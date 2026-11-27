@@ -20,10 +20,7 @@
 //! and reconcile triggers.
 
 use billing::{BillingProvider, InvoiceLine, InvoiceRequest, XeroBillingProvider};
-#[cfg(feature = "restate-compatibility")]
-use chrono::Datelike;
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use serde::{Deserialize, Serialize};
 use store::postgres::PostgresDb;
 use store::purchases;
@@ -54,97 +51,6 @@ pub struct SandboxResetReport {
     /// Invoices already raised for this closed period on an earlier run —
     /// the idempotency key matched. A retry's receipt, not new money.
     pub overage_already_billed: usize,
-}
-
-/// Service registered with the Restate endpoint. Holds a `SurrealDB` clone
-/// (the same connection the worker opened at boot); the Postgres pool and
-/// the Xero provider are built from env inside the steps so no token sits
-/// idle between monthly runs.
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct SandboxCreditResetService {
-    surreal: SurrealDb,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl SandboxCreditResetService {
-    #[must_use]
-    pub fn new(surreal: SurrealDb) -> Self {
-        Self { surreal }
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "SandboxCreditReset")]
-impl SandboxCreditResetService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        _req: Json<SandboxResetRequest>,
-    ) -> Result<Json<SandboxResetReport>, HandlerError> {
-        let surreal = self.surreal.clone();
-        let grant_json = ctx
-            .run(move || async move {
-                // The month that just closed, and the month being granted.
-                // The `billing_period` spelling is the ledger's own.
-                let now = chrono::Utc::now();
-                let (year, month) = match now.month() {
-                    1 => (now.year() - 1, 12_u32),
-                    m => (now.year(), m - 1),
-                };
-                let closed_period = sandbox_usage::billing_period(year, month);
-                let new_period = sandbox_usage::billing_period(now.year(), now.month());
-
-                let pg = PostgresDb::from_env()
-                    .await
-                    .map_err(|error| HandlerError::from(anyhow::anyhow!("Postgres: {error}")))?;
-                let granted = grant_active_subscribers(&pg, &surreal, &new_period)
-                    .await
-                    .map_err(HandlerError::from)?;
-                serde_json::to_string(&(closed_period, new_period, granted)).map_err(|error| {
-                    HandlerError::from(anyhow::anyhow!("journal grant result: {error}"))
-                })
-            })
-            .name("grant")
-            .await?;
-        let (closed_period, new_period, granted): (String, String, usize) =
-            serde_json::from_str(&grant_json)
-                .map_err(|error| HandlerError::from(anyhow::anyhow!("unjournal grant: {error}")))?;
-
-        let surreal = self.surreal.clone();
-        let closed = closed_period.clone();
-        let report_json = ctx
-            .run(move || async move {
-                // A terminal error, not a silent skip: overage is promised
-                // à la carte, so an unconfigured Xero must fail the run and
-                // its schedule, not quietly drop what subscribers owe.
-                let mut billing = XeroBillingProvider::from_env().ok_or_else(|| {
-                    TerminalError::new("Xero is not configured (XERO_* env unset)")
-                })?;
-                let pg = PostgresDb::from_env()
-                    .await
-                    .map_err(|error| HandlerError::from(anyhow::anyhow!("Postgres: {error}")))?;
-                let report = invoice_closed_overage(&mut billing, &pg, &surreal, &closed)
-                    .await
-                    .map_err(HandlerError::from)?;
-                serde_json::to_string(&report).map_err(|error| {
-                    HandlerError::from(anyhow::anyhow!("journal invoice report: {error}"))
-                })
-            })
-            .name("invoice_overage")
-            .await?;
-        let report: SandboxResetReport = serde_json::from_str(&report_json).map_err(|error| {
-            HandlerError::from(anyhow::anyhow!("unjournal invoice report: {error}"))
-        })?;
-
-        Ok(Json(SandboxResetReport {
-            new_period,
-            closed_period,
-            granted,
-            ..report
-        }))
-    }
 }
 
 /// Grant the fresh period's credit to every current Same Day Legal subscriber —
@@ -204,7 +110,7 @@ fn latest_purchase(
 /// its deterministic key only protects retries inside Xero's six-minute
 /// retention window. Durable per-overage invoice recovery remains separate
 /// from this matter-billing implementation.
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 async fn invoice_closed_overage(
     billing: &mut dyn BillingProvider,
     pg: &PostgresDb,

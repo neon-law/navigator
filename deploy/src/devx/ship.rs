@@ -3285,6 +3285,10 @@ pub(super) fn run_selected_ship(
     if opts.dry_run {
         return offline_ship_plan(&cfg, deployment, opts, lane);
     }
+    ensure!(
+        cfg.dbos_only,
+        "this release requires DBOS-only deployment configuration before a live rollout"
+    );
     // Held until the ship returns: dropping it deletes the scratch
     // kubeconfig and registry login.
     let _credentials = ShipCredentials::cluster_and_registry(&cfg)?;

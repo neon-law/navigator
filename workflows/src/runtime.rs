@@ -1,5 +1,4 @@
-//! Durable-runtime abstraction — Restate today, anything that
-//! implements [`StateMachineRuntime`] tomorrow.
+//! Runtime interface for Notation state machines.
 //!
 //! A Notation runs *two* state machines back-to-back: a
 //! questionnaire walker that asks one question per signal, then
@@ -11,13 +10,8 @@
 //! the streams. The runtime key is therefore
 //! `(MachineKind, notation_id)`.
 //!
-//! The crate stays runtime-agnostic so the rest of the application
-//! depends only on this trait. A Restate adapter that uses the
-//! `restate-sdk` crate's `Context` to record each transition as a
-//! `ctx.run()` side effect (so reruns are deterministic) plugs in
-//! behind the same surface. The shipped `InMemoryRuntime` is what
-//! tests and local-dev mode use — it records events in a `Vec`
-//! and accepts external `signal`s synchronously.
+//! The application submits transitions through this trait. The in-memory implementation records
+//! events and applies signals synchronously for tests.
 
 use std::sync::{Arc, Mutex};
 

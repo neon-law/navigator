@@ -185,7 +185,7 @@ infrastructure rather than a future swap-in.
 - **Notation HTTP transport**: [`workflows/src/notation_http.rs`](../workflows/src/notation_http.rs) uses `wiremock`
   to pin wire shape, authentication, trace propagation and failures per `MachineKind`. Adapter tests retain legacy
   service selection and native revision-bound approval checks.
-- **Worker handlers**: `workflows-service/src/notation_service.rs` pins `next_state` against the questionnaire spec; the
-  journal helpers live next door in `workflows-service/src/journal.rs`.
+- **Worker handlers** run transitions in [`dbos_notation.rs`](../workflows-service/src/dbos_notation.rs) and append
+  events through [`journal.rs`](../workflows-service/src/journal.rs).
 - **HTTP + browser**: `server/tests/browser_e2e.rs` drives the full retainer walk end-to-end via fantoccini +
   chromedriver.

@@ -750,28 +750,6 @@ async fn workflow_metadata_preserves_canonical_project_delete_guards_and_capture
 // These are the real pinned SDK serialization boundaries used by captured
 // Notation state/start commands and Project Slack keyed state. Native migration
 // fixtures stay SDK-free; the compatibility lane checks identical persisted bytes.
-#[cfg(feature = "restate-compatibility")]
-#[test]
-fn sdk_wire_codec_matches_native_capture_fixture() {
-    for value in [SPEC, "BEGIN", "quoted \"value\"\n", ""] {
-        let sdk = restate_sdk::serde::Serialize::serialize(&value.to_owned()).unwrap();
-        assert_eq!(sdk.as_ref(), serde_json::to_vec(value).unwrap());
-    }
-    for ephemeral in [false, true] {
-        let body = workflows_service::StartBody {
-            spec_yaml: SPEC.into(),
-            ephemeral,
-        };
-        let native = serde_json::to_vec(&body).unwrap();
-        let sdk =
-            restate_sdk::serde::Serialize::serialize(&restate_sdk::serde::Json(body)).unwrap();
-        assert_eq!(sdk.as_ref(), native);
-    }
-    let seen = vec!["abc1234:1"];
-    let sdk =
-        restate_sdk::serde::Serialize::serialize(&restate_sdk::serde::Json(seen.clone())).unwrap();
-    assert_eq!(sdk.as_ref(), serde_json::to_vec(&seen).unwrap());
-}
 
 /// The controlled wire fixture passes the production capture parser, import,
 /// and activation parity checks before two native callers can be selected.

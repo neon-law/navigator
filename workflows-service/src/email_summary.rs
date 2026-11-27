@@ -9,15 +9,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cloud::{GeminiVertexAdapter, MetadataTokenSource, StorageService, VertexError, VertexRequest};
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use serde::{Deserialize, Serialize};
 use store::email_receipts::EmailReceipt;
-#[cfg(feature = "restate-compatibility")]
-use tracing::Instrument;
+
 use uuid::Uuid;
-#[cfg(feature = "restate-compatibility")]
-use workflows::EmailSummaryRequest;
+
 use workflows::{
     build_prompt, deliver_summary, normalize_email, parse_summary, scoped_email_digest, sender,
     DeliveryResult, EmailSummaryRunConfig, ProviderDelivery, Sender, SlackBot,
@@ -180,33 +177,6 @@ pub(crate) async fn check_sender_step(
 pub struct EmailSummaryReport {
     pub receipt_id: uuid::Uuid,
     pub delivery_state: String,
-}
-
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct EmailSummaryService {
-    surreal: store::surreal::SurrealDb,
-    storage: Arc<dyn StorageService>,
-    slack: Arc<dyn SlackBot>,
-    providers: Option<SummaryProviders>,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl EmailSummaryService {
-    #[must_use]
-    pub fn new(
-        surreal: store::surreal::SurrealDb,
-        storage: Arc<dyn StorageService>,
-        slack: Arc<dyn SlackBot>,
-        providers: Option<SummaryProviders>,
-    ) -> Self {
-        Self {
-            surreal,
-            storage,
-            slack,
-            providers,
-        }
-    }
 }
 
 fn request_for(
@@ -503,7 +473,7 @@ impl DeliveryTarget {
 }
 
 /// The root span of an `EmailSummary::run` invocation. Identifiers only.
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn run_span(receipt_id: uuid::Uuid, invocation_id: impl std::fmt::Display) -> tracing::Span {
     tracing::info_span!(
         "email_summary.run",
@@ -511,135 +481,6 @@ fn run_span(receipt_id: uuid::Uuid, invocation_id: impl std::fmt::Display) -> tr
         invocation_id = %invocation_id,
         navigator.keep = true,
     )
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "EmailSummary")]
-impl EmailSummaryService {
-    #[restate_sdk::handler]
-    #[allow(clippy::too_many_lines)]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        Json(request): Json<EmailSummaryRequest>,
-    ) -> Result<Json<EmailSummaryReport>, HandlerError> {
-        let receipt_id = request.receipt_id;
-        let span = run_span(receipt_id, ctx.invocation_id());
-        telemetry::set_span_parent(
-            &span,
-            ctx.headers().get("traceparent").map(String::as_str),
-            ctx.headers().get("tracestate").map(String::as_str),
-        );
-        async {
-            let surreal = self.surreal.clone();
-            let receipt: EmailReceipt = ctx
-                .run(move || async move {
-                    let receipt = store::email_receipts::find_by_id(&surreal, receipt_id)
-                        .await
-                        .map_err(HandlerError::from)?
-                        .ok_or_else(|| TerminalError::new("email receipt not found"))?;
-                    Ok(Json(receipt))
-                })
-                .name("load-receipt")
-                .await?
-                .into_inner();
-
-            if request.gemini.input_digest != receipt.raw_digest {
-                return Err(
-                    TerminalError::new("summary run configuration does not match receipt").into(),
-                );
-            }
-
-            let gate = {
-                let storage = Arc::clone(&self.storage);
-                let surreal = self.surreal.clone();
-                let receipt = receipt.clone();
-                ctx.run(move || async move {
-                    Ok(Json(
-                        check_sender_step(storage, &surreal, &receipt, request.matter_project_id)
-                            .await
-                            .map_err(WorkflowStepError::into_handler_error)?,
-                    ))
-                })
-                .name("check-sender")
-                .await?
-                .into_inner()
-            };
-
-            let gemini = match gate {
-                SenderGate::Unknown { reason } => ProviderDelivery::Skipped { reason },
-                SenderGate::Known => {
-                    let storage = Arc::clone(&self.storage);
-                    let providers = self.providers.clone();
-                    let receipt = receipt.clone();
-                    let config = request.gemini.clone();
-                    let project_id = request.project_id.clone();
-                    let matter_project_id = request.matter_project_id;
-                    let surreal = self.surreal.clone();
-                    ctx.run(move || async move {
-                        let started = std::time::Instant::now();
-                        let result = summarize_provider_authorized(
-                            storage,
-                            surreal,
-                            providers,
-                            SummaryProvider::Gemini,
-                            receipt,
-                            config,
-                            project_id,
-                            matter_project_id,
-                        )
-                        .await;
-                        telemetry::record_email_stage(
-                            &receipt_id.to_string(),
-                            telemetry::EmailStage::Summary,
-                            match &result {
-                                Ok(ProviderDelivery::Succeeded { .. }) => {
-                                    telemetry::EmailOutcome::Succeeded
-                                }
-                                Ok(ProviderDelivery::Skipped { .. }) => {
-                                    telemetry::EmailOutcome::Skipped
-                                }
-                                _ => telemetry::EmailOutcome::Failed,
-                            },
-                            started.elapsed(),
-                        );
-                        Ok(Json(result.map_err(WorkflowStepError::into_handler_error)?))
-                    })
-                    .name("summarize-gemini")
-                    .await?
-                    .into_inner()
-                }
-            };
-
-            let target = DeliveryTarget {
-                surreal: self.surreal.clone(),
-                slack: Arc::clone(&self.slack),
-                storage: Arc::clone(&self.storage),
-                receipt: receipt.clone(),
-                config: request.gemini.clone(),
-                channel_id: request.channel_id.clone(),
-            };
-            let delivery = ctx
-                .run(move || async move {
-                    Ok(Json(
-                        target
-                            .deliver(gemini)
-                            .await
-                            .map_err(WorkflowStepError::into_handler_error)?,
-                    ))
-                })
-                .name("deliver-slack")
-                .await?
-                .into_inner();
-
-            Ok(Json(EmailSummaryReport {
-                receipt_id,
-                delivery_state: delivery,
-            }))
-        }
-        .instrument(span)
-        .await
-    }
 }
 
 #[cfg(test)]

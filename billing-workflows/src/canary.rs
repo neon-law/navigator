@@ -23,23 +23,15 @@
 //! ([`build_confirmation`]) are pure/provider-agnostic so they unit-test
 //! against the [`billing::StubBillingProvider`] without a worker.
 
-#[cfg(feature = "restate-compatibility")]
-use std::sync::Arc;
-
 use billing::BillingProvider;
-#[cfg(feature = "restate-compatibility")]
-use billing::XeroBillingProvider;
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use serde::{Deserialize, Serialize};
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 use workflows::billing_canary::notify_recipient;
-#[cfg(feature = "restate-compatibility")]
-use workflows::billing_canary::BillingProviderAdapter;
+
 use workflows::billing_canary::CanaryProviderError;
 pub use workflows::billing_canary::CanaryReport;
-#[cfg(feature = "restate-compatibility")]
-use workflows::EmailService;
+
 use workflows::OutboundEmail;
 
 /// Request body for `BillingCanary::run`. Empty — the trigger only starts
@@ -47,73 +39,6 @@ use workflows::OutboundEmail;
 /// without changing the handler signature.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct RunRequest {}
-
-/// Service registered with the Restate endpoint. Holds the worker-side
-/// [`EmailService`] (for the confirmation step); the Xero provider is
-/// built from env inside the Xero step so no token or HTTP client is held
-/// idle between runs. Same shape as `archives`'s `ArchivesService`.
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct BillingCanaryService {
-    email: Arc<dyn EmailService>,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl BillingCanaryService {
-    #[must_use]
-    pub fn new(email: Arc<dyn EmailService>) -> Self {
-        Self { email }
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "BillingCanary")]
-impl BillingCanaryService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        _req: Json<RunRequest>,
-    ) -> Result<Json<CanaryReport>, HandlerError> {
-        // Step 1 — Xero: build the real provider and run the canary. A
-        // missing Xero config is terminal (no point retrying); a
-        // provider/API error is retryable, so Restate replays just this
-        // step without re-sending the email below.
-        let report: CanaryReport = ctx
-            .run(|| async {
-                let provider = XeroBillingProvider::from_env().ok_or_else(|| {
-                    TerminalError::new("Xero is not configured (XERO_* env unset)")
-                })?;
-                let adapter = BillingProviderAdapter(Arc::new(provider));
-                let report = workflows::billing_canary::run_canary(&adapter)
-                    .await
-                    .map_err(|_| {
-                        HandlerError::from(billing::BillingError::Provider(
-                            "canary contact resolve failed".into(),
-                        ))
-                    })?;
-                Ok(Json(report))
-            })
-            .name("xero")
-            .await?
-            .into_inner();
-
-        // Step 2 — email confirmation, journaled separately so a Xero-step
-        // retry never re-sends and an email-send retry never re-resolves.
-        let email = build_confirmation(&report, &notify_recipient(|k| std::env::var(k).ok()));
-        let svc = Arc::clone(&self.email);
-        ctx.run(move || async move {
-            svc.send(email)
-                .await
-                .map(|_| ())
-                .map_err(HandlerError::from)
-        })
-        .name("email")
-        .await?;
-
-        Ok(Json(report))
-    }
-}
 
 /// Resolve the stable canary contact twice and confirm the same id comes
 /// back. Provider-agnostic so it unit-tests against the stub.

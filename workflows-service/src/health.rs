@@ -1,18 +1,4 @@
-//! Always-on, unsigned liveness/readiness probe for the worker (ENG-551).
-//!
-//! The Restate SDK's endpoint on `:9080` requires a valid Restate Cloud
-//! signature on every request once `RESTATE_IDENTITY_KEY` is set — kubelet
-//! and the GCE LB can never produce one — and Envoy answers
-//! `GET /restate/health` with a static `200` instead of proxying to the
-//! worker (ENG-509, and rightly so: do not change that). Neither path ever
-//! exercises the worker's own request-handling code, which is exactly how
-//! ENG-550's `CryptoProvider` panic shipped invisibly. This listener is a
-//! second, separate Axum server (distinct from both the Restate endpoint and
-//! the GitHub webhook receiver) whose one route calls
-//! [`crate::request_identity::crypto_provider_is_healthy`], round-tripping a
-//! throwaway signature through the same verification path real traffic
-//! uses, so a future regression there fails the probe instead of shipping
-//! silently again.
+//! Liveness and PostgreSQL readiness for the DBOS executor.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,8 +11,6 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
-
-use crate::request_identity::crypto_provider_is_healthy;
 
 /// Upper bound for one readiness system-database probe. The route must answer
 /// inside kubelet's probe timeout even while a system database hangs.
@@ -43,9 +27,7 @@ pub struct DbosReadiness {
     pub system_database_url: Option<Arc<str>>,
 }
 
-/// Distinct from both the Restate endpoint's `:9080` and the GitHub webhook
-/// receiver's `:9082`, so kubelet can reach this unconditionally on every
-/// deployment (the webhook receiver binds only on the automation home).
+/// Listener for the DBOS ingress and its health probes.
 const DEFAULT_HEALTH_LISTEN: &str = "0.0.0.0:9083";
 
 pub fn router() -> Router {
@@ -67,44 +49,31 @@ pub fn router_with_dbos_ingress(
 }
 
 async fn healthz() -> StatusCode {
-    if crypto_provider_is_healthy() {
-        StatusCode::OK
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-    }
+    StatusCode::OK
 }
 
-/// Readiness: everything liveness checks plus the DBOS executor's health —
-/// the executor reports itself running and its system database is reachable.
-/// The route is unsigned, so it never echoes probe error detail (details go
-/// to the log); a disabled executor reads as ready rather than failing pods
-/// that legitimately run the Restate engine only.
+/// Report whether the DBOS executor is running and can reach its system database.
 async fn readyz(State(dbos): State<Option<Arc<DbosReadiness>>>) -> axum::response::Response {
-    if !crypto_provider_is_healthy() {
-        return readiness_response(StatusCode::INTERNAL_SERVER_ERROR, "unhealthy", "unknown");
-    }
     let Some(readiness) = dbos.as_deref() else {
-        return readiness_response(StatusCode::OK, "ok", "disabled");
+        return readiness_response(StatusCode::OK, "disabled");
     };
     if !(readiness.is_running)() {
-        return readiness_response(StatusCode::SERVICE_UNAVAILABLE, "ok", "stopped");
+        return readiness_response(StatusCode::SERVICE_UNAVAILABLE, "stopped");
     }
     let Some(url) = readiness.system_database_url.as_deref() else {
         return readiness_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "ok",
             "system-database-unconfigured",
         );
     };
     match tokio::time::timeout(READY_DB_TIMEOUT, system_database_ping(url)).await {
-        Ok(Ok(())) => readiness_response(StatusCode::OK, "ok", "ok"),
+        Ok(Ok(())) => readiness_response(StatusCode::OK, "ok"),
         Ok(Err(reason)) => {
             // Staged, URL-free detail for the log only; the unsigned body
             // stays `system-database-unreachable`.
             tracing::error!(%reason, "readiness probe: system database unreachable");
             readiness_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "ok",
                 "system-database-unreachable",
             )
         }
@@ -112,15 +81,14 @@ async fn readyz(State(dbos): State<Option<Arc<DbosReadiness>>>) -> axum::respons
             tracing::error!("readiness probe: system database ping timed out");
             readiness_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "ok",
                 "system-database-unreachable",
             )
         }
     }
 }
 
-fn readiness_response(status: StatusCode, crypto: &str, dbos: &str) -> axum::response::Response {
-    (status, Json(json!({ "crypto": crypto, "dbos": dbos }))).into_response()
+fn readiness_response(status: StatusCode, dbos: &str) -> axum::response::Response {
+    (status, Json(json!({ "dbos": dbos }))).into_response()
 }
 
 /// Probe the executor's system database with one cheap connection: opening
@@ -243,8 +211,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn healthz_responds_ok_without_any_restate_signature() {
-        crate::request_identity::install_crypto_provider();
+    async fn healthz_responds_ok() {
         let request = Request::builder()
             .method("GET")
             .uri("/healthz")
@@ -275,7 +242,6 @@ mod tests {
 
     #[tokio::test]
     async fn readyz_reads_disabled_without_a_configured_executor() {
-        crate::request_identity::install_crypto_provider();
         let response = readiness_router(None)
             .oneshot(readiness_request())
             .await
@@ -285,7 +251,6 @@ mod tests {
 
     #[tokio::test]
     async fn readyz_fails_when_the_executor_is_stopped() {
-        crate::request_identity::install_crypto_provider();
         let readiness = readiness_with(false, Some("postgres://127.0.0.1:1/dbos_probe"));
         let response = readiness_router(Some(readiness))
             .oneshot(readiness_request())
@@ -296,7 +261,6 @@ mod tests {
 
     #[tokio::test]
     async fn readyz_fails_when_the_system_database_is_unreachable() {
-        crate::request_identity::install_crypto_provider();
         // Loopback port 1 refuses instantly, so the probe takes the
         // unreachable path without a database dependency.
         let readiness = readiness_with(true, Some("postgres://127.0.0.1:1/dbos_probe"));
@@ -309,7 +273,6 @@ mod tests {
 
     #[tokio::test]
     async fn readyz_fails_without_a_configured_system_database_url() {
-        crate::request_identity::install_crypto_provider();
         let readiness = readiness_with(true, None);
         let response = readiness_router(Some(readiness))
             .oneshot(readiness_request())
@@ -319,11 +282,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn combined_router_keeps_liveness_signed_off() {
+    async fn combined_router_exposes_liveness() {
         // The manifests pin the liveness probe to /healthz on the SAME
         // listener the DBOS ingress and /readyz share; dropping it restarts
         // healthy workers.
-        crate::request_identity::install_crypto_provider();
         let healthz_request = Request::builder()
             .method("GET")
             .uri("/healthz")

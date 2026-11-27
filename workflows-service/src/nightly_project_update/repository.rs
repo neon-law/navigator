@@ -22,8 +22,7 @@ use std::sync::Arc;
 use cloud::forge::ForgeService;
 use cloud::forgejo_governance::{FileUpdate, GovernedForge, UpdateProposal};
 use cloud::ForgeBackend;
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use rules::project_manifest::{
     pin_status, pinned_version, with_pinned_version, PinStatus, FILE as MANIFEST,
 };
@@ -31,11 +30,6 @@ use serde::{Deserialize, Serialize};
 use store::project_surfaces::SurfaceStatus;
 use store::surreal::SurrealDb;
 use uuid::Uuid;
-
-#[cfg(feature = "restate-compatibility")]
-use super::tag_retry_policy;
-#[cfg(feature = "restate-compatibility")]
-use super::ProjectTagRequest;
 
 use crate::workflow_step_error::WorkflowStepError;
 
@@ -157,59 +151,6 @@ impl FirmForges for EnvFirmForges {
         .await
         .map_err(WorkflowStepError::retryable)?;
         Ok(Arc::new(forge))
-    }
-}
-
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct RepositoryTagService {
-    surreal: SurrealDb,
-    forge: RepositoryForge,
-    runtime_version: String,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl RepositoryTagService {
-    /// `runtime_version` is the release this worker runs, normally
-    /// [`RUNTIME_VERSION`].
-    #[must_use]
-    pub fn new(
-        surreal: SurrealDb,
-        forge: RepositoryForge,
-        runtime_version: impl Into<String>,
-    ) -> Self {
-        Self {
-            surreal,
-            forge,
-            runtime_version: runtime_version.into(),
-        }
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "NightlyProjectUpdateRepository")]
-impl RepositoryTagService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        request: Json<ProjectTagRequest>,
-    ) -> Result<Json<RepositoryOutcome>, HandlerError> {
-        let project_id = request.into_inner().project_id;
-        let surreal = self.surreal.clone();
-        let forge = self.forge.clone();
-        let runtime_version = self.runtime_version.clone();
-        let outcome = ctx
-            .run(move || async move {
-                reconcile_repository(&surreal, &forge, project_id, &runtime_version)
-                    .await
-                    .map(Json)
-                    .map_err(WorkflowStepError::into_handler_error)
-            })
-            .name("reconcile-repository")
-            .retry_policy(tag_retry_policy())
-            .await?;
-        Ok(outcome)
     }
 }
 

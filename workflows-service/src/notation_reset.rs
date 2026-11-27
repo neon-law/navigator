@@ -15,254 +15,34 @@
 //! the duration, and the ids that failed to delete; never a client, a
 //! matter, or a Project code.
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 use std::sync::Arc;
 
 use crate::workflow_step_error::WorkflowStepError;
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 use chrono::{DateTime, Utc};
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
-#[cfg(feature = "restate-compatibility")]
-use uuid::Uuid;
-#[cfg(any(test, feature = "restate-compatibility"))]
+
+#[cfg(test)]
 use workflows::SlackBot;
 
 pub use workflows::notation_reset::{
     environment_label, render_failure, render_report, run_key, DraftRoster, NotationResetReport,
 };
 
-#[cfg(feature = "restate-compatibility")]
-use crate::nightly_project_update::{slack_error, tag_retry_policy};
-
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct RunRequest {}
 
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct NotationResetService {
-    surreal: SurrealDb,
-    slack: Arc<dyn SlackBot>,
-    messages_channel_id: String,
-    staging_messages_channel_id: String,
-    environment: &'static str,
-    simulated: bool,
-    slack_enabled: bool,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl NotationResetService {
-    #[must_use]
-    pub fn new(
-        surreal: SurrealDb,
-        slack: Arc<dyn SlackBot>,
-        messages_channel_id: String,
-        staging_messages_channel_id: String,
-        environment: &'static str,
-        simulated: bool,
-        slack_enabled: bool,
-    ) -> Self {
-        Self {
-            surreal,
-            slack,
-            messages_channel_id,
-            staging_messages_channel_id,
-            environment,
-            simulated,
-            slack_enabled,
-        }
-    }
-
-    fn channel_id(&self) -> &str {
-        workflows::notation_reset::channel_id(
-            self.simulated,
-            &self.messages_channel_id,
-            &self.staging_messages_channel_id,
-        )
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "NotationReset")]
-impl NotationResetService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        _request: Json<RunRequest>,
-    ) -> Result<Json<NotationResetReport>, HandlerError> {
-        let channel_id = self.channel_id().to_string();
-        validate_configuration(&channel_id, self.slack_enabled)
-            .map_err(WorkflowStepError::into_handler_error)?;
-
-        let started_at: String = ctx
-            .run(|| async { Ok(Json(Utc::now().to_rfc3339())) })
-            .name("read-clock")
-            .await?
-            .into_inner();
-        let started = parse_clock(&started_at).map_err(WorkflowStepError::into_handler_error)?;
-        tracing::info!(
-            run_key = ctx.key(),
-            environment = self.environment,
-            "notation reset started"
-        );
-
-        let surreal = self.surreal.clone();
-        let roster = ctx
-            .run(move || async move {
-                discover_drafts(&surreal)
-                    .await
-                    .map(Json)
-                    .map_err(WorkflowStepError::into_handler_error)
-            })
-            .name("discover-drafts")
-            .retry_policy(tag_retry_policy())
-            .await;
-        let roster = match roster {
-            Ok(Json(roster)) => roster,
-            Err(error) => {
-                let elapsed = workflows::notation_reset::elapsed_ms(
-                    started,
-                    self.clock(&ctx, "read-clock-failed").await?,
-                );
-                let message = render_failure(self.environment, elapsed);
-                self.post(&ctx, "post-failure", channel_id, message).await?;
-                return Err(error.into());
-            }
-        };
-
-        let mut report = NotationResetReport::default();
-        self.delete_notations(&ctx, &roster.notations, &mut report)
-            .await;
-        self.delete_previews(&ctx, &roster.previews, &mut report)
-            .await;
-
-        report.duration_ms = workflows::notation_reset::elapsed_ms(
-            started,
-            self.clock(&ctx, "read-clock-end").await?,
-        );
-        let message = render_report(self.environment, &report);
-        self.post(&ctx, "post-outcome", channel_id, message).await?;
-        tracing::info!(
-            run_key = ctx.key(),
-            notations_deleted = report.notations_deleted,
-            previews_deleted = report.previews_deleted,
-            kept = report.kept,
-            failures = report.failures.len(),
-            duration_ms = report.duration_ms,
-            "notation reset complete"
-        );
-        Ok(Json(report))
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl NotationResetService {
-    /// One journaled delete per Notation draft, each with a bounded retry; a
-    /// failure is recorded by id and the run moves on.
-    async fn delete_notations(
-        &self,
-        ctx: &WorkflowContext<'_>,
-        ids: &[Uuid],
-        report: &mut NotationResetReport,
-    ) {
-        for id in ids {
-            let surreal = self.surreal.clone();
-            let notation_id = *id;
-            let outcome = ctx
-                .run(move || async move {
-                    store::notation_reset::delete_draft(&surreal, notation_id)
-                        .await
-                        .map(Json)
-                        .map_err(|error| HandlerError::from(TerminalError::new(error.to_string())))
-                })
-                .name(format!("delete-notation-{id}"))
-                .retry_policy(tag_retry_policy())
-                .await;
-            match outcome {
-                Ok(Json(outcome)) => report.absorb(outcome),
-                Err(error) => {
-                    tracing::warn!(notation_id = %id, %error, "notation draft delete failed");
-                    report.failures.push(*id);
-                }
-            }
-        }
-    }
-
-    /// One journaled delete per stored preview draft.
-    async fn delete_previews(
-        &self,
-        ctx: &WorkflowContext<'_>,
-        ids: &[Uuid],
-        report: &mut NotationResetReport,
-    ) {
-        for id in ids {
-            let surreal = self.surreal.clone();
-            let preview_id = *id;
-            let outcome = ctx
-                .run(move || async move {
-                    store::notation_reset::delete_preview_draft(&surreal, preview_id)
-                        .await
-                        .map_err(|error| HandlerError::from(TerminalError::new(error.to_string())))
-                })
-                .name(format!("delete-preview-{id}"))
-                .retry_policy(tag_retry_policy())
-                .await;
-            match outcome {
-                Ok(()) => report.previews_deleted += 1,
-                Err(error) => {
-                    tracing::warn!(draft_id = %id, %error, "preview draft delete failed");
-                    report.failures.push(*id);
-                }
-            }
-        }
-    }
-
-    /// The run's one Slack post, journaled under `name`.
-    async fn post(
-        &self,
-        ctx: &WorkflowContext<'_>,
-        name: &str,
-        channel_id: String,
-        message: String,
-    ) -> Result<(), HandlerError> {
-        let slack = Arc::clone(&self.slack);
-        ctx.run(move || async move {
-            slack
-                .post_message(&channel_id, &message)
-                .await
-                .map_err(slack_error)
-                .map_err(WorkflowStepError::into_handler_error)
-        })
-        .name(name)
-        .await?;
-        Ok(())
-    }
-
-    async fn clock(
-        &self,
-        ctx: &WorkflowContext<'_>,
-        name: &str,
-    ) -> Result<DateTime<Utc>, HandlerError> {
-        let at: String = ctx
-            .run(|| async { Ok(Json(Utc::now().to_rfc3339())) })
-            .name(name)
-            .await?
-            .into_inner();
-        parse_clock(&at).map_err(WorkflowStepError::into_handler_error)
-    }
-}
-
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn parse_clock(value: &str) -> Result<DateTime<Utc>, WorkflowStepError> {
     DateTime::parse_from_rfc3339(value)
         .map(|at| at.with_timezone(&Utc))
         .map_err(|_| WorkflowStepError::terminal("the journaled clock is not RFC 3339"))
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), WorkflowStepError> {
     if channel_id.is_empty() {
         return Err(WorkflowStepError::terminal(

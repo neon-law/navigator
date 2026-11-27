@@ -36,18 +36,11 @@
 //! The `dri-digest-trigger` `CronJob` fires nightly at 01:11 UTC, keyed on
 //! the UTC run date so a same-day double-fire is a no-op.
 
-#[cfg(feature = "restate-compatibility")]
-use std::sync::Arc;
-
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 use store::projects::ProjectDriSummary;
 use store::surreal::SurrealDb;
 pub use workflows::dri_digest::dri_digest_message;
-#[cfg(feature = "restate-compatibility")]
-use workflows::Notifier;
 
 /// Request body for `DriDigest::run`. Empty — the trigger only starts the
 /// workflow — but kept as a struct so fields can be threaded later without
@@ -78,21 +71,6 @@ pub fn open_matters_followup(
     (!simulated).then(|| workflows::dri_digest::open_matters_message(brands))
 }
 
-/// Service registered with the Restate endpoint. Holds a `SurrealDB` clone (the
-/// same connection the worker opened at boot, same shape as
-/// `ReconcileInvoicesService`), the worker-side Slack [`Notifier`], and
-/// whether this deployment discloses simulated matters
-/// (`store::sample_matters`) — resolved once at boot in
-/// `workflows-service/src/host.rs`, not re-read from the environment on
-/// every run.
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct DriDigestService {
-    surreal: SurrealDb,
-    notifier: Arc<dyn Notifier>,
-    simulated: bool,
-}
-
 /// Build the opt-in DBOS worker context after its store connection is ready.
 /// A disabled schedule does not validate delivery configuration.
 pub fn dbos_context(
@@ -108,18 +86,6 @@ pub fn dbos_context(
     workflows::dbos_engine::dri_digest::Context::from_lookup(surreal, slack, simulated, lookup)
         .map(Some)
         .map_err(Into::into)
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl DriDigestService {
-    #[must_use]
-    pub fn new(surreal: SurrealDb, notifier: Arc<dyn Notifier>, simulated: bool) -> Self {
-        Self {
-            surreal,
-            notifier,
-            simulated,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -159,72 +125,6 @@ mod dbos_context_tests {
         assert!(dbos_context(Some(surreal()), bot(), true, configured)
             .unwrap()
             .is_some());
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "DriDigest")]
-impl DriDigestService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        _req: Json<RunRequest>,
-    ) -> Result<Json<DriDigestReport>, HandlerError> {
-        // Step 1 — query each open project's DRIs. A database error surfaces as a
-        // retryable `HandlerError` so Restate replays just this step.
-        let surreal = self.surreal.clone();
-        let projects: Vec<ProjectDriSummary> = ctx
-            .run(move || async move { Ok(Json(store::projects::dri_digest(&surreal).await?)) })
-            .name("query")
-            .await?
-            .into_inner();
-
-        // Step 2 — render + post, journaled separately so a query retry never
-        // re-posts and a notify retry never re-reads the database.
-        let message = dri_digest_message(&projects, self.simulated);
-        let notifier = Arc::clone(&self.notifier);
-        ctx.run(move || async move { notifier.notify(message).await.map_err(HandlerError::from) })
-            .name("notify")
-            .await?;
-
-        // Steps 3-4 — a real deployment's open-matters/pitches follow-up.
-        // Never runs for a simulated-matters deployment: that count is a
-        // real-matter-only signal, so there is nothing to query or post.
-        if !self.simulated {
-            let surreal = self.surreal.clone();
-            let brands = ctx
-                .run(move || async move {
-                    workflows::dri_digest::slack_firm_open_pitch_counts(
-                        &surreal,
-                        workflows::firm_slack::DeploymentSlackFirm::DefaultBrand,
-                    )
-                    .await
-                    .map(Json)
-                    .map_err(|error| {
-                        HandlerError::from(TerminalError::new(format!("counts: {error}")))
-                    })
-                })
-                .name("counts")
-                .await?
-                .into_inner();
-
-            // `simulated` is `false` in this branch, so this is always `Some`;
-            // the shared helper still owns the decision so its own unit tests
-            // are the single place that predicate is pinned.
-            if let Some(followup) = open_matters_followup(self.simulated, &brands) {
-                let notifier = Arc::clone(&self.notifier);
-                ctx.run(move || async move {
-                    notifier.notify(followup).await.map_err(HandlerError::from)
-                })
-                .name("notify_counts")
-                .await?;
-            }
-        }
-
-        Ok(Json(DriDigestReport {
-            projects: projects.len(),
-        }))
     }
 }
 

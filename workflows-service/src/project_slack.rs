@@ -7,15 +7,9 @@
 
 use std::sync::Arc;
 
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "restate-compatibility")]
-use tracing::Instrument;
-use workflows::{project_channel_name, SlackBot, SlackBotError, SlackChannel};
 
-#[cfg(feature = "restate-compatibility")]
-use crate::firm_slack::ProjectSlackBots;
+use workflows::{project_channel_name, SlackBot, SlackBotError, SlackChannel};
 
 /// Why a lane step failed, shared by the Restate and DBOS paths.
 ///
@@ -74,22 +68,7 @@ impl LaneError {
     }
 }
 
-impl LaneError {
-    /// The Restate handler surface: a terminal failure becomes a fatal
-    /// [`TerminalError`] so the invocation stops, while a retriable one
-    /// stays an ordinary error the engine may retry. A `From` impl cannot
-    /// carry this distinction: the SDK's blanket `From<E: Error>` would
-    /// make a terminal failure retriable.
-    #[must_use]
-    #[cfg(feature = "restate-compatibility")]
-    pub fn into_handler_error(self) -> HandlerError {
-        if self.terminal() {
-            TerminalError::new(self.to_string()).into()
-        } else {
-            HandlerError::from(Box::new(self) as Box<dyn std::error::Error + Send + Sync>)
-        }
-    }
-}
+impl LaneError {}
 
 /// The outcome of one half of a Project repository's CD run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -201,10 +180,6 @@ pub enum MainPushOutcome {
     Duplicate,
 }
 
-/// The object-state key holding the `(sha, run attempt)` keys this Project
-/// has already posted, newest last.
-#[cfg(feature = "restate-compatibility")]
-const MAIN_PUSH_SEEN_KEY: &str = "main_push_seen";
 /// How many posted keys one Project remembers. A rerun of a run attempt
 /// arrives within hours; a thousand pushes later the key is new again.
 const MAIN_PUSH_SEEN_LIMIT: usize = 200;
@@ -220,36 +195,7 @@ pub struct ClientProjectViewRequest {}
 /// itself is the Project-specific destination.
 pub const CLIENT_PROJECT_VIEW_MESSAGE: &str = "A client viewed this Project in the portal.";
 
-/// The Restate object. `bots` resolves the owning Firm's Slack bot for each
-/// Project at the moment a step needs it (ENG-392): there is no
-/// deployment-wide bot for Project channels.
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct ProjectSlackService {
-    surreal: store::surreal::SurrealDb,
-    bots: Arc<dyn ProjectSlackBots>,
-    simulated: bool,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl ProjectSlackService {
-    /// `simulated` selects the channel prefix: `staging-` on a
-    /// simulated-matters deployment, `navigator-` otherwise.
-    #[must_use]
-    pub fn new(
-        surreal: store::surreal::SurrealDb,
-        bots: Arc<dyn ProjectSlackBots>,
-        simulated: bool,
-    ) -> Self {
-        Self {
-            surreal,
-            bots,
-            simulated,
-        }
-    }
-}
-
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn project_id(key: &str) -> Result<uuid::Uuid, LaneError> {
     key.parse::<uuid::Uuid>().map_err(|error| {
         LaneError::InvalidIdentity(format!(
@@ -258,7 +204,7 @@ fn project_id(key: &str) -> Result<uuid::Uuid, LaneError> {
     })
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn project_store_error(error: &store::projects::ProjectStoreError) -> LaneError {
     use store::projects::ProjectStoreError as Error;
     if matches!(
@@ -301,7 +247,7 @@ impl ChannelOutcome {
 
 /// Find or create the Project's private Slack channel. Extracted from the
 /// Restate handler so the store/Slack work is unit-testable without a broker.
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 pub(crate) async fn ensure_internal_channel(
     surreal: &store::surreal::SurrealDb,
     slack: &Arc<dyn SlackBot>,
@@ -406,7 +352,7 @@ async fn record_channel(
     Ok(())
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 async fn post_client_view_notice(
     slack: &Arc<dyn SlackBot>,
     channel_id: &str,
@@ -418,7 +364,7 @@ async fn post_client_view_notice(
 }
 
 /// The root span of a `client_project_view` invocation. Identifiers only.
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn client_project_view_span(project_id: &str) -> tracing::Span {
     tracing::info_span!(
         "project_slack.client_project_view",
@@ -428,7 +374,7 @@ fn client_project_view_span(project_id: &str) -> tracing::Span {
 }
 
 /// The root span of a `main_push` invocation. Identifiers only.
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn main_push_span(project_id: &str, event_key: &str) -> tracing::Span {
     tracing::info_span!(
         "project_slack.main_push",
@@ -447,7 +393,7 @@ pub struct MainPushDestination {
     pub repository_url: Option<String>,
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 pub(crate) async fn main_push_destination(
     surreal: &store::surreal::SurrealDb,
     slack: &Arc<dyn SlackBot>,
@@ -566,124 +512,6 @@ pub fn admit_main_push(seen: &mut Vec<String>, event: &MainPushRequest) -> MainP
     MainPushOutcome::Posted
 }
 
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::object(name = "project-slack")]
-impl ProjectSlackService {
-    /// Ensure the Project has a private Slack channel, then post the client
-    /// portal-view notice into that channel.
-    #[restate_sdk::handler]
-    async fn client_project_view(
-        &self,
-        ctx: ObjectContext<'_>,
-        _request: Json<ClientProjectViewRequest>,
-    ) -> Result<(), HandlerError> {
-        let span = client_project_view_span(ctx.key());
-        async move {
-            let project_id = project_id(ctx.key())?;
-            let surreal = self.surreal.clone();
-            let bots = Arc::clone(&self.bots);
-            let simulated = self.simulated;
-            let channel_id: String = ctx
-                .run(|| async move {
-                    let slack = bots
-                        .for_project(&surreal, project_id)
-                        .await
-                        .map_err(LaneError::into_handler_error)?;
-                    ensure_internal_channel(&surreal, &slack, project_id, simulated)
-                        .await
-                        .map(Json)
-                        .map_err(LaneError::into_handler_error)
-                })
-                .name("ensure-channel")
-                .await?
-                .into_inner();
-
-            let surreal = self.surreal.clone();
-            let bots = Arc::clone(&self.bots);
-            ctx.run(move || async move {
-                let slack = bots
-                    .for_project(&surreal, project_id)
-                    .await
-                    .map_err(LaneError::into_handler_error)?;
-                post_client_view_notice(&slack, &channel_id)
-                    .await
-                    .map_err(HandlerError::from)
-            })
-            .name("post-client-view")
-            .await?;
-            Ok(())
-        }
-        .instrument(span)
-        .await
-    }
-
-    /// A push to the Project repository's `main`: post one notice to the
-    /// Project's private channel, once per `(sha, run attempt)`. The
-    /// channel comes from the Project row, never from the request.
-    #[restate_sdk::handler]
-    async fn main_push(
-        &self,
-        ctx: ObjectContext<'_>,
-        request: Json<MainPushRequest>,
-    ) -> Result<Json<MainPushOutcome>, HandlerError> {
-        let event = request.into_inner();
-        let span = main_push_span(ctx.key(), &event.event_key());
-        async move {
-            let project_id = project_id(ctx.key())?;
-            let mut seen: Vec<String> = ctx
-                .get::<Json<Vec<String>>>(MAIN_PUSH_SEEN_KEY)
-                .await?
-                .map(Json::into_inner)
-                .unwrap_or_default();
-            if admit_main_push(&mut seen, &event) == MainPushOutcome::Duplicate {
-                tracing::info!("main push already posted");
-                return Ok(Json(MainPushOutcome::Duplicate));
-            }
-
-            let surreal = self.surreal.clone();
-            let bots = Arc::clone(&self.bots);
-            let simulated = self.simulated;
-            let destination: MainPushDestination = ctx
-                .run(|| async move {
-                    let slack = bots
-                        .for_project(&surreal, project_id)
-                        .await
-                        .map_err(LaneError::into_handler_error)?;
-                    main_push_destination(&surreal, &slack, project_id, simulated)
-                        .await
-                        .map(Json)
-                        .map_err(LaneError::into_handler_error)
-                })
-                .name("resolve-destination")
-                .await?
-                .into_inner();
-
-            let message = render_main_push(&event, destination.repository_url.as_deref());
-            let surreal = self.surreal.clone();
-            let bots = Arc::clone(&self.bots);
-            let channel_id = destination.channel_id;
-            ctx.run(move || async move {
-                let slack = bots
-                    .for_project(&surreal, project_id)
-                    .await
-                    .map_err(LaneError::into_handler_error)?;
-                slack
-                    .post_message(&channel_id, &message)
-                    .await
-                    .map_err(HandlerError::from)
-            })
-            .name("post-main-push")
-            .await?;
-            // Recorded after the post, so a run that never managed to post
-            // is not remembered as posted.
-            ctx.set(MAIN_PUSH_SEEN_KEY, Json(seen));
-            Ok(Json(MainPushOutcome::Posted))
-        }
-        .instrument(span)
-        .await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -750,18 +578,6 @@ mod tests {
         // The Restate path renders the same LaneError the DBOS path
         // classifies: a retriable failure surfaces as an ordinary error the
         // engine may retry; a terminal one renders its verdict as text.
-        #[cfg(feature = "restate-compatibility")]
-        {
-            let retriable = store_err.into_handler_error();
-            assert!(!format!("{retriable:?}").contains("stop"), "{retriable:?}");
-            let terminal =
-                LaneError::ProjectGone("Project no longer exists for Slack notice".to_string())
-                    .into_handler_error();
-            assert!(
-                format!("{terminal:?}").contains("no longer exists"),
-                "{terminal:?}"
-            );
-        }
     }
 
     #[test]

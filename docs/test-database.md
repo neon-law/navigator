@@ -89,15 +89,13 @@ embedded compatibility tests, so request that capability explicitly:
 
 ```bash
 cargo test --workspace \
-  --features store/surreal-compatibility,workflows-service/jwt-provider-regression
+  --features store/surreal-compatibility
 ```
 
-The JWT regression feature tests an unpinned two-provider process separately from startup pinning before the first
-health probe. Provider selection lasts for the process lifetime; pinning cannot repair a process that already selected
-an ambiguous provider. The compatibility run needs its documented PostgreSQL and Source fixtures. The embedded engine
-feature does not disable `NAVIGATOR_FORBID_SURREAL`: a primary-lane environment still refuses an attempted engine start.
-Without the feature, calling an embedded fixture fails rather than silently skipping it. Remote HTTP/WebSocket
-compatibility clients remain available without the embedded engine.
+The compatibility run needs its documented PostgreSQL and Source fixtures. The embedded engine feature preserves
+`NAVIGATOR_FORBID_SURREAL`: a primary-lane environment still refuses an attempted engine start. Without the feature,
+calling an embedded fixture fails rather than silently skipping it. Remote HTTP/WebSocket compatibility clients remain
+available without the embedded engine.
 
 The existing call sites move to the PostgreSQL fixture crate by crate as each domain's PostgreSQL authority lands
 (ENG-1356). The ratchet holds each crate's count: a port that removes call sites lowers that crate's `BASELINE` entry in
@@ -133,7 +131,7 @@ The full compatibility-inclusive workspace command is:
 
 ```sh
 cargo nextest run --workspace \
-  --features store/surreal-compatibility,workflows-service/jwt-provider-regression
+  --features store/surreal-compatibility
 cargo test -p features --features store/surreal-compatibility
 ```
 
@@ -153,7 +151,7 @@ wire, which an in-process engine cannot cover — point the harness at a running
 ```sh
 set -a; source .devx/env; set +a
 NAV_REQUIRE_SURREAL=1 cargo nextest run --workspace \
-  --features store/surreal-compatibility,workflows-service/jwt-provider-regression
+  --features store/surreal-compatibility
 ```
 
 ## How CI runs them

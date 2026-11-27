@@ -1,19 +1,12 @@
-//! Notation business logic shared by both engine adapters.
+//! Business logic for the DBOS Notation workflow.
 //!
-//! The Restate virtual object (`notation_service.rs`) and the DBOS port
-//! (`dbos_notation.rs`) run the *same* state machines: the pure transition
-//! rules, the immutable `notation_events` journal append, the funnel events,
-//! the review-notification plan and its sends, and the matter close. This
-//! module is that one body of logic, phrased in domain terms —
-//! [`NotationLogicError`] separates a deterministic caller-visible failure
-//! (bad spec, no transition, unknown notation) from a store/transport failure
-//! (`SurrealDB`, the email provider), because the adapters disagree on what
-//! those mean: Restate surfaces both as terminal handler errors, DBOS retries
-//! the store class and fails terminally on the deterministic class.
+//! The workflow applies the questionnaire and post-intake state machines, appends the immutable
+//! `notation_events` journal, and runs review notifications and matter closure. DBOS retries
+//! store and transport errors. An invalid specification, missing transition, or unknown Notation
+//! fails the workflow.
 //!
-//! Identifiers only cross the engine boundary — `notation_id`, person and
-//! project ids, state names, conditions. Mailboxes and project codes are
-//! resolved inside the steps that use them, never frozen into a plan.
+//! Workflow inputs carry identifiers and transition conditions. Steps resolve mailboxes and project
+//! codes at execution time.
 
 use std::sync::Arc;
 
@@ -178,8 +171,6 @@ pub(crate) const fn review_copy(hop: ReviewNotificationHop) -> ReviewCopy {
 /// The funnel step caused by one durable workflow transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkflowFunnelStep {
-    #[cfg(feature = "restate-compatibility")]
-    IntakeComplete,
     ReviewEntered,
     Sent(telemetry::FunnelChannel),
 }
@@ -439,11 +430,6 @@ pub(crate) async fn record_notation_funnel_step(
     let notation_id = notation_id.to_string();
     let project_id = notation.project_id.to_string();
     let event = match step {
-        #[cfg(feature = "restate-compatibility")]
-        WorkflowFunnelStep::IntakeComplete => telemetry::FunnelEvent::IntakeComplete {
-            notation_id: &notation_id,
-            project_id: &project_id,
-        },
         WorkflowFunnelStep::ReviewEntered => telemetry::FunnelEvent::ReviewEntered {
             notation_id: &notation_id,
             project_id: &project_id,

@@ -2,15 +2,11 @@
 
 use std::sync::Arc;
 
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::inbox::{direction, Conversation, InboxError, Message};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::SlackBot;
-#[cfg(feature = "restate-compatibility")]
-use workflows::{InboundMessageAlertReport, InboundMessageAlertRequest};
 
 use crate::workflow_step_error::WorkflowStepError;
 
@@ -342,66 +338,6 @@ pub(crate) async fn alert_context(
         channel: conversation.channel,
         interaction_type: conversation.interaction_type,
     }))
-}
-
-/// Map the shared context-read error onto the Restate step's error type.
-#[cfg(feature = "restate-compatibility")]
-fn alert_context_handler_error(error: AlertContextError) -> HandlerError {
-    match error {
-        AlertContextError::Store(inner) => inner.into(),
-        terminal => TerminalError::new(terminal.to_string()).into(),
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "InboundMessageAlert")]
-impl InboundMessageAlertService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        Json(request): Json<InboundMessageAlertRequest>,
-    ) -> Result<Json<InboundMessageAlertReport>, HandlerError> {
-        let message_id = request.message_id;
-        let context = {
-            let surreal = self.surreal.clone();
-            ctx.run(move || async move {
-                alert_context(&surreal, message_id)
-                    .await
-                    .map(Json)
-                    .map_err(alert_context_handler_error)
-            })
-            .name("load-inbound-message-context")
-            .await?
-            .into_inner()
-        };
-        let Some(context) = context else {
-            return Ok(Json(InboundMessageAlertReport {
-                message_id,
-                state: "skipped_non_inbound".into(),
-            }));
-        };
-        let service = self.clone();
-        ctx.run(move || async move {
-            service
-                .deliver_alert(message_id, &context)
-                .await
-                .map_err(WorkflowStepError::into_handler_error)?;
-            Ok(Json(()))
-        })
-        .name("post-inbound-message-alert")
-        .await?;
-        let surreal = self.surreal.clone();
-        let state = ctx
-            .run(move || async move {
-                let receipt = store::inbox_alerts::receipt(&surreal, message_id).await?;
-                Ok(Json(receipt.state.unwrap_or_else(|| "historical".into())))
-            })
-            .name("read-inbound-message-alert-receipt")
-            .await?
-            .into_inner();
-        Ok(Json(InboundMessageAlertReport { message_id, state }))
-    }
 }
 
 impl InboundMessageAlertService {

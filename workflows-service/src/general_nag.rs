@@ -19,19 +19,7 @@
 //! The `general-nag` `CronJob` fires nightly at 01:11 UTC, keyed on the UTC
 //! run date so a same-day double-fire is a no-op.
 
-#[cfg(feature = "restate-compatibility")]
-use std::sync::Arc;
-
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "restate-compatibility")]
-use store::surreal::SurrealDb;
-#[cfg(feature = "restate-compatibility")]
-use workflows::SlackBot;
-
-#[cfg(feature = "restate-compatibility")]
-use crate::dri_digest::open_matters_followup;
 
 /// Request body for `GeneralNag::run`. Empty — the trigger only starts the
 /// workflow — but kept as a struct so fields can be threaded later without
@@ -50,102 +38,6 @@ pub struct GeneralNagReport {
 #[must_use]
 pub fn nag_message(_simulated: bool) -> String {
     "Nobody Cares, Work Harder".to_string()
-}
-
-/// Service registered with the Restate endpoint. Holds a `SurrealDB` clone
-/// (the same connection the worker opened at boot), the target-aware Slack
-/// bot, `#general`'s channel id, and whether this deployment discloses
-/// simulated matters — resolved once at boot in `workflows-service/src/host.rs`.
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct GeneralNagService {
-    surreal: SurrealDb,
-    slack: Arc<dyn SlackBot>,
-    channel_id: String,
-    simulated: bool,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl GeneralNagService {
-    #[must_use]
-    pub fn new(
-        surreal: SurrealDb,
-        slack: Arc<dyn SlackBot>,
-        channel_id: String,
-        simulated: bool,
-    ) -> Self {
-        Self {
-            surreal,
-            slack,
-            channel_id,
-            simulated,
-        }
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "GeneralNag")]
-impl GeneralNagService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        _req: Json<RunRequest>,
-    ) -> Result<Json<GeneralNagReport>, HandlerError> {
-        if self.channel_id.is_empty() {
-            return Err(HandlerError::from(TerminalError::new(
-                "SLACK_GENERAL_CHANNEL_ID must be set (the #general channel ID)",
-            )));
-        }
-
-        let channel_id = self.channel_id.clone();
-        let message = nag_message(self.simulated);
-        let slack = Arc::clone(&self.slack);
-        ctx.run(move || async move {
-            slack
-                .post_message(&channel_id, &message)
-                .await
-                .map_err(HandlerError::from)
-        })
-        .name("notify")
-        .await?;
-
-        let mut posted_followup = false;
-        if !self.simulated {
-            let surreal = self.surreal.clone();
-            let brands = ctx
-                .run(move || async move {
-                    workflows::dri_digest::slack_firm_open_pitch_counts(
-                        &surreal,
-                        workflows::firm_slack::DeploymentSlackFirm::DefaultBrand,
-                    )
-                    .await
-                    .map(Json)
-                    .map_err(|error| {
-                        HandlerError::from(TerminalError::new(format!("counts: {error}")))
-                    })
-                })
-                .name("counts")
-                .await?
-                .into_inner();
-
-            if let Some(followup) = open_matters_followup(self.simulated, &brands) {
-                let channel_id = self.channel_id.clone();
-                let slack = Arc::clone(&self.slack);
-                ctx.run(move || async move {
-                    slack
-                        .post_message(&channel_id, &followup)
-                        .await
-                        .map_err(HandlerError::from)
-                })
-                .name("notify_counts")
-                .await?;
-                posted_followup = true;
-            }
-        }
-
-        Ok(Json(GeneralNagReport { posted_followup }))
-    }
 }
 
 #[cfg(test)]

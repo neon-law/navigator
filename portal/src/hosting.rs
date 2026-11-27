@@ -904,7 +904,6 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
 
     let lookup = |key: &str| std::env::var(key).ok();
     let combined = cohost::enabled(host_dbos, lookup)?;
-    workflows_service::request_identity::install_crypto_provider();
     let mut rt = build_from_env(brand.seed).await?;
 
     // The tenant shape lights the existing portal-only mode rather than adding

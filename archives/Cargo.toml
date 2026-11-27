@@ -20,10 +20,6 @@ path = "src/bin/trigger.rs"
 name = "archives"
 path = "src/lib.rs"
 
-[features]
-default = []
-restate-compatibility = ["dep:restate-sdk"]
-
 [dependencies]
 anyhow.workspace = true
 arrow.workspace = true
@@ -39,7 +35,6 @@ dotenvy.workspace = true
 dbos.workspace = true
 # UUID columns carry Parquet's UUID logical type, which Iceberg's `uuid` reads.
 parquet = { workspace = true, features = ["arrow_canonical_extension_types"] }
-restate-sdk = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

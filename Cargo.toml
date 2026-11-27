@@ -141,8 +141,6 @@ rgb = "0.8"
 symphonia = { version = "0.6", features = ["all"] }
 base64 = "0.23"
 bs58 = "0.5"
-# `alloc` + `pkcs8` encode Restate request-identity test keys as Ed25519 DER
-# for `restate-jwt`. Encoding is feature-gated in 3.x.
 ed25519-dalek = { version = "3", features = ["alloc", "pkcs8"] }
 # Forgejo signs webhook deliveries with hex-encoded HMAC-SHA256 digests.
 hex = "0.4.3"
@@ -265,11 +263,9 @@ wiremock = "0.6"
 workflows = { path = "workflows" }
 workflows-service = { path = "workflows-service", default-features = false }
 word = { path = "word" }
-restate-sdk = "0.13"
 # Native DBOS durable execution on PostgreSQL (docs/dbos-durability.md). Pinned
 # exactly: a minor release can change the system schema it migrates on launch.
 dbos = { version = "=0.6.0", default-features = false, features = ["engine", "runtime-tokio"] }
-restate-jwt = { package = "jsonwebtoken", version = "10.4", default-features = false, features = ["rust_crypto"] }
 serde_yaml = "0.9"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }
 # Historical IANA offsets for `geotime` — tzdata compiled into the crate, no

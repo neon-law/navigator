@@ -154,26 +154,6 @@ jobs:
         worker="$PWD/images/postgres/tests/dbos/target/debug/dbos-image-smoke"
         bash store/postgres/tests/integrated_recovery.sh kind-postgres-persistence "$worker" 25433
         bash images/postgres/tests/dbos-pod-recovery.sh kind-postgres-persistence "$worker"
-    - name: Verify retained Restate request identity and host admission
-      env:
-        NAVIGATOR_TEST_POSTGRES_PORT: '25432'
-      run: |
-        kubectl -n navigator port-forward --address 127.0.0.1 service/postgres-spike 25432:5432 > "$RUNNER_TEMP/postgres-port-forward.log" 2>&1 &
-        forward_pid=$!
-        trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
-        ready=false
-        for attempt in $(seq 1 30); do
-          kill -0 "$forward_pid"
-          if bash -c 'echo > /dev/tcp/127.0.0.1/25432' 2>/dev/null; then ready=true; break; fi
-          sleep 1
-        done
-        test "$ready" = true
-        cargo test --locked -p workflows-service --features restate-compatibility --test request_identity_signature
-        cargo test --locked -p workflows-service --features restate-compatibility --lib host::host_mode_tests
-        cargo test --locked -p workflows-service --features restate-compatibility,jwt-provider-regression \
-          --test crypto_provider_health_check
-        cargo test --locked -p workflows-service --features restate-compatibility,jwt-provider-regression \
-          --lib request_identity::tests
     - name: Cleanup task cluster
       if: always()
       run: kind delete cluster --name postgres-persistence
@@ -198,7 +178,4 @@ jobs:
     - workflows-service/Cargo.toml
     - workflows-service/src/host.rs
     - workflows-service/src/host/**
-    - workflows-service/src/request_identity.rs
-    - workflows-service/tests/crypto_provider_health_check.rs
-    - workflows-service/tests/request_identity_signature.rs
   workflow_dispatch: null

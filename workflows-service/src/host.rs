@@ -2,138 +2,27 @@
 //! Opens the shared store connection and builds the worker's `EmailService`
 //! (bare `SendGrid` in production, `CapturingEmail` otherwise).
 //!
-//! Native artifacts require DBOS and complete native route ownership. The
-//! `restate-compatibility` feature also exposes the retained Restate endpoint
-//! and permits mixed ownership while retained work drains.
+//! The host requires DBOS and complete native route ownership.
 
-#[cfg(feature = "restate-compatibility")]
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 mod local_providers;
 
-#[cfg(feature = "restate-compatibility")]
-use crate::dri_digest::DriDigestService;
-#[cfg(feature = "restate-compatibility")]
-use crate::email_summary::EmailSummaryService;
 use crate::email_summary::SummaryProviders;
 use crate::engine::Engine;
-#[cfg(feature = "restate-compatibility")]
-use crate::finance_aggregate::FinanceAggregateService;
+
 use crate::firm_slack::{FirmSlackBots, ProjectSlackBots};
-#[cfg(feature = "restate-compatibility")]
-use crate::general_nag::GeneralNagService;
+
 use crate::inbound_message_alert::InboundMessageAlertService;
 use crate::inbound_triage::{InboundTriageService, TriageProviders};
 use crate::nightly_project_update::repository::{EnvFirmForges, RepositoryForge};
-#[cfg(feature = "restate-compatibility")]
-use crate::nightly_project_update::{
-    membership::MembershipTagService, repository::RepositoryTagService, slack::SlackTagService,
-    NightlyProjectUpdateService,
-};
-#[cfg(feature = "restate-compatibility")]
-use crate::notation_reset::NotationResetService;
-#[cfg(feature = "restate-compatibility")]
-use crate::request_identity::apply_identity_key;
-use crate::request_identity::install_crypto_provider;
-#[cfg(feature = "restate-compatibility")]
-use crate::social_publisher::SocialPublishReconcilerService;
+
 use crate::social_publisher::SocialPublisherService;
 use crate::youtube_comments::YoutubeCommentsPollerService;
-#[cfg(feature = "restate-compatibility")]
-use crate::{project_slack::ProjectSlackService, NotationService};
-use anyhow::Context;
-#[cfg(feature = "restate-compatibility")]
-use archives::workflow::ArchivesService;
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
-use workflows::dbos_engine;
 
-#[cfg(feature = "restate-compatibility")]
-macro_rules! bind_common_services {
-    ($endpoint:expr, $surreal:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $slack_bot:expr, $project_slack_bots:expr, $general_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
-        $endpoint
-            .bind(SocialPublisherService::new(
-                $surreal.clone(),
-                $kms.clone(),
-                $assets_storage.clone(),
-            ))
-            .bind(YoutubeCommentsPollerService::new(
-                $surreal.clone(),
-                $kms.clone(),
-            ))
-            .bind(SocialPublishReconcilerService::new(
-                $surreal.clone(),
-                $kms,
-                $assets_storage,
-            ))
-            .bind($email_summary)
-            .bind($inbound_triage)
-            .bind(InboundMessageAlertService::new(
-                $surreal.clone(),
-                $slack_bot.clone(),
-                $messages_channel.clone(),
-                $staging_messages_channel.clone(),
-                $simulated_matters,
-                $slack_bot_enabled,
-                $portal_origin.clone(),
-            ))
-            .bind(ArchivesService::new(
-                $slack_bot.clone(),
-                if $simulated_matters {
-                    $staging_messages_channel.clone()
-                } else {
-                    $messages_channel.clone()
-                },
-                $slack_bot_enabled,
-            ))
-            .bind(NotationResetService::new(
-                $surreal.clone(),
-                $slack_bot.clone(),
-                $messages_channel.clone(),
-                $staging_messages_channel.clone(),
-                $environment_label,
-                $simulated_matters,
-                $slack_bot_enabled,
-            ))
-            .bind(NightlyProjectUpdateService::new(
-                $surreal.clone(),
-                $slack_bot.clone(),
-                $messages_channel,
-                $staging_messages_channel,
-                $simulated_matters,
-                $slack_bot_enabled,
-            ))
-            .bind(MembershipTagService::new(
-                $surreal.clone(),
-                $project_slack_bots.clone(),
-                $simulated_matters,
-            ))
-            .bind(SlackTagService::new(
-                $surreal.clone(),
-                $project_slack_bots,
-                $portal_origin,
-                $repository_forge.clone(),
-            ))
-            .bind(RepositoryTagService::new(
-                $surreal.clone(),
-                $repository_forge,
-                crate::nightly_project_update::repository::RUNTIME_VERSION,
-            ))
-            .bind(DriDigestService::new(
-                $surreal.clone(),
-                $notifier,
-                $simulated_matters,
-            ))
-            .bind(FinanceAggregateService::new($surreal.clone(), $storage))
-            .bind(GeneralNagService::new(
-                $surreal,
-                $slack_bot,
-                $general_channel,
-                $simulated_matters,
-            ))
-    };
-}
+use anyhow::Context;
+
+use workflows::dbos_engine;
 
 async fn social_runtime_kms_from_env() -> Arc<dyn cloud::RuntimeKms> {
     let Ok(config) = cloud::GoogleKmsConfig::from_env() else {
@@ -146,18 +35,8 @@ async fn social_runtime_kms_from_env() -> Arc<dyn cloud::RuntimeKms> {
     };
     Arc::new(cloud::GoogleKms::new(config, Arc::new(tokens)))
 }
-#[cfg(feature = "restate-compatibility")]
-fn bind_legacy_objects(
-    endpoint: restate_sdk::endpoint::Builder,
-    services: Option<(NotationService, ProjectSlackService)>,
-) -> restate_sdk::endpoint::Builder {
-    match services {
-        Some((notation, slack)) => endpoint.bind(notation).bind(slack),
-        None => endpoint,
-    }
-}
 
-/// Run the complete standalone worker with its configured engine.
+/// Run the standalone DBOS worker.
 pub async fn run(
     shutdown: impl std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
 ) -> anyhow::Result<()> {
@@ -202,29 +81,11 @@ enum HostMode {
     Embedded,
 }
 
-#[cfg(feature = "restate-compatibility")]
-fn restate_endpoint(
-    mode: HostMode,
-    environment: store::DeploymentEnvironment,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> Result<Option<restate_sdk::endpoint::Builder>, crate::request_identity::IdentityConfigError> {
-    match mode {
-        HostMode::Standalone => {
-            apply_identity_key(Endpoint::builder(), environment, lookup).map(Some)
-        }
-        HostMode::Embedded => Ok(None),
-    }
-}
-
-#[cfg(not(feature = "restate-compatibility"))]
 fn require_native_routes(
     engine: Engine,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        engine == Engine::Dbos,
-        "This artifact runs DBOS; retained Restate work requires the compatibility worker"
-    );
+    anyhow::ensure!(engine == Engine::Dbos, "the workflow host requires DBOS");
     for workflow in store::workflow_engine::WORKFLOWS {
         anyhow::ensure!(
             dbos_engine::flag_enabled(workflow.flag, lookup(workflow.flag).as_deref())?,
@@ -261,22 +122,16 @@ async fn run_host(
         })
         .await
         .context("verify durable object engine ownership")?;
-    #[cfg(not(feature = "restate-compatibility"))]
+
     anyhow::ensure!(
         !object_selection.legacy_objects(),
-        "The native artifact requires verified durable object ownership; retain the compatibility worker until handover completes"
+        "the workflow host requires verified DBOS ownership"
     );
     // Drives `DriDigest` and `GeneralNag` staging disclosure and the
     // production-only open-matters follow-up — the same flag the site-wide
     // "simulated projects" banner reads.
     let simulated_matters =
         store::sample_matters(environment).context("resolve NAVIGATOR_SIMULATED_MATTERS")?;
-    // Makes `jsonwebtoken`'s process-level `CryptoProvider` deterministic
-    // before any request-identity signature is verified (ENG-550): Cargo
-    // feature unification otherwise leaves both `rust_crypto` and
-    // `aws_lc_rs` enabled on the shared `jsonwebtoken` instance, which
-    // panics the first real Restate-signed request.
-    install_crypto_provider();
     let lookup = |key: &str| std::env::var(key).ok();
     let enabled = |flag| dbos_engine::flag_enabled(flag, lookup(flag).as_deref());
     let triage_dbos_enabled = enabled(workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV)?;
@@ -295,7 +150,7 @@ async fn run_host(
             || !(youtube_dbos_enabled || triage_dbos_enabled || sandbox_credit_reset_enabled),
         "The enabled DBOS workflow routes require the DBOS executor"
     );
-    #[cfg(not(feature = "restate-compatibility"))]
+
     require_native_routes(engine, lookup)?;
     // Runtime KMS unseals Firm integration secrets, including the Slack Firm's
     // bot token every deployment notice posts with.
@@ -614,10 +469,7 @@ async fn run_host(
     } else {
         None
     };
-    #[cfg(feature = "restate-compatibility")]
-    let endpoint_builder = restate_endpoint(mode, environment, lookup)
-        .map_err(anyhow::Error::msg)
-        .context("configure Restate request identity")?;
+
     // Branding is Neon Law by default; NAVIGATOR_CUSTOM_BRANDING opts into a
     // mounted white-label bundle (fail closed when set but absent).
     let brand_bundle = views::brand_bundle::BrandBundle::from_env()
@@ -661,8 +513,7 @@ async fn run_host(
 
     // Operations notifications post with the deployment's Slack bot; client
     // mail uses the separately configured email backend.
-    #[cfg(feature = "restate-compatibility")]
-    let notifier = ops_notifier.clone();
+
     // The public origin the internal Project canvas links the Portal
     // under; unset, the canvas links the portal by its path.
     let portal_origin = std::env::var("NAVIGATOR_PUBLIC_HOST")
@@ -679,8 +530,7 @@ async fn run_host(
     // `#general`'s channel ID — unset in KIND, where the CronJob is still
     // installed but has no live Slack destination. An empty value fails the
     // `GeneralNag` run as a terminal error rather than posting nowhere.
-    #[cfg(feature = "restate-compatibility")]
-    let general_channel = std::env::var("SLACK_GENERAL_CHANNEL_ID").unwrap_or_default();
+
     // The `#finance` destination for the nightly Xero and IOLTA report. It
     // uses the same configured Slack App as `#general`; the empty-value rule
     // is the same too, so a run with nowhere to report is a terminal error.
@@ -688,9 +538,7 @@ async fn run_host(
     let staging_messages_channel =
         std::env::var("SLACK_STAGING_MESSAGES_CHANNEL_ID").unwrap_or_default();
     // How `NotationReset` names this deployment in its daily post.
-    #[cfg(feature = "restate-compatibility")]
-    let environment_label =
-        crate::notation_reset::environment_label(environment, simulated_matters);
+
     // The GitHub forge for the daily Project sync; `None` when the deployment
     // configures no GitHub provider (KIND), a partial configuration is fatal.
     let forge: Option<Arc<dyn cloud::forge::ForgeService>> =
@@ -758,15 +606,7 @@ async fn run_host(
     // Nightly Folder convergence must remain available without Slack configuration.
     // The parent validates/posts Slack only after visiting the full Project roster.
     let summary_providers = SummaryProviders::from_env().context("configure summary providers")?;
-    #[cfg(feature = "restate-compatibility")]
-    let email_summary = EmailSummaryService::new(
-        surreal.clone(),
-        storage.clone(),
-        slack_bot.clone(),
-        summary_providers.clone(),
-    );
-    // Event-driven DBOS twins are registered after the Restate endpoint is
-    // built, so their captures of the shared transports happen here.
+
     let dbos_email_storage = storage.clone();
     let dbos_email_slack = slack_bot.clone();
     let dbos_alert_slack = slack_bot.clone();
@@ -790,18 +630,6 @@ async fn run_host(
         None
     };
 
-    #[cfg(feature = "restate-compatibility")]
-    let listen = if mode == HostMode::Standalone {
-        let listen: SocketAddr = std::env::var("WORKFLOWS_SERVICE_LISTEN")
-            .unwrap_or_else(|_| "0.0.0.0:9080".into())
-            .parse()
-            .context("parse WORKFLOWS_SERVICE_LISTEN")?;
-        tracing::info!(%listen, "workflows-service listening");
-        Some(listen)
-    } else {
-        None
-    };
-
     // One endpoint hosts every workflow: the `Notation` virtual object,
     // `EmailSummary`, and the `Archives` nightly-export, `BillingCanary`,
     // `BillingDigest`
@@ -813,52 +641,6 @@ async fn run_host(
     // worker — there is no per-workflow pod. The exact set of service names
     // bound here is mirrored in `crate::registry`, which the
     // registry tests guard against drift (count + PascalCase naming).
-    #[cfg(feature = "restate-compatibility")]
-    let server = async move {
-        if let Some((endpoint_builder, listen)) = endpoint_builder.zip(listen) {
-            let legacy_objects = object_selection.legacy_objects().then(|| {
-                (
-                    NotationService::new(surreal.clone(), email.clone(), storage.clone()),
-                    ProjectSlackService::new(
-                        surreal.clone(),
-                        project_slack_bots.clone(),
-                        simulated_matters,
-                    ),
-                )
-            });
-            let endpoint_builder = bind_legacy_objects(endpoint_builder, legacy_objects);
-            HttpServer::new(
-                bind_common_services!(
-                    endpoint_builder,
-                    surreal,
-                    storage,
-                    assets_storage,
-                    kms,
-                    email_summary,
-                    inbound_triage,
-                    notifier,
-                    slack_bot,
-                    project_slack_bots,
-                    general_channel,
-                    messages_channel,
-                    staging_messages_channel,
-                    slack_bot_enabled,
-                    simulated_matters,
-                    repository_forge,
-                    portal_origin,
-                    environment_label
-                )
-                .build(),
-            )
-            .listen_and_serve(listen)
-            .await;
-        } else {
-            std::future::pending::<()>().await;
-        }
-    };
-
-    #[cfg(not(feature = "restate-compatibility"))]
-    let server = std::future::pending::<()>();
 
     let health_listener = bind_health_listener().await?;
     let manual_token = std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV)
@@ -1120,11 +902,7 @@ async fn run_host(
                                 ));
                         }
                     }
-                    // Social publishing twins: the same SurrealDB handle the
-                    // Restate endpoint binds, plus the reconciler's flag.
                     if let Some((social_surreal, social_reconciler_enabled)) = social_surreal {
-                        // The same publisher construction the Restate endpoint
-                        // uses, so both engines drive identical provider steps.
                         let social_publisher = SocialPublisherService::new(
                             social_surreal.clone(),
                             dbos_social_kms.clone(),
@@ -1258,7 +1036,6 @@ async fn run_host(
     }
     let mut health_finished = false;
     let result = tokio::select! {
-        () = server => Ok(()),
         result = shutdown => result,
         result = &mut health => {
             health_finished = true;
@@ -1285,13 +1062,7 @@ async fn run_host(
     health_result
 }
 
-/// Unsigned liveness/readiness probe (ENG-551): unlike the Restate endpoint,
-/// it needs no Restate Cloud signature, so kubelet and the GCE LB can reach it
-/// directly on every deployment. `/healthz` round-trips a throwaway signature
-/// through the same `jsonwebtoken` verification path real traffic uses,
-/// catching an ENG-550-style `CryptoProvider` regression instead of shipping
-/// it invisibly again; `/readyz` additionally reports the DBOS executor's
-/// health (running + system database reachable). Both engines serve it.
+/// Bind the DBOS ingress and its liveness and readiness probes.
 async fn bind_health_listener() -> anyhow::Result<tokio::net::TcpListener> {
     let health_addr = crate::health::health_listen_addr(|key| std::env::var(key).ok())?;
     let health_listener = tokio::net::TcpListener::bind(health_addr)
@@ -1329,10 +1100,7 @@ fn serve_health_listener(
     })
 }
 
-#[cfg(all(test, feature = "restate-compatibility"))]
-mod host_mode_tests;
-
-#[cfg(all(test, not(feature = "restate-compatibility")))]
+#[cfg(test)]
 mod native_host_tests {
     use super::*;
     #[test]

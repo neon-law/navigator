@@ -106,7 +106,7 @@ pub(crate) async fn open_storage() -> Result<Arc<dyn StorageService>> {
 
 /// Snapshot the selected `SurrealDB` source, or preserve the scheduled slot
 /// without `SurrealDB` rows when only PostgreSQL is selected.
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 pub(crate) async fn snapshot_selected(
     db: Option<&SurrealDb>,
     storage: &dyn StorageService,

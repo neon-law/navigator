@@ -1,8 +1,7 @@
 //! Durable workflow adapters and the shared application/worker host.
 //!
 //! DBOS workflows run on PostgreSQL through one executor in the application
-//! process or the separately selected worker. The `restate-compatibility` feature
-//! exposes the retained endpoint while caller and retained-work handover is incomplete.
+//! process or the standalone worker.
 //! Notation transitions preserve per-object serialization and store projections.
 
 pub mod asset_config;
@@ -34,20 +33,17 @@ pub mod journal;
 pub mod nightly_project_update;
 pub(crate) mod notation_logic;
 pub mod notation_reset;
-#[cfg(feature = "restate-compatibility")]
-pub mod notation_service;
+
 pub mod notation_transport;
 pub mod project_slack;
 pub mod registry;
-pub mod request_identity;
 pub mod social_publisher;
 mod tiktok_business;
 pub mod workflow_step_error;
 pub mod youtube_comments;
 
 pub use email_config::{from_env as email_from_env, EmailConfigError};
-#[cfg(feature = "restate-compatibility")]
-pub use notation_service::NotationService;
+
 pub use notation_transport::{
     CurrentStateResponse, QuestionnaireSignalBody, SignalResponse, StartBody, WorkflowSignalBody,
 };

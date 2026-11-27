@@ -106,13 +106,13 @@ COPY docs              docs
 # 41198940005 failed on the missing council/SKILL.md).
 COPY .agents           .agents
 
-RUN cargo build --release --target "$(cat /tmp/rust-target)" -p workflows-service --features restate-compatibility \
+RUN cargo build --release --target "$(cat /tmp/rust-target)" -p workflows-service \
     && cp "target/$(cat /tmp/rust-target)/release/workflows-service" /usr/local/bin/workflows-service
 
 # ---------- Stage 2: runtime ----------
 #
 # `distroless/cc` (vs `static`) so the binary's TLS dep — pulled in by
-# `restate-sdk` via reqwest — finds its dynamic loader. Same nonroot
+# PostgreSQL and HTTPS dependencies — finds its dynamic loader. Same nonroot
 # user as the web image.
 
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
