@@ -38,6 +38,7 @@ pub mod inbox_triage;
 pub mod intake;
 pub mod integrations;
 pub mod message_alert;
+#[cfg(feature = "dbos")]
 mod notation_http;
 pub mod notation_reset;
 pub mod notation_session;
