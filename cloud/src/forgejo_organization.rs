@@ -71,12 +71,33 @@ pub struct Organization {
     pub made_private: bool,
 }
 
-#[derive(Deserialize)]
 struct OrganizationBody {
     id: i64,
-    #[serde(alias = "name")]
     username: String,
     visibility: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for OrganizationBody {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct WireOrganization {
+            id: i64,
+            username: Option<String>,
+            name: Option<String>,
+            visibility: Option<String>,
+        }
+
+        let wire = WireOrganization::deserialize(deserializer)?;
+        let username = wire
+            .username
+            .or(wire.name)
+            .ok_or_else(|| serde::de::Error::missing_field("username"))?;
+        Ok(Self {
+            id: wire.id,
+            username,
+            visibility: wire.visibility,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -373,7 +394,7 @@ mod tests {
     const ORG: &str = "example-law-pc";
 
     fn org(id: i64, visibility: &str) -> serde_json::Value {
-        json!({ "id": id, "username": ORG, "visibility": visibility })
+        json!({ "id": id, "name": "Example Law PC", "username": ORG, "visibility": visibility })
     }
 
     fn client(server: &MockServer) -> ForgejoOrganizations {
