@@ -1350,13 +1350,18 @@ mod tests {
             assert_eq!(event.sequence, 0);
             assert!(!event.cancelled);
             assert_eq!(event.reminder_minutes, vec![10080, 4320, 1440, 15]);
+            let description = event.description.as_deref().unwrap();
+            let (details, target) = description.rsplit_once("\nSubmit by ").unwrap();
             assert_eq!(
-                event.description.as_deref(),
-                Some(format!(
-                    "Authority: Order setting briefing\nDeadline: {}\nMatter page: https://law.test/app/projects/mirror-code\nSubmit by 2026-11-02T16:45:00-08:00",
+                details,
+                format!(
+                    "Authority: Order setting briefing\nDeadline: {}\nMatter page: https://law.test/app/projects/mirror-code",
                     created.id
-                ))
-                .as_deref()
+                )
+            );
+            assert_eq!(
+                DateTime::parse_from_rfc3339(target).unwrap(),
+                DateTime::parse_from_rfc3339("2026-11-02T16:45:00-08:00").unwrap()
             );
             assert_eq!(
                 event.private_properties.get(MARKER_KEY),
