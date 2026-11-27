@@ -312,7 +312,8 @@ impl SchedulingPolicy {
                 .from_local_datetime(&day.date.and_time(self.end_of_business))
                 .earliest()?
                 .fixed_offset(),
-            _ => due,
+            Some(day) => due.with_timezone(&day.timezone).fixed_offset(),
+            None => due,
         };
         cutoff.checked_sub_signed(chrono::TimeDelta::minutes(self.buffer_minutes))
     }
