@@ -181,8 +181,6 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
     let rows = store::inbox_triage::list_for_review(&surreal, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
-    let filing_enabled = std::env::var(workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV)
-        .is_ok_and(|value| value.trim() == "true");
     let attachment_filing_enabled = workflows::trigger::inbox_attachment_filing_enabled();
     let mut views = Vec::with_capacity(rows.len());
     for row in rows {
@@ -199,13 +197,9 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
             })
             .collect();
         let href = format!("/app/inbox/{}", row.conversation_id);
-        let approval = if filing_enabled {
-            store::inbox_triage::filing_action_for_review(&surreal, actor, &row)
-                .await
-                .map_err(|_| ServerFnError::new("could not load the filing proposal"))?
-        } else {
-            None
-        };
+        let approval = store::inbox_triage::filing_action_for_review(&surreal, actor, &row)
+            .await
+            .map_err(|_| ServerFnError::new("could not load the filing proposal"))?;
         let filing_action = approval.map(|approval| filing_action_view(&href, &approval));
         let attachment_filings = if let Some((filing, approval)) = filing_action
             .as_ref()

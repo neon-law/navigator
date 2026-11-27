@@ -759,19 +759,8 @@ async fn unregistered_advanced_schema_is_never_adopted_as_an_upgrade() {
     cleanup(options, native.postgres, creation).await;
 }
 
-fn full_native_lookup() -> std::collections::BTreeMap<&'static str, String> {
-    let mut values = crate::workflow_engine::WORKFLOWS
-        .iter()
-        .map(|selection| (selection.flag, "true".into()))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    values.insert(crate::workflow_engine::COHOST_ENV, "true".into());
-    values.insert(crate::workflow_engine::ENGINE_ENV, "dbos".into());
-    values.insert(crate::workflow_engine::DBOS_ENABLED_ENV, "true".into());
-    values
-}
-
 #[tokio::test]
-async fn fresh_origin_and_object_epoch_commit_atomically_and_boot_requires_every_native_selector() {
+async fn fresh_origin_and_object_epoch_commit_atomically_and_refuse_foreign_ownership() {
     let options = options();
     let operation = Uuid::new_v4();
     let native = create(options.clone(), operation, tier())
@@ -780,62 +769,26 @@ async fn fresh_origin_and_object_epoch_commit_atomically_and_boot_requires_every
         .initialize()
         .await
         .unwrap();
-    let values = full_native_lookup();
-    let selection =
-        crate::durable_object_handover::require_runtime_selection(native.postgres(), |key| {
-            values.get(key).cloned()
-        })
+    crate::durable_object_handover::verify_runtime_ownership(native.postgres())
         .await
         .unwrap();
-    assert!(!selection.legacy_objects());
-    for workflow in crate::workflow_engine::WORKFLOWS {
-        let mut mixed = values.clone();
-        mixed.insert(workflow.flag, "false".into());
-        assert!(
-            crate::durable_object_handover::require_runtime_selection(native.postgres(), |key| {
-                mixed.get(key).cloned()
-            })
-            .await
-            .is_err(),
-            "{} must select native execution",
-            workflow.name
-        );
-    }
-    for workflow in crate::workflow_engine::DISABLED_BILLING {
-        let mut disabled = values.clone();
-        disabled.insert(workflow.flag, "false".into());
-        assert!(
-            !crate::durable_object_handover::require_runtime_selection(native.postgres(), |key| {
-                disabled.get(key).cloned()
-            })
-            .await
-            .unwrap()
-            .legacy_objects(),
-            "{} must not require a billing executor",
-            workflow.name
-        );
-    }
     let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM database_origin),(SELECT count(*) FROM durable_object_ownership)").fetch_one(native.postgres().pool()).await.unwrap();
     assert_eq!(counts, (1, 1));
     sqlx::query("UPDATE durable_object_handover SET origin='captured_source',source_environment='synthetic-foreign',capture_sha256=repeat('a',64) WHERE capture_id=(SELECT capture_id FROM durable_object_ownership)")
         .execute(native.postgres().pool()).await.unwrap();
     assert!(
-        crate::durable_object_handover::require_runtime_selection(native.postgres(), |key| values
-            .get(key)
-            .cloned())
-        .await
-        .is_err()
+        crate::durable_object_handover::verify_runtime_ownership(native.postgres())
+            .await
+            .is_err()
     );
     sqlx::query("DELETE FROM durable_object_ownership")
         .execute(native.postgres().pool())
         .await
         .unwrap();
     assert!(
-        crate::durable_object_handover::require_runtime_selection(native.postgres(), |key| values
-            .get(key)
-            .cloned())
-        .await
-        .is_err()
+        crate::durable_object_handover::verify_runtime_ownership(native.postgres())
+            .await
+            .is_err()
     );
     cleanup(options.clone(), native.postgres, operation).await;
 
@@ -866,83 +819,36 @@ async fn fresh_origin_and_object_epoch_commit_atomically_and_boot_requires_every
 }
 
 #[tokio::test]
-async fn fresh_fixture_requires_full_native_profile_and_invalid_or_unavailable_epochs_refuse() {
+async fn missing_invalid_and_unavailable_ownership_refuse_startup() {
     let options = options();
     let inactive = crate::test_support::PostgresFixture::create_capture_target(options.clone())
         .await
         .unwrap();
     assert!(
-        crate::durable_object_handover::require_runtime_selection(inactive.postgres(), |_| None)
+        crate::durable_object_handover::verify_runtime_ownership(inactive.postgres())
             .await
-            .unwrap()
-            .legacy_objects()
+            .is_err()
     );
     inactive.close().await.unwrap();
     let active = crate::test_support::PostgresFixture::create(options)
         .await
         .unwrap();
-    let lookup = |key: &str| match key {
-        "NAVIGATOR_DBOS_ENABLED"
-        | "NAVIGATOR_DBOS_NOTATION_ENABLED"
-        | "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED" => Some("true".into()),
-        "NAVIGATOR_WORKFLOW_ENGINE" => Some("dbos".into()),
-        _ => None,
-    };
-    assert!(matches!(
-        crate::durable_object_handover::require_runtime_selection(active.postgres(), lookup).await,
-        Err(crate::durable_object_handover::HandoverError::NativeProfile)
-    ));
-    let values = full_native_lookup();
-    let lookup = |key: &str| values.get(key).cloned();
-    assert!(
-        !crate::durable_object_handover::require_runtime_selection(active.postgres(), lookup)
-            .await
-            .unwrap()
-            .legacy_objects()
-    );
-    assert!(
-        crate::durable_object_handover::require_runtime_selection(active.postgres(), |key| {
-            if key == "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED" {
-                Some("false".into())
-            } else {
-                lookup(key)
-            }
-        })
+    crate::durable_object_handover::verify_runtime_ownership(active.postgres())
         .await
-        .is_err()
-    );
-    for (key, value) in [
-        ("NAVIGATOR_WORKFLOW_ENGINE", None),
-        ("NAVIGATOR_WORKFLOW_ENGINE", Some("restate")),
-        ("NAVIGATOR_WORKFLOW_ENGINE", Some("invalid")),
-        ("NAVIGATOR_DBOS_ENABLED", None),
-        ("NAVIGATOR_DBOS_ENABLED", Some("false")),
-        ("NAVIGATOR_DBOS_ENABLED", Some("invalid")),
-    ] {
-        assert!(crate::durable_object_handover::require_runtime_selection(
-            active.postgres(),
-            |candidate| if candidate == key {
-                value.map(str::to_owned)
-            } else {
-                lookup(candidate)
-            }
-        )
-        .await
-        .is_err());
-    }
+        .unwrap();
     sqlx::query("UPDATE durable_object_ownership SET ownership_epoch=$1")
         .bind(Uuid::nil())
         .execute(active.postgres().pool())
         .await
         .unwrap();
     assert!(
-        crate::durable_object_handover::require_runtime_selection(active.postgres(), lookup)
+        crate::durable_object_handover::verify_runtime_ownership(active.postgres())
             .await
             .is_err()
     );
     active.postgres().pool().close().await;
     assert!(
-        crate::durable_object_handover::require_runtime_selection(active.postgres(), lookup)
+        crate::durable_object_handover::verify_runtime_ownership(active.postgres())
             .await
             .is_err()
     );

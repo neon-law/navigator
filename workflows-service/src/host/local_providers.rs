@@ -4,7 +4,7 @@ use std::sync::Arc;
 use store::postgres::PostgresDb;
 use store::surreal::SurrealDb;
 use store::DeploymentEnvironment;
-use workflows::{CapturingEmail, CapturingNotifier, CapturingSlackBot, SlackBot};
+use workflows::{CapturingEmail, CapturingNotifier, CapturingSlackBot};
 
 const CHANNEL: &str = "local-capture";
 const EXPLICIT_DELIVERY: &[&str] = &[
@@ -148,10 +148,6 @@ impl LocalProviders {
             true,
         )
         .with_schedule_enabled(enabled))
-    }
-
-    pub(super) fn archives(&self) -> (Arc<dyn SlackBot>, String, bool) {
-        (self.slack.clone(), CHANNEL.into(), true)
     }
 }
 

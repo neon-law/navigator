@@ -403,32 +403,6 @@ jobs:
           step: "health check brand-readiness: ${{ steps.brand-readiness.outcome == 'success' && 'pass' || 'fail' }}"
           tag: ${{ env.TAG }}
 
-      # The CLI reuses ship's published profile: complete DBOS-only rows have no
-      # Restate target; retained compatibility rows must register their own worker.
-      # Unknown or incomplete native modes refuse before registration. This check
-      # does not certify disposition of retained work or infer it from selector flags.
-      - name: "health check: Restate registration"
-        id: restate-registration
-        env:
-          RESTATE_ADMIN_URL: ${{ vars.STAGING_RESTATE_ADMIN_URL }}
-          RESTATE_ADMIN_TOKEN: ${{ secrets.STAGING_RESTATE_ADMIN_TOKEN }}
-        run: |
-          set -euo pipefail
-          if ! hudson ops restate register --help | grep -q -- '--project-id'; then
-              echo "::warning::navigator ${TAG} predates \`ops restate register --project-id\`; relying on the registration in ops ship"
-              exit 0
-          fi
-          hudson ops restate register --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
-
-      - name: "post the Restate registration result to #navigator"
-        if: always() && steps.restate-registration.outcome != 'skipped'
-        uses: ./.github/actions/slack-progress
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          stage: ship-staging
-          step: "health check restate-registration: ${{ steps.restate-registration.outcome == 'success' && 'pass' || 'fail' }}"
-          tag: ${{ env.TAG }}
-
       - name: record the staging deployment outcome
         if: always() && steps.deployment.outputs.id != ''
         env:
@@ -635,30 +609,6 @@ jobs:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           stage: ship-production
           step: "health check brand-readiness: ${{ steps.brand-readiness.outcome == 'success' && 'pass' || 'fail' }}"
-          tag: ${{ env.TAG }}
-
-      # The same CLI profile decision applies to production; compatibility registration
-      # remains required, while complete DBOS-only rows need no Restate credentials.
-      - name: "health check: Restate registration"
-        id: restate-registration
-        env:
-          RESTATE_ADMIN_URL: ${{ vars.PRODUCTION_RESTATE_ADMIN_URL }}
-          RESTATE_ADMIN_TOKEN: ${{ secrets.PRODUCTION_RESTATE_ADMIN_TOKEN }}
-        run: |
-          set -euo pipefail
-          if ! hudson ops restate register --help | grep -q -- '--project-id'; then
-              echo "::warning::navigator ${TAG} predates \`ops restate register --project-id\`; relying on the registration in ops ship"
-              exit 0
-          fi
-          hudson ops restate register --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
-
-      - name: "post the Restate registration result to #navigator"
-        if: always() && steps.restate-registration.outcome != 'skipped'
-        uses: ./.github/actions/slack-progress
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          stage: ship-production
-          step: "health check restate-registration: ${{ steps.restate-registration.outcome == 'success' && 'pass' || 'fail' }}"
           tag: ${{ env.TAG }}
 
       # The durable last-known-good record: a `success` status here is what

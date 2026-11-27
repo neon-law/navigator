@@ -63,12 +63,7 @@ pub fn flag_enabled(name: &'static str, value: Option<&str>) -> Result<bool, Set
     }
 }
 
-/// Resolve an automatic timer independently of native handler registration.
-/// Complete native cohosting defaults off; mixed and standalone hosts retain
-/// their existing default. Explicit activation still uses the strict flag parser.
-///
-/// # Errors
-/// Returns a malformed timer or engine-selector key without its value.
+/// Resolve an optional automatic timer. Retired billing schedules stay off.
 pub fn schedule_enabled(
     name: &'static str,
     get: &impl Fn(&str) -> Option<String>,
@@ -79,13 +74,7 @@ pub fn schedule_enabled(
     ) {
         return Ok(false);
     }
-    let native =
-        store::workflow_engine::dbos_only(get).map_err(|error| SettingsError::Invalid(error.0))?;
-    store::workflow_engine::missing_dbos_flags(get)
-        .map_err(|error| SettingsError::Invalid(error.0))?;
-    let value = get(name);
-    let default = if native { "false" } else { "true" };
-    flag_enabled(name, value.as_deref().or(Some(default)))
+    flag_enabled(name, get(name).as_deref())
 }
 
 #[cfg(test)]

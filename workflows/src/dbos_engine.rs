@@ -3,7 +3,7 @@
 //! effect safe to repeat.
 //!
 //! The `web` process hosts the executor when [`ENABLED_ENV`] is `true`
-//! (`portal::hosting::run_with_dbos`); `workflows-service` runs the same
+//! (`portal::hosting::run`); `workflows-service` runs the same
 //! [`serve`] when its own engine switch selects DBOS. Both go through
 //! [`Executor`], so there is one lifecycle wherever the executor runs.
 //!
@@ -44,10 +44,6 @@ pub mod release_maintenance;
 pub mod retention_purge;
 pub mod source_imports;
 
-/// The flag that hosts the DBOS executor inside the `web` process: `true` or
-/// `false`, unset meaning `false`.
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_ENABLED";
-
 /// The variable carrying the deployed release, used as the DBOS application
 /// version.
 pub const RELEASE_ENV: &str = "NAVIGATOR_RELEASE_TAG";
@@ -64,17 +60,6 @@ pub const SYSTEM_SCHEMA: &str = "dbos";
 /// Defined in [`crate::flags`] so callers without the `dbos` feature parse
 /// the same switches; re-exported here for the established path.
 pub use crate::flags::SettingsError;
-
-/// Whether [`ENABLED_ENV`] asks this process to host the executor.
-///
-/// # Errors
-///
-/// Refuses any value other than `true` or `false`, so a typo cannot silently
-/// leave the executor off.
-pub fn enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, SettingsError> {
-    let value = lookup(ENABLED_ENV);
-    flag_enabled(ENABLED_ENV, value.as_deref())
-}
 
 pub use crate::flags::flag_enabled;
 
@@ -871,9 +856,9 @@ pub(crate) async fn post_once(
 #[cfg(test)]
 mod tests {
     use super::{
-        config, effect_key, enabled, Settings, SettingsError, APP_NAME, DATABASE_ENV, ENABLED_ENV,
-        EXECUTOR_ID_ENV, HOST_ENV, PASSWORD_ENV, PORT_ENV, RELEASE_ENV, ROOT_CERT_ENV, SSLMODE_ENV,
-        SYSTEM_SCHEMA, USER_ENV,
+        config, effect_key, Settings, SettingsError, APP_NAME, DATABASE_ENV, EXECUTOR_ID_ENV,
+        HOST_ENV, PASSWORD_ENV, PORT_ENV, RELEASE_ENV, ROOT_CERT_ENV, SSLMODE_ENV, SYSTEM_SCHEMA,
+        USER_ENV,
     };
 
     fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -974,19 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn the_executor_is_off_unless_enabled() {
-        assert_eq!(enabled(lookup(&[])), Ok(false));
-        assert_eq!(enabled(lookup(&[(ENABLED_ENV, "")])), Ok(false));
-        assert_eq!(enabled(lookup(&[(ENABLED_ENV, "false")])), Ok(false));
-        assert_eq!(enabled(lookup(&[(ENABLED_ENV, "true")])), Ok(true));
-        assert_eq!(
-            enabled(lookup(&[(ENABLED_ENV, "yes")])),
-            Err(SettingsError::Invalid(ENABLED_ENV))
-        );
-    }
-
-    #[test]
-    fn workflow_switches_share_the_strict_executor_flag_contract() {
+    fn workflow_settings_accept_only_strict_booleans() {
         const FLAG: &str = "NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED";
         assert_eq!(super::flag_enabled(FLAG, None), Ok(false));
         assert_eq!(super::flag_enabled(FLAG, Some("")), Ok(false));

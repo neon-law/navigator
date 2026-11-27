@@ -80,12 +80,6 @@ pub enum HandoverError {
     PendingNativeOperation,
     #[error("retained-object capture storage unavailable")]
     Storage,
-    #[error("{0} must select native durable execution for established ownership")]
-    EngineSelection(&'static str),
-    #[error("fresh-native Database Origin requires the complete DBOS-only host profile")]
-    NativeProfile,
-    #[error("activated durable objects require the DBOS executor and engine")]
-    NativeExecutor,
 }
 
 impl From<sqlx::Error> for HandoverError {
@@ -653,51 +647,16 @@ pub async fn require_native_ownership(postgres: &PostgresDb) -> Result<(), Hando
     Ok(())
 }
 
-/// Verified selection for ordinary host startup. It does not drain old work or
-/// change broker registrations; the host omits only already-owned object routes.
-pub struct RuntimeSelection {
-    legacy_objects: bool,
-}
-
-impl RuntimeSelection {
-    #[must_use]
-    pub const fn legacy_objects(&self) -> bool {
-        self.legacy_objects
-    }
-}
-
-/// Enforce established ownership before providers, schedules or an endpoint start.
-/// Fresh application origin requires the complete canonical native profile. An
-/// activated two-object capture requires only those two callers to stay native.
-///
-/// # Errors
-/// Missing/foreign epoch, unreadable provenance or contradictory engine selectors.
-pub async fn require_runtime_selection(
-    postgres: &PostgresDb,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> Result<RuntimeSelection, HandoverError> {
+/// Verify that PostgreSQL owns the durable objects before starting the application.
+pub async fn verify_runtime_ownership(postgres: &PostgresDb) -> Result<(), HandoverError> {
     let fresh = crate::postgres::native_origin::admits(postgres)
         .await
         .map_err(|error| match error {
             crate::postgres::native_origin::OriginError::Storage => HandoverError::Storage,
             _ => HandoverError::Conflict,
         })?;
-    if fresh
-        && !crate::workflow_engine::dbos_only(&lookup)
-            .map_err(|error| HandoverError::EngineSelection(error.0))?
-    {
-        return Err(HandoverError::NativeProfile);
-    }
     let rows=sqlx::query("SELECT o.ownership_epoch,o.capture_id,h.capture_id AS header_id,h.capture_version,h.origin,h.source_environment,h.capture_sha256,h.notation_machines,h.slack_projects,h.slack_posted_events FROM durable_object_ownership o LEFT JOIN durable_object_handover h ON h.capture_id=o.capture_id")
         .fetch_all(postgres.pool()).await?;
-    if rows.is_empty() {
-        if fresh {
-            return Err(HandoverError::Conflict);
-        }
-        return Ok(RuntimeSelection {
-            legacy_objects: true,
-        });
-    }
     let [row] = rows.as_slice() else {
         return Err(HandoverError::Conflict);
     };
@@ -743,32 +702,13 @@ pub async fn require_runtime_selection(
                 || digest.is_some()
                 || row.try_get::<i32, _>("notation_machines")? != 0
                 || row.try_get::<i32, _>("slack_posted_events")? != 0
-                || !crate::workflow_engine::dbos_only(&lookup)
-                    .map_err(|error| HandoverError::EngineSelection(error.0))?
             {
                 return Err(HandoverError::Conflict);
             }
         }
         _ => return Err(HandoverError::Conflict),
     }
-    if !crate::workflow_engine::dbos_executor(&lookup)
-        .map_err(|error| HandoverError::EngineSelection(error.0))?
-    {
-        return Err(HandoverError::NativeExecutor);
-    }
-    let missing = crate::workflow_engine::missing_dbos_flags(&lookup)
-        .map_err(|error| HandoverError::EngineSelection(error.0))?;
-    for selection in crate::workflow_engine::WORKFLOWS
-        .iter()
-        .filter(|selection| matches!(selection.name, "notation" | "project-slack"))
-    {
-        if missing.contains(&selection.flag) {
-            return Err(HandoverError::EngineSelection(selection.flag));
-        }
-    }
-    Ok(RuntimeSelection {
-        legacy_objects: false,
-    })
+    Ok(())
 }
 
 // Only the two exclusively-created resource constructors call this transaction
@@ -821,23 +761,7 @@ mod tests {
                     .await,
                 Err(DeliveryError::MainPushHistoryUnavailable)
             ));
-            assert!(require_runtime_selection(&pg, |_| None).await.is_err());
-            let selection = require_runtime_selection(&pg, |key| match key {
-                crate::workflow_engine::COHOST_ENV | crate::workflow_engine::DBOS_ENABLED_ENV => {
-                    Some("true".into())
-                }
-                crate::workflow_engine::ENGINE_ENV => Some("dbos".into()),
-                key if crate::workflow_engine::WORKFLOWS
-                    .iter()
-                    .any(|row| row.flag == key) =>
-                {
-                    Some("true".into())
-                }
-                _ => None,
-            })
-            .await
-            .unwrap();
-            assert!(!selection.legacy_objects());
+            verify_runtime_ownership(&pg).await.unwrap();
 
             let entity_id = sqlx::query_scalar("SELECT entity_id FROM project WHERE id=$1")
                 .bind(historical)
