@@ -2962,8 +2962,9 @@ async fn project_status_door(
     } else {
         Vec::new()
     };
+    let integrations = firm_integrations(project.firm_id).await?;
     let drive_folder_id = linked_drive_folder(&project);
-    if project.status == "open" && drive_folder_id.is_none() {
+    if project.status == "open" && integrations.drive && drive_folder_id.is_none() {
         missing.push(format!(
             "Link the matter's Drive folder: `navigator project set {} --drive-folder <link>`.",
             project.code
@@ -2981,6 +2982,7 @@ async fn project_status_door(
         "closed_at": project.closed_at,
         "source_state": store::project_surfaces::source_state(&project),
         "drive_folder_id": drive_folder_id,
+        "firm_integrations": integrations,
         "onboarding": {
             "filed": opening.contains(&id),
             "status": onboarding_status.label(),
@@ -2993,6 +2995,32 @@ async fn project_status_door(
         "missing": missing
     }))
     .into_response())
+}
+
+/// The owning Firm's Firm Integrations switches; a Project without a Firm has both off.
+#[derive(serde::Serialize)]
+struct FirmIntegrations {
+    calendar: bool,
+    drive: bool,
+}
+
+async fn firm_integrations(firm: Option<Uuid>) -> Result<FirmIntegrations, ApiError> {
+    let Some(firm) = firm else {
+        return Ok(FirmIntegrations {
+            calendar: false,
+            drive: false,
+        });
+    };
+    let unavailable = |error: store::firms::FirmError| ApiError::Db(error.to_string());
+    Ok(FirmIntegrations {
+        calendar: store::firms::calendar_owner(firm)
+            .await
+            .map_err(unavailable)?
+            .is_some(),
+        drive: store::firms::google_drive(firm)
+            .await
+            .map_err(unavailable)?,
+    })
 }
 
 async fn stored_project_envelopes(

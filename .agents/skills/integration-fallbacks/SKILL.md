@@ -33,16 +33,20 @@ in every case; a file in `~/Downloads` is the lawyer's copy to open, import, or 
 
 ## 1. Detect what is missing
 
-Check before the step, not after a failure. Any one sign is enough:
+Check before the step, not after a failure. Read the Firm's switches from the Project's live status:
 
-- **Google Calendar:** no `calendar_id` in `navigator.yaml`; no calendar or booking row on the Project page; or
-  `navigator project deadline sync` or `navigator calendar access` refuses the Firm.
-- **Google Drive:** `navigator project status` prints `drive folder: none linked`, or the Project page has no Drive row.
+```bash
+navigator project status <code> --json
+```
+
+Its `firm_integrations` object reads `{"calendar": true, "drive": false}` for the Firm that owns the Project; the plain
+output prints the same as a `Firm Integrations:` line. `false` means the integration is off, and a Project without a
+Firm has both off. An older server omits the object: treat the switch as unknown and ask the lawyer.
+
 - **Notion:** `private_notion_page: not provisioned` in `navigator.yaml`, or no Notion connector in the session.
 - **Gmail:** no Gmail connector in the session, and `navigator mail draft` refuses for want of a stored login.
 
-Don't run `navigator project setup` to probe: it provisions. If its earlier output reported a resource as `skipped
-(provider is not configured)`, treat that integration as off. When the signs disagree, ask the lawyer which is right.
+Don't run `navigator project setup` to probe: it provisions.
 
 ## 2. Calendar off: Deadline plus ICS
 
@@ -86,22 +90,20 @@ Use the first tool that works, and follow the `email-draft` skill for voice and 
 2. **`navigator mail draft`**, when a Gmail login is stored but the connector is absent.
 3. **The Firm's own mail client**, when the Firm runs Outlook: leave an unsent draft there as the `outlook-triage`
    skill does.
-4. **An `.eml` file** otherwise, named `~/Downloads/<code>-<YYYY-MM-DD>-<slug>.eml`, UTF-8 plain text, CRLF line ends:
+4. **An `.eml` file** otherwise, written by `navigator mail draft --eml`, which needs no Gmail login:
 
-   ```text
-   To: client@example.com
-   Cc: paralegal@example.com
-   Subject: Draft agreement for your review
-   X-Unsent: 1
-   MIME-Version: 1.0
-   Content-Type: text/plain; charset=utf-8
-
-   The revised agreement is ready for your review.
+   ```bash
+   navigator mail draft --eml ~/Downloads/acme-auto-ny-2026-12-02-draft-agreement.eml \
+     --to client@example.com --cc paralegal@example.com \
+     --subject "Draft agreement for your review" \
+     --body-file ~/Downloads/acme-auto-ny-2026-12-02-draft-agreement.txt \
+     --attach ~/Downloads/acme-auto-ny-2026-12-02-agreement.pdf
    ```
 
-   Leave out `From:`, so the lawyer's client sends from their own account. For a reply, add `In-Reply-To:` and
-   `References:` with the original `Message-ID`. Leave attachments out of the file: copy each beside it in `~/Downloads`
-   under its client-facing name, as `email-draft` describes.
+   The file is UTF-8 with CRLF line ends and `X-Unsent: 1`, with each `--attach` as a MIME part. It has no `From:` and
+   no signature, so the lawyer's mail client fills both. For a reply, pass `--in-reply-to` with the original
+   `Message-ID` to set `In-Reply-To:` and `References:`. The command never replaces an existing file. Delete the body
+   text file once the `.eml` is written.
 
 File inbound mail the same way whatever the provider: save the `.eml` and run `navigator mail ingest <path> --project
 <code>`.
