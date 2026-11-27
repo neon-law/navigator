@@ -968,6 +968,7 @@ async fn existing_esign_ledger_accepts_earlier_handover_migrations_without_nativ
         20_261_119_040_000,
         20_261_119_050_000,
         20_261_121_000_000,
+        20_261_126_230_000,
     ];
     let existing = sqlx::migrate::Migrator::with_migrations(
         embedded_migrator()

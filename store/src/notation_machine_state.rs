@@ -139,7 +139,8 @@ const READ_SQL: &str = concat!(
 ///
 /// # Errors
 ///
-/// [`MachineStateError`] for a database failure.
+/// Refuses to recreate a missing historical machine across a no-capture
+/// cutover. A database failure also returns [`MachineStateError`].
 pub async fn start_machine(
     pg: &PostgresDb,
     notation_id: Uuid,
@@ -147,6 +148,23 @@ pub async fn start_machine(
     spec_yaml: &str,
     ephemeral: bool,
 ) -> Result<bool, MachineStateError> {
+    let discarded: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM notation n \
+         JOIN durable_object_ownership o ON o.singleton \
+         JOIN durable_object_handover h USING (capture_id) \
+         WHERE n.id=$1 AND n.inserted_at <= o.activated_at AND h.origin='source_discarded' \
+         AND NOT EXISTS(SELECT 1 FROM notation_machine_state m WHERE m.notation_id=n.id AND m.machine_kind=$2))",
+    )
+    .bind(notation_id)
+    .bind(machine_kind)
+    .fetch_one(pg.pool())
+    .await?;
+    if discarded {
+        return Err(MachineStateError::MachineMissing {
+            notation_id,
+            machine_kind: machine_kind.to_owned(),
+        });
+    }
     let result = sqlx::query(
         "INSERT INTO notation_machine_state \
          (notation_id, machine_kind, spec_yaml, current_state, ephemeral) \

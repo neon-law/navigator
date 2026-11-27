@@ -34,6 +34,8 @@ pub enum DeliveryError {
     HandoverRequired,
     #[error("Project Slack client-view posting evidence is unresolved")]
     Unresolved,
+    #[error("Project Slack main-push history was not imported for this Project")]
+    MainPushHistoryUnavailable,
     #[error("invalid Project Slack event identity")]
     InvalidEvent,
     #[error("Project Slack delivery storage unavailable")]
@@ -91,7 +93,7 @@ pub async fn admission(
     key: &str,
 ) -> Result<Admission, DeliveryError> {
     validate_event(kind, key)?;
-    let row = sqlx::query("SELECT h.native_active,h.client_view_disposition FROM project_slack_handover h JOIN durable_object_ownership o ON o.ownership_epoch=h.ownership_epoch WHERE h.project_id=$1")
+    let row = sqlx::query("SELECT h.native_active,h.client_view_disposition,e.origin FROM project_slack_handover h JOIN durable_object_ownership o ON o.ownership_epoch=h.ownership_epoch LEFT JOIN durable_object_handover e ON h.capture_id=e.capture_id WHERE h.project_id=$1")
         .bind(project_id).fetch_optional(postgres.pool()).await?
         .ok_or(DeliveryError::HandoverRequired)?;
     if !row.try_get::<bool, _>("native_active")? {
@@ -101,6 +103,11 @@ pub async fn admission(
         .bind(project_id).bind(kind).bind(key).fetch_one(postgres.pool()).await?;
     if posted {
         return Ok(Admission::Posted);
+    }
+    if kind == "main_push"
+        && row.try_get::<Option<String>, _>("origin")?.as_deref() == Some("source_discarded")
+    {
+        return Err(DeliveryError::MainPushHistoryUnavailable);
     }
     if kind == "client_view" {
         match row

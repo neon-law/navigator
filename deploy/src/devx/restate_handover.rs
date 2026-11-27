@@ -169,6 +169,18 @@ pub(super) fn run(environment: &str) -> Result<()> {
     Ok(())
 }
 
+/// Check aggregate obligations without reading any retained object or journal body.
+pub(super) fn require_drained(environment: &str) -> Result<()> {
+    if environment.trim().is_empty() || environment.starts_with('-') {
+        bail!("an explicit Restate environment is required");
+    }
+    let audit = audit(|sql| query(environment, sql))?;
+    if audit.nonterminal_invocations != 0 || audit.completed_failures != 0 {
+        bail!("Restate still has unfinished work or failed outcomes to reconcile");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
