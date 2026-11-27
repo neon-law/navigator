@@ -148,12 +148,11 @@ const FIRM_NAV: &[NavLink] = &[
 /// Guieb & Shook's public contact page.
 pub const GUIEB_SHOOK_CONTACT_URL: &str = "https://guiebshook.com/contact";
 
-/// Neon's header names its pages: Notations, the document format; Lawyers, the
-/// connected Project; and a guide to choosing when to get legal help.
+/// Neon's header names its pages: Notations, the document format; and Lawyers,
+/// the connected Project.
 const NEON_NAV: &[NavLink] = &[
     NavLink::leaf("Notations", "/notations"),
     NavLink::leaf("Lawyers", "/lawyers"),
-    NavLink::leaf("Do I need a lawyer?", "/do-i-need-a-lawyer"),
 ];
 
 /// Public footer pages. `firm_footer_nav` adds Contact, Testimonials, Privacy,
@@ -1366,9 +1365,6 @@ impl BrandKey {
                 .explainer_pages()
                 .iter()
                 .any(|(route, _)| *route == path);
-        }
-        if path == "/do-i-need-a-lawyer" {
-            return self == Self::Neon;
         }
         // Every house-brand home accepts contact requests through `/leads`.
         if path == "/contact/sent" {
@@ -3142,7 +3138,6 @@ mod tests {
             [
                 ("Notations", "/notations"),
                 ("Lawyers", "/lawyers"),
-                ("Do I need a lawyer?", "/do-i-need-a-lawyer"),
             ]
         );
     }

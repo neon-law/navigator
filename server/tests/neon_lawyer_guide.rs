@@ -51,30 +51,16 @@ async fn neon_contact_redirects_to_guieb_shook() {
 }
 
 #[tokio::test]
-async fn lawyer_guide_offers_self_help_and_representation() {
+async fn home_links_to_guieb_shook_externally_and_has_no_lawyer_guide() {
     let app = site_app().await;
     let home = get(&app, "/", "localhost:32100").await;
     assert_eq!(home.status(), StatusCode::OK);
     let home = body_string(home).await;
     assert!(home.contains("Agentic lawyering is for everyone."));
-    assert!(home.contains(r#"href="/do-i-need-a-lawyer""#));
+    assert!(!home.contains("/do-i-need-a-lawyer"));
+    assert!(home.contains("opens in a new tab"));
     assert!(!home.contains(r#"href="/legal-aid""#));
 
     let response = get(&app, "/do-i-need-a-lawyer", "localhost:32100").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = body_string(response).await;
-    for expected in [
-        "Do I need a lawyer?",
-        "When you can start on your own",
-        "When to talk to a lawyer",
-        "Check whether representation is required",
-        "valid retainer",
-        r#"href="/notations""#,
-        r#"href="https://guiebshook.com/contact""#,
-    ] {
-        assert!(body.contains(expected), "missing {expected}");
-    }
-
-    let sibling = get(&app, "/do-i-need-a-lawyer", "localhost:32101").await;
-    assert_eq!(sibling.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

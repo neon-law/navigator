@@ -27,8 +27,6 @@ bands:
       - title: Represent yourself
         body:
           - - text: Find a public template and enter your details. You review what you file or send.
-          - - text: Do I need a lawyer?
-              href: /do-i-need-a-lawyer
         href: /notations
         href_label: Browse templates
       - title: Talk to a lawyer

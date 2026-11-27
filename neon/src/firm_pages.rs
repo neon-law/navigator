@@ -1604,14 +1604,6 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
-    if !branding.firm_family.is_empty() {
-        routers.push(dioxus_app::marketing_page_router(
-            "/do-i-need-a-lawyer",
-            locales::lawyer_guide(branding),
-            state.sessions.clone(),
-            portal::secure_cookies(state),
-        ));
-    }
     routers.push(dioxus_app::marketing_page_router(
         "/lawyers",
         firm_copy::lawyers(branding),
