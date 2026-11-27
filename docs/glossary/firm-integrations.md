@@ -14,9 +14,10 @@ On the [Firm](firm.md) edit page, an Owner switches Google Calendar and Google D
 - **Google Drive off:** Drive links and the Drive folder setting disappear from Project pages. A recorded folder id
   stays stored.
 
-A Firm without a saved Drive choice has Drive off. [G&S](g-and-s.md) has both on.
+A Firm without a saved Drive choice has Drive off. [G&S](gs.md) has both on.
 
-The Drive switch is the `firm_drive_settings` table. The Calendar switch is the presence of a mailbox in
-`firm_calendar_settings`.
+The Calendar switch is the presence of a mailbox in `firm_calendar_settings`. The Drive switch is its own table.
+
+The table is `firm_drive_settings`.
 
 Schema: [`firm_drive_settings`](../../store/postgres/schema.sql).
