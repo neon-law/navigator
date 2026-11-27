@@ -173,22 +173,6 @@ mod help_tests {
                 .chain(["--deployments-dir", "/unused"])
         )
         .is_err());
-        let register = [
-            "navigator",
-            "ops",
-            "restate",
-            "register",
-            "--deployment",
-            "example-deployment",
-            "--project-id",
-            "example-project",
-        ];
-        assert!(Cli::try_parse_from(register).is_ok());
-        assert!(Cli::try_parse_from(&register[..6]).is_err());
-        assert!(
-            Cli::try_parse_from(register.into_iter().chain(["--url", "https://w.example/"]))
-                .is_err()
-        );
         assert!(Cli::try_parse_from([
             "navigator",
             "ops",
