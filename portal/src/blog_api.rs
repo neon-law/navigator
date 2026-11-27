@@ -384,23 +384,8 @@ pub(crate) async fn status(
     .into_response())
 }
 
-/// Whether this deployment can start publications: the `SocialPublisher`
-/// switch selects the worker's DBOS ingress, else the Restate broker.
 fn publisher_configured() -> bool {
-    match workflows::trigger::service_target(
-        workflows::trigger::SOCIAL_PUBLISHER_ENABLED_ENV,
-        std::env::var(workflows::trigger::SOCIAL_PUBLISHER_ENABLED_ENV)
-            .ok()
-            .as_deref(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
-    ) {
-        Ok(workflows::trigger::ServiceTarget::Dbos { .. }) => true,
-        Ok(workflows::trigger::ServiceTarget::Restate) => {
-            crate::cron_schedules::restate_broker_url().is_some()
-        }
-        Err(_) => false,
-    }
+    workflows::trigger::dbos_ingress_from_env().is_ok()
 }
 
 async fn selected_accounts(
@@ -585,37 +570,12 @@ pub(crate) async fn publish(
     Json(input): Json<PublishPost>,
 ) -> Result<Response, BlogError> {
     authorize(&state, &actor, &input.brand).await?;
-    let target = workflows::trigger::service_target(
-        workflows::trigger::SOCIAL_PUBLISHER_ENABLED_ENV,
-        std::env::var(workflows::trigger::SOCIAL_PUBLISHER_ENABLED_ENV)
-            .ok()
-            .as_deref(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
-    )
-    .map_err(|error| BlogError::Invalid(error.to_string()))?;
-    match &target {
-        workflows::trigger::ServiceTarget::Dbos { ingress, token } => {
-            queue_publication_dbos(&state, &actor, &input, ingress, token).await
-        }
-        workflows::trigger::ServiceTarget::Restate => {
-            let broker =
-                crate::cron_schedules::restate_broker_url().ok_or(BlogError::Unavailable)?;
-            queue_publication(
-                &state,
-                &actor,
-                &input,
-                &broker,
-                std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
-            )
-            .await
-        }
-    }
+    let (ingress, token) =
+        workflows::trigger::dbos_ingress_from_env().map_err(|_| BlogError::Unavailable)?;
+    queue_publication_dbos(&state, &actor, &input, &ingress, &token).await
 }
 
-/// Schedule one publication through the authenticated internal DBOS worker
-/// ingress, keyed by the same `(post, scheduled time)` identity the Restate
-/// invocation key carried. The caller has already authorized the brand.
+/// Queue the publication after the caller authorizes the Brand.
 async fn queue_publication_dbos(
     state: &ApiState,
     actor: &SessionData,
@@ -646,29 +606,6 @@ async fn queue_publication_dbos(
         })),
     )
         .into_response())
-}
-
-async fn queue_publication(
-    state: &ApiState,
-    actor: &SessionData,
-    input: &PublishPost,
-    broker: &str,
-    auth_token: Option<&str>,
-) -> Result<Response, BlogError> {
-    let request = prepare(state, actor, input, Utc::now()).await?;
-    let key = format!("{}:{}", request.post_id, request.publish_at.to_rfc3339());
-    workflows::start_workflow(
-        broker,
-        auth_token,
-        "SocialPublisher",
-        &key,
-        "run",
-        &request,
-        true,
-    )
-    .await
-    .map_err(database)?;
-    Ok((StatusCode::ACCEPTED, Json(json!({"post_id":request.post_id,"status":"scheduled","publish_at":request.publish_at,"outcome":"queued","brand":input.brand,"account_ids":input.account_ids}))).into_response())
 }
 
 #[derive(Deserialize)]
@@ -1012,9 +949,10 @@ mod tests {
         .unwrap();
         let command = form.into_publish().unwrap();
         for _ in 0..2 {
-            let response = queue_publication(&state, &actor, &command, &broker.uri(), None)
-                .await
-                .unwrap();
+            let response =
+                queue_publication_dbos(&state, &actor, &command, &broker.uri(), "synthetic-token")
+                    .await
+                    .unwrap();
             assert_eq!(response.status(), StatusCode::ACCEPTED);
         }
         let post = store::posts::find_by_brand_slug(
@@ -1034,11 +972,12 @@ mod tests {
         let requests = broker.received_requests().await.unwrap();
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].url.path(), requests[1].url.path());
-        assert!(requests[0].url.path().starts_with("/SocialPublisher/"));
-        assert!(requests[0].url.path().ends_with("/run/send"));
+        assert_eq!(requests[0].url.path(), "/internal/dbos/social-publisher");
         let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
-        assert_eq!(body["post_id"], post.id.to_string());
-        assert_eq!(body["publish_at"], serde_json::json!(publish_at));
+        assert_eq!(body["request"]["post_id"], post.id.to_string());
+        assert_eq!(body["request"]["publish_at"], serde_json::json!(publish_at));
+        let replay: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(body["workflow_id"], replay["workflow_id"]);
     }
 
     #[tokio::test]

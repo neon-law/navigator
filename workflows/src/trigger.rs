@@ -14,8 +14,7 @@
 //! (`RESTATE_AUTH_TOKEN`); the in-cluster Restate Operator used in
 //! KIND does not. Passing `auth_token = None` (or an empty string)
 //! sends no header at all, so the same code path works in both
-//! environments — the exact contract the [`crate::RestateRuntime`]
-//! adapter already follows for the `notation` service.
+//! environments.
 //!
 //! `one_way = true` targets Restate's `/send` variant: the call
 //! returns as soon as the invocation is *accepted* (Restate then runs
@@ -416,18 +415,47 @@ pub fn service_target(
     dbos_ingress_token: Option<String>,
 ) -> Result<ServiceTarget, ServiceTargetError> {
     if crate::flags::flag_enabled(flag, enabled)? {
-        let ingress = dbos_ingress_url
-            .map(|url| url.trim().trim_end_matches('/').to_owned())
-            .filter(|url| !url.is_empty())
-            .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_URL_ENV))?;
-        let token = dbos_ingress_token
-            .map(|token| token.trim().to_owned())
-            .filter(|token| !token.is_empty())
-            .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_TOKEN_ENV))?;
+        let (ingress, token) = parse_dbos_ingress(dbos_ingress_url, dbos_ingress_token)?;
         Ok(ServiceTarget::Dbos { ingress, token })
     } else {
         Ok(ServiceTarget::Restate)
     }
+}
+
+/// Read the authenticated DBOS ingress configuration.
+pub fn dbos_ingress(
+    get: &impl Fn(&str) -> Option<String>,
+) -> Result<(String, String), ServiceTargetError> {
+    parse_dbos_ingress(get(DBOS_INGRESS_URL_ENV), get(DBOS_INGRESS_TOKEN_ENV))
+}
+
+fn parse_dbos_ingress(
+    ingress: Option<String>,
+    token: Option<String>,
+) -> Result<(String, String), ServiceTargetError> {
+    let ingress = ingress
+        .map(|url| url.trim().trim_end_matches('/').to_owned())
+        .filter(|url| !url.is_empty())
+        .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_URL_ENV))?;
+    let token = token
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty())
+        .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_TOKEN_ENV))?;
+    Ok((ingress, token))
+}
+
+pub fn dbos_ingress_from_env() -> Result<(String, String), ServiceTargetError> {
+    dbos_ingress(&|key| std::env::var(key).ok())
+}
+
+/// Mounted applications can omit workflow ingress for routes that only persist intake.
+pub fn optional_dbos_ingress_from_env() -> Result<Option<(String, String)>, ServiceTargetError> {
+    if std::env::var_os(DBOS_INGRESS_URL_ENV).is_none()
+        && std::env::var_os(DBOS_INGRESS_TOKEN_ENV).is_none()
+    {
+        return Ok(None);
+    }
+    dbos_ingress_from_env().map(Some)
 }
 
 /// The base URL of the worker's authenticated DBOS ingress. Ungated: every
@@ -678,18 +706,7 @@ pub fn inbox_attachment_filing_enabled() -> bool {
 pub async fn start_approved_inbox_filing(
     approval: &store::inbox_triage::FilingApproval,
 ) -> Result<(), TriggerError> {
-    let target = service_target(
-        INBOUND_TRIAGE_DBOS_ENABLED_ENV,
-        std::env::var(INBOUND_TRIAGE_DBOS_ENABLED_ENV)
-            .ok()
-            .as_deref(),
-        std::env::var(DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(DBOS_INGRESS_TOKEN_ENV).ok(),
-    )
-    .map_err(|_| TriggerError::Transport)?;
-    let ServiceTarget::Dbos { ingress, token } = target else {
-        return Err(TriggerError::Transport);
-    };
+    let (ingress, token) = dbos_ingress_from_env().map_err(|_| TriggerError::Transport)?;
     start_dbos_at(
         &ingress,
         &token,
@@ -699,42 +716,20 @@ pub async fn start_approved_inbox_filing(
     .await
 }
 
-/// Select one durable engine for a persisted inbound Message.
+/// Submit triage for a persisted inbound Message.
 pub async fn start_inbound_triage(message_id: uuid::Uuid) -> Result<(), String> {
-    let request = crate::InboundTriageRequest { message_id };
-    let target = service_target(
-        INBOUND_TRIAGE_DBOS_ENABLED_ENV,
-        std::env::var(INBOUND_TRIAGE_DBOS_ENABLED_ENV)
-            .ok()
-            .as_deref(),
-        std::env::var(DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(DBOS_INGRESS_TOKEN_ENV).ok(),
+    let Some((ingress, token)) =
+        optional_dbos_ingress_from_env().map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
+    start_dbos_at(
+        &ingress,
+        &token,
+        "/internal/dbos/inbound-triage",
+        &crate::InboundTriageRequest { message_id },
     )
-    .map_err(|error| error.to_string())?;
-    match target {
-        ServiceTarget::Dbos { ingress, token } => {
-            start_dbos_at(&ingress, &token, "/internal/dbos/inbound-triage", &request).await
-        }
-        ServiceTarget::Restate => {
-            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-            else {
-                return Ok(());
-            };
-            start_workflow(
-                &ingress,
-                std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
-                "InboundTriage",
-                &message_id.to_string(),
-                "run",
-                &request,
-                true,
-            )
-            .await
-            .map(|_| ())
-        }
-    }
+    .await
     .map_err(|error| error.to_string())
 }
 

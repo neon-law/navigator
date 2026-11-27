@@ -129,11 +129,8 @@ Native Notation execution uses the PostgreSQL-backed DBOS worker in
 transitions and persists state and Notation Events through the existing transactional store seams. The application uses
 [`DbosNotationRuntime`](../workflows/src/runtime_dbos.rs) with its explicit ingress and bearer token.
 
-The native and retained broker adapters use the same internal [Notation HTTP
-transport](../workflows/src/notation_http.rs) for start, signal, actor attribution, trace propagation, and bodyless
-state/event reads. Native revision-bound approvals have dedicated handlers. Explicit compatibility selection retains
-[`RestateRuntime`](../workflows/src/runtime_restate.rs), its broker environment, and journaled worker handlers. Boot
-selection and ownership admission determine which adapter is allowed.
+The [Notation HTTP transport](../workflows/src/notation_http.rs) handles start, signal, actor attribution, trace
+propagation, and bodyless state and event reads. Revision-bound approvals use dedicated handlers.
 
 ## The signature seam
 
@@ -183,8 +180,8 @@ infrastructure rather than a future swap-in.
   branches, prior-answer pre-fill), [`webapp/src/intake_review.rs`](../webapp/src/intake_review.rs) the review phases
   and the CSRF token on every write, and [`webapp/src/reask.rs`](../webapp/src/reask.rs) the flagged re-ask.
 - **Notation HTTP transport**: [`workflows/src/notation_http.rs`](../workflows/src/notation_http.rs) uses `wiremock`
-  to pin wire shape, authentication, trace propagation and failures per `MachineKind`. Adapter tests retain legacy
-  service selection and native revision-bound approval checks.
+  to pin wire shape, authentication, trace propagation and failures per `MachineKind`. DBOS adapter tests verify
+  revision-bound approval.
 - **Worker handlers** run transitions in [`dbos_notation.rs`](../workflows-service/src/dbos_notation.rs) and append
   events through [`journal.rs`](../workflows-service/src/journal.rs).
 - **HTTP + browser**: `server/tests/browser_e2e.rs` drives the full retainer walk end-to-end via fantoccini +

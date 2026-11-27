@@ -3481,39 +3481,10 @@ async fn run_finance_door(
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
     let run_id = format!("manual-{}", Uuid::new_v4());
-    let dbos_flag = std::env::var("NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED").ok();
-    let Ok(dbos_ingress) = finance_dbos_ingress_config(
-        dbos_flag.as_deref(),
-        std::env::var("NAVIGATOR_DBOS_INGRESS_URL").ok(),
-        std::env::var("NAVIGATOR_DBOS_INGRESS_TOKEN").ok(),
-    ) else {
-        return Ok((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "workflows_unavailable",
-                "message": "DBOS FinanceAggregate is enabled but its ingress configuration is invalid."
-            })),
-        )
-            .into_response());
+    let Ok((url, token)) = workflows::trigger::dbos_ingress_from_env() else {
+        return Ok(workflow_ingress_unavailable());
     };
-    let dispatch = if let Some((url, token)) = dbos_ingress {
-        queue_finance_run_dbos(&url, &token, id, &project.code, &run_id).await
-    } else {
-        let Some(broker) = crate::cron_schedules::restate_broker_url() else {
-            return Ok((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": "workflows_unavailable",
-                    "message": "No durable workflow ingress is configured for this deployment."
-                })),
-            )
-                .into_response());
-        };
-        let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-        queue_finance_run(&broker, token.as_deref(), id, &project.code, &run_id)
-            .await
-            .map(|_| ())
-    };
+    let dispatch = queue_finance_run_dbos(&url, &token, id, &project.code, &run_id).await;
     match dispatch {
         Ok(()) => {
             tracing::info!(project_id = %id, run_id, "finance aggregate run queued");
@@ -3643,39 +3614,10 @@ async fn main_push_event_door(
         )
             .into_response());
     }
-    let dbos_flag = std::env::var(workflows::trigger::PROJECT_SLACK_ENABLED_ENV).ok();
-    let Ok(dbos_ingress) = project_slack_dbos_ingress_config(
-        dbos_flag.as_deref(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
-    ) else {
-        return Ok((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "workflows_unavailable",
-                "message": "DBOS project-slack is enabled but its ingress configuration is invalid."
-            })),
-        )
-            .into_response());
+    let Ok((url, token)) = workflows::trigger::dbos_ingress_from_env() else {
+        return Ok(workflow_ingress_unavailable());
     };
-    let dispatch = if let Some((url, token)) = dbos_ingress {
-        queue_main_push_dbos(&url, &token, id, &event).await
-    } else {
-        let Some(broker) = crate::cron_schedules::restate_broker_url() else {
-            return Ok((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": "workflows_unavailable",
-                    "message": "No durable workflow ingress is configured for this deployment."
-                })),
-            )
-                .into_response());
-        };
-        let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-        queue_main_push(&broker, token.as_deref(), id, &event)
-            .await
-            .map(|_| ())
-    };
+    let dispatch = queue_main_push_dbos(&url, &token, id, &event).await;
     match dispatch {
         Ok(()) => {
             tracing::info!(
@@ -3699,65 +3641,15 @@ async fn main_push_event_door(
     }
 }
 
-/// Fire-and-forget `project-slack/<project id>/main_push` on the Restate
-/// ingress. The body is the event as validated; the worker resolves the
-/// channel from the Project row.
-async fn queue_main_push(
-    broker: &str,
-    token: Option<&str>,
-    project_id: Uuid,
-    event: &MainPushEvent,
-) -> Result<String, workflows::TriggerError> {
-    workflows::start_workflow(
-        broker,
-        token,
-        "project-slack",
-        &project_id.to_string(),
-        "main_push",
-        event,
-        true,
+fn workflow_ingress_unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "workflows_unavailable",
+            "message": "The durable workflow ingress is unavailable."
+        })),
     )
-    .await
-}
-
-/// Fire-and-forget start of `FinanceAggregate/<run_id>/run` on the Restate
-/// ingress, carrying the Project id and code the workflow reads its input by.
-async fn queue_finance_run(
-    broker: &str,
-    token: Option<&str>,
-    project_id: Uuid,
-    project_code: &str,
-    run_id: &str,
-) -> Result<String, workflows::TriggerError> {
-    workflows::start_workflow(
-        broker,
-        token,
-        "FinanceAggregate",
-        run_id,
-        "run",
-        &serde_json::json!({ "project_id": project_id, "project_code": project_code }),
-        true,
-    )
-    .await
-}
-
-fn finance_dbos_ingress_config(
-    enabled: Option<&str>,
-    ingress_url: Option<String>,
-    token: Option<String>,
-) -> Result<Option<(String, String)>, ()> {
-    let enabled =
-        workflows::dbos_engine::flag_enabled("NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED", enabled)
-            .map_err(|_| ())?;
-    if !enabled {
-        return Ok(None);
-    }
-    let ingress_url = ingress_url
-        .map(|url| url.trim().trim_end_matches('/').to_owned())
-        .filter(|url| !url.is_empty())
-        .ok_or(())?;
-    let token = token.filter(|token| !token.trim().is_empty()).ok_or(())?;
-    Ok(Some((ingress_url, token)))
+        .into_response()
 }
 
 /// Start one manual FinanceAggregate run through the authenticated internal
@@ -3781,31 +3673,7 @@ async fn queue_finance_run_dbos(
     .await
 }
 
-fn project_slack_dbos_ingress_config(
-    enabled: Option<&str>,
-    ingress_url: Option<String>,
-    token: Option<String>,
-) -> Result<Option<(String, String)>, ()> {
-    let enabled = workflows::dbos_engine::flag_enabled(
-        workflows::trigger::PROJECT_SLACK_ENABLED_ENV,
-        enabled,
-    )
-    .map_err(|_| ())?;
-    if !enabled {
-        return Ok(None);
-    }
-    let ingress_url = ingress_url
-        .map(|url| url.trim().trim_end_matches('/').to_owned())
-        .filter(|url| !url.is_empty())
-        .ok_or(())?;
-    let token = token.filter(|token| !token.trim().is_empty()).ok_or(())?;
-    Ok(Some((ingress_url, token)))
-}
-
-/// Start the `ProjectSlack` main-push lane through the authenticated
-/// internal DBOS worker ingress, keyed by the same `(sha, run attempt)`
-/// identity per Project the Restate object carried. The caller has already
-/// checked the CI session's scope and the Project's existence.
+/// Queue a Project Slack notice keyed by commit SHA and run attempt after authorization.
 async fn queue_main_push_dbos(
     ingress: &str,
     token: &str,
@@ -15037,34 +14905,6 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
     }
 
     #[tokio::test]
-    async fn queue_finance_run_posts_the_project_to_the_workflow_ingress() {
-        use wiremock::matchers::{body_json, header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-        let server = MockServer::start().await;
-        let project_id = uuid::Uuid::from_u128(7);
-        Mock::given(method("POST"))
-            .and(path("/FinanceAggregate/manual-run-1/run/send"))
-            .and(header("authorization", "Bearer tok"))
-            .and(body_json(serde_json::json!({
-                "project_id": project_id,
-                "project_code": "sample-finance"
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_string("{\"invocationId\":\"inv\"}"))
-            .expect(1)
-            .mount(&server)
-            .await;
-        super::queue_finance_run(
-            &server.uri(),
-            Some("tok"),
-            project_id,
-            "sample-finance",
-            "manual-run-1",
-        )
-        .await
-        .expect("queued");
-    }
-
-    #[tokio::test]
     async fn queue_finance_run_posts_the_same_run_to_authenticated_dbos_ingress() {
         use wiremock::matchers::{body_json, header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -15096,56 +14936,28 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
         .expect("authenticated DBOS run accepted");
     }
 
-    #[test]
-    fn finance_dbos_flag_controls_dispatch_and_fails_closed_on_bad_configuration() {
-        assert_eq!(
-            super::finance_dbos_ingress_config(None, None, None),
-            Ok(None)
-        );
-        assert_eq!(
-            super::finance_dbos_ingress_config(
-                Some("false"),
-                Some("http://worker".into()),
-                Some("secret".into()),
-            ),
-            Ok(None),
-            "an ingress URL alone does not switch this workflow off Restate"
-        );
-        assert!(super::finance_dbos_ingress_config(Some("true"), None, None).is_err());
-        assert!(super::finance_dbos_ingress_config(
-            Some("true"),
-            Some("http://worker".into()),
-            None
-        )
-        .is_err());
-        assert!(super::finance_dbos_ingress_config(Some("TRUE"), None, None).is_err());
-        assert_eq!(
-            super::finance_dbos_ingress_config(
-                Some("true"),
-                Some(" http://worker/ ".into()),
-                Some("secret".into()),
-            ),
-            Ok(Some(("http://worker".into(), "secret".into())))
-        );
-    }
-
     #[tokio::test]
-    async fn queue_main_push_sends_the_event_to_the_project_slack_object() {
+    async fn queue_main_push_sends_the_event_to_authenticated_dbos_ingress() {
         use wiremock::matchers::{body_json, header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
         let project_id = uuid::Uuid::from_u128(9);
         Mock::given(method("POST"))
-            .and(path(format!("/project-slack/{project_id}/main_push/send")))
+            .and(path("/internal/dbos/project-slack"))
             .and(header("authorization", "Bearer tok"))
             .and(body_json(serde_json::json!({
+                "workflow_id": workflows::trigger::project_slack_main_push_workflow_id(
+                    project_id, "abc1234", 1,
+                ),
+                "event": {
                 "short_sha": "abc1234",
                 "run_url": "https://github.com/an-organization/sample-push/actions/runs/1",
                 "author_login": "octocat",
                 "gate": "pass",
                 "run_attempt": 1
+                }
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_string("{\"invocationId\":\"inv\"}"))
+            .respond_with(ResponseTemplate::new(202))
             .expect(1)
             .mount(&server)
             .await;
@@ -15159,7 +14971,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             subject: None,
         };
         event.validate().expect("a well-formed event");
-        super::queue_main_push(&server.uri(), Some("tok"), project_id, &event)
+        super::queue_main_push_dbos(&server.uri(), "tok", project_id, &event)
             .await
             .expect("queued");
     }
@@ -15237,9 +15049,9 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
-        let result = super::queue_finance_run(
+        let result = super::queue_finance_run_dbos(
             &server.uri(),
-            None,
+            "synthetic-token",
             uuid::Uuid::nil(),
             "sample-finance",
             "manual-run-2",

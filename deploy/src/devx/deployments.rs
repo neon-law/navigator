@@ -655,7 +655,7 @@ pub fn unsatisfied_requirements(deployment: &Deployment) -> Result<Vec<Requireme
 /// The lane is gated by `NAVIGATOR_SUMMARY_ENABLED`, a value rather than a
 /// presence, so it cannot ride `WEB_REQUIREMENTS`' presence triggers: a row
 /// that writes `"false"` would be asked for everything. The key list is
-/// `workflows::email_summary_config::required_keys`, the one `web` and
+/// `workflows::email_summary_config::REQUIRED_KEYS`, the one `web` and
 /// `workflows-service` refuse to boot without, so a key made mandatory there
 /// fails this gate before it can crash-loop a staging roll (26.10.10-rc.1).
 pub fn unsatisfied_summary_keys(deployment: &Deployment) -> Result<Vec<&'static str>> {
@@ -667,7 +667,7 @@ pub fn unsatisfied_summary_keys(deployment: &Deployment) -> Result<Vec<&'static 
         return Ok(Vec::new());
     }
     let supplied = deployment.supplied_keys();
-    let required = summary::required_keys(&|key| deployment.coordinates.get(key).cloned())?;
+    let required = summary::REQUIRED_KEYS;
     Ok(required
         .iter()
         .copied()
@@ -3290,7 +3290,7 @@ sops:
         );
         assert!(unsatisfied_summary_keys(&off).unwrap().is_empty());
 
-        let required = workflows::email_summary_config::required_keys(&|_| None).unwrap();
+        let required = workflows::email_summary_config::REQUIRED_KEYS;
         let supplied: Vec<&str> = required
             .iter()
             .copied()

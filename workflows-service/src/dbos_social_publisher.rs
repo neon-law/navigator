@@ -40,7 +40,7 @@ use dbos::{CancellationToken, StepOptions, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
-use workflows::trigger::{ServiceTarget, ServiceTargetError};
+use workflows::trigger::ServiceTargetError;
 use workflows::{SocialPublishReport, SocialPublishRequest};
 
 use crate::social_publisher::{
@@ -183,21 +183,6 @@ impl PublisherContext {
     }
 }
 
-/// How the reconciler's inbound-notice recovery reaches the alert, chosen by
-/// the `InboundMessageAlert` DBOS switch. The DBOS branch posts to the
-/// worker's own authenticated ingress; the Restate branch keeps the broker
-/// settings the Restate endpoint used while that switch is off.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AlertRoute {
-    /// The worker's DBOS ingress and bearer.
-    Dbos { ingress: String, token: String },
-    /// The Restate ingress and optional bearer.
-    Restate {
-        ingress: String,
-        token: Option<String>,
-    },
-}
-
 /// The reconciler's dependencies: the store it reads due posts and notices
 /// from, the publisher its link reconciliation drives, the registered
 /// publisher workflow it starts children of, and the route its
@@ -207,48 +192,24 @@ pub struct ReconcilerContext {
     surreal: SurrealDb,
     publisher: Publisher,
     social_publisher: SocialPublishWorkflow,
-    alert_route: Option<AlertRoute>,
+    alert_ingress: (String, String),
     pacing: Pacing,
 }
 
 impl ReconcilerContext {
-    /// Assembles the context from process configuration. The alert route
-    /// follows the `InboundMessageAlert` DBOS switch: on, the worker's DBOS
-    /// ingress (both settings required); off, the same broker settings the
-    /// Restate endpoint uses.
-    ///
-    /// # Errors
-    ///
-    /// [`workflows::trigger::ServiceTargetError`] for a switch other than
-    /// `true` / `false`, or a missing DBOS setting when the switch asks for
-    /// the route.
+    /// Configure the reconciler and its authenticated alert ingress.
     pub fn from_lookup(
         surreal: SurrealDb,
         publisher: Publisher,
         social_publisher: SocialPublishWorkflow,
         get: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ServiceTargetError> {
-        let alert_route = match workflows::trigger::service_target(
-            workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
-            get(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV).as_deref(),
-            get(workflows::trigger::DBOS_INGRESS_URL_ENV),
-            get(workflows::trigger::DBOS_INGRESS_TOKEN_ENV),
-        ) {
-            Ok(ServiceTarget::Dbos { ingress, token }) => Some(AlertRoute::Dbos { ingress, token }),
-            Ok(ServiceTarget::Restate) => get("RESTATE_BROKER_URL")
-                .map(|url| url.trim().to_owned())
-                .filter(|url| !url.is_empty())
-                .map(|ingress| AlertRoute::Restate {
-                    ingress,
-                    token: get("RESTATE_AUTH_TOKEN").filter(|token| !token.trim().is_empty()),
-                }),
-            Err(error) => return Err(error),
-        };
+        let alert_ingress = workflows::trigger::dbos_ingress(&get)?;
         Ok(Self {
             surreal,
             publisher,
             social_publisher,
-            alert_route,
+            alert_ingress,
             pacing: Pacing::default(),
         })
     }
@@ -542,14 +503,6 @@ async fn reconcile(
     })
     .await?;
 
-    // The Restate reconciler refuses to run at all without broker
-    // configuration, because its notice recovery needs it; this port keeps
-    // that gate, and `from_lookup` has already refused a DBOS switch without
-    // the worker's ingress settings.
-    if context.alert_route.is_none() {
-        return Err(dbos::Error::Application(SocialPublishDbosError::Dispatch));
-    }
-
     for (index, (post_id, publish_at)) in scheduled.iter().enumerate() {
         start_publisher_child(&context.social_publisher, *post_id, *publish_at, index).await?;
     }
@@ -633,55 +586,28 @@ async fn recover_notice_step(
     tick: &str,
     index: usize,
 ) -> dbos::Result<(), SocialPublishDbosError> {
-    let route = context.alert_route.clone();
+    let ingress = context.alert_ingress.clone();
     let tick = tick.to_owned();
     dbos::step(
         &format!("recover-inbound-message-notice-{index}"),
         move || {
-            let route = route.clone();
+            let (ingress, token) = ingress.clone();
             let tick = tick.clone();
             async move {
-                match route {
-                    Some(AlertRoute::Dbos { ingress, token }) => {
-                        workflows::trigger::start_dbos_inbound_message_alert(
-                            &ingress,
-                            &token,
-                            // Recovery lane: a per-tick id, not the plain
-                            // per-message one. An alert that completed with a
-                            // `pending` send owns that id's completed run —
-                            // re-submitting under it would join the run and
-                            // never try Slack again. A fresh id per tick gives
-                            // the recovery its own execution, the same
-                            // semantics as the Restate `{message_id}:{tick}`
-                            // key this lane replaces.
-                            &serde_json::json!({
-                                "workflow_id":
-                                    workflows::trigger::inbound_message_alert_recovery_workflow_id(
-                                        message_id,
-                                        &tick,
-                                    ),
-                                "request": {
-                                    "message_id": message_id,
-                                },
-                            }),
-                        )
-                        .await
-                        .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Dispatch))
-                    }
-                    Some(AlertRoute::Restate { ingress, token }) => workflows::start_workflow(
-                        &ingress,
-                        token.as_deref(),
-                        "InboundMessageAlert",
-                        &format!("{message_id}:{tick}"),
-                        "run",
-                        &workflows::InboundMessageAlertRequest { message_id },
-                        true,
-                    )
-                    .await
-                    .map(|_| ())
-                    .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Dispatch)),
-                    None => Err(dbos::Error::Application(SocialPublishDbosError::Dispatch)),
-                }
+                workflows::trigger::start_dbos_inbound_message_alert(
+                    &ingress,
+                    &token,
+                    // Each recovery tick gets its own execution so it can retry a pending delivery.
+                    &serde_json::json!({
+                        "workflow_id": workflows::trigger::inbound_message_alert_recovery_workflow_id(
+                            message_id,
+                            &tick,
+                        ),
+                        "request": { "message_id": message_id },
+                    }),
+                )
+                .await
+                .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Dispatch))
             }
         },
     )

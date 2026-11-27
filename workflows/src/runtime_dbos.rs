@@ -7,28 +7,10 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::dbos_engine::flag_enabled;
 use crate::notation_http::{NotationHttpRuntime, NOTATION_SERVICE};
 use crate::runtime::{SignalContext, StateMachineRuntime, WorkflowEvent, WorkflowRuntimeError};
 use crate::spec::{MachineKind, StateName, WorkflowSpec};
 use crate::trigger::{DBOS_INGRESS_TOKEN_ENV, DBOS_INGRESS_URL_ENV};
-
-/// The workflow-specific switch that moves notation traffic to the DBOS
-/// worker. Follows the strict `true` / `false` flag contract.
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_NOTATION_ENABLED";
-
-/// Whether [`ENABLED_ENV`] moves notation traffic to the DBOS worker.
-///
-/// # Errors
-///
-/// Refuses any value other than `true` or `false`, so a typo cannot
-/// silently choose a different runtime.
-pub fn enabled(
-    lookup: impl Fn(&str) -> Option<String>,
-) -> Result<bool, crate::dbos_engine::SettingsError> {
-    let value = lookup(ENABLED_ENV);
-    flag_enabled(ENABLED_ENV, value.as_deref())
-}
 
 /// [`StateMachineRuntime`] over the worker's DBOS ingress.
 #[derive(Clone)]
@@ -46,15 +28,11 @@ impl DbosNotationRuntime {
         }
     }
 
-    /// Build from the environment the boot site already has in hand:
-    /// [`ENABLED_ENV`] must be on (call [`enabled`] first), plus the
-    /// worker's DBOS ingress URL and bearer token.
+    /// Configure the authenticated ingress client.
     ///
     /// # Errors
     ///
-    /// [`RuntimeConfigError::MissingIngress`] when the flag is on but the
-    /// worker's ingress URL or token is unset — fail the boot rather than
-    /// silently routing notation traffic at nothing.
+    /// [`RuntimeConfigError::MissingIngress`] when the ingress URL or bearer token is absent.
     pub fn from_lookup(
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, RuntimeConfigError> {
@@ -80,8 +58,8 @@ impl DbosNotationRuntime {
 /// Why a boot could not build the DBOS notation runtime.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeConfigError {
-    /// The flag is on but the worker's ingress is unconfigured.
-    #[error("{0} must be set while NAVIGATOR_DBOS_NOTATION_ENABLED is on")]
+    /// An ingress setting is absent.
+    #[error("{0} is required for the DBOS Notation runtime")]
     MissingIngress(&'static str),
 }
 
@@ -201,7 +179,7 @@ impl StateMachineRuntime for DbosNotationRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{enabled, DbosNotationRuntime, RuntimeConfigError, ENABLED_ENV};
+    use super::{DbosNotationRuntime, RuntimeConfigError};
     use crate::trigger::{DBOS_INGRESS_TOKEN_ENV, DBOS_INGRESS_URL_ENV};
 
     fn lookup<'a>(env: &'a [(&'static str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
@@ -213,28 +191,17 @@ mod tests {
     }
 
     #[test]
-    fn flag_follows_the_strict_switch_contract() {
-        assert!(!enabled(lookup(&[])).expect("unset is off"));
-        assert!(!enabled(lookup(&[(ENABLED_ENV, "false")])).expect("false is off"));
-        assert!(enabled(lookup(&[(ENABLED_ENV, "true")])).expect("true is on"));
-        assert!(
-            enabled(lookup(&[(ENABLED_ENV, "TRUE")])).is_err(),
-            "non-lowercase truthy values fail closed, like every other DBOS flag"
-        );
-    }
-
-    #[test]
     fn boot_fails_closed_without_ingress_configuration() {
         assert!(matches!(
-            DbosNotationRuntime::from_lookup(lookup(&[(ENABLED_ENV, "true")])),
+            DbosNotationRuntime::from_lookup(lookup(&[])),
             Err(RuntimeConfigError::MissingIngress(_))
         ));
 
         assert!(matches!(
-            DbosNotationRuntime::from_lookup(lookup(&[
-                (ENABLED_ENV, "true"),
-                (DBOS_INGRESS_URL_ENV, "http://worker:9083"),
-            ])),
+            DbosNotationRuntime::from_lookup(lookup(&[(
+                DBOS_INGRESS_URL_ENV,
+                "http://worker:9083"
+            ),])),
             Err(RuntimeConfigError::MissingIngress(_))
         ));
     }
@@ -242,7 +209,6 @@ mod tests {
     #[test]
     fn boot_points_the_shared_client_at_the_dbos_ingress() {
         let runtime = DbosNotationRuntime::from_lookup(lookup(&[
-            (ENABLED_ENV, "true"),
             (DBOS_INGRESS_URL_ENV, "http://worker:9083/"),
             (DBOS_INGRESS_TOKEN_ENV, "lane-token"),
         ]))

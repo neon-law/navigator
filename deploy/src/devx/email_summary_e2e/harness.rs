@@ -675,19 +675,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_worker_env_passes_the_workers_own_summary_config_validation() {
-        let env = worker_env("http://host.docker.internal:4000", Uuid::now_v7());
-        let mut lookup: std::collections::HashMap<String, String> = env.into_iter().collect();
-        lookup.insert("NAVIGATOR_CI_HARNESS".into(), "1".into());
-        let config = workflows::EmailSummaryConfig::from_lookup(|key| lookup.get(key).cloned())
-            .expect("valid config")
-            .expect("enabled");
-        assert_eq!(config.envelope_recipients, vec![MAILBOX.to_string()]);
-        assert_eq!(config.deployment, DEPLOYMENT);
-        assert_eq!(config.channel_id, CHANNEL);
-    }
-
     #[tokio::test]
     async fn a_disabled_proxy_refuses_work_and_an_enabled_one_forwards_it() {
         let upstream = TcpListener::bind("127.0.0.1:0").await.expect("bind");

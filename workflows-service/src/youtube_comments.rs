@@ -25,7 +25,6 @@ use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 use workflows::social_publish::{self, TokenRefreshConfig};
-use workflows::trigger::ServiceTarget;
 
 pub type PollWorkflow = dbos::WorkflowRef<PollRequest, PollReport, PollError>;
 
@@ -419,60 +418,18 @@ impl YoutubeCommentsPollerService {
     }
 }
 
-/// Start the same alert and triage workflows every inbound channel starts
-/// after a fresh ingest. Both are keyed by Message ID, so a repeated start
-/// attaches to the same durable workflow instead of duplicating work. A
-/// deployment without a broker configured is a no-op, exactly as in the
-/// portal's ingest paths.
-///
-/// # Errors
-///
-/// A failed durable submission — the caller's journaled step retries it while
-/// ingest itself stays untouched.
+/// Queue the alert and triage workflows for a persisted Message. Both use the Message ID for deduplication.
 async fn start_inbound_hooks(message_id: Uuid) -> anyhow::Result<()> {
-    let alert_target = workflows::trigger::service_target(
-        workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
-        std::env::var(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)
-            .ok()
-            .as_deref(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
-    )?;
-    match &alert_target {
-        ServiceTarget::Dbos { ingress, token } => {
-            workflows::trigger::start_dbos_inbound_message_alert(
-                ingress,
-                token,
-                &serde_json::json!({
-                    "workflow_id":
-                        workflows::trigger::inbound_message_alert_workflow_id(message_id),
-                    "request": workflows::InboundMessageAlertRequest { message_id },
-                }),
-            )
-            .await?;
-        }
-        ServiceTarget::Restate => {
-            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-            else {
-                return workflows::trigger::start_inbound_triage(message_id)
-                    .await
-                    .map_err(anyhow::Error::msg);
-            };
-            let auth = std::env::var("RESTATE_AUTH_TOKEN").ok();
-            workflows::start_workflow(
-                &ingress,
-                auth.as_deref(),
-                "InboundMessageAlert",
-                &message_id.to_string(),
-                "run",
-                &workflows::InboundMessageAlertRequest { message_id },
-                true,
-            )
-            .await?;
-        }
-    }
+    let (ingress, token) = workflows::trigger::dbos_ingress_from_env()?;
+    workflows::trigger::start_dbos_inbound_message_alert(
+        &ingress,
+        &token,
+        &serde_json::json!({
+            "workflow_id": workflows::trigger::inbound_message_alert_workflow_id(message_id),
+            "request": workflows::InboundMessageAlertRequest { message_id },
+        }),
+    )
+    .await?;
     workflows::trigger::start_inbound_triage(message_id)
         .await
         .map_err(anyhow::Error::msg)?;

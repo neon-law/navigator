@@ -1,6 +1,7 @@
 //! Signed SMS redelivery joins one archived receipt and one completed DBOS workflow.
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
+use axum::routing::post;
 use http_body_util::BodyExt as _;
 use sqlx::ConnectOptions as _;
 use std::{sync::Arc, time::Duration};
@@ -46,8 +47,6 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
             .env(workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV, "true")
             .env(workflows::trigger::DBOS_INGRESS_TOKEN_ENV, TOKEN)
             .env_remove("RESTATE_BROKER_URL")
-            .env_remove(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)
-            .env_remove(workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV)
             .kill_on_drop(true);
         let mut child = child.spawn().unwrap();
         if let Ok(status) = tokio::time::timeout(Duration::from_secs(90), child.wait()).await {
@@ -83,6 +82,16 @@ async fn exercise() {
             ..Default::default()
         },
         None,
+    )
+    // This case runs the real summary workflow. Its sibling Inbox workflows
+    // acknowledge submission here and have their own execution tests.
+    .route(
+        "/internal/dbos/inbound-message-alert",
+        post(accept_inbox_submission),
+    )
+    .route(
+        "/internal/dbos/inbound-triage",
+        post(accept_inbox_submission),
     );
     worker.launch().await.unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -132,6 +141,14 @@ async fn exercise() {
     worker.shutdown().await;
     server.abort();
     let _ = server.await;
+}
+
+async fn accept_inbox_submission(headers: axum::http::HeaderMap) -> StatusCode {
+    assert_eq!(
+        headers.get(header::AUTHORIZATION).unwrap(),
+        format!("Bearer {TOKEN}").as_str()
+    );
+    StatusCode::ACCEPTED
 }
 
 async fn configure(

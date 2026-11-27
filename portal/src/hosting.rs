@@ -372,53 +372,11 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         ));
     tracing::info!("attachment scanner configured");
 
-    // Runtime selection. The DBOS notation flag moves both timelines to
-    // the worker's DBOS ingress and wins over `RESTATE_BROKER_URL` — the
-    // flag is the explicit operator decision to move notation traffic, and
-    // `from_lookup` fails the boot when the worker's ingress is not
-    // configured (pointing notation at nothing is never the safe default).
-    // If the flag is off and `RESTATE_BROKER_URL` is set in the
-    // environment, the `web` binary talks to the in-cluster
-    // `workflows-service` worker through Restate. Otherwise we fall
-    // back to the in-process `InMemoryRuntime` *wrapped in
-    // `DispatchingRuntime`* — without that wrap the local dev binary
-    // never fires the welcome email (the `email_send__*` step has no
-    // worker to consume it).
-    //
-    // Both implement `StateMachineRuntime`; the workflow and
-    // questionnaire timelines share a single runtime instance keyed
-    // by `(MachineKind, notation_id)`.
-    let dbos_notation_enabled = workflows::dbos_notation_enabled(|key| std::env::var(key).ok())
-        .map_err(anyhow::Error::msg)
-        .context("read NAVIGATOR_DBOS_NOTATION_ENABLED")?;
-    let (workflow_runtime, questionnaire_runtime): (
-        std::sync::Arc<dyn workflows::StateMachineRuntime>,
-        std::sync::Arc<dyn workflows::StateMachineRuntime>,
-    ) = if dbos_notation_enabled {
-        let rt = std::sync::Arc::new(
-            workflows::DbosNotationRuntime::from_lookup(|key| std::env::var(key).ok())
-                .map_err(anyhow::Error::msg)
-                .context("configure the DBOS notation runtime")?,
-        );
-        tracing::info!("runtime: DbosNotationRuntime (NAVIGATOR_DBOS_NOTATION_ENABLED=true)");
-        (rt.clone(), rt)
-    } else if std::env::var("RESTATE_BROKER_URL").is_ok() {
-        let rt = std::sync::Arc::new(workflows::RestateRuntime::from_env());
-        tracing::info!("runtime: RestateRuntime (RESTATE_BROKER_URL is set)");
-        (rt.clone(), rt)
-    } else {
-        let inner: std::sync::Arc<dyn workflows::StateMachineRuntime> =
-            std::sync::Arc::new(workflows::InMemoryRuntime::new());
-        let workflow = std::sync::Arc::new(
-            workflows::DispatchingRuntime::new(inner.clone(), email.clone(), storage.clone())
-                .with_store(surreal.clone()),
-        );
-        tracing::info!(
-            "runtime: DispatchingRuntime<InMemoryRuntime> (RESTATE_BROKER_URL unset; dispatches \
-             email_send__* steps in-process through the EmailService)"
-        );
-        (workflow, inner)
-    };
+    let workflow_runtime: std::sync::Arc<dyn workflows::StateMachineRuntime> = std::sync::Arc::new(
+        workflows::DbosNotationRuntime::from_lookup(|key| std::env::var(key).ok())
+            .context("configure the DBOS Notation runtime")?,
+    );
+    let questionnaire_runtime = workflow_runtime.clone();
 
     let inbound_email_secret = std::env::var("SENDGRID_INBOUND_SECRET")
         .ok()
@@ -744,7 +702,7 @@ pub struct Site {
 /// Propagates a failure to assemble the runtime (configuration, database,
 /// storage, content) or to bind and serve the configured port.
 pub async fn run(brand: Site) -> anyhow::Result<()> {
-    Box::pin(boot(brand, false)).await
+    Box::pin(boot(brand, true)).await
 }
 
 /// Boot one brand like [`run`], hosting the DBOS executor in this process when
@@ -760,7 +718,7 @@ pub async fn run(brand: Site) -> anyhow::Result<()> {
 /// settings, or a failed DBOS launch: with the flag on, the boot fails closed
 /// rather than serving without the executor.
 pub async fn run_with_dbos(brand: Site) -> anyhow::Result<()> {
-    Box::pin(boot(brand, true)).await
+    run(brand).await
 }
 
 /// Run `serve`, hosting the DBOS executor beside it when `lookup` sets
