@@ -2220,7 +2220,7 @@ fn canonical_document(base: &str) -> Value {
           "post": {
             "summary": "Reconcile each Project's mirrored Deadline events to its rows (admin)",
             "description":
-              "Reconciles the Project's shared Google Calendar against its Deadline rows: inserts, patches, and deletes the events the nightly mirror owns, carrying the matter-page link beside each. The applied pass ensures the calendar exists and is shared first; a dry run plans the same writes without making them. A dry run of a Project with no recorded calendar first asks the provider for the calendar it would adopt, so a refused plan fails like the applied pass would. Outcomes: `mirrored`, `skipped_closed`, `recorded_resource_missing`; `mirror_incomplete` when the provider refused some rows, with one line per refused row; `calendar_unprovisioned` when no calendar is recorded and the provider refused to create or adopt one, its detail naming the provider class; `provider_unauthorized` when the Workspace refuses the delegated owner; `provider_unavailable` for a failure a retry clears; `duplicate` for an ambiguous calendar summary; and the resolution outcomes. Every outcome except `mirrored` and `skipped_closed` means requested writes did not happen. Events carry the Deadline id, so a retry patches rather than duplicates. The response carries outcome lines with counts and Deadline ids, never matter content. Authorization: admin-tier, plus `use_integrations` on the Project's owning Firm.",
+              "Reconciles the Project's shared Google Calendar against its Deadline rows. The applied pass ensures the calendar before reconciling events. A dry run reads provider state and plans writes without making them. After a lost response, use a dry run to verify whether the calendar is recorded and how many event changes remain. Mirrored events carry the Deadline id so a retry can resume from provider state. An incomplete or unavailable result can follow partial writes. Calendar provider refusals include a sanitized reason and the action when available. Authorization requires admin tier and `use_integrations` on the owning Firm.",
             "requestBody": { "required": true, "content": { "application/json": {
               "schema": { "$ref": "#/components/schemas/DeadlineMirrorRequest" }
             } } },
@@ -6802,7 +6802,11 @@ fn canonical_document(base: &str) -> Value {
                     "outcome": { "type": "string",
                                  "description": "A closed slug naming what happened. Never a provider URL, page id, or channel id — those stay on the firm side." },
                     "detail": { "type": "string",
-                                "description": "Present only for an outcome that names a mechanism the operator must act on, such as how many pages carry one code." }
+                                "description": "Operator-facing detail, such as how many pages carry one code." },
+                    "calendar_recorded": { "type": "boolean", "description": "Whether the Project has a stored Calendar ID, when known to the deadline mirror." },
+                    "pending_changes": { "type": "integer", "minimum": 0, "description": "Event changes planned by a successful deadline mirror dry run." },
+                    "provider_reason": { "type": "string", "description": "Sanitized class of a Calendar provider failure." },
+                    "provider_action": { "type": "string", "description": "Calendar provider operation that failed, when known." }
                   }
                 }
               }

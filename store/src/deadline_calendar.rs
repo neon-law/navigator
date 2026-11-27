@@ -161,8 +161,8 @@ pub async fn reconcile(
                 .await
             }
         } else {
-            // No calendar yet: a first pass would create one and insert
-            // every row. That plan needs no calendar to read.
+            // Check the same provider lookup that an applied pass uses before provisioning.
+            let _ = calendar.find_calendar(&project.code).await?;
             let mut report = MirrorReport::empty(MirrorOutcome::Mirrored, dry_run);
             report.creates_calendar = true;
             plan_rows(application_store, &project, base_url, &mut report).await?;
@@ -752,6 +752,61 @@ mod tests {
             test(&db, project_id).await;
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn mirror_resumes_after_calendar_and_event_writes_with_lost_responses() {
+        for count in [0, 1, 3] {
+            with_project(async |db, project_id| {
+                let calendar = FakeCalendar::default();
+                super::ensure_calendar(db, project_id, &calendar)
+                    .await
+                    .unwrap();
+                let recorded = super::find_project(db, project_id)
+                    .await
+                    .unwrap()
+                    .calendar_id
+                    .unwrap();
+                let mut existing_ids = Vec::new();
+                for index in 0..count {
+                    let mut input = internal_task(project_id);
+                    input.title = Some(format!("Synthetic task {index}"));
+                    project_deadlines::create(db, &input).await.unwrap();
+                    if index == 0 && count > 1 {
+                        reconcile(db, &calendar, project_id, None, false)
+                            .await
+                            .unwrap();
+                        existing_ids
+                            .extend(calendar.events(&recorded).into_iter().map(|event| event.id));
+                    }
+                }
+
+                let preview = reconcile(db, &calendar, project_id, None, true)
+                    .await
+                    .unwrap();
+                assert!(!preview.creates_calendar);
+                assert_eq!(preview.upserted.len(), count - existing_ids.len());
+                assert_eq!(calendar.events(&recorded).len(), existing_ids.len());
+                let retry = reconcile(db, &calendar, project_id, None, false)
+                    .await
+                    .unwrap();
+                assert!(retry.failures.is_empty());
+                assert_eq!(retry.upserted, preview.upserted);
+                let verified = reconcile(db, &calendar, project_id, None, true)
+                    .await
+                    .unwrap();
+                assert!(verified.upserted.is_empty() && verified.deleted.is_empty());
+                assert_eq!(verified.in_sync, count);
+                let events = calendar.events(&recorded);
+                assert_eq!(events.len(), count);
+                assert!(existing_ids
+                    .iter()
+                    .all(|id| events.iter().any(|event| &event.id == id)));
+                assert!(calendar.sharing(&recorded).is_empty());
+                assert_eq!(calendar.created(), 1);
+            })
+            .await;
+        }
     }
 
     #[tokio::test]
