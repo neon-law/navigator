@@ -469,15 +469,14 @@ async fn pending_annotations_are_actions_for_their_timekeeper_in_both_billing_vi
     pg.pool().close().await;
 }
 
-#[tokio::test]
-async fn approval_prices_only_the_selected_plan_claim_and_replaces_attested_time() {
-    use billing_annotations::{Annotation, Decision};
+async fn two_matching_plan_claims(
+    pg: &PostgresDb,
+    project: &Project,
+    lawyer: Uuid,
+    on: chrono::NaiveDate,
+    synthetic_rate: i32,
+) -> (Uuid, Uuid) {
     use plan_claims::{Authorization, Change, Event, Service, Work};
-    let Some((options, database)) = fresh_schema().await else {
-        return;
-    };
-    let pg = connect(&options, &database).await;
-    let (fixture, project) = billing_matter(&pg).await;
     let firm = project.firm_id.unwrap();
     let plan_id: Uuid = sqlx::query_scalar(
         "INSERT INTO legal_plan (firm_id,name,acceptance_sla_hours,turnaround_sla_days)
@@ -493,19 +492,17 @@ async fn approval_prices_only_the_selected_plan_claim_and_replaces_attested_time
         .execute(pg.pool())
         .await
         .unwrap();
-    let on = Utc::now().date_naive();
     let first = Uuid::new_v4();
     let selected = Uuid::new_v4();
-    let synthetic_rate = 10_000;
     for (claim_id, benefit) in [
         (first, "First synthetic service"),
         (selected, "Second synthetic service"),
     ] {
         plan_claims::record(
-            &pg,
+            pg,
             project.id,
             firm,
-            fixture.lawyer,
+            lawyer,
             Change {
                 claim_id,
                 event_id: Uuid::new_v4(),
@@ -530,6 +527,22 @@ async fn approval_prices_only_the_selected_plan_claim_and_replaces_attested_time
         .await
         .unwrap();
     }
+    (first, selected)
+}
+
+#[tokio::test]
+async fn approval_prices_only_the_selected_plan_claim_and_replaces_attested_time() {
+    use billing_annotations::{Annotation, Decision};
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let (fixture, project) = billing_matter(&pg).await;
+    let firm = project.firm_id.unwrap();
+    let on = Utc::now().date_naive();
+    let synthetic_rate = 10_000;
+    let (first, selected) =
+        two_matching_plan_claims(&pg, &project, fixture.lawyer, on, synthetic_rate).await;
     let annotation = Annotation {
         id: Uuid::new_v4(),
         change_id: "k".repeat(32),
