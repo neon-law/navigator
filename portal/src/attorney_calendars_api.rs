@@ -639,28 +639,38 @@ async fn project_busy(
             missing,
         }),
     }
+    let policy = store::project_deadlines::scheduling_policy(project.firm_id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
     for deadline in store::project_deadlines::list(&state.application_store, project.id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
     {
         if deadline.status != store::project_deadlines::STATUS_OPEN
-            || deadline
-                .due_on
-                .as_ref()
-                .is_some_and(|day| day.cutoff.is_none())
+            || deadline.calendar_review_pending
         {
             continue;
         }
-        let Ok(due) = DateTime::parse_from_rfc3339(deadline.due_at.trim()) else {
-            continue;
-        };
-        blocks.push(SourceBlock {
-            source: deadline.title.unwrap_or_else(|| "deadline".into()),
-            role: "deadline".into(),
-            calendar_id: None,
-            start: due,
-            end: due,
+        let bounds = deadline.buffered_window(policy).or_else(|| {
+            if deadline
+                .due_on
+                .as_ref()
+                .is_some_and(|day| day.cutoff.is_none())
+            {
+                return None;
+            }
+            let due = DateTime::parse_from_rfc3339(deadline.due_at.trim()).ok()?;
+            Some((due, due))
         });
+        if let Some((start, end)) = bounds {
+            blocks.push(SourceBlock {
+                source: deadline.title.unwrap_or_else(|| "deadline".into()),
+                role: "deadline".into(),
+                calendar_id: None,
+                start,
+                end,
+            });
+        }
     }
     Ok((unreadable, blocks))
 }

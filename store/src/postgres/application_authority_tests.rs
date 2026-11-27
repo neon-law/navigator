@@ -477,6 +477,7 @@ fn native_deadline(project_id: uuid::Uuid) -> crate::project_deadlines::NewDeadl
         title: Some("Synthetic deadline".into()),
         description: None,
         hearing: None,
+        effort_minutes: None,
         due_on: None,
         due_at: "2026-12-01T12:00:00Z".into(),
         authority_kind: "statute".into(),
@@ -529,12 +530,12 @@ async fn deadline_civil_date_round_trips_and_reschedules_the_same_record() {
         let hearing = deadlines::DeadlinePatch {
             calendar_role: Some("hearing".into()),
             category: Some(Some("hearing".into())),
-            hearing: Some(deadlines::Hearing {duration_minutes: std::num::NonZeroU32::new(90),location:Some("Courtroom A".into())}),
+            hearing: Some(deadlines::Hearing {duration_minutes: std::num::NonZeroU32::new(90),location:Some("Courtroom A".into()), ..Default::default()}),
             ..Default::default()
         };
         let saved = deadlines::update(&db, project, timed.id, &hearing).await.unwrap();
         let event = crate::deadline_calendar::deadline_event(&saved,"sample",None).unwrap();
-        assert_eq!(event.timing, cloud::calendar::EventTiming::Hearing(90));
+        assert_eq!(event.timing, cloud::calendar::EventTiming::Hearing(120));
         assert_eq!(event.location.as_deref(), Some("Courtroom A"));
         let moved = deadlines::update(&db, project, timed.id, &deadlines::DeadlinePatch {
             hearing:Some(deadlines::Hearing {location:Some("Courtroom B".into()),..Default::default()}),..Default::default()

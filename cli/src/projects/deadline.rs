@@ -85,16 +85,41 @@ pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
     finish(
         async {
             let (base, token, id) = coordinates(host, project).await?;
-            call(
+            let mut rows = call(
                 reqwest::Client::new()
                     .get(format!("{base}/app/api/projects/{id}/deadlines"))
                     .bearer_auth(token),
                 "list",
             )
-            .await
+            .await?;
+            group_trial_series(&mut rows);
+            Ok(rows)
         }
         .await,
     )
+}
+
+fn group_trial_series(rows: &mut Value) {
+    let Some(rows) = rows.as_array_mut() else {
+        return;
+    };
+    let mut series = std::collections::BTreeMap::<String, Vec<Value>>::new();
+    for row in rows.iter() {
+        if let Some(id) = row["hearing"]["appearance"]["day"]["series_id"].as_str() {
+            series.entry(id.to_owned()).or_default().push(row.clone());
+        }
+    }
+    rows.retain_mut(|row| {
+        let Some(id) = row["hearing"]["appearance"]["day"]["series_id"].as_str() else {
+            return true;
+        };
+        let Some(mut days) = series.remove(id) else {
+            return false;
+        };
+        days.sort_by_key(|day| day["hearing"]["appearance"]["day"]["number"].as_u64());
+        row["trial_days"] = json!(days);
+        true
+    });
 }
 
 /// Print the Project's Deadlines as one RFC 5545 `VCALENDAR`. Nothing is
@@ -397,6 +422,27 @@ async fn create_confirmed(
     )
 }
 
+pub(crate) fn effort_minutes(input: &str) -> std::result::Result<i32, String> {
+    if input == "0" {
+        return Ok(0);
+    }
+    let units = [("m", 1), ("h", 60), ("d", 480)];
+    units
+        .into_iter()
+        .find_map(|(suffix, minutes)| {
+            input.strip_suffix(suffix).and_then(|value| {
+                value
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|value| *value >= 0)
+                    .and_then(|value| value.checked_mul(minutes))
+            })
+        })
+        .ok_or_else(|| {
+            "effort must be a nonnegative whole duration such as 30m, 4h, 3d, or 0".into()
+        })
+}
+
 pub(crate) fn hearing_details(
     duration_minutes: Option<std::num::NonZeroU32>,
     location: Option<String>,
@@ -405,8 +451,60 @@ pub(crate) fn hearing_details(
         model::project_deadlines::Hearing {
             duration_minutes,
             location,
+            ..Default::default()
         },
     )
+}
+
+#[derive(Default)]
+pub struct DepositionOptions {
+    pub role: Option<model::project_deadlines::DeponentRole>,
+    pub taken_by: Option<model::project_deadlines::TakenBy>,
+    pub confirm: bool,
+    pub prep_file: Option<std::path::PathBuf>,
+}
+
+fn prepare_deposition(
+    options: DepositionOptions,
+    hearing: &mut Option<model::project_deadlines::Hearing>,
+    due_at: Option<&str>,
+    category: Option<&str>,
+) -> Result<Option<Value>> {
+    use model::project_deadlines::{Appearance, Category, PreparationDeadline};
+    if category != Some("deposition") {
+        anyhow::ensure!(
+            options.role.is_none() && !options.confirm && options.prep_file.is_none(),
+            "use deposition options with --category deposition"
+        );
+        return Ok(None);
+    }
+    let start =
+        chrono::DateTime::parse_from_rfc3339(due_at.context("a deposition requires --due-at")?)?;
+    let details = hearing
+        .as_mut()
+        .context("specify --hearing-minutes and --hearing-location")?;
+    details.appearance = Some(Appearance::Deposition {
+        deponent_role: options.role.context("specify --deponent-role")?,
+        taken_by: options.taken_by.context("specify --taken-by")?,
+    });
+    let prep: Vec<PreparationDeadline> = if let Some(path) = options.prep_file {
+        serde_json::from_slice(&std::fs::read(path).context("read preparation Deadlines")?)
+            .context("parse preparation Deadlines")?
+    } else {
+        details.preparation(start)
+    };
+    details.prep = Some(prep);
+    details
+        .validate_appearance(Some(Category::Deposition), start)
+        .map_err(|error| anyhow!(error))?;
+    Ok((!options.confirm).then(|| {
+        json!({
+            "status": "proposed",
+            "due_at": start,
+            "hearing": details,
+            "next": "Use --confirm to save. Use --prep-file to edit or drop proposed preparation.",
+        })
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -418,7 +516,9 @@ pub async fn create(
     visibility: Option<String>,
     due_at: Option<String>,
     due_on: Option<model::project_deadlines::DueOnInput>,
-    hearing: Option<model::project_deadlines::Hearing>,
+    mut hearing: Option<model::project_deadlines::Hearing>,
+    deposition: DepositionOptions,
+    effort_minutes: Option<i32>,
     authority_kind: String,
     authority: Option<String>,
     source: Option<String>,
@@ -437,12 +537,21 @@ pub async fn create(
             if title.as_deref().is_none_or(|title| title.trim().is_empty()) {
                 return Err(anyhow!("--title must name what is due"));
             }
+            if let Some(preview) = prepare_deposition(
+                deposition,
+                &mut hearing,
+                due_at.as_deref(),
+                category.as_deref(),
+            )? {
+                return Ok(preview);
+            }
             let (base, token, id, code) = coordinates_with_code(host, project).await?;
             let mut body = serde_json::Map::new();
             let object = &mut body;
             insert(object, "due_at", due_at);
             insert(object, "due_on", due_on);
             insert(object, "hearing", hearing);
+            insert(object, "effort_minutes", effort_minutes);
             insert(object, "authority_kind", Some(authority_kind));
             insert(object, "calendar_role", Some(calendar_role));
             insert(object, "title", title);
@@ -488,6 +597,7 @@ pub async fn update(
     due_at: Option<String>,
     due_on: Option<model::project_deadlines::DueOnInput>,
     hearing: Option<model::project_deadlines::Hearing>,
+    effort_minutes: Option<i32>,
     authority_kind: Option<String>,
     authority: Option<String>,
     source: Option<String>,
@@ -509,6 +619,7 @@ pub async fn update(
             insert(object, "due_at", due_at);
             insert(object, "due_on", due_on);
             insert(object, "hearing", hearing);
+            insert(object, "effort_minutes", effort_minutes);
             insert(object, "authority_kind", authority_kind);
             insert(object, "authority", authority);
             insert(object, "source", source);
@@ -882,6 +993,8 @@ mod tests {
                 Some(visibility.into()),
                 Some("2026-11-02T17:00:00-08:00".into()),
                 None,
+                None,
+                super::DepositionOptions::default(),
                 None,
                 "contract".into(),
                 Some("Synthetic agreement".into()),

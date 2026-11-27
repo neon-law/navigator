@@ -197,17 +197,26 @@ impl Draft {
         if self.due_on.is_none() && self.cutoff.is_some() {
             return Err("only a date-only deadline accepts a cutoff");
         }
-        let hearing = self.category == Some(Category::Hearing)
-            || self.calendar_role == Some(CalendarRole::Hearing);
-        if hearing
-            && (self.due_at.is_none()
-                || self
-                    .calendar_role
-                    .is_some_and(|r| r != CalendarRole::Hearing)
-                || self.category.is_some_and(|c| c != Category::Hearing))
-            || self.hearing.is_some() && !hearing
+        let appearance = crate::project_deadlines::is_appearance(
+            if self.calendar_role == Some(CalendarRole::Hearing) {
+                "hearing"
+            } else {
+                ""
+            },
+            self.category,
+        );
+        if appearance && self.due_at.is_none() || self.hearing.is_some() && !appearance {
+            return Err("an appearance requires a timed start and appearance category");
+        }
+        if self.calendar_role == Some(CalendarRole::Hearing)
+            && self
+                .category
+                .is_some_and(|category| !category.is_appearance())
         {
-            return Err("a hearing requires a timed start and hearing category");
+            return Err("a hearing role requires an appearance category");
+        }
+        if let (Some(details), Some(start)) = (&self.hearing, self.due_at) {
+            details.validate_appearance(self.category, start)?;
         }
         Due::from_fields(
             self.due_at.map(|v| v.to_rfc3339()).as_deref(),

@@ -62,6 +62,7 @@ use workflows::dbos_engine::project_calendar::{Source, SyncError};
 pub(crate) struct MembershipSource {
     pub application_store: store::application_store::ApplicationStore,
     pub providers: Arc<dyn crate::integrations::IntegrationProviders>,
+    pub base_url: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -118,6 +119,11 @@ impl Source for MembershipSource {
             store::project_calendar::shared_freebusy_calendars(&db, &firms, &[person_id])
                 .await
                 .map_err(|_| sync_error("reading current Project Calendar assignments"))?;
+        let first_project = assigned
+            .values()
+            .flatten()
+            .next()
+            .map(|project| project.project_id);
         let start = Utc::now().fixed_offset();
         let end = start + chrono::TimeDelta::days(90);
         let mut events = Vec::new();
@@ -169,7 +175,29 @@ impl Source for MembershipSource {
         )
         .await
         .map_err(provider_error)?;
-        unavailable.map_or(Ok(count), Err)
+        if let Some(error) = unavailable {
+            return Err(error);
+        }
+        drop(_guard);
+        if let Some(project_id) = first_project {
+            let project = store::projects::find_by_id(&self.application_store, project_id)
+                .await
+                .map_err(|_| sync_error("reading the work schedule time zone"))?
+                .ok_or_else(|| sync_error("reading the work schedule time zone"))?;
+            let zone = store::projects::calendar_timezone(&self.application_store, &project)
+                .await
+                .map_err(|_| sync_error("reading the work schedule time zone"))?;
+            crate::deadline_scheduling::sync(
+                &self.application_store,
+                self.providers.as_ref(),
+                person_id,
+                zone,
+                self.base_url.as_deref(),
+            )
+            .await
+            .map_err(|_| sync_error("reconciling Deadline work reservations"))?;
+        }
+        Ok(count)
     }
 
     async fn sync(

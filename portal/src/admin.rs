@@ -3004,6 +3004,12 @@ struct FirmUpdateInput {
     portal_theme_brand_key: Option<String>,
     #[serde(default)]
     google_workspace_calendar_owner: Option<String>,
+    deadline_buffer_minutes: Option<String>,
+    deadline_end_of_business: Option<String>,
+    deadline_effort_court: Option<String>,
+    deadline_effort_discovery: Option<String>,
+    deadline_effort_internal: Option<String>,
+    deadline_effort_tickler: Option<String>,
     /// `on` or `off` from the Google Calendar card; `off` clears the Calendar owner.
     #[serde(default)]
     google_calendar: Option<String>,
@@ -3077,6 +3083,41 @@ async fn firms_update(
                 session_data.person_id,
                 id,
                 enabled == "on",
+            )
+            .await,
+        );
+    }
+    if let (Some(buffer), Some(end)) = (
+        input.deadline_buffer_minutes.as_deref(),
+        input.deadline_end_of_business.as_deref(),
+    ) {
+        return firm_setting_saved(
+            id,
+            store::firms::set_deadline_scheduling_policy(
+                &state.application_store,
+                session_data.role,
+                session_data.person_id,
+                id,
+                buffer,
+                end,
+                [
+                    (
+                        "court",
+                        input.deadline_effort_court.as_deref().unwrap_or(""),
+                    ),
+                    (
+                        "discovery",
+                        input.deadline_effort_discovery.as_deref().unwrap_or(""),
+                    ),
+                    (
+                        "internal",
+                        input.deadline_effort_internal.as_deref().unwrap_or(""),
+                    ),
+                    (
+                        "tickler",
+                        input.deadline_effort_tickler.as_deref().unwrap_or(""),
+                    ),
+                ],
             )
             .await,
         );

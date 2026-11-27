@@ -2842,6 +2842,7 @@ struct DeadlineProjectQuery {
     include_pitch: bool,
     #[serde(default)]
     include_deadlines: bool,
+    deadline_schedule_timezone: Option<chrono_tz::Tz>,
 }
 
 /// The dashboard inventory for deadline and readiness reporting.
@@ -2908,9 +2909,27 @@ async fn lawyer_deadline_projects(
         let deadlines = store::project_deadlines::list_for_projects(&project_ids)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?;
-        return Ok(
-            Json(serde_json::json!({"projects": rows, "deadlines": deadlines})).into_response(),
-        );
+        let scheduling_policy = store::project_deadlines::scheduling_policy(Some(firm_id))
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        let mut response = serde_json::json!({
+            "projects": rows, "deadlines": deadlines, "scheduling_policy": scheduling_policy,
+        });
+        if let (Some(zone), Some(person)) = (query.deadline_schedule_timezone, lawyer.0.person_id) {
+            response["work_schedule"] = match crate::deadline_scheduling::plan(
+                &state.application_store,
+                state.integration_providers.as_ref(),
+                person,
+                zone,
+                chrono::Utc::now(),
+            )
+            .await
+            {
+                Ok(plan) => serde_json::json!(plan),
+                Err(_) => serde_json::json!({ "availability": "unverified" }),
+            };
+        }
+        return Ok(Json(response).into_response());
     }
     if query.include_pitch {
         return Ok(Json(serde_json::json!({"projects": rows})).into_response());

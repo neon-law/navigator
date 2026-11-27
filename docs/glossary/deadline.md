@@ -51,22 +51,27 @@ The civil date stays the same in every viewer's time zone. Existing timestamp-on
 A hearing requires a timed start. Save the notice’s duration with `--hearing-minutes` and its courtroom address with
 `--hearing-location`. When the duration is unknown, the calendar reserves one hour.
 
+**Scheduling.** Firm Settings sets the buffer in minutes, with a default of 15 and a minimum of 10. A timed hearing,
+trial day, deposition, conference, consult, or call reserves Busy time on both sides of its scheduled duration. Filing
+Deadlines have a submit-by target one buffer before their recorded cutoff. A civil date without a legal cutoff uses the
+Firm's end of business in the matter's zone for its submit-by target. ICS preserves the recorded date and exports the
+submit-by alarm or buffered appearance window.
+
+**Effort and capacity.** Use `--effort 30m`, `--effort 4h`, `--effort 3d`, or `--effort 0` on creation or update. A day
+represents eight hours of effort. Firm Settings supplies the court, discovery, internal, and tickler defaults when work
+is first recorded. Navigator places the responsible attorney's work in free weekday hours beginning at 9 a.m. within the
+internal lead window. The calendar plan covers 30 days and uses a seven-day lead when none is set. The brief and dated
+agenda flag competing Deadlines at risk and show booked and available working time. Register a private [Attorney
+Calendar](attorney-calendar.md) for Navigator to reserve work in Google Calendar.
+
 **Whose date it is.** `calendar_role` is closed: `firm` (our obligation), `opponent` (the other side's deadline), or
 `hearing` (an appearance). A hearing is not our filing obligation.
 
-**What kind of date it is.** `category` is closed: `court` (a filing or response the court's rules or orders require),
-`hearing` (an appearance; the reminder for a scheduled hearing [Docket Entry](docket-entry.md)), `discovery` (a
-discovery request, response, disclosure, or cutoff), `internal` (a firm preparation target), or `tickler` (a follow-up
-reminder). It answers a different question than `calendar_role` and `authority_kind` — not whose the date is or why it
-binds, but what kind it is — which is why a court deadline and a discovery deadline can both be `firm` plus `court_rule`
-yet sort differently. Creation defaults to `hearing` when the calendar role is `hearing` and `internal` when the
-authority kind is `internal`; otherwise it must be supplied rather than guessed, because `court` and `discovery` share
-authority kinds. The matter calendar colors each category from a fixed map — Tomato for `court`, Grape for `hearing`,
-Banana for `discovery`, Graphite for `internal` and `tickler` — so every matter calendar looks the same, and the map is
-Navigator's, never set per Project. The ICS title includes the category label. The color appears on the mirrored Google
-Calendar event. The one-time migration recovers a missing category as `hearing` for a hearing role, then as `internal`
-for internal authority, without changing an explicit category or the Deadline's dates and revision. Later explicit
-clears remain unset. Rows whose category cannot be settled keep it unset.
+**Category.** A Deadline may be `court`, `hearing`, `discovery`, `internal`, `tickler`, `trial_day`, `deposition`,
+`conference`, `consult`, or `call`. Creation defaults to `hearing` for the hearing role and `internal` for internal
+authority. Supply the category when neither default applies. Google Calendar uses Tomato for court, Grape for hearings
+and trial days, Banana for discovery and depositions, and Graphite for internal work and ticklers. ICS and Google
+Calendar include the category label. Rows whose category is unsettled remain uncategorized.
 
 `navigator project deadline list` marks any unset category with `category_review_required: true`. After review, use
 `navigator project deadline update <id> --category <category>` to select the appropriate closed category.

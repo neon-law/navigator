@@ -10,6 +10,7 @@ pub mod billing_report;
 pub mod cases;
 pub mod correspondence;
 pub mod deadline_proposals;
+pub mod deadline_schedule;
 pub mod document_pointers;
 pub mod documents;
 pub mod efiling_transactions;

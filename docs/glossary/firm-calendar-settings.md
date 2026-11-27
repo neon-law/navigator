@@ -11,6 +11,9 @@ a Firm that made it: Project Calendar provisioning and every [Attorney Calendar]
 Firm without it. Consumer Gmail addresses are refused because they cannot grant Workspace delegation. Clearing the
 mailbox, or switching Calendar off in [Firm Integrations](firm-integrations.md), turns Calendar off.
 
+The Owner also sets the [Deadline](deadline.md) buffer, end-of-business time, and category effort defaults in Firm
+Settings. These settings apply to internal scheduling independently of Google Calendar enrollment.
+
 The table is `firm_calendar_settings`.
 
 Schema: [`firm_calendar_settings`](../../store/postgres/schema.sql).

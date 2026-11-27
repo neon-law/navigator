@@ -192,6 +192,12 @@ pub enum FirmError {
     DriveSettingsUnavailable,
     #[error("Enter a valid Google Workspace mailbox address.")]
     InvalidCalendarOwner,
+    #[error(
+        "Enter a buffer between 10 and 1440 minutes and a valid end-of-business time (HH:MM)."
+    )]
+    InvalidDeadlineSchedulingPolicy,
+    #[error("Use a nonnegative whole number of minutes for every effort default.")]
+    InvalidDeadlineEffortDefaults,
     #[error("Gmail addresses are not supported. Choose a Google Workspace mailbox on the Firm's own domain.")]
     GmailCalendarOwner,
     #[error("Choose DocuSign or Dropbox Sign.")]
@@ -320,6 +326,8 @@ impl FirmError {
             }
             Self::CalendarSettingsUnavailable
             | Self::DriveSettingsUnavailable
+            | Self::InvalidDeadlineSchedulingPolicy
+            | Self::InvalidDeadlineEffortDefaults
             | Self::InvalidCalendarOwner
             | Self::GmailCalendarOwner
             | Self::InvalidEsignProvider => self.to_string(),
@@ -475,6 +483,69 @@ pub async fn set_calendar_owner(
     .execute(db.pool())
     .await?;
     Ok(())
+}
+
+/// Save the Firm Owner's working cutoff and minimum appearance buffer.
+pub async fn set_deadline_scheduling_policy(
+    application_store: &ApplicationStore,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    firm_id: Uuid,
+    buffer: &str,
+    end_of_business: &str,
+    effort_defaults: [(&str, &str); 4],
+) -> Result<(), FirmError> {
+    if actor_role != Role::Owner {
+        return Err(FirmError::NotAuthorized);
+    }
+    authorize_manage_firm(application_store, actor_role, actor_person_id, firm_id).await?;
+    let invalid = || FirmError::InvalidDeadlineSchedulingPolicy;
+    let buffer = buffer.trim().parse::<i32>().map_err(|_| invalid())?;
+    let end = chrono::NaiveTime::parse_from_str(end_of_business.trim(), "%H:%M")
+        .map_err(|_| invalid())?;
+    model::project_deadlines::SchedulingPolicy::new(i64::from(buffer), end)
+        .map_err(|_| invalid())?;
+    let mut effort = serde_json::Map::new();
+    for (category, value) in effort_defaults {
+        let minutes = value
+            .trim()
+            .parse::<i32>()
+            .ok()
+            .filter(|minutes| *minutes >= 0)
+            .ok_or(FirmError::InvalidDeadlineEffortDefaults)?;
+        effort.insert(category.into(), serde_json::json!(minutes));
+    }
+    let db = crate::postgres::PostgresDb::application()
+        .await
+        .map_err(|_| FirmError::CalendarSettingsUnavailable)?;
+    sqlx::query(
+        "INSERT INTO firm_calendar_settings (firm_id, deadline_buffer_minutes, deadline_end_of_business, deadline_effort_defaults)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (firm_id) DO UPDATE SET
+         deadline_buffer_minutes = EXCLUDED.deadline_buffer_minutes,
+         deadline_end_of_business = EXCLUDED.deadline_end_of_business,
+         deadline_effort_defaults = EXCLUDED.deadline_effort_defaults",
+    )
+    .bind(firm_id)
+    .bind(buffer)
+    .bind(end)
+    .bind(serde_json::Value::Object(effort))
+    .execute(db.pool())
+    .await?;
+    Ok(())
+}
+
+/// Configured effort defaults shown alongside the Firm's scheduling policy.
+pub async fn deadline_effort_defaults(firm_id: Uuid) -> Result<serde_json::Value, FirmError> {
+    let db = crate::postgres::PostgresDb::application()
+        .await
+        .map_err(|_| FirmError::CalendarSettingsUnavailable)?;
+    Ok(sqlx::query_scalar(
+        "SELECT deadline_effort_defaults FROM firm_calendar_settings WHERE firm_id=$1",
+    )
+    .bind(firm_id)
+    .fetch_optional(db.pool())
+    .await?
+    .unwrap_or(serde_json::Value::Null))
 }
 
 /// Edit a Firm's own fields. Owner, or that Firm's own Admin membership,

@@ -16,6 +16,9 @@ pub enum Action {
     Queue {
         #[arg(long)]
         file: PathBuf,
+        /// Display trial preparation suggestions without queuing the proposal.
+        #[arg(long)]
+        preview: bool,
     },
     /// Replace the draft at the given revision. Use the browser to confirm a court date.
     Correct {
@@ -36,7 +39,39 @@ fn read(file: PathBuf) -> Result<Value> {
     serde_json::from_slice(&data).context("invalid court-date JSON file")
 }
 
+fn suggest_trial_prep(submission: &mut Value) -> Result<()> {
+    use model::project_deadlines::{Category, Hearing};
+    let draft = &mut submission["draft"];
+    if draft["category"] == "trial_day" && draft["hearing"]["prep"].is_null() {
+        let hearing: Hearing = serde_json::from_value(draft["hearing"].clone())?;
+        let start = draft["due_at"]
+            .as_str()
+            .context("set the first trial start in due_at")?
+            .parse()?;
+        hearing
+            .validate_appearance(Some(Category::TrialDay), start)
+            .map_err(anyhow::Error::msg)?;
+        draft["hearing"]["prep"] = json!(hearing.preparation(start));
+    }
+    Ok(())
+}
+
 async fn execute(host: Option<&str>, project: Option<&str>, action: Action) -> Result<Value> {
+    if let Action::Queue {
+        file,
+        preview: true,
+    } = action
+    {
+        let mut input = read(file)?;
+        if let Some(rows) = input.as_array_mut() {
+            for row in rows {
+                suggest_trial_prep(row)?;
+            }
+        } else {
+            suggest_trial_prep(&mut input)?;
+        }
+        return Ok(input);
+    }
     let (base, token, project_id) = deadline::coordinates(host, project).await?;
     let url = format!("{base}/app/api/projects/{project_id}/court-date-proposals");
     let client = reqwest::Client::new();
@@ -44,7 +79,7 @@ async fn execute(host: Option<&str>, project: Option<&str>, action: Action) -> R
         Action::List => {
             deadline::call(client.get(&url).bearer_auth(&token), "list proposals").await
         }
-        Action::Queue { file } => {
+        Action::Queue { file, .. } => {
             let submissions = match read(file)? {
                 Value::Array(rows) => rows,
                 row => vec![row],

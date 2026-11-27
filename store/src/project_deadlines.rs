@@ -30,6 +30,8 @@ pub struct Deadline {
     pub due_at: String,
     pub due_on: Option<DueOn>,
     pub hearing: Option<Hearing>,
+    #[serde(default)]
+    pub effort_minutes: i32,
     pub authority_kind: String,
     pub authority: String,
     pub source: String,
@@ -82,6 +84,7 @@ pub struct NewDeadline {
     pub due_at: String,
     pub due_on: Option<DueOn>,
     pub hearing: Option<Hearing>,
+    pub effort_minutes: Option<i32>,
     pub authority_kind: String,
     pub authority: String,
     pub source: String,
@@ -104,6 +107,7 @@ pub struct DeadlinePatch {
     pub due_at: Option<String>,
     pub due_on: Option<DueOn>,
     pub hearing: Option<Hearing>,
+    pub effort_minutes: Option<i32>,
     pub authority_kind: Option<String>,
     pub authority: Option<String>,
     pub source: Option<String>,
@@ -123,6 +127,7 @@ struct DeadlineInput<'a> {
     due_at: &'a str,
     due_on: Option<&'a DueOn>,
     hearing: Option<&'a Hearing>,
+    effort_minutes: Option<i32>,
     authority_kind: &'a str,
     authority: &'a str,
     source: &'a str,
@@ -145,13 +150,29 @@ fn normalized_time(
             "due_at must be an RFC 3339 timestamp with an explicit offset".into(),
         )
     })?;
-    let is_hearing = calendar_role == "hearing" || category.map(str::trim) == Some("hearing");
+    let is_hearing = model::project_deadlines::is_appearance(
+        calendar_role,
+        category.and_then(|value| value.trim().parse().ok()),
+    );
     if hearing.is_some() && !is_hearing {
         return Err(DeadlineError::Invalid(
-            "hearing details require a hearing role or category".into(),
+            "appearance details require an appearance role or category".into(),
+        ));
+    }
+    if matches!(category.map(str::trim), Some("trial_day" | "deposition")) && hearing.is_none() {
+        return Err(DeadlineError::Invalid(
+            "trial and deposition details are required".into(),
         ));
     }
     if let Some(details) = hearing {
+        details
+            .validate_appearance(category.and_then(|value| value.trim().parse().ok()), due_at)
+            .map_err(|error| DeadlineError::Invalid(error.into()))?;
+        if details.minutes() > 1440 {
+            return Err(DeadlineError::Invalid(
+                "an appearance may last at most 1440 minutes".into(),
+            ));
+        }
         let duration = chrono::Duration::minutes(i64::from(details.minutes()));
         if due_at.checked_add_signed(duration).is_none() {
             return Err(DeadlineError::Invalid(
@@ -168,7 +189,7 @@ fn normalized_time(
         }
         if is_hearing {
             return Err(DeadlineError::Invalid(
-                "a hearing requires a scheduled start time".into(),
+                "an appearance requires a scheduled start time".into(),
             ));
         }
     }
@@ -182,6 +203,7 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
         due_at,
         due_on,
         hearing,
+        effort_minutes,
         authority_kind,
         authority,
         source,
@@ -263,6 +285,7 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
         due_at: due_at.to_rfc3339(),
         due_on: due_on.cloned(),
         hearing: hearing.cloned(),
+        effort_minutes,
         authority_kind: authority_kind.to_string(),
         authority,
         source,
@@ -330,6 +353,88 @@ async fn require_links(
         }
     }
     Ok(())
+}
+
+/// Read the Firm's internal calendar policy independently of calendar integration status.
+pub async fn scheduling_policy(
+    firm_id: Option<Uuid>,
+) -> Result<model::project_deadlines::SchedulingPolicy, DeadlineError> {
+    use crate::postgres::matter::MatterAuthorityError as PgError;
+    use model::project_deadlines::SchedulingPolicy;
+    let Some(firm_id) = firm_id else {
+        return Ok(SchedulingPolicy::default());
+    };
+    let pg = crate::postgres::matter::authority_for("project_deadlines").await?;
+    let settings = sqlx::query_as::<_, (i32, chrono::NaiveTime)>(
+        "SELECT deadline_buffer_minutes, deadline_end_of_business FROM firm_calendar_settings WHERE firm_id = $1",
+    )
+    .bind(firm_id)
+    .fetch_optional(pg.pool())
+    .await
+    .map_err(PgError::from)?;
+    settings.map_or_else(
+        || Ok(SchedulingPolicy::default()),
+        |(buffer, end)| {
+            SchedulingPolicy::new(i64::from(buffer), end)
+                .map_err(|error| DeadlineError::Invalid(error.into()))
+        },
+    )
+}
+
+impl Deadline {
+    #[must_use]
+    pub fn work(
+        &self,
+        policy: model::project_deadlines::SchedulingPolicy,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<model::deadline_schedule::Work> {
+        if self.status != STATUS_OPEN
+            || self.calendar_review_pending
+            || self.calendar_role == "opponent"
+            || self.effort_minutes == 0
+        {
+            return None;
+        }
+        let due = self.due_at.parse().ok()?;
+        let target = if model::project_deadlines::is_appearance(
+            &self.calendar_role,
+            self.category
+                .as_deref()
+                .and_then(|value| value.parse().ok()),
+        ) {
+            self.buffered_window(policy)?.0
+        } else {
+            policy.submit_by(due, self.due_on.as_ref())?
+        };
+        Some(model::deadline_schedule::Work::new(
+            self.id,
+            target.to_utc(),
+            now,
+            self.internal_lead_days,
+            self.effort_minutes,
+            policy.buffer_minutes(),
+        ))
+    }
+
+    #[must_use]
+    pub fn buffered_window(
+        &self,
+        policy: model::project_deadlines::SchedulingPolicy,
+    ) -> Option<(DateTime<FixedOffset>, DateTime<FixedOffset>)> {
+        if self.status != STATUS_OPEN
+            || self.calendar_review_pending
+            || !model::project_deadlines::is_appearance(
+                &self.calendar_role,
+                self.category
+                    .as_deref()
+                    .and_then(|category| category.parse().ok()),
+            )
+        {
+            return None;
+        }
+        let start = self.due_at.parse().ok()?;
+        policy.appearance(start, self.hearing.as_ref().map_or(60, Hearing::minutes))
+    }
 }
 
 /// Deadlines on one Project, earliest due instant first.
@@ -567,6 +672,7 @@ pub async fn create(
         due_at: &new.due_at,
         due_on: new.due_on.as_ref(),
         hearing: new.hearing.as_ref(),
+        effort_minutes: new.effort_minutes,
         authority_kind: &new.authority_kind,
         authority: &new.authority,
         source: &new.source,
@@ -652,6 +758,7 @@ pub(crate) async fn publish_reviewed(
     conn: &mut sqlx::PgConnection,
     proposal: &model::deadline_proposals::Proposal,
     citations: &[String],
+    reviewer: Option<Uuid>,
 ) -> Result<Deadline, DeadlineError> {
     use crate::postgres::matter::MatterAuthorityError as PgError;
     use model::deadline_proposals::{Kind, Role};
@@ -692,7 +799,7 @@ pub(crate) async fn publish_reviewed(
     let role = draft
         .calendar_role
         .unwrap_or_else(|| {
-            if category == Category::Hearing {
+            if category.is_appearance() {
                 CalendarRole::Hearing
             } else if prior.is_some_and(|row| row.calendar_role == "opponent") {
                 CalendarRole::Opponent
@@ -721,6 +828,7 @@ pub(crate) async fn publish_reviewed(
         due_at: &due_at,
         due_on: due_on.as_ref(),
         hearing: draft.hearing.as_ref(),
+        effort_minutes: prior.map(|row| row.effort_minutes),
         title: Some(&draft.title),
         description: prior.and_then(|d| d.description.as_deref()),
         source: prior.map_or("lawyer", |d| d.source.as_str()),
@@ -732,23 +840,130 @@ pub(crate) async fn publish_reviewed(
         internal_lead_days: prior.and_then(|d| d.internal_lead_days),
         replay_key: prior.and_then(|d| d.replay_key.as_deref()),
     })?;
-    let now = chrono::Utc::now().to_rfc3339();
-    crate::postgres::project_deadlines::persist_on(
+    publish_reviewed_schedule(
         conn,
-        proposal.deadline_id.unwrap_or_else(Uuid::now_v7),
         proposal.project_id,
+        proposal.deadline_id,
+        normalized,
+        prior,
+        source_document_id,
+        reviewer,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn publish_reviewed_schedule(
+    conn: &mut sqlx::PgConnection,
+    project: Uuid,
+    target: Option<Uuid>,
+    mut normalized: Normalized,
+    prior: Option<&Deadline>,
+    source_document_id: Option<Uuid>,
+    reviewer: Option<Uuid>,
+) -> Result<Deadline, DeadlineError> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let parent_id = target.unwrap_or_else(Uuid::now_v7);
+    let old_trial = prior
+        .and_then(|row| row.hearing.as_ref())
+        .and_then(|details| match details.appearance {
+            Some(model::project_deadlines::Appearance::TrialDay { day, .. }) => day,
+            _ => None,
+        });
+    let mut starts = vec![normalized.due_at.clone()];
+    let mut cancelled = false;
+    if let Some(details) = &mut normalized.hearing {
+        if let Some(model::project_deadlines::Appearance::TrialDay {
+            additional_starts,
+            day,
+            cancel,
+        }) = &mut details.appearance
+        {
+            if day.is_some()
+                || (prior.is_some() && !additional_starts.is_empty())
+                || (*cancel && old_trial.is_none())
+            {
+                return Err(DeadlineError::Invalid(
+                    "a trial revision may amend one existing day".into(),
+                ));
+            }
+            cancelled = *cancel;
+            *cancel = false;
+            starts.extend(additional_starts.drain(..).map(|start| start.to_rfc3339()));
+            *day = old_trial.or(Some(model::project_deadlines::TrialDay {
+                series_id: parent_id,
+                number: 1,
+                total: u16::try_from(starts.len())
+                    .map_err(|_| DeadlineError::Invalid("too many trial days".into()))?,
+            }));
+        } else if old_trial.is_some() {
+            return Err(DeadlineError::Invalid(
+                "a trial day must retain its trial category".into(),
+            ));
+        }
+    } else if old_trial.is_some() {
+        return Err(DeadlineError::Invalid(
+            "a trial day must retain its trial details".into(),
+        ));
+    }
+    let prep = normalized
+        .hearing
+        .as_mut()
+        .and_then(|details| details.prep.take())
+        .unwrap_or_default();
+    let owner = prior.and_then(|d| d.owner_person_id).or(reviewer);
+    let parent = crate::postgres::project_deadlines::persist_on(
+        conn,
+        parent_id,
+        project,
         &StoredDeadline {
             normalized: &normalized,
             source_document_id,
-            owner_person_id: prior.and_then(|d| d.owner_person_id),
-            status: STATUS_OPEN,
+            owner_person_id: owner,
+            status: if cancelled {
+                STATUS_CANCELLED
+            } else {
+                STATUS_OPEN
+            },
             expected_status: prior.map(|d| d.status.as_str()),
             expected_updated_at: prior.map(|d| d.updated_at.as_str()),
             inserted_at: &now,
         },
         true,
     )
-    .await
+    .await?;
+    for (index, start) in starts.into_iter().enumerate().skip(1) {
+        normalized.due_at = start;
+        if let Some(model::project_deadlines::Appearance::TrialDay { day: Some(day), .. }) =
+            normalized
+                .hearing
+                .as_mut()
+                .and_then(|details| details.appearance.as_mut())
+        {
+            day.number = u16::try_from(index + 1)
+                .map_err(|_| DeadlineError::Invalid("too many trial days".into()))?;
+        }
+        crate::postgres::project_deadlines::persist_on(
+            conn,
+            Uuid::now_v7(),
+            project,
+            &StoredDeadline {
+                normalized: &normalized,
+                source_document_id,
+                owner_person_id: owner,
+                status: STATUS_OPEN,
+                expected_status: None,
+                expected_updated_at: None,
+                inserted_at: &now,
+            },
+            true,
+        )
+        .await?;
+    }
+    if prior.is_none() {
+        crate::postgres::project_deadlines::persist_preparation(conn, &parent, &prep, &now).await?;
+    }
+    Ok(parent)
 }
 
 /// Replace the named fields and return the stored row. Status stays put.
@@ -784,9 +999,16 @@ pub async fn update(
         (Some(changes), Some(current)) => Some(Hearing {
             duration_minutes: changes.duration_minutes.or(current.duration_minutes),
             location: changes.location.clone().or(current.location),
+            appearance: changes.appearance.clone().or(current.appearance),
+            prep: current.prep,
         }),
         (Some(changes), None) => Some(changes.clone()),
-        (None, current) if calendar_role == "hearing" || category.as_deref() == Some("hearing") => {
+        (None, current)
+            if model::project_deadlines::is_appearance(
+                &calendar_role,
+                category.as_deref().and_then(|value| value.parse().ok()),
+            ) =>
+        {
             current
         }
         (None, _) => None,
@@ -805,6 +1027,7 @@ pub async fn update(
         due_at: &due_at,
         due_on: due_on.as_ref(),
         hearing: hearing.as_ref(),
+        effort_minutes: patch.effort_minutes.or(Some(existing.effort_minutes)),
         authority_kind: &authority_kind,
         authority: &authority,
         source: &source,
@@ -847,6 +1070,27 @@ async fn transition(
     let existing = find(application_store, project_id, id)
         .await?
         .ok_or(DeadlineError::NotFound)?;
+    if existing.category.as_deref() == Some("trial_day")
+        && existing.status != next
+        && matches!(next, STATUS_CANCELLED | STATUS_OPEN)
+    {
+        return Err(DeadlineError::Invalid(
+            "amend the trial day through a Deadline Proposal with the source order or stipulation"
+                .into(),
+        ));
+    }
+    if existing.category.as_deref() == Some("trial_day")
+        && next == STATUS_COMPLETE
+        && existing.status == STATUS_OPEN
+        && existing
+            .due_at
+            .parse::<DateTime<FixedOffset>>()
+            .is_ok_and(|date| date > chrono::Utc::now())
+    {
+        return Err(DeadlineError::Invalid(
+            "a future trial day requires reviewed evidence to remove".into(),
+        ));
+    }
     let allowed = existing.status == next
         || (existing.status == STATUS_OPEN && next != STATUS_OPEN)
         || (existing.status == STATUS_CANCELLED && next == STATUS_OPEN);
@@ -865,6 +1109,7 @@ async fn transition(
         due_at: &existing.due_at,
         due_on: existing.due_on.as_ref(),
         hearing: existing.hearing.as_ref(),
+        effort_minutes: Some(existing.effort_minutes),
         authority_kind: &existing.authority_kind,
         authority: &existing.authority,
         source: &existing.source,
@@ -929,6 +1174,7 @@ mod tests {
             title: None,
             description: None,
             hearing: None,
+            effort_minutes: None,
             due_on: None,
             due_at: "2026-11-02T17:00:00-08:00".into(),
             authority_kind: "statute".into(),

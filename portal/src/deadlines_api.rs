@@ -25,6 +25,7 @@ pub(crate) struct CreateDeadlineRequest {
     due_at: Option<String>,
     due_on: Option<DueOnInput>,
     hearing: Option<Hearing>,
+    effort_minutes: Option<i32>,
     authority_kind: AuthorityKind,
     #[serde(default)]
     authority: String,
@@ -53,6 +54,7 @@ pub(crate) struct UpdateDeadlineRequest {
     due_at: Option<String>,
     due_on: Option<DueOnInput>,
     hearing: Option<Hearing>,
+    effort_minutes: Option<i32>,
     authority_kind: Option<String>,
     authority: Option<String>,
     source: Option<String>,
@@ -119,6 +121,59 @@ async fn mirror_after_write(state: &ApiState, project_id: Uuid) {
     }
 }
 
+async fn policy(
+    state: &ApiState,
+    project_id: Uuid,
+) -> Result<model::project_deadlines::SchedulingPolicy, ApiError> {
+    let project = store::projects::find_by_id(&state.application_store, project_id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .ok_or(ApiError::NotFound)?;
+    store::project_deadlines::scheduling_policy(project.firm_id)
+        .await
+        .map_err(map_deadline)
+}
+
+fn scheduled_row(
+    row: &store::project_deadlines::Deadline,
+    policy: model::project_deadlines::SchedulingPolicy,
+) -> serde_json::Value {
+    let mut value = serde_json::json!(row);
+    value["scheduling_policy"] = serde_json::json!(policy);
+    value
+}
+
+async fn apply_calendar_schedule(
+    state: &ApiState,
+    row: &store::project_deadlines::Deadline,
+    actor: Option<Uuid>,
+) -> Option<serde_json::Value> {
+    let person = row.owner_person_id.filter(|id| Some(*id) == actor)?;
+    let project = store::projects::find_by_id(&state.application_store, row.project_id)
+        .await
+        .ok()??;
+    let zone = store::projects::calendar_timezone(&state.application_store, &project)
+        .await
+        .ok()?;
+    let result = crate::deadline_scheduling::sync(
+        &state.application_store,
+        state.integration_providers.as_ref(),
+        person,
+        zone,
+        state.canonical_base_url.as_deref(),
+    )
+    .await;
+    Some(match result {
+        Ok(plan) => serde_json::json!({
+            "booked": plan.booked,
+            "work_blocks": plan.schedule.blocks.get(&row.id),
+            "at_risk": plan.schedule.at_risk.contains_key(&row.id),
+            "competing_deadlines": plan.schedule.at_risk.get(&row.id),
+        }),
+        Err(_) => serde_json::json!({ "availability": "unverified" }),
+    })
+}
+
 /// `GET /app/api/projects/{id}/deadlines`
 pub(crate) async fn list_deadlines(
     State(state): State<ApiState>,
@@ -129,7 +184,13 @@ pub(crate) async fn list_deadlines(
     let rows = store::project_deadlines::list(&state.application_store, id)
         .await
         .map_err(map_deadline)?;
-    Ok(Json(rows).into_response())
+    let policy = policy(&state, id).await?;
+    Ok(Json(
+        rows.iter()
+            .map(|row| scheduled_row(row, policy))
+            .collect::<Vec<_>>(),
+    )
+    .into_response())
 }
 
 /// `POST /app/api/projects/{id}/deadlines`
@@ -150,6 +211,16 @@ pub(crate) async fn create_deadline(
     ) {
         return Err(ApiError::DeadlineInvalid("Queue this court date with navigator project deadline review queue and confirm its evidence in Navigator.".into()));
     }
+    if input.category == Some(Category::Deposition)
+        && input
+            .hearing
+            .as_ref()
+            .is_none_or(|details| details.prep.is_none())
+    {
+        return Err(ApiError::DeadlineInvalid(
+            "Review the deposition and explicitly accept or drop its preparation Deadlines.".into(),
+        ));
+    }
     let (due_at, due_on) = store::project_deadlines::resolve_due(
         &state.application_store,
         id,
@@ -159,6 +230,7 @@ pub(crate) async fn create_deadline(
     )
     .await
     .map_err(map_deadline)?;
+    let policy = policy(&state, id).await?;
     let row = store::project_deadlines::create(
         &state.application_store,
         &store::project_deadlines::NewDeadline {
@@ -167,12 +239,13 @@ pub(crate) async fn create_deadline(
             description: input.description,
             due_on,
             hearing: input.hearing,
+            effort_minutes: input.effort_minutes,
             due_at,
             authority_kind: input.authority_kind.to_string(),
             authority: input.authority,
             source: input.source,
             source_document_id: input.source_document_id,
-            owner_person_id: input.owner_person_id,
+            owner_person_id: input.owner_person_id.or(session.person_id),
             calendar_role: input.calendar_role.to_string(),
             category: input.category.map(|category| category.to_string()),
             internal_lead_days: input.internal_lead_days,
@@ -183,7 +256,11 @@ pub(crate) async fn create_deadline(
     .await
     .map_err(map_deadline)?;
     mirror_after_write(&state, id).await;
-    Ok((StatusCode::CREATED, Json(row)).into_response())
+    let mut result = scheduled_row(&row, policy);
+    if let Some(schedule) = apply_calendar_schedule(&state, &row, session.person_id).await {
+        result["work_schedule"] = schedule;
+    }
+    Ok((StatusCode::CREATED, Json(result)).into_response())
 }
 
 /// `PATCH /app/api/projects/{id}/deadlines/{deadline_id}`
@@ -208,6 +285,7 @@ pub(crate) async fn update_deadline(
     } else {
         (None, None)
     };
+    let policy = policy(&state, id).await?;
     let row = store::project_deadlines::update(
         &state.application_store,
         id,
@@ -218,6 +296,7 @@ pub(crate) async fn update_deadline(
             due_at,
             due_on,
             hearing: input.hearing,
+            effort_minutes: input.effort_minutes,
             authority_kind: input.authority_kind,
             authority: input.authority,
             source: input.source,
@@ -234,7 +313,11 @@ pub(crate) async fn update_deadline(
     .await
     .map_err(map_deadline)?;
     mirror_after_write(&state, id).await;
-    Ok(Json(row).into_response())
+    let mut result = scheduled_row(&row, policy);
+    if let Some(schedule) = apply_calendar_schedule(&state, &row, session.person_id).await {
+        result["work_schedule"] = schedule;
+    }
+    Ok(Json(result).into_response())
 }
 
 /// `POST /app/api/projects/{id}/deadlines/{deadline_id}/complete`
@@ -248,6 +331,7 @@ pub(crate) async fn complete_deadline(
         .await
         .map_err(map_deadline)?;
     mirror_after_write(&state, id).await;
+    let _ = apply_calendar_schedule(&state, &row, session.person_id).await;
     Ok(Json(row).into_response())
 }
 
@@ -262,6 +346,7 @@ pub(crate) async fn cancel_deadline(
         .await
         .map_err(map_deadline)?;
     mirror_after_write(&state, id).await;
+    let _ = apply_calendar_schedule(&state, &row, session.person_id).await;
     Ok(Json(row).into_response())
 }
 
@@ -276,5 +361,6 @@ pub(crate) async fn reopen_deadline(
         .await
         .map_err(map_deadline)?;
     mirror_after_write(&state, id).await;
+    let _ = apply_calendar_schedule(&state, &row, session.person_id).await;
     Ok(Json(row).into_response())
 }

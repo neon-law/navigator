@@ -314,6 +314,7 @@ pub(super) async fn seed(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn litigation(
     application_store: &ApplicationStore,
     project: &Project,
@@ -369,6 +370,7 @@ async fn litigation(
                 title: None,
                 description: None,
                 hearing: None,
+                effort_minutes: None,
                 due_on: None,
                 due_at: ahead.due_at.to_string(),
                 authority_kind: ahead.authority_kind.to_string(),
