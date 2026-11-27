@@ -182,10 +182,6 @@ store = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true }
 views = { workspace = true }
 
-[[test]]
-name = "brand_seed_presentation"
-path = "tests/brand_seed_presentation.rs"
-required-features = ["server"]
 
 # `build.rs` reads the same kustomization to generate the shipped `CronJob`
 # table. Build-only for the same reason.

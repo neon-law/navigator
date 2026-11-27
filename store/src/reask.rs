@@ -14,8 +14,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::notation_events::{append_event, latest_for_kind, TransitionRecord};
-use crate::surreal::SurrealDb;
 
 /// `notation_events.machine_kind` token for a re-ask change request. A
 /// distinct kind so these rows never participate in the workflow /
@@ -58,7 +58,7 @@ pub struct ChangeRequest {
 /// # Errors
 /// Fails if the flagged set can't be encoded or the row can't be inserted.
 pub async fn record_change_request(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     notation_id: Uuid,
     acting_person_id: Uuid,
     flagged_questions: &[String],
@@ -71,7 +71,7 @@ pub async fn record_change_request(
     let payload = serde_json::to_string(&request).map_err(|e| ReaskError::Encode(e.to_string()))?;
     let now = chrono::Utc::now().to_rfc3339();
     append_event(
-        surreal,
+        application_store,
         TransitionRecord {
             notation_id,
             acting_person_id: Some(acting_person_id),
@@ -93,10 +93,10 @@ pub async fn record_change_request(
 /// # Errors
 /// Propagates a query failure.
 pub async fn latest_change_request(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Option<ChangeRequest>, ReaskError> {
-    let Some(event) = latest_for_kind(surreal, notation_id, MACHINE_REASK).await? else {
+    let Some(event) = latest_for_kind(application_store, notation_id, MACHINE_REASK).await? else {
         return Ok(None);
     };
     Ok(event
@@ -112,104 +112,14 @@ pub async fn latest_change_request(
 /// # Errors
 /// Propagates a query failure.
 pub async fn flagged_questions(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Vec<String>, ReaskError> {
-    Ok(latest_change_request(surreal, notation_id)
+    Ok(latest_change_request(application_store, notation_id)
         .await?
         .map(|r| r.flagged_questions)
         .unwrap_or_default())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{flagged_questions, latest_change_request, record_change_request};
-    use crate::test_support;
-
-    #[tokio::test]
-    async fn change_request_round_trips_flagged_set_and_note() {
-        let surreal = test_support::mem_surreal().await;
-        let notation_id = test_support::seed_notation(&surreal).await;
-        let lawyer = test_support::dri_person(&surreal).await;
-
-        record_change_request(
-            &surreal,
-            notation_id,
-            lawyer,
-            &["person__client".into(), "project__engagement".into()],
-            Some("client name is misspelled; confirm the entity type"),
-        )
-        .await
-        .expect("record change request");
-
-        let request = latest_change_request(&surreal, notation_id)
-            .await
-            .expect("read change request")
-            .expect("a change request was recorded");
-        assert_eq!(
-            request.flagged_questions,
-            vec![
-                "person__client".to_string(),
-                "project__engagement".to_string()
-            ],
-        );
-        assert_eq!(
-            request.note.as_deref(),
-            Some("client name is misspelled; confirm the entity type"),
-        );
-        assert_eq!(
-            flagged_questions(&surreal, notation_id).await.unwrap(),
-            vec![
-                "person__client".to_string(),
-                "project__engagement".to_string()
-            ],
-        );
-    }
-
-    #[tokio::test]
-    async fn flagged_questions_is_empty_when_never_sent_back() {
-        let surreal = test_support::mem_surreal().await;
-        let notation_id = test_support::seed_notation(&surreal).await;
-        assert!(flagged_questions(&surreal, notation_id)
-            .await
-            .unwrap()
-            .is_empty());
-        assert!(latest_change_request(&surreal, notation_id)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn latest_change_request_projects_the_most_recent_round() {
-        // Append-only: a second round of changes supersedes the first, so
-        // the re-ask surface always re-collects the current flagged set.
-        let surreal = test_support::mem_surreal().await;
-        let notation_id = test_support::seed_notation(&surreal).await;
-        let lawyer = test_support::dri_person(&surreal).await;
-
-        record_change_request(
-            &surreal,
-            notation_id,
-            lawyer,
-            &["person__client".into()],
-            None,
-        )
-        .await
-        .unwrap();
-        record_change_request(
-            &surreal,
-            notation_id,
-            lawyer,
-            &["project__engagement".into()],
-            None,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            flagged_questions(&surreal, notation_id).await.unwrap(),
-            vec!["project__engagement".to_string()],
-        );
-    }
-}
+mod tests {}

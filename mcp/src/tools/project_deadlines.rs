@@ -17,19 +17,19 @@ use super::ToolError;
 
 pub(super) async fn dispatch(
     name: &str,
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
     match name {
-        "list_project_deadlines" => list_call(surreal, person_id, role, arguments).await,
-        "queue_court_date" => queue_call(surreal, person_id, role, arguments).await,
-        "create_deadline" => create_call(surreal, person_id, role, arguments).await,
-        "update_deadline" => update_call(surreal, person_id, role, arguments).await,
-        "complete_deadline" => complete_call(surreal, person_id, role, arguments).await,
-        "cancel_deadline" => cancel_call(surreal, person_id, role, arguments).await,
-        "reopen_deadline" => reopen_call(surreal, person_id, role, arguments).await,
+        "list_project_deadlines" => list_call(application_store, person_id, role, arguments).await,
+        "queue_court_date" => queue_call(application_store, person_id, role, arguments).await,
+        "create_deadline" => create_call(application_store, person_id, role, arguments).await,
+        "update_deadline" => update_call(application_store, person_id, role, arguments).await,
+        "complete_deadline" => complete_call(application_store, person_id, role, arguments).await,
+        "cancel_deadline" => cancel_call(application_store, person_id, role, arguments).await,
+        "reopen_deadline" => reopen_call(application_store, person_id, role, arguments).await,
         other => Err(ToolError::Unknown(other.to_owned())),
     }
 }
@@ -109,7 +109,7 @@ struct QueueArgs {
 }
 
 pub async fn queue_call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     arguments: &Value,
@@ -117,7 +117,7 @@ pub async fn queue_call(
     let args: QueueArgs = super::decode_args(arguments)?;
     let project_id = args.project_id;
     if !role.is_lawyer_tier()
-        || !store::projects::has_firm_participation(surreal, person_id, project_id)
+        || !store::projects::has_firm_participation(application_store, person_id, project_id)
             .await
             .map_err(|e| ToolError::Database(e.to_string()))?
     {
@@ -128,7 +128,7 @@ pub async fn queue_call(
         .map_err(|e| ToolError::Database(e.to_string()))?;
     let draft = store::deadline_proposals::resolve_draft(
         &pg,
-        surreal,
+        application_store,
         project_id,
         args.request_id,
         None,
@@ -139,7 +139,7 @@ pub async fn queue_call(
     let receipts = if draft.evidence.iter().any(|source| source.forgejo.is_some()) {
         let kms = cloud::runtime_kms_from_env().await;
         store::court_date_forgejo::verify(
-            surreal,
+            application_store,
             project_id,
             &draft,
             role.is_lawyer_tier(),
@@ -358,13 +358,13 @@ struct IdArgs {
 }
 
 async fn require_participant(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     project_id: Uuid,
 ) -> Result<(), ToolError> {
     let viewer = super::portal_access()
-        .matter_viewer(surreal, Some(person_id), role, project_id)
+        .matter_viewer(application_store, Some(person_id), role, project_id)
         .await
         .map_err(ToolError::Database)?;
     if viewer.is_some() {
@@ -390,14 +390,14 @@ fn row_result(deadline: &Deadline, summary: &str) -> Value {
 }
 
 pub async fn list_call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
     let args: ProjectArgs = super::decode_args(arguments)?;
-    require_participant(surreal, person_id, role, args.project_id).await?;
-    let deadlines = store::project_deadlines::list(surreal, args.project_id)
+    require_participant(application_store, person_id, role, args.project_id).await?;
+    let deadlines = store::project_deadlines::list(application_store, args.project_id)
         .await
         .map_err(map_deadline)?;
     Ok(json!({
@@ -413,13 +413,13 @@ pub async fn list_call(
 }
 
 pub async fn create_call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
     let args: CreateArgs = super::decode_args(arguments)?;
-    require_participant(surreal, person_id, role, args.project_id).await?;
+    require_participant(application_store, person_id, role, args.project_id).await?;
     if model::project_deadlines::requires_court_review(
         &args.calendar_role.to_string(),
         &args.authority_kind.to_string(),
@@ -432,7 +432,7 @@ pub async fn create_call(
         ));
     }
     let (due_at, due_on) = store::project_deadlines::resolve_due(
-        surreal,
+        application_store,
         args.project_id,
         DeadlineIdentity::Replay(args.replay_key.as_deref()),
         args.due_at.as_deref(),
@@ -441,7 +441,7 @@ pub async fn create_call(
     .await
     .map_err(map_deadline)?;
     let deadline = store::project_deadlines::create(
-        surreal,
+        application_store,
         &store::project_deadlines::NewDeadline {
             project_id: args.project_id,
             title: args.title,
@@ -477,16 +477,16 @@ pub async fn create_call(
 }
 
 pub async fn update_call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
     let args: UpdateArgs = super::decode_args(arguments)?;
-    require_participant(surreal, person_id, role, args.project_id).await?;
+    require_participant(application_store, person_id, role, args.project_id).await?;
     let (due_at, due_on) = if args.due_at.is_some() || args.due_on.is_some() {
         let (at, on) = store::project_deadlines::resolve_due(
-            surreal,
+            application_store,
             args.project_id,
             DeadlineIdentity::Id(args.deadline_id),
             args.due_at.as_deref(),
@@ -499,7 +499,7 @@ pub async fn update_call(
         (None, None)
     };
     let deadline = store::project_deadlines::update(
-        surreal,
+        application_store,
         args.project_id,
         args.deadline_id,
         &store::project_deadlines::DeadlinePatch {
@@ -528,30 +528,51 @@ pub async fn update_call(
 }
 
 pub async fn complete_call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
-    transition(surreal, person_id, role, arguments, Transition::Complete).await
+    transition(
+        application_store,
+        person_id,
+        role,
+        arguments,
+        Transition::Complete,
+    )
+    .await
 }
 
 pub async fn cancel_call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
-    transition(surreal, person_id, role, arguments, Transition::Cancel).await
+    transition(
+        application_store,
+        person_id,
+        role,
+        arguments,
+        Transition::Cancel,
+    )
+    .await
 }
 
 pub async fn reopen_call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
-    transition(surreal, person_id, role, arguments, Transition::Reopen).await
+    transition(
+        application_store,
+        person_id,
+        role,
+        arguments,
+        Transition::Reopen,
+    )
+    .await
 }
 
 #[derive(Clone, Copy)]
@@ -562,23 +583,26 @@ enum Transition {
 }
 
 async fn transition(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     role: Role,
     arguments: &Value,
     which: Transition,
 ) -> Result<Value, ToolError> {
     let args: IdArgs = super::decode_args(arguments)?;
-    require_participant(surreal, person_id, role, args.project_id).await?;
+    require_participant(application_store, person_id, role, args.project_id).await?;
     let deadline = match which {
         Transition::Complete => {
-            store::project_deadlines::complete(surreal, args.project_id, args.deadline_id).await
+            store::project_deadlines::complete(application_store, args.project_id, args.deadline_id)
+                .await
         }
         Transition::Cancel => {
-            store::project_deadlines::cancel(surreal, args.project_id, args.deadline_id).await
+            store::project_deadlines::cancel(application_store, args.project_id, args.deadline_id)
+                .await
         }
         Transition::Reopen => {
-            store::project_deadlines::reopen(surreal, args.project_id, args.deadline_id).await
+            store::project_deadlines::reopen(application_store, args.project_id, args.deadline_id)
+                .await
         }
     }
     .map_err(map_deadline)?;
@@ -594,15 +618,15 @@ mod tests {
     use store::persons::{NewPerson, Role};
     use uuid::Uuid;
 
-    async fn project(surreal: &store::surreal::SurrealDb) -> Uuid {
-        crate::test_fixtures::seed_brands(surreal).await;
+    async fn project(application_store: &store::application_store::ApplicationStore) -> Uuid {
+        crate::test_fixtures::seed_brands(application_store).await;
         store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: format!("deadline-{}", Uuid::now_v7()),
                 name: "Deadline matter".into(),
                 status: "open".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: store::test_support::seed_entity(application_store).await,
                 ..Default::default()
             },
         )
@@ -611,9 +635,12 @@ mod tests {
         .id
     }
 
-    async fn lawyer(surreal: &store::surreal::SurrealDb, project_id: Option<Uuid>) -> Uuid {
+    async fn lawyer(
+        application_store: &store::application_store::ApplicationStore,
+        project_id: Option<Uuid>,
+    ) -> Uuid {
         let person = store::persons::create(
-            surreal,
+            application_store,
             &NewPerson::with_role(
                 "Synthetic Lawyer",
                 format!("lawyer-{}@example.com", Uuid::now_v7()),
@@ -624,7 +651,7 @@ mod tests {
         .unwrap();
         if let Some(project_id) = project_id {
             store::participation::add_participant(
-                surreal,
+                application_store,
                 &store::participation::AddParticipantCommand {
                     project_id,
                     person_id: person.id,
@@ -654,11 +681,11 @@ mod tests {
     #[tokio::test]
     async fn create_list_update_and_complete_round_trip() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let project_id = project(&surreal).await;
-            let person_id = lawyer(&surreal, Some(project_id)).await;
+            let application_store = crate::test_fixtures::handle();
+            let project_id = project(&application_store).await;
+            let person_id = lawyer(&application_store, Some(project_id)).await;
             let created = create_call(
-                &surreal,
+                &application_store,
                 person_id,
                 Role::Lawyer,
                 &create_args(project_id, "Synthetic agreement § 1"),
@@ -671,7 +698,7 @@ mod tests {
                 .to_string();
             assert_eq!(created["structuredContent"]["deadline"]["status"], "open");
             let listed = list_call(
-                &surreal,
+                &application_store,
                 person_id,
                 Role::Lawyer,
                 &json!({ "project_id": project_id }),
@@ -680,7 +707,7 @@ mod tests {
             .unwrap();
             assert_eq!(listed["structuredContent"]["count"], 1);
             let updated = update_call(
-                &surreal,
+                &application_store,
                 person_id,
                 Role::Lawyer,
                 &json!({
@@ -696,7 +723,7 @@ mod tests {
                 "opponent"
             );
             let completed = complete_call(
-                &surreal,
+                &application_store,
                 person_id,
                 Role::Lawyer,
                 &json!({ "project_id": project_id, "deadline_id": deadline_id }),
@@ -714,18 +741,18 @@ mod tests {
     #[tokio::test]
     async fn a_title_is_stored_and_changed() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let project_id = project(&surreal).await;
-            let person_id = lawyer(&surreal, Some(project_id)).await;
+            let application_store = crate::test_fixtures::handle();
+            let project_id = project(&application_store).await;
+            let person_id = lawyer(&application_store, Some(project_id)).await;
             let mut args = create_args(project_id, "Synthetic agreement § 1");
             args["title"] = json!("Answer to the complaint");
-            let created = create_call(&surreal, person_id, Role::Lawyer, &args)
+            let created = create_call(&application_store, person_id, Role::Lawyer, &args)
                 .await
                 .unwrap();
             let deadline = &created["structuredContent"]["deadline"];
             assert_eq!(deadline["title"], "Answer to the complaint");
             let updated = update_call(
-                &surreal,
+                &application_store,
                 person_id,
                 Role::Lawyer,
                 &json!({
@@ -747,11 +774,11 @@ mod tests {
     #[tokio::test]
     async fn a_cancelled_deadline_can_be_reopened() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let project_id = project(&surreal).await;
-            let person_id = lawyer(&surreal, Some(project_id)).await;
+            let application_store = crate::test_fixtures::handle();
+            let project_id = project(&application_store).await;
+            let person_id = lawyer(&application_store, Some(project_id)).await;
             let created = create_call(
-                &surreal,
+                &application_store,
                 person_id,
                 Role::Lawyer,
                 &create_args(project_id, "Synthetic agreement § 1"),
@@ -760,14 +787,14 @@ mod tests {
             .unwrap();
             let deadline_id = created["structuredContent"]["deadline"]["id"].clone();
             let ids = json!({ "project_id": project_id, "deadline_id": deadline_id });
-            let cancelled = cancel_call(&surreal, person_id, Role::Lawyer, &ids)
+            let cancelled = cancel_call(&application_store, person_id, Role::Lawyer, &ids)
                 .await
                 .unwrap();
             assert_eq!(
                 cancelled["structuredContent"]["deadline"]["status"],
                 "cancelled"
             );
-            let reopened = reopen_call(&surreal, person_id, Role::Lawyer, &ids)
+            let reopened = reopen_call(&application_store, person_id, Role::Lawyer, &ids)
                 .await
                 .unwrap();
             assert_eq!(reopened["structuredContent"]["deadline"]["status"], "open");
@@ -790,12 +817,12 @@ mod tests {
     #[tokio::test]
     async fn a_court_order_requires_review_even_with_a_citation() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let project_id = project(&surreal).await;
-            let person_id = lawyer(&surreal, Some(project_id)).await;
+            let application_store = crate::test_fixtures::handle();
+            let project_id = project(&application_store).await;
+            let person_id = lawyer(&application_store, Some(project_id)).await;
             let mut args = create_args(project_id, "Synthetic order, page 1");
             args["authority_kind"] = json!("court_order");
-            let error = create_call(&surreal, person_id, Role::Lawyer, &args)
+            let error = create_call(&application_store, person_id, Role::Lawyer, &args)
                 .await
                 .unwrap_err();
             assert!(matches!(error, ToolError::InvalidArguments(reason) if reason.contains("queue_court_date")));
@@ -806,11 +833,11 @@ mod tests {
     #[tokio::test]
     async fn a_non_participant_is_refused() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let project_id = project(&surreal).await;
-            let person_id = lawyer(&surreal, None).await;
+            let application_store = crate::test_fixtures::handle();
+            let project_id = project(&application_store).await;
+            let person_id = lawyer(&application_store, None).await;
             let error = create_call(
-                &surreal,
+                &application_store,
                 person_id,
                 Role::Lawyer,
                 &create_args(project_id, "Synthetic agreement § 1"),

@@ -113,7 +113,7 @@ async fn run_host(
     // bot token every deployment notice posts with.
     let kms = social_runtime_kms_from_env().await;
     let (slack_bot, slack_bot_enabled) = workflows::firm_slack::deployment_bot_or_capture(
-        store::surreal::SurrealDb::uninitialized(),
+        store::application_store::ApplicationStore::from(postgres.clone()),
         kms.clone(),
         lookup,
     )
@@ -141,9 +141,11 @@ async fn run_host(
             .context("NAVIGATOR_DBOS_INGRESS_TOKEN is required for DBOS ingress")?;
         crate::dbos_ingress::FinanceIngress::validate_token(&token).map_err(anyhow::Error::msg)?;
         let dbos_ingress_token = Some(token);
-        let surreal = Some(store::surreal::SurrealDb::uninitialized());
+        let application_store = Some(store::application_store::ApplicationStore::from(
+            postgres.clone(),
+        ));
         let general_nag = {
-            let source = surreal
+            let source = application_store
                 .clone()
                 .context("GeneralNag database not configured")?;
             Some(if let Some(local) = &local_providers {
@@ -159,7 +161,7 @@ async fn run_host(
             })
         };
         let notation_reset = {
-            let source = surreal
+            let source = application_store
                 .clone()
                 .context("NotationReset database not configured")?;
             let label =
@@ -179,7 +181,7 @@ async fn run_host(
         };
         let profit_digest = if profit_digest_enabled {
             use workflows::dbos_engine::profit_digest;
-            let surreal = surreal
+            let application_store = application_store
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("ProfitDigest database not configured"))?;
             let pg = store::postgres::PostgresDb::from_env()
@@ -187,7 +189,7 @@ async fn run_host(
                 .context("connect PostgreSQL for the profit digest")?;
             Some(
                 profit_digest::Context::from_lookup(
-                    Arc::new(profit_digest::StoreProfitSource::new(surreal, pg)),
+                    Arc::new(profit_digest::StoreProfitSource::new(application_store, pg)),
                     slack_bot.clone(),
                     simulated_matters,
                     lookup,
@@ -198,7 +200,7 @@ async fn run_host(
             None
         };
         let reconcile_context = if reconcile_enabled {
-            let source = surreal
+            let source = application_store
                 .clone()
                 .context("ReconcileInvoices database not configured")?;
             Some(if let Some(local) = &local_providers {
@@ -223,7 +225,7 @@ async fn run_host(
         let dri_digest = if let Some(local) = &local_providers {
             Some(
                 local.dri_digest(
-                    surreal
+                    application_store
                         .clone()
                         .context("DriDigest database not configured")?,
                     postgres.clone(),
@@ -232,7 +234,7 @@ async fn run_host(
         } else {
             Some(
                 workflows::dbos_engine::dri_digest::Context::from_lookup(
-                    store::surreal::SurrealDb::uninitialized(),
+                    store::application_store::ApplicationStore::from(postgres.clone()),
                     slack_bot.clone(),
                     simulated_matters,
                     lookup,
@@ -281,17 +283,17 @@ async fn run_host(
                 ..Default::default()
             },
             reconcile_context,
-            surreal.clone(),
+            application_store.clone(),
             if reconcile_enabled {
-                surreal.clone()
+                application_store.clone()
             } else {
                 None
             },
             dbos_ingress_token,
             finance_claim_postgres,
-            surreal.clone(),
+            application_store.clone(),
             project_slack_postgres,
-            surreal,
+            application_store,
         )
     };
 
@@ -318,7 +320,7 @@ async fn run_host(
     crate::asset_config::validate_for_deployment(|key| std::env::var(key).ok())
         .context("validate deployment asset base URL")?;
 
-    let surreal = store::surreal::SurrealDb::uninitialized();
+    let application_store = store::application_store::ApplicationStore::from(postgres.clone());
 
     // Every worker send — the workflow-driven template mail and the
     // Notation service's client mail — journals one `sent_email` row, the
@@ -393,7 +395,7 @@ async fn run_host(
         .context("configure public assets storage")?;
     let dbos_social_kms = kms.clone();
     let youtube_dbos = Some(YoutubeCommentsPollerService::new(
-        surreal.clone(),
+        application_store.clone(),
         kms.clone(),
     ));
     let dbos_social_assets_storage = assets_storage.clone();
@@ -412,7 +414,7 @@ async fn run_host(
             store::postgres::PostgresDb::from_env()
                 .await
                 .context("connect PostgreSQL for DBOS SandboxCreditReset")?,
-            surreal.clone(),
+            application_store.clone(),
         ))
     } else {
         None
@@ -420,11 +422,11 @@ async fn run_host(
     // Every Project channel is reached through its owning Firm's own Slack
     // bot, unsealed from the Firm's `slack_bot_token` credential (ENG-392).
     let project_slack_bots: Arc<dyn ProjectSlackBots> = Arc::new(FirmSlackBots::new(kms.clone()));
-    let dbos_nightly_surreal = surreal.clone();
-    let dbos_notation_surreal = surreal.clone();
+    let dbos_nightly_surreal = application_store.clone();
+    let dbos_notation_surreal = application_store.clone();
     let dbos_nightly_slack = slack_bot.clone();
     let dbos_nightly_bots = project_slack_bots.clone();
-    let dbos_project_slack_surreal = surreal.clone();
+    let dbos_project_slack_surreal = application_store.clone();
     let dbos_project_slack_bots = project_slack_bots.clone();
     let dbos_nightly_repository_forge = repository_forge.clone();
     let dbos_nightly_portal_origin = portal_origin.clone();
@@ -443,7 +445,7 @@ async fn run_host(
     // Rules-only when `NAVIGATOR_TRIAGE_ENABLED` is unset: the service stays
     // registered and every message still gets a triage row, from rules alone.
     let triage_providers = TriageProviders::from_env().context("configure triage providers")?;
-    let inbound_triage = InboundTriageService::new(surreal.clone(), triage_providers);
+    let inbound_triage = InboundTriageService::new(application_store.clone(), triage_providers);
     let triage_dbos = Some(inbound_triage.clone());
     let inbox_attachment_dbos = if inbox_attachment_dbos_enabled {
         let address = lookup("NAVIGATOR_CLAMD_ADDR")
@@ -452,7 +454,7 @@ async fn run_host(
         let scanner = Arc::new(cloud::attachment_scanner::ClamdAttachmentScanner::new(
             address,
         ));
-        Some((surreal.clone(), storage.clone(), scanner))
+        Some((application_store.clone(), storage.clone(), scanner))
     } else {
         None
     };
@@ -481,26 +483,26 @@ async fn run_host(
     ) = dbos_hosting;
     let dbos_executor = {
         let finance_aggregate_surreal_for_ingress = finance_aggregate_surreal.clone();
-        let finance_aggregate_context = finance_aggregate_surreal.map(|surreal| {
-            crate::dbos_finance_aggregate::Context::new(surreal, dbos_finance_storage)
+        let finance_aggregate_context = finance_aggregate_surreal.map(|application_store| {
+            crate::dbos_finance_aggregate::Context::new(application_store, dbos_finance_storage)
         });
         let email_summary_context = {
-            let surreal = event_surreal
+            let application_store = event_surreal
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("EmailSummary database not configured"))?;
             Some(crate::dbos_email_summary::Context::new(
-                surreal,
+                application_store,
                 Arc::clone(&dbos_email_storage),
                 Arc::clone(&dbos_email_slack),
                 summary_providers.clone(),
             ))
         };
         let alert_context = {
-            let surreal = event_surreal
+            let application_store = event_surreal
                 .ok_or_else(|| anyhow::anyhow!("InboundMessageAlert database not configured"))?;
             Some(crate::dbos_inbound_message_alert::Context::new(
                 InboundMessageAlertService::new(
-                    surreal,
+                    application_store,
                     Arc::clone(&dbos_alert_slack),
                     dbos_alert_messages_channel,
                     dbos_alert_staging_messages_channel,
@@ -578,7 +580,7 @@ async fn run_host(
                 if let Some(context) = reconcile_context {
                     let schedule_enabled = context.schedule_enabled();
                     let workflow = crate::dbos_reconcile::register(dbos, context)?;
-                    if let (Some(token), Some(_surreal)) =
+                    if let (Some(token), Some(_application_store)) =
                         (dbos_ingress_token.clone(), reconcile_surreal)
                     {
                         registered_ingress.reconcile = Some(
@@ -654,7 +656,7 @@ async fn run_host(
                 }
                 if let Some(context) = finance_aggregate_context {
                     let workflow = crate::dbos_finance_aggregate::register(dbos, context)?;
-                    if let (Some(token), Some(surreal), Some(postgres)) = (
+                    if let (Some(token), Some(application_store), Some(postgres)) = (
                         dbos_ingress_token.clone(),
                         finance_aggregate_surreal_for_ingress,
                         finance_claim_postgres,
@@ -663,15 +665,15 @@ async fn run_host(
                             token,
                             workflow,
                             dbos.clone(),
-                            surreal,
+                            application_store,
                             postgres,
                         );
                         registered_ingress.finance = Some(ingress);
                     }
                 }
-                if let Some((surreal, postgres)) = dbos_notation_stores.clone() {
+                if let Some((application_store, postgres)) = dbos_notation_stores.clone() {
                     let context = crate::dbos_notation::Context::new(
-                        surreal,
+                        application_store,
                         postgres.clone(),
                         Arc::clone(&dbos_notation_email),
                         Arc::clone(&dbos_notation_storage),
@@ -771,14 +773,18 @@ async fn run_host(
                         tokio::spawn(crate::inbox_attachment_filing::schedule(workflow, stop))
                     }));
                 }
-                if let (Some((postgres, surreal)), Some(token)) = (
+                if let (Some((postgres, application_store)), Some(token)) = (
                     sandbox_credit_reset_stores.clone(),
                     dbos_ingress_token.as_ref(),
                 ) {
                     registered_ingress.sandbox_credit_reset =
                         Some(crate::dbos_ingress::SandboxResetIngress {
                             token: token.as_str().into(),
-                            workflow: crate::dbos_sandbox_reset::register(dbos, postgres, surreal)?,
+                            workflow: crate::dbos_sandbox_reset::register(
+                                dbos,
+                                postgres,
+                                application_store,
+                            )?,
                         });
                 }
                 *dbos_ingress_for_registration

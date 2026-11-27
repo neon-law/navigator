@@ -111,7 +111,7 @@ impl Config {
 /// Propagates database failures as a string for the webhook's best-effort
 /// log path.
 pub(crate) async fn ingest(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
 ) -> Result<Option<store::inbox::IngestedInbound>, String> {
@@ -119,7 +119,7 @@ pub(crate) async fn ingest(
 }
 
 async fn ingest_for_config(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
     config: Option<Config>,
@@ -292,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn unaddressed_mail_is_not_routed() {
         let storage = storage().await;
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let firm_id = fixture_firm();
         let config = config(&["nick@neonlaw.com"], firm_id);
         let email = email("Client <client@example.com>", "Nick <other@example.com>");
@@ -304,7 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn unconfigured_channel_is_not_routed() {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
         let email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
         let ingested = ingest_for_config(&db, &storage, &email, None)
@@ -316,7 +316,7 @@ mod tests {
     #[tokio::test]
     async fn lawyer_tier_sender_is_never_inbound_correspondence() {
         with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let storage = storage().await;
             let firm_id = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await
@@ -362,7 +362,7 @@ mod tests {
     #[tokio::test]
     async fn client_mail_ingests_under_one_provider_account_across_aliases() {
         with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let storage = storage().await;
             let firm_id = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await
@@ -404,7 +404,7 @@ mod tests {
     #[tokio::test]
     async fn redelivery_dedupes_and_keeps_the_firm_archive_and_original_message_time() {
         with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let storage = storage().await;
             let firm_id = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await
@@ -450,7 +450,7 @@ Synthetic body"
     #[tokio::test]
     async fn attachment_bytes_change_the_dedup_key_when_the_provider_id_is_missing() {
         with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let storage = storage().await;
             let firm_id = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await

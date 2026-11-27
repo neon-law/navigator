@@ -1,8 +1,8 @@
 //! Seed a registered receiving number and its Firm-owned credential.
 
+use crate::application_store::ApplicationStore;
 use crate::brand_phone_numbers::{self, ChannelKinds, NewBrandPhoneNumber};
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 use uuid::Uuid;
 
 /// An independent signing credential for a synthetic receiving number.
@@ -18,7 +18,7 @@ pub fn auth_token() -> String {
 ///
 /// The synthetic Firm must have an Admin DRI, and its test stores must accept the binding.
 pub async fn register_number(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     pg: &PostgresDb,
     firm_id: Uuid,
     brand_key: &str,

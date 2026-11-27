@@ -31,7 +31,7 @@ use lost_response_slack::LostResponseSlackBot;
 
 async fn firm_matter_on(
     pg: &store::postgres::PostgresDb,
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
 ) -> store::projects::Project {
     store::postgres::PostgresDb::with_test_db(pg.clone(), async {
         native_project::matter(db).await.0
@@ -142,21 +142,21 @@ struct Lane {
     executor: dbos::DBOS,
     workflow: ProjectSlackWorkflow,
     postgres: store::postgres::PostgresDb,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     bot: Arc<LaneSlackBot>,
 }
 
 async fn launch_lane(
     url: &str,
     postgres: store::postgres::PostgresDb,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     bot: Arc<LaneSlackBot>,
 ) -> Lane {
     let executor = dbos::DBOS::new(dbos_engine::config(url, APP_VERSION));
     let workflow = dbos_project_slack::register(
         &executor,
         dbos_project_slack::Context::new(
-            surreal.clone(),
+            application_store.clone(),
             Arc::new(workflows_service::firm_slack::SharedSlackBot(bot.clone())),
             postgres.clone(),
             false,
@@ -168,7 +168,7 @@ async fn launch_lane(
         executor,
         workflow,
         postgres,
-        surreal,
+        application_store,
         bot,
     }
 }
@@ -225,11 +225,11 @@ async fn the_same_projects_main_pushes_post_one_at_a_time() {
     let lane = launch_lane(
         &db.url,
         db.store(),
-        store::surreal::SurrealDb::uninitialized(),
+        store::application_store::ApplicationStore::uninitialized(),
         bot.clone(),
     )
     .await;
-    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let matter = firm_matter_on(&lane.postgres, &lane.application_store).await;
     // Two distinct main pushes for ONE Project: both must post, and the
     // lane must hold them to one post at a time — the single-writer
     // guarantee the replaced virtual object gave the GitHub relay.
@@ -277,16 +277,16 @@ async fn the_ingress_posts_one_relayed_event_once() {
     let lane = launch_lane(
         &db.url,
         db.store(),
-        store::surreal::SurrealDb::uninitialized(),
+        store::application_store::ApplicationStore::uninitialized(),
         bot.clone(),
     )
     .await;
-    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let matter = firm_matter_on(&lane.postgres, &lane.application_store).await;
     let ingress = ProjectSlackIngress::new(
         "synthetic-service-token".into(),
         lane.workflow.clone(),
         lane.executor.clone(),
-        lane.surreal.clone(),
+        lane.application_store.clone(),
         lane.postgres.clone(),
     );
     let router = workflows_service::health::router_with_dbos_ingress(
@@ -337,11 +337,11 @@ async fn a_repeated_client_view_posts_once() {
     let lane = launch_lane(
         &db.url,
         db.store(),
-        store::surreal::SurrealDb::uninitialized(),
+        store::application_store::ApplicationStore::uninitialized(),
         bot.clone(),
     )
     .await;
-    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let matter = firm_matter_on(&lane.postgres, &lane.application_store).await;
     let id = dbos_project_slack::client_view_workflow_id(matter.id);
     for attempt in 0..2 {
         let started = lane
@@ -374,12 +374,12 @@ async fn different_projects_post_without_waiting_on_each_other() {
     let lane = launch_lane(
         &db.url,
         db.store(),
-        store::surreal::SurrealDb::uninitialized(),
+        store::application_store::ApplicationStore::uninitialized(),
         bot.clone(),
     )
     .await;
-    let first = firm_matter_on(&lane.postgres, &lane.surreal).await;
-    let second = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let first = firm_matter_on(&lane.postgres, &lane.application_store).await;
+    let second = firm_matter_on(&lane.postgres, &lane.application_store).await;
     let first_id = dbos_project_slack::main_push_workflow_id(first.id, &push("abc1234", 1));
     let second_id = dbos_project_slack::main_push_workflow_id(second.id, &push("def5678", 1));
     let (left, right) = tokio::join!(
@@ -424,16 +424,16 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
     let lane = launch_lane(
         &db.url,
         db.store(),
-        store::surreal::SurrealDb::uninitialized(),
+        store::application_store::ApplicationStore::uninitialized(),
         bot.clone(),
     )
     .await;
-    let matter = firm_matter_on(&lane.postgres, &lane.surreal).await;
+    let matter = firm_matter_on(&lane.postgres, &lane.application_store).await;
     let ingress = ProjectSlackIngress::new(
         "synthetic-service-token".into(),
         lane.workflow.clone(),
         lane.executor.clone(),
-        lane.surreal.clone(),
+        lane.application_store.clone(),
         lane.postgres.clone(),
     );
     let router = workflows_service::health::router_with_dbos_ingress(
@@ -495,8 +495,8 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
 #[tokio::test]
 async fn a_post_accepted_before_its_checkpoint_is_not_repeated_on_recovery() {
     let Some(db) = database().await else { return };
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let matter = firm_matter_on(&db.store(), &surreal).await;
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    let matter = firm_matter_on(&db.store(), &application_store).await;
     for (request, id) in [
         (
             LaneRequest::MainPush(push("abc1234", 1)),
@@ -512,7 +512,7 @@ async fn a_post_accepted_before_its_checkpoint_is_not_repeated_on_recovery() {
         let workflow = dbos_project_slack::register(
             &executor,
             dbos_project_slack::Context::new(
-                surreal.clone(),
+                application_store.clone(),
                 Arc::new(workflows_service::firm_slack::SharedSlackBot(bot.clone())),
                 db.store(),
                 false,

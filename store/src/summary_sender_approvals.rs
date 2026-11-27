@@ -4,13 +4,12 @@
 //! is updated in place, while the audit table preserves who changed it.
 
 use chrono::{DateTime, Utc};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::{
+    application_store::ApplicationStore,
     firm_capability::{self, FirmCapability, FirmCapabilityDecision},
     persons::{self, Role},
-    surreal::{record_id, record_uuid, SurrealDb},
 };
 
 pub const TABLE: &str = "summary_sender_approval";
@@ -40,8 +39,6 @@ pub enum ApprovalError {
     SenderNotClientDri,
     #[error("provider account must be a non-empty token")]
     InvalidProviderAccount,
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error("person lookup: {0}")]
     Person(#[from] persons::PersonError),
     #[error("firm capability: {0}")]
@@ -50,38 +47,8 @@ pub enum ApprovalError {
     Project(#[from] crate::projects::ProjectStoreError),
 }
 
-#[derive(SurrealValue)]
-struct ApprovalRow {
-    id: surrealdb::types::RecordId,
-    firm_id: surrealdb::types::RecordId,
-    project_id: Option<surrealdb::types::RecordId>,
-    provider_account: String,
-    person_id: surrealdb::types::RecordId,
-    sender_email: String,
-    status: String,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl ApprovalRow {
-    fn into_approval(self) -> Option<SummarySenderApproval> {
-        Some(SummarySenderApproval {
-            id: record_uuid(&self.id)?,
-            firm_id: record_uuid(&self.firm_id)?,
-            project_id: self.project_id.as_ref().and_then(record_uuid),
-            provider_account: self.provider_account,
-            person_id: record_uuid(&self.person_id)?,
-            sender_email: self.sender_email,
-            status: self.status,
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const SELECT: &str =
-    "id, firm_id, project_id, provider_account, person_id, sender_email, status, updated_at";
-
 pub async fn is_approved(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     firm_id: Uuid,
     project_id: Uuid,
     provider_account: &str,
@@ -98,79 +65,45 @@ pub async fn is_approved(
     if !is_current_client_dri(db, project_id, person_id).await? {
         return Ok(false);
     }
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        let found: Option<serde_json::Value> = crate::postgres::matter::find(&pg, TABLE,
-            serde_json::json!({"firm_id": firm_id,"project_id": project_id,"provider_account": provider_account,
-                "person_id": person_id,"sender_email": email.trim().to_ascii_lowercase(),"status": "approved"})).await?;
-        return Ok(found.is_some());
-    }
-    let mut response = db.query(format!("SELECT VALUE id FROM {TABLE} WHERE firm_id = $firm AND project_id = $project AND provider_account = $account AND person_id = $person AND sender_email = $email AND status = 'approved' LIMIT 1"))
-        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
-        .bind(("project", record_id(crate::projects::PROJECT_TABLE, project_id)))
-        .bind(("account", provider_account.to_string()))
-        .bind(("person", record_id("person", person_id)))
-        .bind(("email", email.trim().to_ascii_lowercase()))
-        .await.and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(!rows.is_empty())
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    let found: Option<serde_json::Value> = crate::postgres::matter::find(&pg, TABLE,
+        serde_json::json!({"firm_id": firm_id,"project_id": project_id,"provider_account": provider_account,
+            "person_id": person_id,"sender_email": email.trim().to_ascii_lowercase(),"status": "approved"})).await?;
+    Ok(found.is_some())
 }
 
 pub async fn list_for_firm(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     role: Role,
     actor: Option<Uuid>,
     firm_id: Uuid,
 ) -> Result<Vec<SummarySenderApproval>, ApprovalError> {
     authorize(db, role, actor, firm_id).await?;
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return Ok(crate::postgres::matter::select(
-            &pg,
-            TABLE,
-            serde_json::json!({"firm_id": firm_id}),
-            &["updated_at DESC", "id DESC"],
-        )
-        .await?);
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE firm_id = $firm ORDER BY updated_at DESC"
-        ))
-        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ApprovalRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(ApprovalRow::into_approval)
-        .collect())
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    Ok(crate::postgres::matter::select(
+        &pg,
+        TABLE,
+        serde_json::json!({"firm_id": firm_id}),
+        &["updated_at DESC", "id DESC"],
+    )
+    .await?)
 }
 
 pub async fn audit_history_for_firm(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     role: Role,
     actor: Option<Uuid>,
     firm_id: Uuid,
 ) -> Result<Vec<ApprovalEvent>, ApprovalError> {
     authorize(db, role, actor, firm_id).await?;
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return Ok(crate::postgres::matter::select(
-            &pg,
-            AUDIT_TABLE,
-            serde_json::json!({"firm_id": firm_id}),
-            &["inserted_at DESC", "id DESC"],
-        )
-        .await?);
-    }
-
-    let mut response = db.query(format!("SELECT id, firm_id, actor_person_id, project_id, provider_account, sender_email, person_id, action, inserted_at FROM {AUDIT_TABLE} WHERE firm_id = $firm ORDER BY inserted_at DESC"))
-        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
-        .await.and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ApprovalEventRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(ApprovalEventRow::into_event)
-        .collect())
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    Ok(crate::postgres::matter::select(
+        &pg,
+        AUDIT_TABLE,
+        serde_json::json!({"firm_id": firm_id}),
+        &["inserted_at DESC", "id DESC"],
+    )
+    .await?)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -184,33 +117,8 @@ pub struct ApprovalEvent {
     pub inserted_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct ApprovalEventRow {
-    id: surrealdb::types::RecordId,
-    actor_person_id: surrealdb::types::RecordId,
-    project_id: Option<surrealdb::types::RecordId>,
-    provider_account: String,
-    sender_email: String,
-    action: String,
-    inserted_at: surrealdb::types::Datetime,
-}
-
-impl ApprovalEventRow {
-    fn into_event(self) -> Option<ApprovalEvent> {
-        Some(ApprovalEvent {
-            id: record_uuid(&self.id)?,
-            actor_person_id: record_uuid(&self.actor_person_id)?,
-            project_id: self.project_id.as_ref().and_then(record_uuid),
-            sender_email: self.sender_email,
-            provider_account: self.provider_account,
-            action: self.action,
-            inserted_at: self.inserted_at.into(),
-        })
-    }
-}
-
 pub async fn approve(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     role: Role,
     actor: Uuid,
     firm_id: Uuid,
@@ -226,9 +134,7 @@ pub async fn approve(
         .filter(|person| person.email_confirmed)
         .ok_or(ApprovalError::SenderNotVerified)?;
     validate_project_sender(db, firm_id, project_id, person.id).await?;
-    let pg = crate::postgres::matter::authority_for(TABLE)
-        .await?
-        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
     crate::postgres::summary_sender_approvals::approve(
         &pg,
         actor,
@@ -242,21 +148,19 @@ pub async fn approve(
 }
 
 pub async fn revoke(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     role: Role,
     actor: Uuid,
     firm_id: Uuid,
     approval_id: Uuid,
 ) -> Result<(), ApprovalError> {
     authorize(db, role, Some(actor), firm_id).await?;
-    let pg = crate::postgres::matter::authority_for(TABLE)
-        .await?
-        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
     crate::postgres::summary_sender_approvals::revoke(&pg, actor, firm_id, approval_id).await
 }
 
 async fn authorize(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     role: Role,
     actor: Option<Uuid>,
     firm_id: Uuid,
@@ -286,7 +190,7 @@ fn validate_account(account: &str) -> Result<(), ApprovalError> {
 }
 
 async fn is_current_client_dri(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     person_id: Uuid,
 ) -> Result<bool, ApprovalError> {
@@ -307,7 +211,7 @@ async fn is_current_client_dri(
 }
 
 async fn validate_project_sender(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     firm_id: Uuid,
     project_id: Uuid,
     person_id: Uuid,
@@ -333,8 +237,8 @@ mod tests {
         test_support,
     };
 
-    async fn setup() -> (SurrealDb, Uuid, Uuid, Uuid, Uuid, Uuid) {
-        let db = SurrealDb::uninitialized();
+    async fn setup() -> (ApplicationStore, Uuid, Uuid, Uuid, Uuid, Uuid) {
+        let db = ApplicationStore::uninitialized();
         test_support::seed_compiled_brands_postgres(&db).await;
         let entity = crate::test_support::seed_entity(&db).await;
         let dri = persons::create(
@@ -371,7 +275,7 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::projects::designate_dri_in_surreal(
+        crate::projects::designate_dri(
             &db,
             project.id,
             sender.id,
@@ -529,10 +433,7 @@ mod tests {
                 .unwrap();
             // The data model keeps email unique. This simulates a later identity
             // taking the address after the original Person row has changed.
-            let pg = crate::postgres::matter::authority_for(TABLE)
-                .await
-                .unwrap()
-                .unwrap();
+            let pg = crate::postgres::matter::authority_for(TABLE).await.unwrap();
             sqlx::query("UPDATE person SET email = 'former@example.com' WHERE id = $1")
                 .bind(sender_id)
                 .execute(pg.pool())
@@ -633,13 +534,9 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap();
-            crate::projects::clear_dri_in_surreal(
-                &db,
-                participation.id,
-                crate::projects::DriSide::Client,
-            )
-            .await
-            .unwrap();
+            crate::projects::clear_dri(&db, participation.id, crate::projects::DriSide::Client)
+                .await
+                .unwrap();
             assert!(!is_approved(
                 &db,
                 firm,

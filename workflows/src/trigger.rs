@@ -1,27 +1,4 @@
-//! Start a Restate workflow by POSTing to the ingress.
-//!
-//! The one shared way the application *kicks off* a durable workflow
-//! from outside Restate. Two callers converge here:
-//!
-//! - the `archives` crate's `trigger` binary (the nightly CronJob),
-//!   which fires the `Archives` export workflow once per night, and
-//! - `web`'s Cron schedules controls (`portal::cron_schedules`), which queue
-//!   any scheduled workflow on demand for testing / recovery.
-//!
-//! Both need the same wire shape — `POST {ingress}/{Service}/{key}/{handler}`
-//! with an optional `Authorization: Bearer …` header. Restate Cloud
-//! authenticates every ingress call with the tenant bearer token
-//! (`RESTATE_AUTH_TOKEN`); the in-cluster Restate Operator used in
-//! KIND does not. Passing `auth_token = None` (or an empty string)
-//! sends no header at all, so the same code path works in both
-//! environments.
-//!
-//! `one_way = true` targets Restate's `/send` variant: the call
-//! returns as soon as the invocation is *accepted* (Restate then runs
-//! it to completion on the worker, owning the retry schedule). Use it
-//! when the caller must not block on the whole run — e.g. an HTTP
-//! handler that would otherwise hold a request open for the duration
-//! of a 26-table snapshot.
+//! Authenticated starts for DBOS workflows.
 
 use serde::Serialize;
 use thiserror::Error;
@@ -39,139 +16,7 @@ pub enum TriggerError {
     Rejected { status: reqwest::StatusCode },
 }
 
-/// POST to the Restate ingress to start one invocation of
-/// `{service}/{key}/{handler}`.
-///
-/// - `ingress` — the Restate ingress base URL (Restate Cloud in prod,
-///   the in-cluster `restate` Service in KIND). A trailing slash is
-///   trimmed.
-/// - `auth_token` — `Some(non-empty)` attaches `Authorization: Bearer
-///   …`; `None` or `Some("")` sends no header (KIND / dev).
-/// - `service` / `key` / `handler` — the Restate virtual-object
-///   coordinates, e.g. `("Archives", "2026-06-05", "run")`.
-/// - `body` — JSON request body for the handler (`&serde_json::json!({})`
-///   for handlers that take an empty struct).
-/// - `one_way` — `true` appends `/send` so the call returns on
-///   acceptance instead of blocking until the workflow completes.
-///
-/// On success returns the ingress response body (for `/send` this is
-/// the JSON `{"invocationId": "inv_…"}` the caller can log).
-///
-/// # Errors
-///
-/// [`TriggerError::Transport`] when the request can't be sent;
-/// [`TriggerError::Rejected`] on any non-success status.
-#[tracing::instrument(
-    level = "info",
-    name = "workflow.trigger",
-    skip(ingress, auth_token, key, body),
-    fields(
-        service = service,
-        handler = handler,
-        operation = "workflow trigger",
-        one_way
-    )
-)]
-pub async fn start_workflow<B: Serialize + ?Sized>(
-    ingress: &str,
-    auth_token: Option<&str>,
-    service: &str,
-    key: &str,
-    handler: &str,
-    body: &B,
-    one_way: bool,
-) -> Result<String, TriggerError> {
-    if store::workflow_engine::disabled_billing_service(service) {
-        return Err(TriggerError::Rejected {
-            status: reqwest::StatusCode::GONE,
-        });
-    }
-    let suffix = if one_way { "/send" } else { "" };
-    let url = format!(
-        "{}/{}/{}/{}{}",
-        ingress.trim_end_matches('/'),
-        service,
-        key,
-        handler,
-        suffix
-    );
-
-    // Bound the POST so a hung or unreachable ingress can never leave a
-    // trigger pod running indefinitely. A `CronJob` with
-    // `concurrencyPolicy: Forbid` treats a still-running job as a reason to
-    // skip the next schedule, so an unbounded request turns one transient
-    // ingress stall into a permanently wedged schedule (this is one half of
-    // how the nightly Archives trigger silently stopped firing). 30s is far
-    // longer than a healthy one-way `/send` (milliseconds) yet short enough
-    // that the Job's `activeDeadlineSeconds` backstop and the next schedule
-    // both still apply.
-    let mut req = reqwest::Client::new()
-        .post(&url)
-        .json(body)
-        .timeout(std::time::Duration::from_secs(30));
-    // Empty tokens omit Authorization, matching the shared Notation transport.
-    if let Some(token) = auth_token.filter(|t| !t.is_empty()) {
-        req = req.bearer_auth(token);
-    }
-
-    // Inject the current span's W3C trace context (`traceparent`) so the
-    // workflow handler can continue this trace across the Restate boundary
-    // (extracted handler-side from `ctx.headers()`; see telemetry). Empty —
-    // and a no-op — when OTLP is unconfigured or no sampled span is active, so
-    // dev / KIND / OSS forks attach nothing. Only opaque trace context crosses
-    // here, never a client field.
-    for (name, value) in telemetry::current_trace_context_headers() {
-        if let (Ok(name), Ok(value)) = (
-            reqwest::header::HeaderName::from_bytes(name.as_bytes()),
-            reqwest::header::HeaderValue::from_str(&value),
-        ) {
-            req = req.header(name, value);
-        }
-    }
-
-    // Record the outcome as a metric (`navigator.workflow.trigger.fired`) and a
-    // structured event on every path — safe fields and outcome counts only,
-    // never identifiers or request content. This is the single instrumentation
-    // point every trigger funnels through, so a service whose scheduled fire
-    // silently stops shows up as a flat counter line and an absent "accepted" event.
-    let Ok(resp) = req.send().await else {
-        telemetry::record_trigger_fired(service, telemetry::outcome::TRANSPORT_ERROR);
-        tracing::error!(
-            service,
-            handler,
-            operation = "workflow trigger",
-            outcome = telemetry::outcome::TRANSPORT_ERROR,
-            "workflow trigger failed"
-        );
-        return Err(TriggerError::Transport);
-    };
-    let status = resp.status();
-    let resp_body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        telemetry::record_trigger_fired(service, telemetry::outcome::REJECTED);
-        tracing::error!(
-            service,
-            handler,
-            operation = "workflow trigger",
-            status = status.as_u16(),
-            outcome = telemetry::outcome::REJECTED,
-            "workflow trigger rejected by ingress"
-        );
-        return Err(TriggerError::Rejected { status });
-    }
-    telemetry::record_trigger_fired(service, telemetry::outcome::ACCEPTED);
-    tracing::info!(
-        service,
-        handler,
-        operation = "workflow trigger",
-        status = status.as_u16(),
-        outcome = telemetry::outcome::ACCEPTED,
-        "workflow trigger accepted"
-    );
-    Ok(resp_body)
-}
-
-/// Start an explicitly selected DBOS schedule through authenticated ingress.
+/// Start a DBOS schedule through authenticated ingress.
 /// A caller retains its manual key when retrying the same request.
 pub async fn start_dbos_schedule(
     ingress: &str,
@@ -179,7 +24,7 @@ pub async fn start_dbos_schedule(
     service: &str,
     run_key: &str,
 ) -> Result<(), TriggerError> {
-    if store::workflow_engine::disabled_billing_service(service) {
+    if store::disabled_billing::disabled_billing_service(service) {
         return Err(TriggerError::Rejected {
             status: reqwest::StatusCode::GONE,
         });
@@ -362,64 +207,12 @@ pub fn social_publish_reconciler_workflow_id(slot: chrono::DateTime<chrono::Utc>
     format!("SocialPublishReconciler:{}", slot.format("%Y-%m-%dT%H-%M"))
 }
 
-/// Which ingress a caller of a ported service hands its start to, chosen by
-/// that service's `NAVIGATOR_DBOS_*_ENABLED` switch.
-///
-/// Unlike [`fire`] (the thin trigger binaries' selection, which must fail a
-/// run when the Restate ingress is unconfigured), this caller selection
-/// leaves the Restate branch's availability to the caller: a portal without
-/// `RESTATE_BROKER_URL` reports "unavailable" today and keeps doing so while
-/// the switch is off.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ServiceTarget {
-    /// The worker's authenticated DBOS ingress; `ingress` has no trailing `/`.
-    Dbos {
-        /// The worker's DBOS ingress base URL.
-        ingress: String,
-        /// The bearer for the app-to-worker hop.
-        token: String,
-    },
-    /// The Restate ingress while the service's switch is off — the caller's
-    /// existing Restate-or-unavailable behavior.
-    Restate,
-}
-
-/// A caller's ingress selection the environment does not complete.
+/// Missing configuration for authenticated DBOS ingress.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ServiceTargetError {
-    /// The service's switch is neither `true` nor `false`.
-    #[error(transparent)]
-    Switch(#[from] crate::flags::SettingsError),
     /// The selected DBOS ingress needs this variable set to a non-blank value.
     #[error("{0} must be set to start this workflow on DBOS")]
     Missing(&'static str),
-}
-
-/// Select a caller's ingress for one ported service from its DBOS switch.
-///
-/// With the switch on, both the worker's DBOS ingress URL and its bearer
-/// must be non-blank — pointing a service at nothing is never the safe
-/// default, so the caller reports the misconfiguration instead of silently
-/// dropping the durable start. With the switch off (the default), the caller
-/// keeps its existing Restate path.
-///
-/// # Errors
-///
-/// [`ServiceTargetError::Switch`] for a switch other than `true` / `false`;
-/// [`ServiceTargetError::Missing`] for an absent or blank DBOS ingress
-/// setting while the switch is on.
-pub fn service_target(
-    flag: &'static str,
-    enabled: Option<&str>,
-    dbos_ingress_url: Option<String>,
-    dbos_ingress_token: Option<String>,
-) -> Result<ServiceTarget, ServiceTargetError> {
-    if crate::flags::flag_enabled(flag, enabled)? {
-        let (ingress, token) = parse_dbos_ingress(dbos_ingress_url, dbos_ingress_token)?;
-        Ok(ServiceTarget::Dbos { ingress, token })
-    } else {
-        Ok(ServiceTarget::Restate)
-    }
 }
 
 /// Read the authenticated DBOS ingress configuration.
@@ -464,15 +257,10 @@ pub fn optional_dbos_ingress_from_env() -> Result<Option<(String, String)>, Serv
 pub const DBOS_INGRESS_URL_ENV: &str = "NAVIGATOR_DBOS_INGRESS_URL";
 /// The bearer secret for the worker's DBOS ingress.
 pub const DBOS_INGRESS_TOKEN_ENV: &str = "NAVIGATOR_DBOS_INGRESS_TOKEN";
-/// The Restate ingress a trigger uses while its workflow's DBOS switch is off.
-pub const RESTATE_INGRESS_URL_ENV: &str = "RESTATE_INGRESS_URL";
-/// The optional Restate Cloud bearer.
-pub const RESTATE_AUTH_TOKEN_ENV: &str = "RESTATE_AUTH_TOKEN";
-
 /// Queue one idempotent, authenticated EmailSummary recovery operation.
 ///
 /// # Errors
-/// Returns transport or selected-ingress rejection without falling back to Restate.
+/// Returns transport or ingress rejection.
 pub async fn start_dbos_email_summary_recovery(
     ingress: &str,
     token: &str,
@@ -508,136 +296,10 @@ pub fn email_summary_recovery_child(receipt: uuid::Uuid, operation: uuid::Uuid) 
     format!("EmailSummary:{receipt}:recovery:{operation}")
 }
 
-/// The `EmailSummary` rollout switch. Default off; the Restate lane keeps
-/// serving until cutover flips it.
-pub const EMAIL_SUMMARY_ENABLED_ENV: &str = "NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED";
-/// The `InboundMessageAlert` rollout switch. Default off.
-pub const INBOUND_MESSAGE_ALERT_ENABLED_ENV: &str = "NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED";
-/// The `project-slack` rollout switch. Default off.
-pub const PROJECT_SLACK_ENABLED_ENV: &str = "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED";
-/// The `SocialPublisher` rollout switch. Default off.
-pub const SOCIAL_PUBLISHER_ENABLED_ENV: &str = "NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED";
-/// The `SocialPublishReconciler` rollout switch. Default off.
-pub const SOCIAL_PUBLISH_RECONCILER_ENABLED_ENV: &str =
-    "NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED";
-
-/// One scheduled trigger: the workflow a `CronJob` starts, as data.
-pub struct CronTrigger {
-    /// The workflow's `NAVIGATOR_DBOS_*_ENABLED` switch.
-    pub flag: &'static str,
-    /// The Restate service name.
-    pub service: &'static str,
-    /// The worker's DBOS ingress route and its body. `None` for a workflow
-    /// the DBOS engine fires from its own schedule: with the switch on there
-    /// is no route to submit to, and the trigger exits without submitting.
-    pub dbos: Option<(&'static str, serde_json::Value)>,
-    /// The Restate key and body, read only once Restate is selected.
-    pub restate: RestateRun,
-}
-
-/// Resolves a trigger's Restate key and body from the environment lookup.
-pub type RestateRun =
-    Box<dyn FnOnce(&dyn Fn(&str) -> Option<String>) -> anyhow::Result<(String, serde_json::Value)>>;
-
-/// A Restate key and body that depend on nothing in the environment.
-#[must_use]
-pub fn restate_run(key: String, body: serde_json::Value) -> RestateRun {
-    Box::new(move |_| Ok((key, body)))
-}
-
-/// Where a [`CronTrigger`] handed its run.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Fired {
-    /// The DBOS engine's own schedule fires this workflow; nothing was sent.
-    EngineSchedule,
-    /// The worker's authenticated DBOS ingress accepted the run.
-    Dbos,
-    /// The Restate ingress accepted the run under this key.
-    Restate(String),
-}
-
-/// Hand one scheduled run to the ingress its switch selects. The Restate call
-/// is one-way: Restate admits one invocation per key, so a re-fire of the
-/// same key is a no-op, and it owns the retry schedule from there.
-///
-/// # Errors
-///
-/// A switch other than `true` / `false`, an absent or blank setting for the
-/// selected ingress, a refusal from `restate`, or an ingress that does not
-/// accept the run.
-pub async fn fire(
-    trigger: CronTrigger,
-    lookup: &dyn Fn(&str) -> Option<String>,
-) -> anyhow::Result<Fired> {
-    use anyhow::Context as _;
-    let CronTrigger {
-        flag,
-        service,
-        dbos,
-        restate,
-    } = trigger;
-    let enabled = lookup(flag);
-    if let Some((route, body)) = dbos {
-        let target = service_target(
-            flag,
-            enabled.as_deref(),
-            lookup(DBOS_INGRESS_URL_ENV),
-            lookup(DBOS_INGRESS_TOKEN_ENV),
-        )?;
-        if let ServiceTarget::Dbos { ingress, token } = target {
-            start_dbos_at(&ingress, &token, route, &body)
-                .await
-                .with_context(|| format!("triggering {service} through DBOS ingress"))?;
-            return Ok(Fired::Dbos);
-        }
-    } else if crate::flags::flag_enabled(flag, enabled.as_deref())? {
-        return Ok(Fired::EngineSchedule);
-    }
-    let (key, body) = restate(lookup)?;
-    let ingress = lookup(RESTATE_INGRESS_URL_ENV)
-        .filter(|url| !url.trim().is_empty())
-        .context("RESTATE_INGRESS_URL must be set (the Restate ingress endpoint)")?;
-    let auth_token = lookup(RESTATE_AUTH_TOKEN_ENV);
-    start_workflow(
-        &ingress,
-        auth_token.as_deref(),
-        service,
-        &key,
-        "run",
-        &body,
-        true,
-    )
-    .await
-    .with_context(|| format!("triggering {service} workflow"))?;
-    Ok(Fired::Restate(key))
-}
-
-/// The whole of a trigger binary: load the local environment, start the
-/// shared observability seam under `telemetry_name`, and [`fire`] once.
-///
-/// # Errors
-///
-/// Whatever [`fire`] refuses.
-pub async fn run_cron_trigger(
-    telemetry_name: &'static str,
-    trigger: CronTrigger,
-) -> anyhow::Result<()> {
-    let _ = dotenvy::dotenv();
-    let _ = dotenvy::from_path(".devx/env");
-    // Held to the end so the drop flushes any batched export before exit.
-    let _telemetry = telemetry::init(telemetry_name);
-    let service = trigger.service;
-    match fire(trigger, &|name| std::env::var(name).ok()).await? {
-        Fired::EngineSchedule => println!("DBOS engine owns {service}; Restate submit skipped"),
-        Fired::Dbos => println!("triggered {service} through DBOS ingress"),
-        Fired::Restate(key) => println!("triggered {service}/{key}"),
-    }
-    Ok(())
-}
-
-/// Submit one scheduled job to authenticated DBOS ingress.
+/// Submit a scheduled run to authenticated DBOS ingress.
 pub async fn run_dbos_cron(
     telemetry_name: &'static str,
+    service: &'static str,
     route: &str,
     body: &serde_json::Value,
 ) -> anyhow::Result<()> {
@@ -645,7 +307,15 @@ pub async fn run_dbos_cron(
     let _ = dotenvy::from_path(".devx/env");
     let _telemetry = telemetry::init(telemetry_name);
     let (ingress, token) = dbos_ingress_from_env()?;
-    Ok(start_dbos_at(&ingress, &token, route, body).await?)
+    let result = start_dbos_at(&ingress, &token, route, body).await;
+    let outcome = match &result {
+        Ok(()) => telemetry::outcome::ACCEPTED,
+        Err(TriggerError::Transport) => telemetry::outcome::TRANSPORT_ERROR,
+        Err(TriggerError::Rejected { .. }) => telemetry::outcome::REJECTED,
+    };
+    telemetry::record_trigger_fired(service, outcome);
+    tracing::info!(service, outcome, "DBOS schedule submission");
+    Ok(result?)
 }
 
 async fn start_dbos_at<B: Serialize + ?Sized>(
@@ -666,14 +336,15 @@ async fn start_dbos_at<B: Serialize + ?Sized>(
         return Err(TriggerError::Transport);
     }
     let url = format!("{}{}", ingress.trim_end_matches('/'), route);
-    let response = reqwest::Client::new()
+    let mut request = reqwest::Client::new()
         .post(url)
         .bearer_auth(token)
         .json(body)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|_| TriggerError::Transport)?;
+        .timeout(std::time::Duration::from_secs(30));
+    for (name, value) in telemetry::current_trace_context_headers() {
+        request = request.header(name, value);
+    }
+    let response = request.send().await.map_err(|_| TriggerError::Transport)?;
     let status = response.status();
     if !status.is_success() {
         return Err(TriggerError::Rejected { status });
@@ -698,7 +369,6 @@ pub async fn start_dbos_sandbox_credit_reset(
     .await
 }
 
-pub const INBOUND_TRIAGE_DBOS_ENABLED_ENV: &str = "NAVIGATOR_DBOS_INBOUND_TRIAGE_ENABLED";
 /// Opt-in for explicitly approved Inbox attachment filings.
 pub const INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV: &str =
     "NAVIGATOR_DBOS_INBOX_ATTACHMENT_FILING_ENABLED";
@@ -746,38 +416,17 @@ pub async fn start_inbound_triage(message_id: uuid::Uuid) -> Result<(), String> 
     .map_err(|error| error.to_string())
 }
 
-pub const YOUTUBE_COMMENTS_DBOS_ENABLED_ENV: &str =
-    "NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED";
-
 #[cfg(test)]
 mod tests {
-    use super::{start_dbos_finance_aggregate, start_dbos_reconcile, start_workflow, TriggerError};
+    use super::{start_dbos_finance_aggregate, start_dbos_reconcile, TriggerError};
     use serde_json::json;
-    use std::sync::{Arc, Mutex};
-    use tracing_subscriber::fmt::MakeWriter;
-    use wiremock::matchers::{body_partial_json, header, header_exists, method, path};
+    use wiremock::matchers::{body_partial_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
-    async fn disabled_billing_never_contacts_either_ingress() {
+    async fn disabled_billing_never_contacts_ingress() {
         let server = MockServer::start().await;
-        for selection in store::workflow_engine::DISABLED_BILLING {
-            let result = start_workflow(
-                &server.uri(),
-                Some("token"),
-                selection.name,
-                "slot",
-                "run",
-                &json!({}),
-                true,
-            )
-            .await;
-            assert!(matches!(
-                result,
-                Err(TriggerError::Rejected {
-                    status: reqwest::StatusCode::GONE
-                })
-            ));
+        for selection in store::disabled_billing::DISABLED_BILLING {
             let result =
                 super::start_dbos_schedule(&server.uri(), "token", selection.name, "slot").await;
             assert!(matches!(
@@ -847,531 +496,12 @@ mod tests {
             .await
             .is_err());
     }
-
-    #[derive(Clone)]
-    struct Buffer(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for Buffer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("capture lock")
-                .extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> MakeWriter<'a> for Buffer {
-        type Writer = Buffer;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
-    #[tokio::test]
-    async fn posts_to_service_key_handler_path() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/Archives/2026-06-05/run"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string("{\"invocationId\":\"inv_1\"}"),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let body = start_workflow(
-            &server.uri(),
-            None,
-            "Archives",
-            "2026-06-05",
-            "run",
-            &json!({}),
-            false,
-        )
-        .await
-        .unwrap();
-        assert!(body.contains("inv_1"));
-    }
-
-    #[tokio::test]
-    async fn one_way_targets_the_send_variant() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/Archives/manual-7/run/send"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        start_workflow(
-            &server.uri(),
-            None,
-            "Archives",
-            "manual-7",
-            "run",
-            &json!({}),
-            true,
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn attaches_bearer_when_token_present() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/Archives/d/run"))
-            .and(header("authorization", "Bearer s3cret"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        start_workflow(
-            &server.uri(),
-            Some("s3cret"),
-            "Archives",
-            "d",
-            "run",
-            &json!({}),
-            false,
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn sends_no_authorization_header_when_token_absent() {
-        let server = MockServer::start().await;
-        // Any request carrying an Authorization header must NOT match.
-        Mock::given(method("POST"))
-            .and(path("/Archives/d/run"))
-            .and(header_exists("authorization"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(0)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/Archives/d/run"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        start_workflow(
-            &server.uri(),
-            None,
-            "Archives",
-            "d",
-            "run",
-            &json!({}),
-            false,
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn empty_token_is_treated_as_absent() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/Archives/d/run"))
-            .and(header_exists("authorization"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(0)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/Archives/d/run"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        start_workflow(
-            &server.uri(),
-            Some(""),
-            "Archives",
-            "d",
-            "run",
-            &json!({}),
-            false,
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn passes_the_json_body_through() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/Archives/d/run"))
-            .and(body_partial_json(json!({"run_date": "2026-06-05"})))
-            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        start_workflow(
-            &server.uri(),
-            None,
-            "Archives",
-            "d",
-            "run",
-            &json!({"run_date": "2026-06-05"}),
-            false,
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn rejected_error_and_trace_are_status_only() {
-        let server = MockServer::start().await;
-        let receipt = "receipt-sentinel-906";
-        let invocation = "invocation-sentinel-906";
-        let request_url = format!("{}/EmailSummary/{receipt}/run/send", server.uri());
-        Mock::given(method("POST"))
-            .and(path(format!("/EmailSummary/{receipt}/run/send")))
-            .respond_with(
-                ResponseTemplate::new(401)
-                    .set_body_string(format!("rejected {receipt} {invocation} {request_url}")),
-            )
-            .mount(&server)
-            .await;
-
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .without_time()
-            .with_ansi(false)
-            .with_writer(Buffer(output.clone()))
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
-        let err = start_workflow(
-            &server.uri(),
-            None,
-            "EmailSummary",
-            receipt,
-            "run",
-            &json!({}),
-            true,
-        )
-        .await
-        .unwrap_err();
-        drop(guard);
-        let message = err.to_string();
-        let trace = String::from_utf8(output.lock().expect("capture lock").clone())
-            .expect("capture is UTF-8");
-
-        match err {
-            TriggerError::Rejected { status } => {
-                assert_eq!(status.as_u16(), 401);
-            }
-            other @ TriggerError::Transport => panic!("expected Rejected, got {other:?}"),
-        }
-        assert_eq!(message, "workflow trigger rejected with status 401");
-        for rendered in [&message, &trace] {
-            assert!(!rendered.contains(receipt), "unsafe receipt in {rendered}");
-            assert!(
-                !rendered.contains(invocation),
-                "unsafe invocation in {rendered}"
-            );
-            assert!(!rendered.contains(&request_url), "unsafe URL in {rendered}");
-        }
-        assert!(trace.contains("EmailSummary"));
-        assert!(trace.contains("run"));
-        assert!(trace.contains("rejected"));
-        assert!(trace.contains("401"));
-    }
-
-    #[tokio::test]
-    async fn transport_error_and_trace_are_status_only() {
-        let ingress = "http://[::1";
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .without_time()
-            .with_ansi(false)
-            .with_writer(Buffer(output.clone()))
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
-        let err = start_workflow(
-            ingress,
-            None,
-            "Archives",
-            "receipt-sentinel-transport-906",
-            "run",
-            &json!({}),
-            false,
-        )
-        .await
-        .unwrap_err();
-        drop(guard);
-        let message = err.to_string();
-        let trace = String::from_utf8(output.lock().expect("capture lock").clone())
-            .expect("capture is UTF-8");
-
-        assert!(matches!(err, TriggerError::Transport));
-        assert_eq!(message, "workflow trigger transport failure");
-        assert!(!message.contains(ingress));
-        assert!(!trace.contains(ingress));
-        assert!(!trace.contains("receipt-sentinel-transport-906"));
-        assert!(trace.contains("Archives"));
-        assert!(trace.contains("run"));
-        assert!(trace.contains("transport_error"));
-    }
-
-    #[tokio::test]
-    async fn unreachable_ingress_becomes_transport_error() {
-        let err = start_workflow(
-            "http://192.0.2.1:1",
-            None,
-            "Archives",
-            "d",
-            "run",
-            &json!({}),
-            false,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, TriggerError::Transport));
-    }
 }
 
 #[cfg(test)]
-mod cron_trigger_tests {
-    use super::{fire, restate_run, CronTrigger, Fired};
-    use serde_json::json;
-    use wiremock::matchers::{body_json, header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    const FLAG: &str = "NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED";
-
-    fn trigger(dbos: bool) -> CronTrigger {
-        CronTrigger {
-            flag: FLAG,
-            service: "NightlyProjectUpdate",
-            dbos: dbos.then(|| {
-                (
-                    "/internal/dbos/nightly-project-update",
-                    json!({"workflow_id": "nightly-2026-11-08"}),
-                )
-            }),
-            restate: restate_run("2026-11-08".to_owned(), json!({"day": 8})),
-        }
-    }
-
-    async fn fired(dbos: bool, pairs: &[(&str, &str)]) -> anyhow::Result<Fired> {
-        fire(trigger(dbos), &|name| {
-            pairs
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| (*value).to_owned())
-        })
-        .await
-    }
-
-    #[tokio::test]
-    async fn the_switch_off_sends_one_keyed_one_way_restate_invocation() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/NightlyProjectUpdate/2026-11-08/run/send"))
-            .and(header("authorization", "Bearer tenant"))
-            .and(body_json(json!({"day": 8})))
-            .respond_with(ResponseTemplate::new(202))
-            .expect(2)
-            .mount(&server)
-            .await;
-        let uri = server.uri();
-        for dbos in [true, false] {
-            let sent = fired(
-                dbos,
-                &[
-                    (FLAG, "false"),
-                    ("RESTATE_INGRESS_URL", uri.as_str()),
-                    ("RESTATE_AUTH_TOKEN", "tenant"),
-                    ("NAVIGATOR_DBOS_INGRESS_URL", "http://worker.invalid"),
-                ],
-            )
-            .await
-            .unwrap();
-            assert_eq!(sent, Fired::Restate("2026-11-08".into()));
-        }
-    }
-
-    #[tokio::test]
-    async fn the_switch_on_posts_the_dbos_body_to_the_worker_route_with_its_bearer() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/internal/dbos/nightly-project-update"))
-            .and(header("authorization", "Bearer worker-secret"))
-            .and(body_json(json!({"workflow_id": "nightly-2026-11-08"})))
-            .respond_with(ResponseTemplate::new(202))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let ingress = format!("{}//", server.uri());
-        let sent = fired(
-            true,
-            &[
-                (FLAG, " true "),
-                ("NAVIGATOR_DBOS_INGRESS_URL", ingress.as_str()),
-                ("NAVIGATOR_DBOS_INGRESS_TOKEN", "worker-secret"),
-            ],
-        )
-        .await
-        .unwrap();
-        assert_eq!(sent, Fired::Dbos);
-    }
-
-    #[tokio::test]
-    async fn an_engine_scheduled_workflow_submits_nothing_once_its_switch_is_on() {
-        // No ingress is configured at all: the engine fires the run itself.
-        assert_eq!(
-            fired(false, &[(FLAG, "true")]).await.unwrap(),
-            Fired::EngineSchedule
-        );
-    }
-
-    #[tokio::test]
-    async fn an_incomplete_or_refusing_ingress_fails_the_run() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(401))
-            .mount(&server)
-            .await;
-        let uri = server.uri();
-        for (dbos, pairs, message) in [
-            (false, &[(FLAG, "yes")][..], "is not valid for DBOS"),
-            (true, &[(FLAG, "yes")][..], "is not valid for DBOS"),
-            (
-                true,
-                &[(FLAG, "true"), ("NAVIGATOR_DBOS_INGRESS_TOKEN", "s")][..],
-                "NAVIGATOR_DBOS_INGRESS_URL must be set",
-            ),
-            (
-                true,
-                &[
-                    (FLAG, "true"),
-                    ("NAVIGATOR_DBOS_INGRESS_URL", "http://worker.invalid"),
-                    ("NAVIGATOR_DBOS_INGRESS_TOKEN", " "),
-                ][..],
-                "NAVIGATOR_DBOS_INGRESS_TOKEN must be set",
-            ),
-            (
-                true,
-                &[
-                    (FLAG, "true"),
-                    ("NAVIGATOR_DBOS_INGRESS_URL", uri.as_str()),
-                    ("NAVIGATOR_DBOS_INGRESS_TOKEN", "s"),
-                ][..],
-                "triggering NightlyProjectUpdate through DBOS ingress",
-            ),
-            (false, &[][..], "RESTATE_INGRESS_URL must be set"),
-            (
-                true,
-                &[("RESTATE_INGRESS_URL", " ")][..],
-                "RESTATE_INGRESS_URL must be set",
-            ),
-            (
-                false,
-                &[("RESTATE_INGRESS_URL", uri.as_str())][..],
-                "triggering NightlyProjectUpdate workflow",
-            ),
-        ] {
-            let error = fired(dbos, pairs).await.unwrap_err();
-            assert!(
-                format!("{error:#}").contains(message),
-                "{pairs:?}: {error:#}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a_restate_refusal_surfaces_before_any_ingress_is_read() {
-        let refused = CronTrigger {
-            restate: Box::new(|_| anyhow::bail!("not this slot")),
-            ..trigger(false)
-        };
-        let error = fire(refused, &|_| None).await.unwrap_err();
-        assert_eq!(error.to_string(), "not this slot");
-    }
-}
-
-#[cfg(test)]
-mod service_target_tests {
-    use super::{
-        service_target, social_publish_reconciler_workflow_id, social_publisher_workflow_id,
-        ServiceTarget, ServiceTargetError,
-    };
-    use crate::flags::SettingsError;
+mod social_workflow_tests {
+    use super::{social_publish_reconciler_workflow_id, social_publisher_workflow_id};
     use chrono::TimeZone;
-
-    const FLAG: &str = super::SOCIAL_PUBLISHER_ENABLED_ENV;
-
-    fn target(
-        enabled: Option<&str>,
-        ingress: Option<&str>,
-        token: Option<&str>,
-    ) -> Result<ServiceTarget, ServiceTargetError> {
-        service_target(
-            FLAG,
-            enabled,
-            ingress.map(str::to_owned),
-            token.map(str::to_owned),
-        )
-    }
-
-    #[test]
-    fn service_target_defaults_to_restate_until_the_switch_flips() {
-        assert_eq!(target(None, None, None), Ok(ServiceTarget::Restate));
-        assert_eq!(
-            target(Some("false"), None, None),
-            Ok(ServiceTarget::Restate)
-        );
-        assert_eq!(
-            target(Some("yes"), Some("http://worker"), Some("t")),
-            Err(ServiceTargetError::Switch(SettingsError::Invalid(FLAG)))
-        );
-    }
-
-    #[test]
-    fn service_target_on_dbos_requires_a_non_blank_ingress_and_bearer() {
-        assert_eq!(
-            target(
-                Some("true"),
-                Some(" http://worker:9083/ "),
-                Some(" secret ")
-            ),
-            Ok(ServiceTarget::Dbos {
-                ingress: "http://worker:9083".into(),
-                token: "secret".into(),
-            })
-        );
-        for (ingress, token, missing) in [
-            (None, Some("t"), super::DBOS_INGRESS_URL_ENV),
-            (Some("  "), Some("t"), super::DBOS_INGRESS_URL_ENV),
-            (Some("///"), Some("t"), super::DBOS_INGRESS_URL_ENV),
-            (Some("http://worker"), None, super::DBOS_INGRESS_TOKEN_ENV),
-            (
-                Some("http://worker"),
-                Some(" "),
-                super::DBOS_INGRESS_TOKEN_ENV,
-            ),
-        ] {
-            assert_eq!(
-                target(Some("true"), ingress, token),
-                Err(ServiceTargetError::Missing(missing))
-            );
-        }
-    }
 
     #[tokio::test]
     async fn dbos_social_handoffs_target_their_internal_allowlisted_routes() {

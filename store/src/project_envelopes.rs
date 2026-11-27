@@ -88,10 +88,10 @@ mod tests {
 
     #[tokio::test]
     async fn later_progress_survives_replay_and_stays_on_the_matched_project() {
-        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+        let Some((options, database)) = crate::postgres::fixtures::fresh_schema().await else {
             return;
         };
-        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let pg = crate::postgres::fixtures::connect(&options, &database).await;
         let (_, notation, _) = workflow_fixture(&pg).await;
         let (firm, project) = firm_for_notation(&pg, notation).await;
         let account = Uuid::new_v4();

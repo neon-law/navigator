@@ -136,7 +136,7 @@ async fn new_client_with(scheme: Option<ColorScheme>) -> Client {
 
     // rustls, like every client in the workspace; pin the crypto provider
     // first, since both ring and aws-lc-rs are compiled in.
-    store::surreal::install_tls_provider();
+    store::tls::install_provider();
     ClientBuilder::rustls()
         .expect("load the WebDriver client's TLS roots")
         .capabilities(caps)

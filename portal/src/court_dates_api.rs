@@ -24,12 +24,12 @@ pub(crate) async fn project_reviewer(
     }
     let actor = session.person_id.ok_or(ApiError::Forbidden)?;
     let member = if session.role.is_lawyer_tier() {
-        store::projects::has_firm_participation(&state.surreal, actor, project_id)
+        store::projects::has_firm_participation(&state.application_store, actor, project_id)
             .await
             .map_err(|e| ApiError::Db(e.to_string()))?
     } else if session.role.is_clerk() {
         store::access::can_see_project_as_clerk(
-            &state.surreal,
+            &state.application_store,
             Some(actor),
             session.role,
             project_id,
@@ -165,7 +165,7 @@ pub(crate) async fn stage(
     let pg = database().await?;
     let draft = proposals::resolve_draft(
         &pg,
-        &state.surreal,
+        &state.application_store,
         project,
         input.request_id,
         None,
@@ -202,7 +202,7 @@ pub(crate) async fn correct(
     let pg = database().await?;
     let draft = proposals::resolve_draft(
         &pg,
-        &state.surreal,
+        &state.application_store,
         project,
         id,
         Some(input.revision),

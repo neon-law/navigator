@@ -34,12 +34,9 @@ pub async fn verified_providers(
     pg: &PostgresDb,
     projects: &[Uuid],
 ) -> Result<HashMap<Uuid, BTreeSet<SigningMethod>>, sqlx::Error> {
-    crate::postgres_backfill::family::require_scope(
-        pg,
-        crate::postgres_backfill::family::Family::Notation,
-    )
-    .await
-    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
+    crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
+        .await
+        .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
     let providers: Vec<&str> = crate::signatures::SignatureProvider::ALL
         .iter()
         .map(crate::signatures::SignatureProvider::as_str)
@@ -75,12 +72,9 @@ pub async fn filed_signing_methods(
     pg: &PostgresDb,
     projects: &[Uuid],
 ) -> Result<HashMap<Uuid, BTreeSet<SigningMethod>>, sqlx::Error> {
-    crate::postgres_backfill::family::require_scope(
-        pg,
-        crate::postgres_backfill::family::Family::Notation,
-    )
-    .await
-    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
+    crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
+        .await
+        .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
     let rows: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
         "SELECT DISTINCT h.project_id,h.signing FROM asset h
          WHERE h.project_id=ANY($1) AND h.deleted_at IS NULL AND h.signing IS NOT NULL
@@ -154,12 +148,9 @@ pub async fn agreements(
     pg: &PostgresDb,
     projects: &[Uuid],
 ) -> Result<Vec<model::projects::OnboardingAgreement>, sqlx::Error> {
-    crate::postgres_backfill::family::require_scope(
-        pg,
-        crate::postgres_backfill::family::Family::Notation,
-    )
-    .await
-    .map_err(|e| sqlx::Error::Configuration(Box::new(e)))?;
+    crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
+        .await
+        .map_err(|e| sqlx::Error::Configuration(Box::new(e)))?;
     let rows = sqlx::query_scalar::<_, sqlx::types::Json<model::projects::OnboardingAgreement>>(
         "WITH runs AS (
             SELECT n.project_id, t.title, n.id AS notation_id, COALESCE(s.state,n.state) AS state,
@@ -193,12 +184,9 @@ pub async fn pending_esign(
     pg: &PostgresDb,
     projects: &[Uuid],
 ) -> Result<std::collections::HashMap<Uuid, EsignSummary>, sqlx::Error> {
-    crate::postgres_backfill::family::require_scope(
-        pg,
-        crate::postgres_backfill::family::Family::Notation,
-    )
-    .await
-    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
+    crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
+        .await
+        .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
     let rows: Vec<(Uuid, String, String, String)> = sqlx::query_as(
         "SELECT DISTINCT ON (n.project_id) n.project_id, s.provider, s.provider_id, s.state
          FROM signature s JOIN notation n ON n.id=s.notation_id
@@ -229,12 +217,9 @@ pub async fn filed_documents(
     pg: &PostgresDb,
     projects: &[Uuid],
 ) -> Result<(HashSet<Uuid>, HashSet<Uuid>), sqlx::Error> {
-    crate::postgres_backfill::family::require_scope(
-        pg,
-        crate::postgres_backfill::family::Family::Notation,
-    )
-    .await
-    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
+    crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
+        .await
+        .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
     let rows: Vec<(Uuid, String)> = sqlx::query_as(
         "SELECT project_id,kind FROM asset
          WHERE project_id=ANY($1) AND deleted_at IS NULL AND kind IN ('onboarding','offboarding')

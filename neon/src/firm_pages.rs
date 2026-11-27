@@ -1383,8 +1383,8 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
 #[allow(clippy::too_many_lines)] // A flat list of the firm's public page routers.
 pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     let mut routers = vec![
-        dioxus_app::blog_index_router(state.surreal.clone()),
-        dioxus_app::blog_post_router(state.surreal.clone()),
+        dioxus_app::blog_index_router(state.application_store.clone()),
+        dioxus_app::blog_post_router(state.application_store.clone()),
     ];
     // Resolve the branding from `state.brand_bundle` (mirroring `bootstrap`)
     // rather than the ambient `current()`: this content is baked at
@@ -1398,7 +1398,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     routers.push(dioxus_app::catalog_index_router(
         dioxus_app::NOTATIONS_INDEX_PATH,
         notations_index_content(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     ));
     routers.push(dioxus_app::notations_about_router(notations_about_content()));
     // Also carries `navigator notation preview`'s draft door (LAW-29): a
@@ -1408,7 +1408,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     routers.push(dioxus_app::notation_preview_router(
         notation_preview_docs(),
         webapp::notation_preview::NotationPreviewMode::Published,
-        Some(state.surreal.clone()),
+        Some(state.application_store.clone()),
     ));
     let alternate = crate::guieb_shook::shared_routes(branding, state);
     let with_guieb_shook = |router: Router| {
@@ -1505,7 +1505,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         dioxus_app::home_router(
             "/",
             home,
-            state.surreal.clone(),
+            state.application_store.clone(),
             Some(home_lead_capture(branding)),
             state.sessions.clone(),
             portal::secure_cookies(state),
@@ -1524,7 +1524,10 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         }
     });
     routers.push(with_branded(
-        dioxus_app::testimonials_router(dioxus_app::TESTIMONIALS_PATH, state.surreal.clone()),
+        dioxus_app::testimonials_router(
+            dioxus_app::TESTIMONIALS_PATH,
+            state.application_store.clone(),
+        ),
         testimonials_copy,
     ));
     // The practice pages the home page's cards lead into. Static copy like the
@@ -1818,7 +1821,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     routers.push(dioxus_app::catalog_index_router(
         dioxus_app::PRESENTATION_INDEX_PATH,
         presentation_index_content(&state.workshops),
-        state.surreal.clone(),
+        state.application_store.clone(),
     ));
     routers.extend(dioxus_app::catalog_material_routers(
         &dioxus_app::PRESENTATION_PATHS,

@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use store::application_store::ApplicationStore;
 use store::inbox::{ingest_inbound, IngestInbound};
 use store::inbox_triage::{find_for_message, PrivilegeLabel, TriageDisposition};
-use store::surreal::SurrealDb;
 use tower::ServiceExt;
 use uuid::Uuid;
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -22,9 +22,13 @@ use crate::support::{APP_VERSION, DEADLINE};
 const ROUTE: &str = "/internal/dbos/inbound-triage";
 const FILING_ROUTE: &str = "/internal/dbos/approved-inbox-filing";
 
-async fn seed_message(surreal: &SurrealDb, firm_id: Uuid, provider_message_id: &str) -> Uuid {
+async fn seed_message(
+    application_store: &ApplicationStore,
+    firm_id: Uuid,
+    provider_message_id: &str,
+) -> Uuid {
     ingest_inbound(
-        surreal,
+        application_store,
         &IngestInbound {
             firm_id,
             brand_key: Some("neon"),
@@ -61,15 +65,22 @@ async fn inbound_triage_preserves_replay_and_confines_classifier_evidence() {
     let Some(db) = database().await else {
         return;
     };
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let (firm_id, _) = store::test_support::seed_firm_with_new_brand(&surreal, "neon").await;
-    let message_id = seed_message(&surreal, firm_id, "triage-replay").await;
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    let (firm_id, _) =
+        store::test_support::seed_firm_with_new_brand(&application_store, "neon").await;
+    let message_id = seed_message(&application_store, firm_id, "triage-replay").await;
     let request = InboundTriageRequest { message_id };
     let dbos = dbos::DBOS::new(workflows::dbos_engine::config(&db.url, APP_VERSION));
-    let workflow = register_dbos(&dbos, InboundTriageService::new(surreal.clone(), None))
-        .expect("register triage");
-    let filing = register_filing_dbos(&dbos, InboundTriageService::new(surreal.clone(), None))
-        .expect("register filing");
+    let workflow = register_dbos(
+        &dbos,
+        InboundTriageService::new(application_store.clone(), None),
+    )
+    .expect("register triage");
+    let filing = register_filing_dbos(
+        &dbos,
+        InboundTriageService::new(application_store.clone(), None),
+    )
+    .expect("register filing");
     dbos.launch().await.expect("launch DBOS");
     let router = router_with_dbos_ingress(
         WorkerIngress {
@@ -110,7 +121,7 @@ async fn inbound_triage_preserves_replay_and_confines_classifier_evidence() {
         .await
         .expect("triage completed within the deadline")
         .expect("triage succeeded");
-    let original = find_for_message(&surreal, message_id)
+    let original = find_for_message(&application_store, message_id)
         .await
         .expect("find the triage row")
         .expect("triage row was recorded");
@@ -127,27 +138,28 @@ async fn inbound_triage_preserves_replay_and_confines_classifier_evidence() {
         .await
         .expect("recover an already-recorded message");
     assert_eq!(
-        find_for_message(&surreal, message_id)
+        find_for_message(&application_store, message_id)
             .await
             .expect("read triage after recovery"),
         Some(original)
     );
-    assert_approved_filing(&router, &dbos, &filing, &surreal, firm_id).await;
+    assert_approved_filing(&router, &dbos, &filing, &application_store, firm_id).await;
     dbos.shutdown().await;
 
-    assert_classifier_evidence_stays_in_the_inbox_audit_row(&db.url, &surreal, firm_id).await;
+    assert_classifier_evidence_stays_in_the_inbox_audit_row(&db.url, &application_store, firm_id)
+        .await;
 }
 
 async fn assert_approved_filing(
     router: &axum::Router,
     dbos: &dbos::DBOS,
     workflow: &FilingWorkflow,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
 ) {
     use store::inbox_triage::FilingApproval;
 
-    let approval = seed_filing_approval(surreal, firm_id).await;
+    let approval = seed_filing_approval(application_store, firm_id).await;
     let project_id = approval.project_id;
     let run = |approval| async move {
         let id = filing_workflow_id(&approval);
@@ -200,23 +212,24 @@ async fn assert_approved_filing(
         dbos::Error::Application(workflows_service::inbound_triage::FilingError::ApprovalExpired)
     ));
     assert_eq!(
-        store::communications::for_project(surreal, project_id)
+        store::communications::for_project(application_store, project_id)
             .await
             .unwrap()
             .len(),
         1
     );
     assert!(
-        store::communications::for_project_client_visible(surreal, project_id)
+        store::communications::for_project_client_visible(application_store, project_id)
             .await
             .unwrap()
             .is_empty()
     );
-    assert_attachment_filing_requires_its_exact_approval(surreal, firm_id, approval).await;
+    assert_attachment_filing_requires_its_exact_approval(application_store, firm_id, approval)
+        .await;
 }
 
 async fn assert_attachment_filing_requires_its_exact_approval(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     firm_id: Uuid,
     filing: store::inbox_triage::FilingApproval,
 ) {
@@ -309,23 +322,27 @@ async fn assert_attachment_filing_requires_its_exact_approval(
 }
 
 async fn seed_filing_approval(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
 ) -> store::inbox_triage::FilingApproval {
     use store::inbox_triage::{record, FilingApproval, NewInboxTriage, RULES_ONLY_PROMPT};
     use store::persons::{self, NewPerson, Role};
 
-    let message_id = seed_message(surreal, firm_id, "triage-approved-filing").await;
-    let project =
-        store::test_support::seed_project_on_firm(surreal, Some(firm_id), "Synthetic Filing").await;
+    let message_id = seed_message(application_store, firm_id, "triage-approved-filing").await;
+    let project = store::test_support::seed_project_on_firm(
+        application_store,
+        Some(firm_id),
+        "Synthetic Filing",
+    )
+    .await;
     let owner = persons::create(
-        surreal,
+        application_store,
         &NewPerson::with_role("Synthetic Reviewer", "reviewer@example.test", Role::Owner),
     )
     .await
     .unwrap();
     store::projects::add_participation(
-        surreal,
+        application_store,
         project.id,
         owner.id,
         store::projects::participation_for_role(Role::Owner),
@@ -333,7 +350,7 @@ async fn seed_filing_approval(
     .await
     .unwrap();
     let review = record(
-        surreal,
+        application_store,
         &NewInboxTriage {
             message_id,
             firm_id,
@@ -363,10 +380,10 @@ async fn seed_filing_approval(
 
 async fn assert_classifier_evidence_stays_in_the_inbox_audit_row(
     postgres_url: &str,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
 ) {
-    let message_id = seed_message(surreal, firm_id, "triage-checkpoint").await;
+    let message_id = seed_message(application_store, firm_id, "triage-checkpoint").await;
     let provider = MockServer::start().await;
     let rationale = "Synthetic private evidence";
     let verdict = serde_json::json!({
@@ -392,7 +409,7 @@ async fn assert_classifier_evidence_stays_in_the_inbox_audit_row(
         .unwrap()
         .with_base_url(provider.uri());
     let service = InboundTriageService::new(
-        surreal.clone(),
+        application_store.clone(),
         Some(TriageProviders {
             gemini,
             project_id: "synthetic-project".into(),
@@ -415,7 +432,7 @@ async fn assert_classifier_evidence_stays_in_the_inbox_audit_row(
         .await
         .unwrap();
     assert_eq!(report.message_id, message_id);
-    let row = find_for_message(surreal, message_id)
+    let row = find_for_message(application_store, message_id)
         .await
         .unwrap()
         .unwrap();

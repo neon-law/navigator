@@ -3,7 +3,7 @@ use super::release_maintenance::{self, Job};
 use cloud::forge::{ForgeService, GitHubForge};
 use dbos::{ScheduleSpec, ScheduledWorkflowInput, DBOS};
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use uuid::Uuid;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -76,7 +76,7 @@ fn compare(github: String, forgejo: String) -> Finding {
 
 async fn inspect(
     target: &Target,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     kms: &dyn cloud::RuntimeKms,
     github: Option<&GitHubForge>,
 ) -> Finding {
@@ -165,7 +165,7 @@ async fn inspect(
 
 async fn release_input(
     target: &Target,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     kms: &dyn cloud::RuntimeKms,
     github: &GitHubForge,
     sha: &str,
@@ -220,7 +220,9 @@ pub(super) fn register(dbos: &DBOS) -> dbos::Result<ScheduleSpec> {
         dbos.register_workflow("ProjectForgeParity", move |_: ScheduledWorkflowInput<()>| {
             let engine = engine.clone();
             async move {
-                let db = SurrealDb::uninitialized();
+                let db = ApplicationStore::connect()
+                    .await
+                    .map_err(|_| dbos::Error::Application(RosterError))?;
                 let targets = dbos::step("active-projects", || async {
                     let mut targets: Vec<_> = store::projects::all(&db)
                         .await

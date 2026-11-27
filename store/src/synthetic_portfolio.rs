@@ -55,7 +55,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use uuid::Uuid;
 
-use crate::surreal::SurrealDb;
+use crate::application_store::ApplicationStore;
 
 /// The version of the fixture this module writes. Bump when the manifest
 /// below changes shape; a stale reader can then tell it apart from an
@@ -422,12 +422,12 @@ impl PortfolioPlan {
 /// [`PortfolioTargetError`] (wrapped) when `target` is refused, or any store
 /// read error.
 pub async fn dry_run(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     environment: crate::DeploymentEnvironment,
     target: Option<&str>,
 ) -> anyhow::Result<PortfolioPlan> {
-    dry_run_with(surreal, storage, environment, target, |key| {
+    dry_run_with(application_store, storage, environment, target, |key| {
         std::env::var(key).ok()
     })
     .await
@@ -437,14 +437,14 @@ pub async fn dry_run(
 /// the refusal boundary without mutating process environment — the same
 /// seam [`crate::config::sample_matters_from`] uses.
 async fn dry_run_with<F: Fn(&str) -> Option<String>>(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     environment: crate::DeploymentEnvironment,
     target: Option<&str>,
     get: F,
 ) -> anyhow::Result<PortfolioPlan> {
     verify_target(target, environment, get)?;
-    run(surreal, storage, Mode::DryRun).await
+    run(application_store, storage, Mode::DryRun).await
 }
 
 /// Apply the fixture to `surreal`/`storage`. Idempotent: a repeat apply
@@ -455,12 +455,12 @@ async fn dry_run_with<F: Fn(&str) -> Option<String>>(
 /// [`PortfolioTargetError`] (wrapped) when `target` is refused before any
 /// write, or any store read/write error.
 pub async fn apply(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     environment: crate::DeploymentEnvironment,
     target: Option<&str>,
 ) -> anyhow::Result<PortfolioPlan> {
-    apply_with(surreal, storage, environment, target, |key| {
+    apply_with(application_store, storage, environment, target, |key| {
         std::env::var(key).ok()
     })
     .await
@@ -469,43 +469,44 @@ pub async fn apply(
 /// [`apply`] with the disclosure flag read through `get`; see
 /// [`dry_run_with`].
 async fn apply_with<F: Fn(&str) -> Option<String>>(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     environment: crate::DeploymentEnvironment,
     target: Option<&str>,
     get: F,
 ) -> anyhow::Result<PortfolioPlan> {
     verify_target(target, environment, get)?;
-    run(surreal, storage, Mode::Apply).await
+    run(application_store, storage, Mode::Apply).await
 }
 
 async fn run(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     mode: Mode,
 ) -> anyhow::Result<PortfolioPlan> {
     let mut plan = PortfolioPlan::new();
 
-    let jurisdiction = crate::jurisdictions::find_by_name(surreal, JURISDICTION_NAME)
+    let jurisdiction = crate::jurisdictions::find_by_name(application_store, JURISDICTION_NAME)
         .await?
         .ok_or_else(|| {
             anyhow!("synthetic portfolio: jurisdiction `{JURISDICTION_NAME}` must be seeded first")
         })?;
-    let entity_type = crate::entity_types::find_by_name(surreal, CLIENT_ENTITY_TYPE)
+    let entity_type = crate::entity_types::find_by_name(application_store, CLIENT_ENTITY_TYPE)
         .await?
         .ok_or_else(|| {
             anyhow!("synthetic portfolio: entity type `{CLIENT_ENTITY_TYPE}` must be seeded first")
         })?;
-    let template = crate::templates::resolve_exact(surreal, None, ONBOARDING_TEMPLATE_CODE)
-        .await?
-        .ok_or_else(|| {
-            anyhow!(
+    let template =
+        crate::templates::resolve_exact(application_store, None, ONBOARDING_TEMPLATE_CODE)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
                 "synthetic portfolio: template `{ONBOARDING_TEMPLATE_CODE}` must be seeded first"
             )
-        })?;
+            })?;
 
     let lawyer_id = plan_primary_matter(
-        surreal,
+        application_store,
         storage,
         &mut plan,
         mode,
@@ -517,7 +518,7 @@ async fn run(
 
     for scenario in LIFECYCLE_SCENARIOS {
         plan_lifecycle_scenario(
-            surreal,
+            application_store,
             storage,
             &mut plan,
             mode,
@@ -530,7 +531,7 @@ async fn run(
     }
 
     plan_finance_portfolio(
-        surreal,
+        application_store,
         &mut plan,
         mode,
         entity_type.id,
@@ -542,7 +543,7 @@ async fn run(
 
     // An Admin who participates in nothing above — see [`ADMIN_NAME`].
     plan_person(
-        surreal,
+        application_store,
         &mut plan,
         mode,
         ADMIN_NAME,
@@ -560,7 +561,7 @@ async fn run(
 /// chain the versioned lifecycle scenarios below do not touch. Returns the
 /// fixture's lawyer id, shared as every [`LifecycleScenario`]'s DRI.
 async fn plan_primary_matter(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     plan: &mut PortfolioPlan,
     mode: Mode,
@@ -569,7 +570,7 @@ async fn plan_primary_matter(
     template_id: Uuid,
 ) -> anyhow::Result<Uuid> {
     let lawyer_id = plan_person(
-        surreal,
+        application_store,
         plan,
         mode,
         LAWYER_NAME,
@@ -578,7 +579,7 @@ async fn plan_primary_matter(
     )
     .await?;
     let client_id = plan_person(
-        surreal,
+        application_store,
         plan,
         mode,
         CLIENT_NAME,
@@ -588,7 +589,7 @@ async fn plan_primary_matter(
     .await?;
 
     let entity_id = plan_entity(
-        surreal,
+        application_store,
         plan,
         mode,
         CLIENT_ENTITY_NAME,
@@ -598,7 +599,7 @@ async fn plan_primary_matter(
     .await?;
 
     let (project_id, _) = plan_project(
-        surreal,
+        application_store,
         plan,
         mode,
         PROJECT_CODE,
@@ -610,7 +611,7 @@ async fn plan_primary_matter(
     .await?;
 
     plan_participation(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -620,7 +621,7 @@ async fn plan_primary_matter(
     )
     .await?;
     plan_participation(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -631,7 +632,7 @@ async fn plan_primary_matter(
     .await?;
 
     plan_document(
-        surreal,
+        application_store,
         storage,
         plan,
         mode,
@@ -643,9 +644,17 @@ async fn plan_primary_matter(
     )
     .await?;
 
-    plan_notation(surreal, plan, mode, project_id, template_id, lawyer_id).await?;
+    plan_notation(
+        application_store,
+        plan,
+        mode,
+        project_id,
+        template_id,
+        lawyer_id,
+    )
+    .await?;
 
-    plan_primary_matter_finance(surreal, plan, mode, project_id, jurisdiction_id).await?;
+    plan_primary_matter_finance(application_store, plan, mode, project_id, jurisdiction_id).await?;
 
     Ok(lawyer_id)
 }
@@ -654,7 +663,7 @@ async fn plan_primary_matter(
 /// only to keep each function under this workspace's line-count lint (see
 /// [`plan_lifecycle_transitions`] for the same reasoning).
 async fn plan_primary_matter_finance(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
@@ -668,10 +677,10 @@ async fn plan_primary_matter_finance(
         chrono::Utc::now().to_rfc3339(),
     )
     .with_external_ref(TRUST_DEPOSIT_EXTERNAL_REF.to_string());
-    plan_trust_movement(surreal, plan, mode, project_id, deposit).await?;
+    plan_trust_movement(application_store, plan, mode, project_id, deposit).await?;
 
     plan_invoice(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -686,7 +695,7 @@ async fn plan_primary_matter_finance(
     .await?;
 
     plan_iolta_account(
-        surreal,
+        application_store,
         plan,
         mode,
         jurisdiction_id,
@@ -698,7 +707,7 @@ async fn plan_primary_matter_finance(
     .await?;
 
     plan_iolta_withdrawal(
-        surreal,
+        application_store,
         plan,
         mode,
         IOLTA_XERO_TRANSACTION_ID,
@@ -711,18 +720,18 @@ async fn plan_primary_matter_finance(
 }
 
 async fn plan_person(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     name: &str,
     email: &str,
     role: crate::persons::Role,
 ) -> anyhow::Result<Uuid> {
-    let existing = crate::persons::find_by_email_ci(surreal, email).await?;
+    let existing = crate::persons::find_by_email_ci(application_store, email).await?;
     plan.record("person", email, action_for(existing.is_some()));
     if mode.is_apply() {
         let row = crate::persons::find_or_create(
-            surreal,
+            application_store,
             &crate::persons::NewPerson::with_role(name, email, role),
         )
         .await?;
@@ -733,21 +742,22 @@ async fn plan_person(
 }
 
 async fn plan_entity(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     name: &str,
     entity_type_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> anyhow::Result<Uuid> {
-    let existing = crate::entities::find_by_name_and_type(surreal, name, entity_type_id).await?;
+    let existing =
+        crate::entities::find_by_name_and_type(application_store, name, entity_type_id).await?;
     plan.record("entity", name, action_for(existing.is_some()));
     if mode.is_apply() {
         if let Some(row) = existing {
             return Ok(row.id);
         }
         let row = crate::entities::create(
-            surreal,
+            application_store,
             &crate::entities::NewEntity {
                 name: name.to_string(),
                 entity_type_id,
@@ -777,7 +787,7 @@ async fn plan_entity(
 /// applied fixture apart from a fresh one — only "did this row already
 /// exist" can.
 async fn plan_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     code: &str,
@@ -786,7 +796,7 @@ async fn plan_project(
     entity_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> anyhow::Result<(Uuid, bool)> {
-    let existing = crate::projects::find_by_code(surreal, code).await?;
+    let existing = crate::projects::find_by_code(application_store, code).await?;
     let already_existed = existing.is_some();
     plan.record("project", code, action_for(already_existed));
     if mode.is_apply() {
@@ -814,9 +824,10 @@ async fn plan_project(
             description: Some(description.to_string()),
         };
         let row = match existing {
-            Some(row) => crate::projects::upsert_with_id(surreal, row.id, &input).await?,
+            Some(row) => crate::projects::upsert_with_id(application_store, row.id, &input).await?,
             None => {
-                crate::projects::find_or_create_by_code(surreal, Uuid::now_v7(), &input).await?
+                crate::projects::find_or_create_by_code(application_store, Uuid::now_v7(), &input)
+                    .await?
             }
         };
         Ok((row.id, already_existed))
@@ -826,7 +837,7 @@ async fn plan_project(
 }
 
 async fn plan_participation(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
@@ -835,27 +846,28 @@ async fn plan_participation(
     participation: &str,
 ) -> anyhow::Result<()> {
     let existing =
-        crate::projects::participation_for_person(surreal, person_id, project_id).await?;
+        crate::projects::participation_for_person(application_store, person_id, project_id).await?;
     plan.record(
         "participation",
         format!("{project_code}:{participation}:{person_id}"),
         action_for(existing.is_some()),
     );
     if mode.is_apply() && existing.is_none() {
-        crate::projects::add_participation(surreal, project_id, person_id, participation).await?;
+        crate::projects::add_participation(application_store, project_id, person_id, participation)
+            .await?;
     }
     Ok(())
 }
 
 /// Add the fixture's lawyer to a matter as its accountable lawyer DRI in one
-/// step, through [`crate::projects::designate_dri_in_surreal`]: idempotent
+/// step, through [`crate::projects::designate_dri`]: idempotent
 /// on `(person, project)`, it creates the participation row when absent and
 /// otherwise only flags an existing one. Several [`LifecycleScenario`]s need
 /// a flagged, currently-licensed lawyer DRI — the Clerk supervision contract
 /// in `docs/access-model.md#clerk` reads for one — and this fixture has
 /// exactly one lawyer, so every new matter simply names them.
 async fn plan_lawyer_dri(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
@@ -863,7 +875,7 @@ async fn plan_lawyer_dri(
     lawyer_id: Uuid,
 ) -> anyhow::Result<()> {
     let existing =
-        crate::projects::participation_for_person(surreal, lawyer_id, project_id).await?;
+        crate::projects::participation_for_person(application_store, lawyer_id, project_id).await?;
     let already_dri = existing.is_some_and(|row| row.is_lawyer_dri);
     plan.record(
         "participation",
@@ -871,8 +883,8 @@ async fn plan_lawyer_dri(
         action_for(already_dri),
     );
     if mode.is_apply() && !already_dri {
-        crate::projects::designate_dri_in_surreal(
-            surreal,
+        crate::projects::designate_dri(
+            application_store,
             project_id,
             lawyer_id,
             crate::projects::DriSide::Lawyer,
@@ -884,7 +896,7 @@ async fn plan_lawyer_dri(
 
 #[allow(clippy::too_many_arguments)]
 async fn plan_document(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     plan: &mut PortfolioPlan,
     mode: Mode,
@@ -896,11 +908,12 @@ async fn plan_document(
 ) -> anyhow::Result<()> {
     let sha256_hex = crate::assets::sha256_hex(content.as_bytes());
     let existing =
-        crate::assets::find_filed_copy(surreal, project_id, filename, &sha256_hex).await?;
+        crate::assets::find_filed_copy(application_store, project_id, filename, &sha256_hex)
+            .await?;
     plan.record("document", filename, action_for(existing.is_some()));
     if mode.is_apply() {
         crate::documents::ingest_bytes_exactly_once(
-            surreal,
+            application_store,
             storage,
             &crate::documents::IngestArgs {
                 project_id,
@@ -930,7 +943,7 @@ async fn plan_document(
 /// rejected by [`crate::projects::transition_project_with_reason`] as a
 /// transition out of a terminal state.
 async fn plan_close(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
@@ -945,7 +958,7 @@ async fn plan_close(
     );
     if mode.is_apply() && !project_already_existed {
         crate::projects::transition_project_with_reason(
-            surreal,
+            application_store,
             project_id,
             crate::projects::Transition::Close,
             Some(reason),
@@ -960,7 +973,7 @@ async fn plan_close(
 /// [`plan_close`] for why the matter's current row cannot answer that on its
 /// own for a scenario that also reopens.
 async fn plan_archive(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
@@ -974,7 +987,7 @@ async fn plan_archive(
     );
     if mode.is_apply() && !project_already_existed {
         crate::projects::transition_project_with_reason(
-            surreal,
+            application_store,
             project_id,
             crate::projects::Transition::Archive,
             None,
@@ -989,7 +1002,7 @@ async fn plan_archive(
 /// `project_already_existed` — see [`plan_close`] for why the matter's
 /// current row cannot answer that on its own once it is back to `"open"`.
 async fn plan_reopen(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
@@ -1004,7 +1017,7 @@ async fn plan_reopen(
     );
     if mode.is_apply() && !project_already_existed {
         crate::projects::transition_project_attested(
-            surreal,
+            application_store,
             project_id,
             crate::projects::Transition::Reopen,
             None,
@@ -1024,7 +1037,7 @@ async fn plan_reopen(
 /// final state.
 #[allow(clippy::too_many_arguments)]
 async fn plan_lifecycle_scenario(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     plan: &mut PortfolioPlan,
     mode: Mode,
@@ -1034,7 +1047,7 @@ async fn plan_lifecycle_scenario(
     scenario: &LifecycleScenario,
 ) -> anyhow::Result<()> {
     let client_id = plan_person(
-        surreal,
+        application_store,
         plan,
         mode,
         scenario.client_name,
@@ -1043,7 +1056,7 @@ async fn plan_lifecycle_scenario(
     )
     .await?;
     let entity_id = plan_entity(
-        surreal,
+        application_store,
         plan,
         mode,
         scenario.entity_name,
@@ -1052,7 +1065,7 @@ async fn plan_lifecycle_scenario(
     )
     .await?;
     let (project_id, project_already_existed) = plan_project(
-        surreal,
+        application_store,
         plan,
         mode,
         scenario.project_code,
@@ -1064,7 +1077,7 @@ async fn plan_lifecycle_scenario(
     .await?;
 
     plan_lawyer_dri(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1073,7 +1086,7 @@ async fn plan_lifecycle_scenario(
     )
     .await?;
     plan_participation(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1089,11 +1102,11 @@ async fn plan_lifecycle_scenario(
             .close_reason
             .is_some_and(crate::projects::ClosureReason::is_active)
     {
-        file_synthetic_onboarding_signature(surreal, project_id, client_id).await?;
+        file_synthetic_onboarding_signature(application_store, project_id, client_id).await?;
     }
 
     plan_lifecycle_transitions(
-        surreal,
+        application_store,
         storage,
         plan,
         mode,
@@ -1106,23 +1119,25 @@ async fn plan_lifecycle_scenario(
 }
 
 async fn file_synthetic_onboarding_signature(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     client_id: Uuid,
 ) -> anyhow::Result<()> {
-    let template = crate::templates::resolve_exact(surreal, None, ONBOARDING_TEMPLATE_CODE)
-        .await?
-        .ok_or_else(|| anyhow!("synthetic portfolio: missing onboarding template"))?;
+    let template =
+        crate::templates::resolve_exact(application_store, None, ONBOARDING_TEMPLATE_CODE)
+            .await?
+            .ok_or_else(|| anyhow!("synthetic portfolio: missing onboarding template"))?;
     let notation = crate::notations::create(
-        surreal,
+        application_store,
         &crate::notations::NewNotation::new(template.id, client_id, project_id, NOTATION_STATE),
     )
     .await?;
     let provider = crate::signatures::SignatureProvider::DocuSign;
     let envelope_id = Uuid::now_v7().to_string();
-    crate::signatures::record_request(surreal, notation.id, provider, &envelope_id).await?;
+    crate::signatures::record_request(application_store, notation.id, provider, &envelope_id)
+        .await?;
     crate::signatures::stamp_signed(
-        surreal,
+        application_store,
         provider,
         &envelope_id,
         &chrono::Utc::now().to_rfc3339(),
@@ -1136,7 +1151,7 @@ async fn file_synthetic_onboarding_signature(
 /// this workspace's line-count lint.
 #[allow(clippy::too_many_arguments)]
 async fn plan_lifecycle_transitions(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     plan: &mut PortfolioPlan,
     mode: Mode,
@@ -1147,7 +1162,7 @@ async fn plan_lifecycle_transitions(
 ) -> anyhow::Result<()> {
     if let Some((filename, content)) = scenario.onboarding {
         plan_document(
-            surreal,
+            application_store,
             storage,
             plan,
             mode,
@@ -1161,7 +1176,7 @@ async fn plan_lifecycle_transitions(
     }
     if let Some((filename, content)) = scenario.offboarding {
         plan_document(
-            surreal,
+            application_store,
             storage,
             plan,
             mode,
@@ -1175,7 +1190,7 @@ async fn plan_lifecycle_transitions(
     }
     if let Some(reason) = scenario.close_reason {
         plan_close(
-            surreal,
+            application_store,
             plan,
             mode,
             project_id,
@@ -1187,7 +1202,7 @@ async fn plan_lifecycle_transitions(
     }
     if scenario.archive {
         plan_archive(
-            surreal,
+            application_store,
             plan,
             mode,
             project_id,
@@ -1198,7 +1213,7 @@ async fn plan_lifecycle_transitions(
     }
     if scenario.reopen {
         plan_reopen(
-            surreal,
+            application_store,
             plan,
             mode,
             project_id,
@@ -1210,7 +1225,7 @@ async fn plan_lifecycle_transitions(
     }
     if let Some((clerk_name, clerk_email)) = scenario.clerk {
         let clerk_id = plan_person(
-            surreal,
+            application_store,
             plan,
             mode,
             clerk_name,
@@ -1219,7 +1234,7 @@ async fn plan_lifecycle_transitions(
         )
         .await?;
         plan_participation(
-            surreal,
+            application_store,
             plan,
             mode,
             project_id,
@@ -1234,7 +1249,7 @@ async fn plan_lifecycle_transitions(
 }
 
 async fn plan_notation(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
@@ -1242,7 +1257,7 @@ async fn plan_notation(
     lawyer_id: Uuid,
 ) -> anyhow::Result<()> {
     let existing = crate::notations::find_by_project_template_person(
-        surreal,
+        application_store,
         project_id,
         template_id,
         lawyer_id,
@@ -1255,7 +1270,7 @@ async fn plan_notation(
     );
     if mode.is_apply() && existing.is_none() {
         crate::notations::create(
-            surreal,
+            application_store,
             &crate::notations::NewNotation::new(template_id, lawyer_id, project_id, NOTATION_STATE),
         )
         .await?;
@@ -1274,7 +1289,7 @@ async fn plan_notation(
 /// builds sets one; see [`crate::trust::record_project_movement`] for why
 /// one is required.
 async fn plan_trust_movement(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
@@ -1284,12 +1299,12 @@ async fn plan_trust_movement(
         .external_ref
         .clone()
         .expect("synthetic portfolio: every fixture trust movement carries an external_ref");
-    let existing = crate::trust::has_external_ref(surreal, project_id, &external_ref)
+    let existing = crate::trust::has_external_ref(application_store, project_id, &external_ref)
         .await
         .map_err(|error| anyhow!("synthetic portfolio: trust movement lookup: {error}"))?;
     plan.record("trust_movement", external_ref, action_for(existing));
     if mode.is_apply() && !existing {
-        crate::trust::record_project_movement(surreal, project_id, &movement)
+        crate::trust::record_project_movement(application_store, project_id, &movement)
             .await
             .map_err(|error| anyhow!("synthetic portfolio: trust movement: {error}"))?;
     }
@@ -1311,7 +1326,7 @@ fn usd_amount_string(cents: i64) -> String {
 /// state back to this call's own `status` on every subsequent apply.
 #[allow(clippy::too_many_arguments)]
 async fn plan_invoice(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
@@ -1323,11 +1338,12 @@ async fn plan_invoice(
     issued_at: chrono::DateTime<chrono::Utc>,
     due_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> anyhow::Result<()> {
-    let existing = crate::xero_invoices::find_for_allocation(surreal, xero_invoice_id).await?;
+    let existing =
+        crate::xero_invoices::find_for_allocation(application_store, xero_invoice_id).await?;
     plan.record("invoice", xero_invoice_id, action_for(existing.is_some()));
     if mode.is_apply() && existing.is_none() {
         crate::xero_invoices::upsert(
-            surreal,
+            application_store,
             &crate::xero_invoices::UpsertXeroInvoice {
                 project_id,
                 xero_invoice_id: xero_invoice_id.to_string(),
@@ -1352,14 +1368,15 @@ async fn plan_invoice(
 /// that finds the mirror row already reconciled to those exact values skips
 /// the write rather than reissuing a no-op `UPDATE`.
 async fn plan_invoice_reconcile(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     xero_invoice_id: &str,
     status: &str,
     amount_paid_cents: i64,
 ) -> anyhow::Result<()> {
-    let existing = crate::xero_invoices::find_for_allocation(surreal, xero_invoice_id).await?;
+    let existing =
+        crate::xero_invoices::find_for_allocation(application_store, xero_invoice_id).await?;
     let already_reconciled = existing.as_ref().is_some_and(|invoice| {
         invoice.status == status && invoice.amount_paid_cents == amount_paid_cents
     });
@@ -1369,20 +1386,23 @@ async fn plan_invoice_reconcile(
         action_for(already_reconciled),
     );
     if mode.is_apply() && !already_reconciled {
-        crate::xero_invoices::record_reconcile(surreal, xero_invoice_id, status, amount_paid_cents)
-            .await?
-            .ok_or_else(|| {
-                anyhow!(
-                    "synthetic portfolio: reconcile found no mirrored invoice {xero_invoice_id}"
-                )
-            })?;
+        crate::xero_invoices::record_reconcile(
+            application_store,
+            xero_invoice_id,
+            status,
+            amount_paid_cents,
+        )
+        .await?
+        .ok_or_else(|| {
+            anyhow!("synthetic portfolio: reconcile found no mirrored invoice {xero_invoice_id}")
+        })?;
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn plan_iolta_account(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     jurisdiction_id: Uuid,
@@ -1391,7 +1411,7 @@ async fn plan_iolta_account(
     currency: &str,
     balance_cents: i64,
 ) -> anyhow::Result<()> {
-    let existing = crate::iolta_accounts::for_jurisdiction(surreal, jurisdiction_id)
+    let existing = crate::iolta_accounts::for_jurisdiction(application_store, jurisdiction_id)
         .await?
         .filter(|account| account.xero_account_id == xero_account_id);
     plan.record(
@@ -1401,7 +1421,7 @@ async fn plan_iolta_account(
     );
     if mode.is_apply() {
         crate::iolta_accounts::upsert(
-            surreal,
+            application_store,
             &crate::iolta_accounts::UpsertIoltaAccount {
                 jurisdiction_id,
                 xero_account_id: xero_account_id.to_string(),
@@ -1422,7 +1442,7 @@ async fn plan_iolta_account(
 /// `xero_transaction_id`.
 #[allow(clippy::too_many_arguments)]
 async fn plan_iolta_withdrawal(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     xero_transaction_id: &str,
@@ -1431,7 +1451,7 @@ async fn plan_iolta_withdrawal(
     occurred_at: chrono::DateTime<chrono::Utc>,
     lines: Vec<(String, i64)>,
 ) -> anyhow::Result<()> {
-    let existing = crate::iolta_withdrawals::find(surreal, xero_transaction_id).await?;
+    let existing = crate::iolta_withdrawals::find(application_store, xero_transaction_id).await?;
     plan.record(
         "iolta_withdrawal",
         xero_transaction_id,
@@ -1440,7 +1460,7 @@ async fn plan_iolta_withdrawal(
     if mode.is_apply() {
         let total_cents = lines.iter().map(|(_, amount_cents)| amount_cents).sum();
         crate::iolta_withdrawals::apply(
-            surreal,
+            application_store,
             &crate::iolta_withdrawals::WithdrawalInput {
                 xero_transaction_id: xero_transaction_id.to_string(),
                 xero_account_id: xero_account_id.to_string(),
@@ -1589,7 +1609,7 @@ const CA_TRUST_REFUND_REF: &str = "synthetic-portfolio-ca-trust-refund";
 /// pooled account, the two matters settled by one pooled Nevada withdrawal,
 /// and the California deposit/refund pair.
 async fn plan_finance_portfolio(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     entity_type_id: Uuid,
@@ -1597,21 +1617,29 @@ async fn plan_finance_portfolio(
     lawyer_id: Uuid,
     template_id: Uuid,
 ) -> anyhow::Result<()> {
-    let california_id = crate::jurisdictions::find_by_name(surreal, CALIFORNIA_JURISDICTION_NAME)
-        .await?
-        .ok_or_else(|| {
-            anyhow!(
-                "synthetic portfolio: jurisdiction `{CALIFORNIA_JURISDICTION_NAME}` must be \
+    let california_id =
+        crate::jurisdictions::find_by_name(application_store, CALIFORNIA_JURISDICTION_NAME)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "synthetic portfolio: jurisdiction `{CALIFORNIA_JURISDICTION_NAME}` must be \
                  seeded first"
-            )
-        })?
-        .id;
+                )
+            })?
+            .id;
 
-    plan_invoice_matrix(surreal, plan, mode, entity_type_id, nevada_jurisdiction_id).await?;
-    plan_eur_invoice_group(surreal, plan, mode, entity_type_id, california_id).await?;
+    plan_invoice_matrix(
+        application_store,
+        plan,
+        mode,
+        entity_type_id,
+        nevada_jurisdiction_id,
+    )
+    .await?;
+    plan_eur_invoice_group(application_store, plan, mode, entity_type_id, california_id).await?;
 
     plan_iolta_account(
-        surreal,
+        application_store,
         plan,
         mode,
         california_id,
@@ -1623,7 +1651,7 @@ async fn plan_finance_portfolio(
     .await?;
 
     plan_pooled_draw(
-        surreal,
+        application_store,
         plan,
         mode,
         entity_type_id,
@@ -1634,7 +1662,7 @@ async fn plan_finance_portfolio(
     .await?;
 
     plan_ca_trust(
-        surreal,
+        application_store,
         plan,
         mode,
         entity_type_id,
@@ -1648,14 +1676,14 @@ async fn plan_finance_portfolio(
 /// One Project carrying four USD invoices — unpaid, overdue, partially
 /// reconciled, and paid in full — across the two fixed reporting periods.
 async fn plan_invoice_matrix(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     entity_type_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> anyhow::Result<()> {
     let client_id = plan_person(
-        surreal,
+        application_store,
         plan,
         mode,
         INVOICE_MATRIX_CLIENT_NAME,
@@ -1664,7 +1692,7 @@ async fn plan_invoice_matrix(
     )
     .await?;
     let entity_id = plan_entity(
-        surreal,
+        application_store,
         plan,
         mode,
         INVOICE_MATRIX_ENTITY_NAME,
@@ -1673,7 +1701,7 @@ async fn plan_invoice_matrix(
     )
     .await?;
     let (project_id, _) = plan_project(
-        surreal,
+        application_store,
         plan,
         mode,
         INVOICE_MATRIX_PROJECT_CODE,
@@ -1684,7 +1712,7 @@ async fn plan_invoice_matrix(
     )
     .await?;
     plan_participation(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1694,21 +1722,21 @@ async fn plan_invoice_matrix(
     )
     .await?;
 
-    plan_invoice_matrix_lines(surreal, plan, mode, project_id).await
+    plan_invoice_matrix_lines(application_store, plan, mode, project_id).await
 }
 
 /// The four invoices [`plan_invoice_matrix`] plans, split out only to keep
 /// each function under this workspace's line-count lint (see
 /// [`plan_lifecycle_transitions`] for the same reasoning).
 async fn plan_invoice_matrix_lines(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
 ) -> anyhow::Result<()> {
     // Issued and due in period two: unpaid, and not yet due.
     plan_invoice(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1724,7 +1752,7 @@ async fn plan_invoice_matrix_lines(
 
     // Issued and due in period one: unpaid, and past its own due date.
     plan_invoice(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1741,7 +1769,7 @@ async fn plan_invoice_matrix_lines(
     // Issued period one, due period two: partially reconciled, spanning
     // both fixed reporting periods on its own.
     plan_invoice(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1755,7 +1783,7 @@ async fn plan_invoice_matrix_lines(
     )
     .await?;
     plan_invoice_reconcile(
-        surreal,
+        application_store,
         plan,
         mode,
         INVOICE_MATRIX_PARTIAL_ID,
@@ -1766,7 +1794,7 @@ async fn plan_invoice_matrix_lines(
 
     // Issued and due in period one: reconciled paid in full.
     plan_invoice(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1780,7 +1808,7 @@ async fn plan_invoice_matrix_lines(
     )
     .await?;
     plan_invoice_reconcile(
-        surreal,
+        application_store,
         plan,
         mode,
         INVOICE_MATRIX_PAID_ID,
@@ -1793,14 +1821,14 @@ async fn plan_invoice_matrix_lines(
 /// One Project carrying two EUR invoices, proving the currency-group split
 /// never rolls EUR into the USD invoice matrix above.
 async fn plan_eur_invoice_group(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     entity_type_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> anyhow::Result<()> {
     let client_id = plan_person(
-        surreal,
+        application_store,
         plan,
         mode,
         EUR_GROUP_CLIENT_NAME,
@@ -1809,7 +1837,7 @@ async fn plan_eur_invoice_group(
     )
     .await?;
     let entity_id = plan_entity(
-        surreal,
+        application_store,
         plan,
         mode,
         EUR_GROUP_ENTITY_NAME,
@@ -1818,7 +1846,7 @@ async fn plan_eur_invoice_group(
     )
     .await?;
     let (project_id, _) = plan_project(
-        surreal,
+        application_store,
         plan,
         mode,
         EUR_GROUP_PROJECT_CODE,
@@ -1829,7 +1857,7 @@ async fn plan_eur_invoice_group(
     )
     .await?;
     plan_participation(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1840,7 +1868,7 @@ async fn plan_eur_invoice_group(
     .await?;
 
     plan_invoice(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1854,7 +1882,7 @@ async fn plan_eur_invoice_group(
     )
     .await?;
     plan_invoice(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1868,7 +1896,7 @@ async fn plan_eur_invoice_group(
     )
     .await?;
     plan_invoice_reconcile(
-        surreal,
+        application_store,
         plan,
         mode,
         EUR_GROUP_PAID_ID,
@@ -1884,7 +1912,7 @@ async fn plan_eur_invoice_group(
 /// matter's Project id.
 #[allow(clippy::too_many_arguments)]
 async fn plan_pooled_draw_matter(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     entity_type_id: Uuid,
@@ -1903,7 +1931,7 @@ async fn plan_pooled_draw_matter(
     invoice_and_draw_cents: i64,
 ) -> anyhow::Result<Uuid> {
     let client_id = plan_person(
-        surreal,
+        application_store,
         plan,
         mode,
         client_name,
@@ -1912,7 +1940,7 @@ async fn plan_pooled_draw_matter(
     )
     .await?;
     let entity_id = plan_entity(
-        surreal,
+        application_store,
         plan,
         mode,
         entity_name,
@@ -1921,7 +1949,7 @@ async fn plan_pooled_draw_matter(
     )
     .await?;
     let (project_id, _) = plan_project(
-        surreal,
+        application_store,
         plan,
         mode,
         project_code,
@@ -1932,7 +1960,7 @@ async fn plan_pooled_draw_matter(
     )
     .await?;
     plan_participation(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1941,7 +1969,15 @@ async fn plan_pooled_draw_matter(
         "client",
     )
     .await?;
-    plan_notation(surreal, plan, mode, project_id, template_id, lawyer_id).await?;
+    plan_notation(
+        application_store,
+        plan,
+        mode,
+        project_id,
+        template_id,
+        lawyer_id,
+    )
+    .await?;
 
     let deposit = crate::trust::Movement::deposit(
         project_id,
@@ -1951,10 +1987,10 @@ async fn plan_pooled_draw_matter(
         fixed_date(PERIOD_ONE_ISSUED).to_rfc3339(),
     )
     .with_external_ref(deposit_ref.to_string());
-    plan_trust_movement(surreal, plan, mode, project_id, deposit).await?;
+    plan_trust_movement(application_store, plan, mode, project_id, deposit).await?;
 
     plan_invoice(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -1977,7 +2013,7 @@ async fn plan_pooled_draw_matter(
 /// for. Each matter's held balance is drawn down by exactly its own line,
 /// never the other's, and never past what it holds.
 async fn plan_pooled_draw(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     entity_type_id: Uuid,
@@ -1986,7 +2022,7 @@ async fn plan_pooled_draw(
     template_id: Uuid,
 ) -> anyhow::Result<()> {
     plan_pooled_draw_matter(
-        surreal,
+        application_store,
         plan,
         mode,
         entity_type_id,
@@ -2006,7 +2042,7 @@ async fn plan_pooled_draw(
     )
     .await?;
     plan_pooled_draw_matter(
-        surreal,
+        application_store,
         plan,
         mode,
         entity_type_id,
@@ -2027,7 +2063,7 @@ async fn plan_pooled_draw(
     .await?;
 
     plan_iolta_withdrawal(
-        surreal,
+        application_store,
         plan,
         mode,
         POOLED_WITHDRAWAL_TRANSACTION_ID,
@@ -2052,7 +2088,7 @@ async fn plan_pooled_draw(
 /// California pool's per-matter trust position reconciles independently of
 /// Nevada's.
 async fn plan_ca_trust(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     entity_type_id: Uuid,
@@ -2061,7 +2097,7 @@ async fn plan_ca_trust(
     template_id: Uuid,
 ) -> anyhow::Result<()> {
     let client_id = plan_person(
-        surreal,
+        application_store,
         plan,
         mode,
         CA_TRUST_CLIENT_NAME,
@@ -2070,7 +2106,7 @@ async fn plan_ca_trust(
     )
     .await?;
     let entity_id = plan_entity(
-        surreal,
+        application_store,
         plan,
         mode,
         CA_TRUST_ENTITY_NAME,
@@ -2079,7 +2115,7 @@ async fn plan_ca_trust(
     )
     .await?;
     let (project_id, _) = plan_project(
-        surreal,
+        application_store,
         plan,
         mode,
         CA_TRUST_PROJECT_CODE,
@@ -2090,7 +2126,7 @@ async fn plan_ca_trust(
     )
     .await?;
     plan_participation(
-        surreal,
+        application_store,
         plan,
         mode,
         project_id,
@@ -2099,7 +2135,15 @@ async fn plan_ca_trust(
         "client",
     )
     .await?;
-    plan_notation(surreal, plan, mode, project_id, template_id, lawyer_id).await?;
+    plan_notation(
+        application_store,
+        plan,
+        mode,
+        project_id,
+        template_id,
+        lawyer_id,
+    )
+    .await?;
 
     let deposit = crate::trust::Movement::deposit(
         project_id,
@@ -2109,7 +2153,7 @@ async fn plan_ca_trust(
         fixed_date(PERIOD_ONE_ISSUED).to_rfc3339(),
     )
     .with_external_ref(CA_TRUST_DEPOSIT_REF.to_string());
-    plan_trust_movement(surreal, plan, mode, project_id, deposit).await?;
+    plan_trust_movement(application_store, plan, mode, project_id, deposit).await?;
 
     let refund = crate::trust::Movement::refund(
         project_id,
@@ -2117,7 +2161,7 @@ async fn plan_ca_trust(
         fixed_date(PERIOD_TWO_ISSUED).to_rfc3339(),
     )
     .with_external_ref(CA_TRUST_REFUND_REF.to_string());
-    plan_trust_movement(surreal, plan, mode, project_id, refund).await
+    plan_trust_movement(application_store, plan, mode, project_id, refund).await
 }
 
 #[cfg(test)]
@@ -2155,8 +2199,11 @@ mod tests {
     /// onboarding-letter template — present after
     /// [`crate::seed::seed_canonical`], which every deployment profile runs
     /// on every boot (unlike the disposable sample-matter layer).
-    async fn canonical(surreal: &SurrealDb, storage: &Arc<dyn cloud::StorageService>) {
-        crate::seed::seed_canonical(surreal, storage)
+    async fn canonical(
+        application_store: &ApplicationStore,
+        storage: &Arc<dyn cloud::StorageService>,
+    ) {
+        crate::seed::seed_canonical(application_store, storage)
             .await
             .expect("canonical seed");
     }
@@ -2227,12 +2274,12 @@ mod tests {
     #[tokio::test]
     async fn dry_run_reports_a_full_create_plan_and_reaches_no_write() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
-            canonical(&surreal, &storage).await;
+            canonical(&application_store, &storage).await;
 
             let plan = dry_run_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -2249,22 +2296,26 @@ mod tests {
             );
             assert_eq!(plan.created(), plan.items.len());
 
-            assert!(crate::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
-                .await
-                .unwrap()
-                .is_none());
-            assert!(crate::projects::find_by_code(&surreal, PROJECT_CODE)
-                .await
-                .unwrap()
-                .is_none());
             assert!(
-                crate::xero_invoices::find_for_allocation(&surreal, XERO_INVOICE_ID)
+                crate::persons::find_by_email_ci(&application_store, LAWYER_EMAIL)
                     .await
                     .unwrap()
                     .is_none()
             );
             assert!(
-                crate::iolta_withdrawals::find(&surreal, IOLTA_XERO_TRANSACTION_ID)
+                crate::projects::find_by_code(&application_store, PROJECT_CODE)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                crate::xero_invoices::find_for_allocation(&application_store, XERO_INVOICE_ID)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                crate::iolta_withdrawals::find(&application_store, IOLTA_XERO_TRANSACTION_ID)
                     .await
                     .unwrap()
                     .is_none()
@@ -2280,7 +2331,7 @@ mod tests {
     #[tokio::test]
     async fn the_same_version_produces_the_same_plan_from_two_clean_checkouts() {
         crate::test_support::with_postgres(async {
-            let first_surreal = crate::surreal::SurrealDb::uninitialized();
+            let first_surreal = crate::application_store::ApplicationStore::uninitialized();
             let first_storage = fs_storage().await;
             canonical(&first_surreal, &first_storage).await;
             let first = dry_run_with(
@@ -2293,7 +2344,7 @@ mod tests {
             .await
             .expect("first dry run");
 
-            let second_surreal = crate::surreal::SurrealDb::uninitialized();
+            let second_surreal = crate::application_store::ApplicationStore::uninitialized();
             let second_storage = fs_storage().await;
             canonical(&second_surreal, &second_storage).await;
             let second = dry_run_with(
@@ -2315,12 +2366,12 @@ mod tests {
     #[tokio::test]
     async fn apply_is_idempotent_across_every_domain_the_fixture_touches() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
-            canonical(&surreal, &storage).await;
+            canonical(&application_store, &storage).await;
 
             let first = apply_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -2332,7 +2383,7 @@ mod tests {
             assert_eq!(first.unchanged(), 0);
 
             let second = apply_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -2355,14 +2406,14 @@ mod tests {
                 "same plan shape the second time, every item now Unchanged"
             );
 
-            let project = crate::projects::find_by_code(&surreal, PROJECT_CODE)
+            let project = crate::projects::find_by_code(&application_store, PROJECT_CODE)
                 .await
                 .unwrap()
                 .expect("project exists after apply");
             assert_eq!(
                 project.jurisdiction_id,
                 Some(
-                    crate::jurisdictions::find_by_name(&surreal, JURISDICTION_NAME)
+                    crate::jurisdictions::find_by_name(&application_store, JURISDICTION_NAME)
                         .await
                         .unwrap()
                         .unwrap()
@@ -2371,7 +2422,7 @@ mod tests {
             );
 
             assert_eq!(
-                crate::projects::participations_for_project(&surreal, project.id)
+                crate::projects::participations_for_project(&application_store, project.id)
                     .await
                     .unwrap()
                     .len(),
@@ -2379,35 +2430,35 @@ mod tests {
                 "lawyer and client, no duplicates on a repeat apply"
             );
             assert_eq!(
-                crate::assets::for_project(&surreal, project.id)
+                crate::assets::for_project(&application_store, project.id)
                     .await
                     .unwrap()
                     .len(),
                 1
             );
             assert_eq!(
-                crate::notations::list_by_project(&surreal, project.id)
+                crate::notations::list_by_project(&application_store, project.id)
                     .await
                     .unwrap()
                     .len(),
                 1
             );
             assert_eq!(
-                crate::xero_invoices::for_projects(&surreal, &[project.id])
+                crate::xero_invoices::for_projects(&application_store, &[project.id])
                     .await
                     .unwrap()
                     .len(),
                 1
             );
             assert_eq!(
-                crate::iolta_withdrawals::lines_for(&surreal, IOLTA_XERO_TRANSACTION_ID)
+                crate::iolta_withdrawals::lines_for(&application_store, IOLTA_XERO_TRANSACTION_ID)
                     .await
                     .unwrap()
                     .len(),
                 1
             );
 
-            let position = crate::trust::position_for_project(&surreal, project.id)
+            let position = crate::trust::position_for_project(&application_store, project.id)
                 .await
                 .unwrap();
             assert_eq!(
@@ -2426,14 +2477,14 @@ mod tests {
     }
 
     async fn resolve_scenario(
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         scenario: &LifecycleScenario,
     ) -> ResolvedScenario {
-        let project = crate::projects::find_by_code(surreal, scenario.project_code)
+        let project = crate::projects::find_by_code(application_store, scenario.project_code)
             .await
             .unwrap()
             .unwrap_or_else(|| panic!("{} must exist after apply", scenario.project_code));
-        let client_id = crate::persons::find_by_email_ci(surreal, scenario.client_email)
+        let client_id = crate::persons::find_by_email_ci(application_store, scenario.client_email)
             .await
             .unwrap()
             .unwrap_or_else(|| panic!("{} must exist after apply", scenario.client_email))
@@ -2444,7 +2495,10 @@ mod tests {
     /// Status and the closure fields each scenario's transitions must leave
     /// behind — the direct proof of the LAW-36 reason contract and of the
     /// reopen-clears-both-fields rule.
-    async fn assert_lifecycle_status_and_closure(surreal: &SurrealDb, s: &LifecycleScenarios) {
+    async fn assert_lifecycle_status_and_closure(
+        application_store: &ApplicationStore,
+        s: &LifecycleScenarios,
+    ) {
         assert_eq!(s.pitch.project.status, "open");
         assert_eq!(s.pitch.project.closure_reason, None);
 
@@ -2460,7 +2514,7 @@ mod tests {
             Some("pitch_declined")
         );
         let (_, has_closing) = crate::projects::matter_lifecycle_sets(
-            surreal,
+            application_store,
             std::slice::from_ref(&s.closed_pitch.project),
         )
         .await
@@ -2486,10 +2540,13 @@ mod tests {
     /// the current shipped derivation (`matter_lifecycle` only special-cases
     /// the literal `"closed"` status; archived matters still branch on
     /// `missing_onboarding`, same as an open one).
-    async fn assert_lifecycle_pill_labels(surreal: &SurrealDb, s: &LifecycleScenarios) {
+    async fn assert_lifecycle_pill_labels(
+        application_store: &ApplicationStore,
+        s: &LifecycleScenarios,
+    ) {
         for resolved in s.all_scenarios() {
             let (has_engagement, has_closing) = crate::projects::matter_lifecycle_sets(
-                surreal,
+                application_store,
                 std::slice::from_ref(&resolved.project),
             )
             .await
@@ -2524,14 +2581,14 @@ mod tests {
     /// scenario's — the participation gate the access model documents,
     /// exercised across the whole scenario set rather than one pair.
     async fn assert_clients_fail_closed_across_matters(
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         s: &LifecycleScenarios,
     ) {
         let all = s.all_projects();
         for owner in s.all_scenarios() {
             for candidate in all {
                 let viewer = crate::access::matter_viewer(
-                    surreal,
+                    application_store,
                     Some(owner.client_id),
                     crate::persons::Role::Client,
                     candidate.id,
@@ -2558,16 +2615,21 @@ mod tests {
 
     /// The supervised Clerk: sees the one matter it was added to as
     /// `MatterViewer::Clerk`, and fails closed on every other one.
-    async fn assert_supervised_clerk_fails_closed(surreal: &SurrealDb, s: &LifecycleScenarios) {
-        let clerk_id =
-            crate::persons::find_by_email_ci(surreal, "riley.doyle@synthetic-portfolio.example")
-                .await
-                .unwrap()
-                .expect("clerk exists")
-                .id;
+    async fn assert_supervised_clerk_fails_closed(
+        application_store: &ApplicationStore,
+        s: &LifecycleScenarios,
+    ) {
+        let clerk_id = crate::persons::find_by_email_ci(
+            application_store,
+            "riley.doyle@synthetic-portfolio.example",
+        )
+        .await
+        .unwrap()
+        .expect("clerk exists")
+        .id;
         for candidate in s.all_projects() {
             let viewer = crate::access::matter_viewer(
-                surreal,
+                application_store,
                 Some(clerk_id),
                 crate::persons::Role::Clerk,
                 candidate.id,
@@ -2593,23 +2655,30 @@ mod tests {
     /// answers `None` on every one of these matters — the same ENG-81
     /// participation-only shape the detail dispatcher renders instead of the
     /// row this predicate alone would otherwise deny.
-    async fn assert_unassigned_admin_resolves_nowhere(surreal: &SurrealDb, s: &LifecycleScenarios) {
-        let admin_id = crate::persons::find_by_email_ci(surreal, ADMIN_EMAIL)
+    async fn assert_unassigned_admin_resolves_nowhere(
+        application_store: &ApplicationStore,
+        s: &LifecycleScenarios,
+    ) {
+        let admin_id = crate::persons::find_by_email_ci(application_store, ADMIN_EMAIL)
             .await
             .unwrap()
             .expect("admin exists")
             .id;
         for candidate in s.all_projects() {
             assert_eq!(
-                crate::projects::participation_for_person(surreal, admin_id, candidate.id)
-                    .await
-                    .unwrap(),
+                crate::projects::participation_for_person(
+                    application_store,
+                    admin_id,
+                    candidate.id
+                )
+                .await
+                .unwrap(),
                 None,
                 "the unassigned Admin must hold no participation row on {}",
                 candidate.code
             );
             let viewer = crate::access::matter_viewer(
-                surreal,
+                application_store,
                 Some(admin_id),
                 crate::persons::Role::Admin,
                 candidate.id,
@@ -2663,12 +2732,12 @@ mod tests {
     #[tokio::test]
     async fn apply_produces_every_lifecycle_and_participation_scenario() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
-            canonical(&surreal, &storage).await;
+            canonical(&application_store, &storage).await;
 
             apply_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -2678,18 +2747,18 @@ mod tests {
             .expect("apply");
 
             let scenarios = LifecycleScenarios {
-                pitch: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[0]).await,
-                closed_active: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[1]).await,
-                closed_pitch: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[2]).await,
-                archived: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[3]).await,
-                reopened: resolve_scenario(&surreal, &LIFECYCLE_SCENARIOS[4]).await,
+                pitch: resolve_scenario(&application_store, &LIFECYCLE_SCENARIOS[0]).await,
+                closed_active: resolve_scenario(&application_store, &LIFECYCLE_SCENARIOS[1]).await,
+                closed_pitch: resolve_scenario(&application_store, &LIFECYCLE_SCENARIOS[2]).await,
+                archived: resolve_scenario(&application_store, &LIFECYCLE_SCENARIOS[3]).await,
+                reopened: resolve_scenario(&application_store, &LIFECYCLE_SCENARIOS[4]).await,
             };
 
-            assert_lifecycle_status_and_closure(&surreal, &scenarios).await;
-            assert_lifecycle_pill_labels(&surreal, &scenarios).await;
-            assert_clients_fail_closed_across_matters(&surreal, &scenarios).await;
-            assert_supervised_clerk_fails_closed(&surreal, &scenarios).await;
-            assert_unassigned_admin_resolves_nowhere(&surreal, &scenarios).await;
+            assert_lifecycle_status_and_closure(&application_store, &scenarios).await;
+            assert_lifecycle_pill_labels(&application_store, &scenarios).await;
+            assert_clients_fail_closed_across_matters(&application_store, &scenarios).await;
+            assert_supervised_clerk_fails_closed(&application_store, &scenarios).await;
+            assert_unassigned_admin_resolves_nowhere(&application_store, &scenarios).await;
         })
         .await;
     }
@@ -2702,11 +2771,11 @@ mod tests {
     #[tokio::test]
     async fn a_production_profile_boot_does_not_auto_apply_the_synthetic_portfolio() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
 
             crate::seed::seed_environment_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 crate::seed::BrandSeed::Neon,
@@ -2714,7 +2783,7 @@ mod tests {
             .await
             .expect("ordinary boot seed");
             assert!(
-                crate::projects::find_by_code(&surreal, PROJECT_CODE)
+                crate::projects::find_by_code(&application_store, PROJECT_CODE)
                     .await
                     .unwrap()
                     .is_none(),
@@ -2722,7 +2791,7 @@ mod tests {
             );
 
             let plan = apply_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -2731,10 +2800,12 @@ mod tests {
             .await
             .expect("explicit apply");
             assert!(plan.created() > 0);
-            assert!(crate::projects::find_by_code(&surreal, PROJECT_CODE)
-                .await
-                .unwrap()
-                .is_some());
+            assert!(
+                crate::projects::find_by_code(&application_store, PROJECT_CODE)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
         })
         .await;
     }
@@ -2744,9 +2815,9 @@ mod tests {
     #[tokio::test]
     async fn apply_refuses_every_unsafe_target_before_any_write() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
-            canonical(&surreal, &storage).await;
+            canonical(&application_store, &storage).await;
 
             let cases: [RefusalCase; 4] = [
                 (None, Production, undisclosed),
@@ -2756,7 +2827,7 @@ mod tests {
             ];
             for (target, environment, get) in cases {
                 assert!(
-                    apply_with(&surreal, &storage, environment, target, get)
+                    apply_with(&application_store, &storage, environment, target, get)
                         .await
                         .is_err(),
                     "{target:?} under {environment:?} must be refused"
@@ -2764,16 +2835,18 @@ mod tests {
             }
 
             assert!(
-                crate::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
+                crate::persons::find_by_email_ci(&application_store, LAWYER_EMAIL)
                     .await
                     .unwrap()
                     .is_none(),
                 "no refused attempt may reach a write"
             );
-            assert!(crate::projects::find_by_code(&surreal, PROJECT_CODE)
-                .await
-                .unwrap()
-                .is_none());
+            assert!(
+                crate::projects::find_by_code(&application_store, PROJECT_CODE)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
         })
         .await;
     }
@@ -2782,13 +2855,14 @@ mod tests {
     /// up with: four billing states across two fixed reporting periods, and
     /// currency totals kept apart when both Projects are read together.
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One fixture verifies the complete set of persisted records.
     async fn apply_produces_the_invoice_status_and_currency_matrix() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
-            canonical(&surreal, &storage).await;
+            canonical(&application_store, &storage).await;
             apply_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -2798,13 +2872,14 @@ mod tests {
             .expect("apply");
 
             let matrix_project =
-                crate::projects::find_by_code(&surreal, INVOICE_MATRIX_PROJECT_CODE)
+                crate::projects::find_by_code(&application_store, INVOICE_MATRIX_PROJECT_CODE)
                     .await
                     .unwrap()
                     .expect("invoice matrix project exists");
-            let invoices = crate::xero_invoices::for_projects(&surreal, &[matrix_project.id])
-                .await
-                .unwrap();
+            let invoices =
+                crate::xero_invoices::for_projects(&application_store, &[matrix_project.id])
+                    .await
+                    .unwrap();
             assert_eq!(invoices.len(), 4, "unpaid, overdue, partial, and paid");
             assert!(
                 invoices.iter().all(|invoice| invoice.currency == "USD"),
@@ -2856,22 +2931,26 @@ mod tests {
             assert_eq!(paid.amount_paid_cents, paid.amount_cents);
             assert_eq!(paid.currency, "USD");
 
-            let eur_project = crate::projects::find_by_code(&surreal, EUR_GROUP_PROJECT_CODE)
-                .await
-                .unwrap()
-                .expect("eur group project exists");
-            let eur_invoices = crate::xero_invoices::for_projects(&surreal, &[eur_project.id])
-                .await
-                .unwrap();
+            let eur_project =
+                crate::projects::find_by_code(&application_store, EUR_GROUP_PROJECT_CODE)
+                    .await
+                    .unwrap()
+                    .expect("eur group project exists");
+            let eur_invoices =
+                crate::xero_invoices::for_projects(&application_store, &[eur_project.id])
+                    .await
+                    .unwrap();
             assert_eq!(eur_invoices.len(), 2);
             assert!(eur_invoices.iter().all(|invoice| invoice.currency == "EUR"));
 
             // Reading both Projects together must never mix the two currencies
             // into one total.
-            let combined =
-                crate::xero_invoices::for_projects(&surreal, &[matrix_project.id, eur_project.id])
-                    .await
-                    .unwrap();
+            let combined = crate::xero_invoices::for_projects(
+                &application_store,
+                &[matrix_project.id, eur_project.id],
+            )
+            .await
+            .unwrap();
             assert_eq!(combined.len(), 6);
             let usd_total: i64 = combined
                 .iter()
@@ -2907,11 +2986,11 @@ mod tests {
     #[tokio::test]
     async fn apply_produces_one_pooled_withdrawal_across_two_matters_with_protected_balances() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
-            canonical(&surreal, &storage).await;
+            canonical(&application_store, &storage).await;
             apply_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -2920,16 +2999,16 @@ mod tests {
             .await
             .expect("apply");
 
-            let a = crate::projects::find_by_code(&surreal, POOL_CLIENT_A_PROJECT_CODE)
+            let a = crate::projects::find_by_code(&application_store, POOL_CLIENT_A_PROJECT_CODE)
                 .await
                 .unwrap()
                 .expect("pool matter A exists");
-            let b = crate::projects::find_by_code(&surreal, POOL_CLIENT_B_PROJECT_CODE)
+            let b = crate::projects::find_by_code(&application_store, POOL_CLIENT_B_PROJECT_CODE)
                 .await
                 .unwrap()
                 .expect("pool matter B exists");
 
-            let position_a = crate::trust::position_for_project(&surreal, a.id)
+            let position_a = crate::trust::position_for_project(&application_store, a.id)
                 .await
                 .unwrap();
             assert_eq!(position_a.deposited_cents, POOL_CLIENT_A_DEPOSIT_CENTS);
@@ -2940,7 +3019,7 @@ mod tests {
                 "matter A's held balance is drawn down by exactly its own line"
             );
 
-            let position_b = crate::trust::position_for_project(&surreal, b.id)
+            let position_b = crate::trust::position_for_project(&application_store, b.id)
                 .await
                 .unwrap();
             assert_eq!(position_b.deposited_cents, POOL_CLIENT_B_DEPOSIT_CENTS);
@@ -2951,11 +3030,13 @@ mod tests {
                 "matter B's held balance is drawn down by exactly its own line"
             );
 
-            let withdrawal =
-                crate::iolta_withdrawals::find(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
-                    .await
-                    .unwrap()
-                    .expect("pooled withdrawal is mirrored");
+            let withdrawal = crate::iolta_withdrawals::find(
+                &application_store,
+                POOLED_WITHDRAWAL_TRANSACTION_ID,
+            )
+            .await
+            .unwrap()
+            .expect("pooled withdrawal is mirrored");
             assert_eq!(
                 withdrawal.total_cents,
                 POOL_CLIENT_A_DRAW_CENTS + POOL_CLIENT_B_DRAW_CENTS,
@@ -2964,13 +3045,13 @@ mod tests {
 
             // Client isolation: each matter's own read carries exactly one line,
             // for its own amount, never the other's.
-            let a_lines = crate::iolta_withdrawals::for_project(&surreal, a.id)
+            let a_lines = crate::iolta_withdrawals::for_project(&application_store, a.id)
                 .await
                 .unwrap();
             assert_eq!(a_lines.len(), 1);
             assert_eq!(a_lines[0].amount_cents, POOL_CLIENT_A_DRAW_CENTS);
 
-            let b_lines = crate::iolta_withdrawals::for_project(&surreal, b.id)
+            let b_lines = crate::iolta_withdrawals::for_project(&application_store, b.id)
                 .await
                 .unwrap();
             assert_eq!(b_lines.len(), 1);
@@ -2978,10 +3059,13 @@ mod tests {
 
             // The firm-side read alone sees the whole two-line split.
             assert_eq!(
-                crate::iolta_withdrawals::lines_for(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
-                    .await
-                    .unwrap()
-                    .len(),
+                crate::iolta_withdrawals::lines_for(
+                    &application_store,
+                    POOLED_WITHDRAWAL_TRANSACTION_ID
+                )
+                .await
+                .unwrap()
+                .len(),
                 2
             );
         })
@@ -2995,11 +3079,11 @@ mod tests {
     #[tokio::test]
     async fn california_pool_is_independent_of_nevada_and_rejects_a_second_account() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
-            canonical(&surreal, &storage).await;
+            canonical(&application_store, &storage).await;
             apply_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -3008,26 +3092,29 @@ mod tests {
             .await
             .expect("apply");
 
-            let nevada = crate::jurisdictions::find_by_name(&surreal, JURISDICTION_NAME)
+            let nevada = crate::jurisdictions::find_by_name(&application_store, JURISDICTION_NAME)
                 .await
                 .unwrap()
                 .expect("nevada seeded");
-            let california =
-                crate::jurisdictions::find_by_name(&surreal, CALIFORNIA_JURISDICTION_NAME)
-                    .await
-                    .unwrap()
-                    .expect("california seeded");
+            let california = crate::jurisdictions::find_by_name(
+                &application_store,
+                CALIFORNIA_JURISDICTION_NAME,
+            )
+            .await
+            .unwrap()
+            .expect("california seeded");
 
-            let nv_account = crate::iolta_accounts::for_jurisdiction(&surreal, nevada.id)
+            let nv_account = crate::iolta_accounts::for_jurisdiction(&application_store, nevada.id)
                 .await
                 .unwrap()
                 .expect("nevada pool exists");
             assert_eq!(nv_account.xero_account_id, IOLTA_XERO_ACCOUNT_ID);
 
-            let ca_account = crate::iolta_accounts::for_jurisdiction(&surreal, california.id)
-                .await
-                .unwrap()
-                .expect("california pool exists");
+            let ca_account =
+                crate::iolta_accounts::for_jurisdiction(&application_store, california.id)
+                    .await
+                    .unwrap()
+                    .expect("california pool exists");
             assert_eq!(ca_account.xero_account_id, IOLTA_CA_XERO_ACCOUNT_ID);
             assert_ne!(
                 nv_account.xero_account_id, ca_account.xero_account_id,
@@ -3035,7 +3122,7 @@ mod tests {
             );
 
             let refused = crate::iolta_accounts::upsert(
-                &surreal,
+                &application_store,
                 &crate::iolta_accounts::UpsertIoltaAccount {
                     jurisdiction_id: california.id,
                     xero_account_id: "synthetic-portfolio-iolta-account-ca-second".to_string(),
@@ -3055,13 +3142,15 @@ mod tests {
                 "a second account for a state that already mirrors one must be refused"
             );
 
-            let ca_trust_project = crate::projects::find_by_code(&surreal, CA_TRUST_PROJECT_CODE)
-                .await
-                .unwrap()
-                .expect("california trust project exists");
-            let position = crate::trust::position_for_project(&surreal, ca_trust_project.id)
-                .await
-                .unwrap();
+            let ca_trust_project =
+                crate::projects::find_by_code(&application_store, CA_TRUST_PROJECT_CODE)
+                    .await
+                    .unwrap()
+                    .expect("california trust project exists");
+            let position =
+                crate::trust::position_for_project(&application_store, ca_trust_project.id)
+                    .await
+                    .unwrap();
             assert_eq!(position.deposited_cents, CA_TRUST_DEPOSIT_CENTS);
             assert_eq!(position.refunded_cents, CA_TRUST_REFUND_CENTS);
             assert_eq!(
@@ -3079,12 +3168,12 @@ mod tests {
     #[tokio::test]
     async fn apply_is_idempotent_for_the_finance_and_trust_scenarios() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
-            canonical(&surreal, &storage).await;
+            canonical(&application_store, &storage).await;
 
             let first = apply_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -3095,28 +3184,31 @@ mod tests {
             assert!(first.created() > 0);
 
             let matrix_project =
-                crate::projects::find_by_code(&surreal, INVOICE_MATRIX_PROJECT_CODE)
+                crate::projects::find_by_code(&application_store, INVOICE_MATRIX_PROJECT_CODE)
                     .await
                     .unwrap()
                     .expect("invoice matrix project exists");
-            let pool_a = crate::projects::find_by_code(&surreal, POOL_CLIENT_A_PROJECT_CODE)
-                .await
-                .unwrap()
-                .expect("pool matter A exists");
+            let pool_a =
+                crate::projects::find_by_code(&application_store, POOL_CLIENT_A_PROJECT_CODE)
+                    .await
+                    .unwrap()
+                    .expect("pool matter A exists");
             let before_invoices =
-                crate::xero_invoices::for_projects(&surreal, &[matrix_project.id])
+                crate::xero_invoices::for_projects(&application_store, &[matrix_project.id])
                     .await
                     .unwrap();
-            let before_position = crate::trust::position_for_project(&surreal, pool_a.id)
+            let before_position = crate::trust::position_for_project(&application_store, pool_a.id)
                 .await
                 .unwrap();
-            let before_lines =
-                crate::iolta_withdrawals::lines_for(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
-                    .await
-                    .unwrap();
+            let before_lines = crate::iolta_withdrawals::lines_for(
+                &application_store,
+                POOLED_WITHDRAWAL_TRANSACTION_ID,
+            )
+            .await
+            .unwrap();
 
             let second = apply_with(
-                &surreal,
+                &application_store,
                 &storage,
                 Production,
                 Some(STAGING_TARGET),
@@ -3131,20 +3223,23 @@ mod tests {
              nothing new"
             );
 
-            let after_invoices = crate::xero_invoices::for_projects(&surreal, &[matrix_project.id])
-                .await
-                .unwrap();
+            let after_invoices =
+                crate::xero_invoices::for_projects(&application_store, &[matrix_project.id])
+                    .await
+                    .unwrap();
             assert_eq!(before_invoices, after_invoices);
 
-            let after_position = crate::trust::position_for_project(&surreal, pool_a.id)
+            let after_position = crate::trust::position_for_project(&application_store, pool_a.id)
                 .await
                 .unwrap();
             assert_eq!(before_position, after_position);
 
-            let after_lines =
-                crate::iolta_withdrawals::lines_for(&surreal, POOLED_WITHDRAWAL_TRANSACTION_ID)
-                    .await
-                    .unwrap();
+            let after_lines = crate::iolta_withdrawals::lines_for(
+                &application_store,
+                POOLED_WITHDRAWAL_TRANSACTION_ID,
+            )
+            .await
+            .unwrap();
             assert_eq!(before_lines.len(), after_lines.len());
             assert_eq!(before_lines, after_lines);
         })
@@ -3199,12 +3294,12 @@ mod tests {
     /// `cargo build`/`cargo check`/`cargo test`, is the guard.
     #[allow(dead_code)]
     fn _no_provider_client_seam_exists(
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         storage: &Arc<dyn cloud::StorageService>,
         environment: crate::DeploymentEnvironment,
         target: Option<&str>,
     ) {
-        drop(apply(surreal, storage, environment, target));
-        drop(dry_run(surreal, storage, environment, target));
+        drop(apply(application_store, storage, environment, target));
+        drop(dry_run(application_store, storage, environment, target));
     }
 }

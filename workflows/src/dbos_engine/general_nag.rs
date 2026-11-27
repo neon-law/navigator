@@ -63,7 +63,10 @@ pub struct Context {
     pub counts: Arc<dyn CountSource>,
 }
 
-struct SurrealCounts(store::surreal::SurrealDb, DeploymentSlackFirm);
+struct SurrealCounts(
+    store::application_store::ApplicationStore,
+    DeploymentSlackFirm,
+);
 
 #[async_trait::async_trait]
 impl CountSource for SurrealCounts {
@@ -75,7 +78,7 @@ impl CountSource for SurrealCounts {
 }
 
 struct ApplicationCounts {
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     postgres: store::postgres::PostgresDb,
 }
 
@@ -84,7 +87,10 @@ impl CountSource for ApplicationCounts {
     async fn read(&self) -> Result<Vec<BrandOpenPitch>, GeneralNagError> {
         store::postgres::PostgresDb::with_application_db(
             self.postgres.clone(),
-            slack_firm_open_pitch_counts(&self.surreal, DeploymentSlackFirm::DefaultBrand),
+            slack_firm_open_pitch_counts(
+                &self.application_store,
+                DeploymentSlackFirm::DefaultBrand,
+            ),
         )
         .await
         .map_err(|_| GeneralNagError::Counts)?
@@ -95,7 +101,7 @@ impl CountSource for ApplicationCounts {
 impl Context {
     /// Inject delivery and an owned store whose admission is checked on each read.
     pub fn with_store(
-        surreal: store::surreal::SurrealDb,
+        application_store: store::application_store::ApplicationStore,
         postgres: store::postgres::PostgresDb,
         slack: Arc<dyn SlackBot>,
         channel_id: String,
@@ -105,7 +111,10 @@ impl Context {
             slack,
             channel_id,
             simulated,
-            counts: Arc::new(ApplicationCounts { surreal, postgres }),
+            counts: Arc::new(ApplicationCounts {
+                application_store,
+                postgres,
+            }),
         }
     }
 
@@ -113,7 +122,7 @@ impl Context {
     /// enabled schedule requires, counting the matters of every Brand the
     /// deployment's Slack Firm owns.
     pub fn from_lookup<F>(
-        surreal: store::surreal::SurrealDb,
+        application_store: store::application_store::ApplicationStore,
         slack: Arc<dyn SlackBot>,
         simulated: bool,
         lookup: F,
@@ -128,7 +137,7 @@ impl Context {
             slack,
             channel_id,
             simulated,
-            counts: Arc::new(SurrealCounts(surreal, firm)),
+            counts: Arc::new(SurrealCounts(application_store, firm)),
         })
     }
 }
@@ -333,7 +342,7 @@ mod tests {
     fn enabled_schedule_requires_its_general_channel() {
         let context = |channel: Option<&'static str>| {
             super::Context::from_lookup(
-                store::surreal::test_support::unreachable(),
+                store::test_support::uninitialized_store(),
                 Arc::new(crate::CapturingSlackBot::new()),
                 true,
                 move |key| (key == "SLACK_GENERAL_CHANNEL_ID").then_some(channel?.to_owned()),

@@ -16,23 +16,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::access::can_see_project;
-use crate::communications::{self, IngestArgs};
+use crate::application_store::ApplicationStore;
+use crate::communications::{self};
 use crate::external_identities;
 use crate::persons::{self, Role};
-use crate::postgres_mirror::{after_write, MirrorKey};
 use crate::projects::{self, ProjectStoreError};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
-
-const CONVERSATION: &str = "inbox_conversation";
-const MESSAGE: &str = "message";
-const MESSAGE_ASSET: &str = "inbox_message_asset";
-const INGRESS: &str = "inbox_ingress";
-const ASSIGNMENT: &str = "inbox_assignment";
-const ATTEMPT: &str = "inbox_delivery_attempt";
 
 pub mod channel {
     pub const EMAIL: &str = "email";
@@ -821,12 +812,6 @@ pub enum InboxError {
     InvalidRoute(String),
 }
 
-impl From<surrealdb::Error> for InboxError {
-    fn from(error: surrealdb::Error) -> Self {
-        Self::Db(error.to_string())
-    }
-}
-
 impl From<persons::PersonError> for InboxError {
     fn from(error: persons::PersonError) -> Self {
         Self::Db(error.to_string())
@@ -853,164 +838,10 @@ impl From<ProjectStoreError> for InboxError {
 
 /// The postgres pool when the deployment has cut the Inbox slice over.
 /// Configuration errors fail closed rather than silently keeping Surreal.
-pub(crate) async fn inbox_authority() -> Result<Option<crate::postgres::PostgresDb>, InboxError> {
+pub(crate) async fn inbox_authority() -> Result<crate::postgres::PostgresDb, InboxError> {
     crate::postgres::inbox::authority()
         .await
         .map_err(|error| InboxError::Db(error.to_string()))
-}
-
-#[derive(SurrealValue)]
-#[allow(clippy::struct_excessive_bools)] // Mirrors Conversation's independent flags.
-struct ConversationRow {
-    id: surrealdb::types::RecordId,
-    firm_id: surrealdb::types::RecordId,
-    brand_key: Option<String>,
-    interaction_type: String,
-    provider_post_id: Option<String>,
-    project_id: Option<surrealdb::types::RecordId>,
-    channel: String,
-    external_address: String,
-    external_name: Option<String>,
-    subject: Option<String>,
-    unread: bool,
-    provider_account: String,
-    provider_thread_ref: Option<String>,
-    source_page: Option<String>,
-    source_channel: Option<String>,
-    matter_consent: bool,
-    promotional_opt_in: bool,
-    promotional_opt_out: bool,
-    email_conversation_id: Option<surrealdb::types::RecordId>,
-    person_id: Option<surrealdb::types::RecordId>,
-    trashed_at: Option<surrealdb::types::Datetime>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-#[derive(SurrealValue)]
-struct MessageRow {
-    id: surrealdb::types::RecordId,
-    conversation_id: surrealdb::types::RecordId,
-    parent_message_id: Option<surrealdb::types::RecordId>,
-    visibility: Option<String>,
-    direction: String,
-    body: String,
-    author_person_id: Option<surrealdb::types::RecordId>,
-    provider_message_id: Option<String>,
-    provider_ref: Option<String>,
-    delivery_state: String,
-    purpose: String,
-    attachment_asset_id: Option<surrealdb::types::RecordId>,
-    raw_storage_key: Option<String>,
-    communication_id: Option<surrealdb::types::RecordId>,
-    occurred_at: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-#[derive(SurrealValue)]
-struct AssignmentRow {
-    id: surrealdb::types::RecordId,
-    conversation_id: surrealdb::types::RecordId,
-    firm_id: surrealdb::types::RecordId,
-    from_project_id: Option<surrealdb::types::RecordId>,
-    to_project_id: surrealdb::types::RecordId,
-    actor_person_id: surrealdb::types::RecordId,
-    inserted_at: surrealdb::types::Datetime,
-}
-
-#[derive(SurrealValue)]
-struct IngressRow {
-    message_id: surrealdb::types::RecordId,
-}
-
-#[derive(SurrealValue)]
-struct ProjectPick {
-    id: surrealdb::types::RecordId,
-    code: String,
-    name: String,
-    description: Option<String>,
-}
-
-const CONVERSATION_SELECT: &str = "id, firm_id, brand_key, interaction_type, provider_post_id, project_id, channel, external_address, \
-    external_name, subject, unread, provider_account, provider_thread_ref, source_page, \
-    source_channel, matter_consent, promotional_opt_in, promotional_opt_out, \
-    email_conversation_id, person_id, trashed_at, inserted_at, updated_at";
-
-const MESSAGE_SELECT: &str =
-    "id, conversation_id, parent_message_id, visibility, direction, body, author_person_id, \
-    provider_message_id, provider_ref, delivery_state, purpose, attachment_asset_id, \
-    raw_storage_key, communication_id, occurred_at, inserted_at, updated_at";
-
-const ASSIGNMENT_SELECT: &str = "id, conversation_id, firm_id, from_project_id, to_project_id, \
-    actor_person_id, inserted_at";
-
-impl ConversationRow {
-    fn into_conversation(self) -> Option<Conversation> {
-        Some(Conversation {
-            id: record_uuid(&self.id)?,
-            firm_id: record_uuid(&self.firm_id)?,
-            brand_key: self.brand_key,
-            interaction_type: self.interaction_type,
-            provider_post_id: self.provider_post_id,
-            project_id: self.project_id.as_ref().and_then(record_uuid),
-            channel: self.channel,
-            external_address: self.external_address,
-            external_name: self.external_name,
-            subject: self.subject,
-            unread: self.unread,
-            provider_account: self.provider_account,
-            provider_thread_ref: self.provider_thread_ref,
-            source_page: self.source_page,
-            source_channel: self.source_channel,
-            matter_consent: self.matter_consent,
-            promotional_opt_in: self.promotional_opt_in,
-            promotional_opt_out: self.promotional_opt_out,
-            email_conversation_id: self.email_conversation_id.as_ref().and_then(record_uuid),
-            person_id: self.person_id.as_ref().and_then(record_uuid),
-            trashed_at: self.trashed_at.map(Into::into),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-impl MessageRow {
-    fn into_message(self) -> Option<Message> {
-        Some(Message {
-            id: record_uuid(&self.id)?,
-            conversation_id: record_uuid(&self.conversation_id)?,
-            parent_message_id: self.parent_message_id.as_ref().and_then(record_uuid),
-            visibility: self.visibility,
-            direction: self.direction,
-            body: self.body,
-            author_person_id: self.author_person_id.as_ref().and_then(record_uuid),
-            provider_message_id: self.provider_message_id,
-            provider_ref: self.provider_ref,
-            delivery_state: self.delivery_state,
-            purpose: self.purpose,
-            attachment_asset_id: self.attachment_asset_id.as_ref().and_then(record_uuid),
-            raw_storage_key: self.raw_storage_key,
-            communication_id: self.communication_id.as_ref().and_then(record_uuid),
-            occurred_at: self.occurred_at,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-impl AssignmentRow {
-    fn into_assignment(self) -> Option<Assignment> {
-        Some(Assignment {
-            id: record_uuid(&self.id)?,
-            conversation_id: record_uuid(&self.conversation_id)?,
-            firm_id: record_uuid(&self.firm_id)?,
-            from_project_id: self.from_project_id.as_ref().and_then(record_uuid),
-            to_project_id: record_uuid(&self.to_project_id)?,
-            actor_person_id: record_uuid(&self.actor_person_id)?,
-            inserted_at: self.inserted_at.into(),
-        })
-    }
 }
 
 pub(crate) fn allows_external_reply(conversation: &Conversation) -> bool {
@@ -1047,7 +878,7 @@ pub fn next_action(
 /// Ingest clean provider attachment bytes after the receiving Firm is resolved.
 /// A bare Asset UUID or supplied hash cannot mint Firm staging authority.
 pub async fn ingest_attachment(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     firm_id: Uuid,
     project_id: Option<Uuid>,
@@ -1057,7 +888,7 @@ pub async fn ingest_attachment(
 ) -> Result<IngestAttachment, InboxError> {
     let pg = inbox_authority().await?;
     ingest_attachment_on(
-        pg.as_ref(),
+        Some(&pg),
         db,
         storage,
         firm_id,
@@ -1072,7 +903,7 @@ pub async fn ingest_attachment(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn ingest_attachment_on(
     pg: Option<&crate::postgres::PostgresDb>,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     firm_id: Uuid,
     project_id: Option<Uuid>,
@@ -1112,13 +943,6 @@ pub(crate) async fn ingest_attachment_on(
             .map_err(|error| InboxError::Db(error.to_string()))?
     };
     if let Some(pg) = pg {
-        // Required projections and receipt must succeed before native Message admission.
-        crate::postgres_mirror::mirror(db, pg, &MirrorKey::Firm(firm_id))
-            .await
-            .map_err(|error| InboxError::Db(error.to_string()))?;
-        crate::postgres_mirror::mirror(db, pg, &MirrorKey::Asset(asset_id))
-            .await
-            .map_err(|error| InboxError::Db(error.to_string()))?;
         if project_id.is_none() {
             crate::postgres::inbox::record_attachment_receipt_on(pg, firm_id, asset_id, &sha256)
                 .await?;
@@ -1131,23 +955,6 @@ pub(crate) async fn ingest_attachment_on(
     })
 }
 
-/// Rebuild the deduped result for an already-ingested provider id: the
-/// caller receives the original conversation/message pair, marked `deduped`.
-async fn replay_existing_message(
-    db: &SurrealDb,
-    message_id: Uuid,
-) -> Result<IngestedInbound, InboxError> {
-    let Some(message) = message_by_id(db, message_id).await? else {
-        return Err(InboxError::NotFound);
-    };
-    Ok(IngestedInbound {
-        conversation_id: message.conversation_id,
-        message_id: message.id,
-        deduped: true,
-        person_linked: false,
-    })
-}
-
 /// Ingest one provider delivery. A repeated webhook with the same Firm,
 /// channel, account, and provider message id returns the original row.
 ///
@@ -1155,7 +962,7 @@ async fn replay_existing_message(
 ///
 /// Propagates any database error.
 pub async fn ingest_inbound(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
     Box::pin(ingest_inbound_in(db, inbound, None)).await
@@ -1181,7 +988,7 @@ pub async fn ingest_inbound(
 ///
 /// Propagates any database error.
 pub async fn ingest_inbound_threaded(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     inbound: &IngestInbound<'_>,
     references: &[String],
 ) -> Result<IngestedInbound, InboxError> {
@@ -1191,26 +998,15 @@ pub async fn ingest_inbound_threaded(
 /// `thread` is `None` for the per-sender threading of [`ingest_inbound`]
 /// and the reference chain for [`ingest_inbound_threaded`].
 async fn ingest_inbound_in(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     inbound: &IngestInbound<'_>,
     thread: Option<&[String]>,
 ) -> Result<IngestedInbound, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        for attachment in &inbound.attachments {
-            Box::pin(crate::postgres_mirror::mirror(
-                db,
-                &pg,
-                &MirrorKey::Asset(attachment.asset_id),
-            ))
-            .await
-            .map_err(|error| InboxError::Db(error.to_string()))?;
-        }
-        return Box::pin(crate::postgres::inbox::ingest_threaded_on(
-            &pg, db, inbound, thread,
-        ))
-        .await;
-    }
-    Box::pin(ingest_inbound_surreal(db, inbound, thread)).await
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::ingest_threaded_on(
+        &pg, db, inbound, thread,
+    ))
+    .await
 }
 
 /// The Conversation the nearest referenced Message lives in: `references`
@@ -1246,9 +1042,7 @@ pub async fn ingest_imported(
     author_person_id: Option<Uuid>,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
-    let Some(pg) = inbox_authority().await? else {
-        return Err(InboxError::PostgresAuthorityRequired);
-    };
+    let pg = inbox_authority().await?;
     crate::postgres::inbox::ingest_message_on(&pg, direction_value, author_person_id, None, inbound)
         .await
 }
@@ -1264,9 +1058,7 @@ pub async fn ingest_imported(
 /// [`InboxError::PostgresAuthorityRequired`] when the deployment has not cut
 /// the Inbox slice over to postgres.
 pub async fn set_attachment_asset(message_id: Uuid, asset_id: Uuid) -> Result<(), InboxError> {
-    let Some(pg) = inbox_authority().await? else {
-        return Err(InboxError::PostgresAuthorityRequired);
-    };
+    let pg = inbox_authority().await?;
     crate::postgres::inbox::set_attachment_asset_on(&pg, message_id, asset_id).await
 }
 
@@ -1297,46 +1089,6 @@ pub(crate) fn sender_display_name<'a>(display: Option<&'a str>, address: &'a str
         .unwrap_or_else(|| address.trim())
 }
 
-/// The inbound email sender's Person on the legacy Surreal lane: primary
-/// or `person_mailbox` alias match (`find_by_any_email`) — never an
-/// address-book claim, and never a lawyer- or clerk-tier sender. Only the
-/// exact, case-insensitive address resolves; near matches do not. A sender
-/// no Person claims becomes a new client-tier Person: the CRM grows from
-/// correspondence, and a duplicate collapses later through `person_merge`.
-async fn inbound_counterparty(
-    db: &SurrealDb,
-    inbound: &IngestInbound<'_>,
-) -> Result<Option<Uuid>, InboxError> {
-    resolve_or_create_sender(db, inbound.external_address, inbound.external_name).await
-}
-
-/// The shared resolve-or-create behind ingest and the backfill: primary or
-/// `person_mailbox` alias match (`find_by_any_email`) — never an
-/// address-book claim, and never a lawyer- or clerk-tier sender. Only the
-/// exact, case-insensitive address resolves; near matches do not. A sender
-/// no Person claims becomes a new client-tier Person: the CRM grows from
-/// correspondence, and a duplicate collapses later through `person_merge`.
-pub(crate) async fn resolve_or_create_sender(
-    db: &SurrealDb,
-    external_address: &str,
-    display_name: Option<&str>,
-) -> Result<Option<Uuid>, InboxError> {
-    let address = external_address.trim();
-    let resolved = persons::find_by_any_email(db, address).await?;
-    if let Some(person) = resolved {
-        // A known lawyer- or clerk-tier sender is outgoing mail: decision
-        // None, and certainly no second Person for the same address.
-        return Ok(counterparty_decision(&person));
-    }
-    let created = persons::create(
-        db,
-        &persons::NewPerson::new(sender_display_name(display_name, address), address),
-    )
-    .await
-    .map_err(|error| InboxError::Db(error.to_string()))?;
-    Ok(Some(created.id))
-}
-
 pub(crate) fn association_log(
     conversation_id: Uuid,
     person_id: Uuid,
@@ -1358,7 +1110,7 @@ pub(crate) fn association_log(
 /// its transaction. An identical replay is skipped; `person_id` is None
 /// when no link was newly made (guard rejection, non-email channel, replay).
 pub(crate) async fn record_association_log(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     conversation_id: Uuid,
     person_id: Option<Uuid>,
     channel: &str,
@@ -1389,15 +1141,6 @@ pub(crate) async fn record_association_log(
     }
 }
 
-/// The backfill reads only what identity needs: the conversation, the
-/// address that owns it, and the display name the first message recorded.
-#[derive(SurrealValue)]
-struct UnassociatedConversation {
-    id: surrealdb::types::RecordId,
-    external_address: String,
-    external_name: Option<String>,
-}
-
 /// Links still-unassociated email conversations to the Person the address
 /// resolves to today — the same resolve-or-create the ingest uses — and
 /// reports how many conversations gained a link.
@@ -1411,192 +1154,9 @@ struct UnassociatedConversation {
 ///
 /// Propagates any database error, including the fail-closed authority
 /// probe error.
-pub async fn backfill_person_links(db: &SurrealDb) -> Result<u64, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::backfill_person_links_on(&pg, db)).await;
-    }
-    backfill_person_links_surreal(db).await
-}
-
-/// The legacy SurrealDB backfill behind [`backfill_person_links`].
-async fn backfill_person_links_surreal(db: &SurrealDb) -> Result<u64, InboxError> {
-    let mut response = db
-        .query(format!(
-            "SELECT id, external_address, external_name FROM {CONVERSATION} \
-             WHERE channel = $channel AND person_id IS NONE"
-        ))
-        .bind(("channel", channel::EMAIL.to_string()))
-        .await?
-        .check()?;
-    let unassociated: Vec<UnassociatedConversation> = response.take(0)?;
-    let mut linked = 0u64;
-    for row in unassociated {
-        let Some(conversation_id) = record_uuid(&row.id) else {
-            continue;
-        };
-        let Some(person_id) =
-            resolve_or_create_sender(db, &row.external_address, row.external_name.as_deref())
-                .await?
-        else {
-            continue;
-        };
-        db.query("UPDATE $id SET person_id = $person, updated_at = time::now()")
-            .bind(("id", record_id(CONVERSATION, conversation_id)))
-            .bind(("person", record_id("person", person_id)))
-            .await?
-            .check()?;
-        linked += 1;
-        record_association_log(
-            db,
-            conversation_id,
-            Some(person_id),
-            channel::EMAIL,
-            &row.external_address,
-        )
-        .await;
-        after_write(db, MirrorKey::InboxConversation(conversation_id)).await;
-    }
-    Ok(linked)
-}
-
-/// Resolves the counterparty Person, joins the thread the delivery answers
-/// (`threaded`, from the reference chain) or the sender's open thread, or
-/// creates a Conversation, and persists the first association — the identity
-/// core of inbound ingest, shared by every lane that ingests from a live
-/// counterparty. Returns the conversation, whether this ingest newly linked
-/// it, and the resolved Person.
-async fn associate_counterparty(
-    db: &SurrealDb,
-    inbound: &IngestInbound<'_>,
-    threaded: Option<Conversation>,
-) -> Result<(Conversation, bool, Option<Uuid>), InboxError> {
-    let sender_person_id = match inbound.channel {
-        channel::EMAIL => inbound_counterparty(db, inbound).await?,
-        _ => None,
-    };
-    let existing = match threaded {
-        Some(existing) => Some(existing),
-        None => find_open_thread(db, inbound).await?,
-    };
-    let (conversation, person_linked) = if let Some(existing) = existing {
-        let linked = sender_person_id.is_some() && existing.person_id.is_none();
-        (existing, linked)
-    } else {
-        let created = create_conversation(db, inbound, sender_person_id).await?;
-        (created, sender_person_id.is_some())
-    };
-    if let (true, Some(person_id)) = (person_linked, sender_person_id) {
-        // First association wins: an existing link is never overwritten,
-        // and the WHERE guard keeps a concurrent ingest from double-writing.
-        db.query(
-            "UPDATE $id SET person_id = $person, updated_at = time::now() \
-             WHERE person_id IS NONE",
-        )
-        .bind(("id", record_id(CONVERSATION, conversation.id)))
-        .bind(("person", record_id("person", person_id)))
-        .await?
-        .check()?;
-        after_write(db, MirrorKey::InboxConversation(conversation.id)).await;
-    }
-    Ok((conversation, person_linked, sender_person_id))
-}
-
-/// The legacy SurrealDB store behind [`ingest_inbound`] — the webhook-shaped
-/// ingest path retained for deployments that have not cut the Inbox slice
-/// over to PostgreSQL.
-async fn ingest_inbound_surreal(
-    db: &SurrealDb,
-    inbound: &IngestInbound<'_>,
-    thread: Option<&[String]>,
-) -> Result<IngestedInbound, InboxError> {
-    let channel_supported = matches!(
-        inbound.channel,
-        channel::EMAIL | channel::SMS | channel::SCRAPER | channel::VOICE
-    ) || is_social_channel(inbound.channel);
-    if !channel_supported
-        || !matches!(
-            inbound.interaction_type.unwrap_or("message"),
-            "message" | "comment" | "direct_message"
-        )
-    {
-        return Err(InboxError::Denied);
-    }
-    if let Some(existing) = find_ingress(
-        db,
-        inbound.firm_id,
-        inbound.channel,
-        inbound.provider_account,
-        inbound.provider_message_id,
-    )
-    .await?
-    {
-        return replay_existing_message(db, existing).await;
-    }
-
-    let threaded = match thread {
-        Some(references) => find_referenced_thread(db, inbound, references).await?,
-        None => None,
-    };
-    let (conversation, person_linked, sender_person_id) =
-        associate_counterparty(db, inbound, threaded).await?;
-    if inbound.email_conversation_id.is_some() && conversation.email_conversation_id.is_none() {
-        link_email_conversation(db, conversation.id, inbound.email_conversation_id).await?;
-    }
-    let message_id = create_message(
-        db,
-        conversation.id,
-        direction::INBOUND,
-        inbound.body,
-        None,
-        Some(inbound.provider_message_id),
-        None,
-        delivery::RECEIVED,
-        purpose::MATTER,
-        inbound.visibility,
-        inbound
-            .attachments
-            .first()
-            .map(|attachment| attachment.asset_id),
-        inbound.occurred_at,
-        inbound.raw_storage_key,
-    )
-    .await?;
-    link_message_assets(db, inbound.firm_id, message_id, &inbound.attachments).await?;
-    if let Some(parent_provider_id) = inbound.parent_provider_message_id {
-        let parent = parent_message_id(db, conversation.id, parent_provider_id).await?;
-        if let Some(parent_id) = parent {
-            db.query("UPDATE $id SET parent_message_id = $parent, updated_at = time::now()")
-                .bind(("id", record_id(MESSAGE, message_id)))
-                .bind(("parent", record_id(MESSAGE, parent_id)))
-                .await?
-                .check()?;
-            after_write(db, MirrorKey::InboxMessage(message_id)).await;
-        }
-    }
-    if let Err(error) = create_ingress(db, inbound, message_id).await {
-        return recover_deduped_ingress(db, inbound, message_id, error).await;
-    }
-    // A new delivery re-flags the thread unread and takes it out of the trash.
-    let _ = db
-        .query("UPDATE $id SET unread = true, trashed_at = NONE, updated_at = time::now()")
-        .bind(("id", record_id(CONVERSATION, conversation.id)))
-        .await;
-    after_write(db, MirrorKey::InboxConversation(conversation.id)).await;
-    let ingested = IngestedInbound {
-        conversation_id: conversation.id,
-        message_id,
-        deduped: false,
-        person_linked,
-    };
-    record_association_log(
-        db,
-        ingested.conversation_id,
-        ingested.person_linked.then_some(sender_person_id).flatten(),
-        inbound.channel,
-        inbound.external_address,
-    )
-    .await;
-    Ok(ingested)
+pub async fn backfill_person_links(db: &ApplicationStore) -> Result<u64, InboxError> {
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::backfill_person_links_on(&pg, db)).await
 }
 
 /// The attachments linked to one Inbox Message, in provider order.
@@ -1608,25 +1168,6 @@ pub struct MessageAttachment {
     pub sha256: String,
 }
 
-#[derive(SurrealValue)]
-struct MessageAssetRow {
-    asset_id: surrealdb::types::RecordId,
-    filename: String,
-    position: i64,
-    sha256: String,
-}
-
-impl MessageAssetRow {
-    fn into_attachment(self) -> Option<MessageAttachment> {
-        Some(MessageAttachment {
-            asset_id: record_uuid(&self.asset_id)?,
-            filename: self.filename,
-            position: self.position,
-            sha256: self.sha256,
-        })
-    }
-}
-
 /// Link a Message to its attachment Assets in provider order. Re-linking
 /// the same message and sha reuses the row, so a retried ingest cannot
 /// duplicate a link.
@@ -1635,58 +1176,13 @@ impl MessageAssetRow {
 ///
 /// Propagates database and Inbox authority errors.
 pub async fn link_message_assets(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     firm_id: Uuid,
     message_id: Uuid,
     attachments: &[IngestAttachment],
 ) -> Result<(), InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        for attachment in attachments {
-            crate::postgres_mirror::mirror(db, &pg, &MirrorKey::Asset(attachment.asset_id))
-                .await
-                .map_err(|error| InboxError::Db(error.to_string()))?;
-        }
-        return crate::postgres::inbox::link_message_assets_on(
-            &pg,
-            firm_id,
-            message_id,
-            attachments,
-        )
-        .await;
-    }
-    for (position, attachment) in attachments.iter().enumerate() {
-        let position = i64::try_from(position).unwrap_or(i64::MAX);
-        let mut response = db
-            .query(format!(
-                "SELECT VALUE id FROM {MESSAGE_ASSET} \
-                 WHERE message_id = $message AND sha256 = $sha LIMIT 1"
-            ))
-            .bind(("message", record_id(MESSAGE, message_id)))
-            .bind(("sha", attachment.sha256.clone()))
-            .await?
-            .check()?;
-        let existing: Vec<surrealdb::types::RecordId> = response.take(0)?;
-        if !existing.is_empty() {
-            continue;
-        }
-        db.query(
-            "CREATE $id SET firm_id = $firm, message_id = $message, \
-             asset_id = $asset, filename = $filename, position = $position, sha256 = $sha",
-        )
-        .bind(("id", record_id(MESSAGE_ASSET, Uuid::now_v7())))
-        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
-        .bind(("message", record_id(MESSAGE, message_id)))
-        .bind((
-            "asset",
-            record_id(crate::assets::TABLE, attachment.asset_id),
-        ))
-        .bind(("filename", attachment.filename.clone()))
-        .bind(("position", position))
-        .bind(("sha", attachment.sha256.clone()))
-        .await?
-        .check()?;
-    }
-    Ok(())
+    let pg = inbox_authority().await?;
+    crate::postgres::inbox::link_message_assets_on(&pg, firm_id, message_id, attachments).await
 }
 
 /// The attachments linked to one Inbox Message, in provider order. Firm
@@ -1697,63 +1193,12 @@ pub async fn link_message_assets(
 ///
 /// Propagates any database error.
 pub async fn message_assets(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     firm_id: Uuid,
     message_id: Uuid,
 ) -> Result<Vec<MessageAttachment>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return crate::postgres::inbox::message_assets_on(&pg, firm_id, message_id).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT asset_id, filename, position, sha256 FROM {MESSAGE_ASSET} \
-             WHERE firm_id = $firm AND message_id = $message ORDER BY position"
-        ))
-        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
-        .bind(("message", record_id(MESSAGE, message_id)))
-        .await?
-        .check()?;
-    let rows: Vec<MessageAssetRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(MessageAssetRow::into_attachment)
-        .collect())
-}
-
-/// A lost ingress-creation race: another worker filed the same provider
-/// message between our dedup check and our ingress write. Roll our message
-/// back and surface the winner's row instead of failing the ingest.
-async fn recover_deduped_ingress(
-    db: &SurrealDb,
-    inbound: &IngestInbound<'_>,
-    message_id: Uuid,
-    error: InboxError,
-) -> Result<IngestedInbound, InboxError> {
-    let _ = db
-        .query("DELETE $id")
-        .bind(("id", record_id(MESSAGE, message_id)))
-        .await;
-    after_write(db, MirrorKey::InboxMessage(message_id)).await;
-    if let Some(existing) = find_ingress(
-        db,
-        inbound.firm_id,
-        inbound.channel,
-        inbound.provider_account,
-        inbound.provider_message_id,
-    )
-    .await?
-    {
-        let Some(message) = message_by_id(db, existing).await? else {
-            return Err(InboxError::NotFound);
-        };
-        return Ok(IngestedInbound {
-            conversation_id: message.conversation_id,
-            message_id: message.id,
-            deduped: true,
-            person_linked: false,
-        });
-    }
-    Err(error)
+    let pg = inbox_authority().await?;
+    crate::postgres::inbox::message_assets_on(&pg, firm_id, message_id).await
 }
 
 /// Check the authoritative Person and participation before an Inbox assignment.
@@ -1762,7 +1207,7 @@ async fn recover_deduped_ingress(
 /// # Errors
 /// Returns an error when the Person or participation cannot be read.
 pub async fn can_assign_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<bool, InboxError> {
@@ -1785,7 +1230,7 @@ pub async fn can_assign_project(
 /// Repeated assignment to that Project repairs a checkpoint gap without
 /// allowing a concurrent import to move the history to another Project.
 pub async fn assign(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
@@ -1824,7 +1269,7 @@ pub async fn assign(
 /// Owner may assign; a Lawyer or Clerk needs target Project participation.
 /// The target Project must belong to the Conversation or import's resolved Firm.
 pub async fn require_assignment_authorization(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     firm_id: Uuid,
     project_id: Uuid,
@@ -1842,26 +1287,20 @@ pub async fn require_assignment_authorization(
 }
 
 pub(crate) async fn assign_unbilled(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::assign_on(
-            &pg,
-            db,
-            actor_id,
-            conversation_id,
-            project_id,
-        ))
-        .await;
-    }
-    let conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    require_assignment_authorization(db, actor_id, conversation.firm_id, project_id).await?;
-    assign_write(db, actor_id, &conversation, project_id).await
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::assign_on(
+        &pg,
+        db,
+        actor_id,
+        conversation_id,
+        project_id,
+    ))
+    .await
 }
 
 /// The triage review queue's assignment door. Owner may act across Firms;
@@ -1874,7 +1313,7 @@ pub(crate) async fn assign_unbilled(
 /// Lawyer/Clerk without active participation on the Project. The other
 /// cases of [`assign`] apply unchanged.
 pub(crate) async fn assign_for_triage_review(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
@@ -1908,49 +1347,27 @@ pub(crate) async fn assign_for_triage_review(
 }
 
 pub(crate) async fn assign_for_triage_review_unbilled(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::assign_for_triage_review_on(
-            &pg,
-            db,
-            actor_id,
-            conversation_id,
-            project_id,
-        ))
-        .await;
-    }
-    let actor = load_person(db, actor_id).await?;
-    let conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    let project = projects::find_by_id(db, project_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if project.firm_id != Some(conversation.firm_id) {
-        return Err(InboxError::CrossFirm);
-    }
-    if !triage_reviewer_may_assign(db, &actor, project_id).await? {
-        return Err(InboxError::Denied);
-    }
-    if matches!(actor.role, Role::Lawyer | Role::Clerk) {
-        if let Some(source_project) = conversation.project_id {
-            if !triage_reviewer_may_assign(db, &actor, source_project).await? {
-                return Err(InboxError::Denied);
-            }
-        }
-    }
-    assign_write(db, actor_id, &conversation, project_id).await
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::assign_for_triage_review_on(
+        &pg,
+        db,
+        actor_id,
+        conversation_id,
+        project_id,
+    ))
+    .await
 }
 
 /// Whether the actor may act on a triage row whose human decision assigns
 /// `project_id`. Owner always, Admin within their Firm; a Lawyer or Clerk
 /// passes the participation check the reply doors use; a Client never.
 pub(crate) async fn triage_reviewer_may_assign(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor: &persons::Person,
     project_id: Uuid,
 ) -> Result<bool, InboxError> {
@@ -1975,7 +1392,7 @@ pub(crate) async fn triage_reviewer_may_assign(
 /// Clerk when they belong to the row's Firm (the same visibility the queue
 /// list grants); a Client never.
 pub(crate) async fn triage_reviewer_may_resolve(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor: &persons::Person,
     firm_id: Uuid,
 ) -> Result<bool, InboxError> {
@@ -2001,7 +1418,7 @@ pub(crate) async fn triage_reviewer_may_resolve(
 /// [`InboxError::Denied`] when the actor fails the review authority,
 /// [`InboxError::NotFound`] when the actor does not exist.
 pub(crate) async fn require_triage_reviewer(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<(), InboxError> {
@@ -2013,81 +1430,12 @@ pub(crate) async fn require_triage_reviewer(
     }
 }
 
-/// The shared write behind both assignment doors: re-point the conversation,
-/// mirror it, rescope any email thread, and record the assignment row.
-async fn assign_write(
-    db: &SurrealDb,
-    actor_id: Uuid,
-    conversation: &Conversation,
-    project_id: Uuid,
-) -> Result<Assignment, InboxError> {
-    let conversation_id = conversation.id;
-    let from_project_id = conversation.project_id;
-    if from_project_id == Some(project_id)
-        && (conversation.channel == channel::VOICE
-            || (conversation.channel == channel::SMS
-                && crate::fi_import::is_account(&conversation.provider_account)))
-    {
-        project_all_messages(db, conversation).await?;
-        if let Some(previous) = assignments(db, conversation_id)
-            .await?
-            .into_iter()
-            .rev()
-            .find(|assignment| assignment.to_project_id == project_id)
-        {
-            return Ok(previous);
-        }
-    }
-    db.query("UPDATE $id SET project_id = $project, unread = true, updated_at = time::now()")
-        .bind(("id", record_id(CONVERSATION, conversation_id)))
-        .bind(("project", record_id(projects::PROJECT_TABLE, project_id)))
-        .await?
-        .check()?;
-    after_write(db, MirrorKey::InboxConversation(conversation_id)).await;
-    if let Some(email_id) = conversation.email_conversation_id {
-        crate::email_conversations::set_scope(
-            db,
-            email_id,
-            Some(conversation.firm_id),
-            Some(project_id),
-        )
-        .await?;
-    }
-    let updated = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    project_all_messages(db, &updated).await?;
-    let assignment_id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET conversation_id = $conversation, firm_id = $firm, \
-             from_project_id = $from_project, to_project_id = $to_project, \
-             actor_person_id = $actor, inserted_at = time::now() RETURN {ASSIGNMENT_SELECT}"
-        ))
-        .bind(("id", record_id(ASSIGNMENT, assignment_id)))
-        .bind(("conversation", record_id(CONVERSATION, conversation_id)))
-        .bind(("firm", record_id(crate::firms::TABLE, conversation.firm_id)))
-        .bind((
-            "from_project",
-            from_project_id.map(|id| record_id(projects::PROJECT_TABLE, id)),
-        ))
-        .bind(("to_project", record_id(projects::PROJECT_TABLE, project_id)))
-        .bind(("actor", record_id("person", actor_id)))
-        .await?
-        .check()?;
-    let rows: Vec<AssignmentRow> = response.take(0)?;
-    after_write(db, MirrorKey::InboxAssignment(assignment_id)).await;
-    rows.into_iter()
-        .find_map(AssignmentRow::into_assignment)
-        .ok_or(InboxError::NotFound)
-}
-
 /// Post-operation that attributes an intake message to one Project after it
 /// has been received. Only an Owner or a participating Lawyer/Clerk may do so,
 /// and only into an open Project — the door refuses closed and archived
 /// matters with [`InboxError::Denied`].
 pub async fn attribute_to_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
@@ -2102,59 +1450,20 @@ pub async fn attribute_to_project(
 /// [`InboxError::Denied`] when the actor cannot see the assigned Project or
 /// is not a Lawyer or Clerk. [`InboxError::Empty`] when the body is blank.
 pub async fn post_note(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     body: &str,
 ) -> Result<Uuid, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::post_note_on(
-            &pg,
-            db,
-            actor_id,
-            conversation_id,
-            body,
-        ))
-        .await;
-    }
-    let body = body.trim();
-    if body.is_empty() {
-        return Err(InboxError::Empty);
-    }
-    let actor = load_person(db, actor_id).await?;
-    if !matches!(actor.role, Role::Lawyer | Role::Clerk) {
-        return Err(InboxError::Denied);
-    }
-    let conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    let Some(project_id) = conversation.project_id else {
-        return Err(InboxError::Denied);
-    };
-    if !sees_project(db, actor_id, actor.role, project_id).await? {
-        return Err(InboxError::Denied);
-    }
-    let message_id = create_message(
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::post_note_on(
+        &pg,
         db,
+        actor_id,
         conversation_id,
-        direction::INTERNAL,
         body,
-        Some(actor_id),
-        None,
-        None,
-        delivery::RECEIVED,
-        purpose::MATTER,
-        None,
-        None,
-        &Utc::now().to_rfc3339(),
-        None,
-    )
-    .await?;
-    let message = message_by_id(db, message_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    project_message(db, &conversation, &message).await?;
-    Ok(message_id)
+    ))
+    .await
 }
 
 /// Queue an external reply. Only a participating Lawyer or Clerk may queue one.
@@ -2166,61 +1475,21 @@ pub async fn post_note(
 /// [`InboxError::OptedOut`] when the reply is promotional and the address
 /// has opted out.
 pub async fn queue_reply(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     body: &str,
     purpose_value: &str,
 ) -> Result<Uuid, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::queue_reply_on(
-            &pg,
-            db,
-            actor_id,
-            conversation_id,
-            body,
-            purpose_value,
-        ))
-        .await;
-    }
-    let body = body.trim();
-    if body.is_empty() {
-        return Err(InboxError::Empty);
-    }
-    let actor = load_person(db, actor_id).await?;
-    if !matches!(actor.role, Role::Lawyer | Role::Clerk) {
-        return Err(InboxError::Denied);
-    }
-    let conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if !allows_external_reply(&conversation) {
-        return Err(InboxError::Denied);
-    }
-    let Some(project_id) = conversation.project_id else {
-        return Err(InboxError::Denied);
-    };
-    if !sees_project(db, actor_id, actor.role, project_id).await? {
-        return Err(InboxError::Denied);
-    }
-    if purpose_value == purpose::PROMOTIONAL && conversation.promotional_opt_out {
-        return Err(InboxError::OptedOut);
-    }
-    create_message(
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::queue_reply_on(
+        &pg,
         db,
+        actor_id,
         conversation_id,
-        direction::OUTBOUND,
         body,
-        Some(actor_id),
-        None,
-        None,
-        delivery::QUEUED,
         purpose_value,
-        None,
-        None,
-        &Utc::now().to_rfc3339(),
-        None,
-    )
+    ))
     .await
 }
 
@@ -2229,79 +1498,22 @@ pub async fn queue_reply(
 /// Lawyers and Clerks must participate on the assigned Project. This path is
 /// separate from matter email/SMS dispatch authorization.
 pub async fn queue_social_reply(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     body: &str,
     visibility: &str,
 ) -> Result<Uuid, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::queue_social_reply_on(
-            &pg,
-            db,
-            actor_id,
-            conversation_id,
-            body,
-            visibility,
-        ))
-        .await;
-    }
-    let conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    let capability_supported = match conversation.channel.as_str() {
-        channel::FACEBOOK | channel::INSTAGRAM => matches!(visibility, "public" | "private"),
-        channel::THREADS | channel::YOUTUBE | channel::TIKTOK => visibility == "public",
-        _ => false,
-    };
-    if !capability_supported
-        || (conversation.channel == channel::TIKTOK
-            && (conversation.interaction_type != "comment"
-                || conversation
-                    .provider_post_id
-                    .as_deref()
-                    .is_none_or(str::is_empty)))
-        || (conversation.interaction_type == "direct_message" && visibility != "private")
-    {
-        return Err(InboxError::Denied);
-    }
-    let body = body.trim();
-    if body.is_empty() {
-        return Err(InboxError::Empty);
-    }
-    authorize_social_reply(db, actor_id, &conversation).await?;
-    if visibility == "public"
-        && messages_for(db, conversation_id)
-            .await?
-            .iter()
-            .any(|message| {
-                message.direction == direction::INBOUND
-                    && message.visibility.as_deref() == Some("private")
-            })
-    {
-        return Err(InboxError::Denied);
-    }
-    let message_id = create_message(
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::queue_social_reply_on(
+        &pg,
         db,
+        actor_id,
         conversation_id,
-        direction::OUTBOUND,
         body,
-        Some(actor_id),
-        None,
-        None,
-        delivery::QUEUED,
-        purpose::MATTER,
-        Some(visibility),
-        None,
-        &Utc::now().to_rfc3339(),
-        None,
-    )
-    .await?;
-    let message = message_by_id(db, message_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    project_message(db, &conversation, &message).await?;
-    Ok(message_id)
+        visibility,
+    ))
+    .await
 }
 
 /// The `ExternalSystem` a social channel's sender ids live under.
@@ -2330,7 +1542,7 @@ fn social_system(channel_name: &str) -> Option<external_identities::ExternalSyst
 ///
 /// Propagates any database error.
 pub(crate) async fn sender_identity(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     conversation: &Conversation,
 ) -> Result<Option<ContactLink>, InboxError> {
     match conversation.channel.as_str() {
@@ -2379,93 +1591,20 @@ pub(crate) async fn sender_identity(
 /// [`InboxError::Contact`] when no Person has that email, the number belongs
 /// to someone else, or the Person already records another phone.
 pub async fn link_contact_phone(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     email: &str,
 ) -> Result<ContactLink, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::link_contact_phone_on(
-            &pg,
-            db,
-            actor_id,
-            conversation_id,
-            email,
-        ))
-        .await;
-    }
-    let conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if conversation.channel != channel::SMS {
-        return Err(InboxError::Denied);
-    }
-    authorize_social_reply(db, actor_id, &conversation).await?;
-    let person = persons::find_by_any_email(db, email.trim())
-        .await?
-        .ok_or_else(|| InboxError::Contact("No person has that email".into()))?;
-    if conversation
-        .person_id
-        .is_some_and(|holder| holder != person.id)
-    {
-        return Err(InboxError::Contact(
-            "That conversation is already linked to another person".into(),
-        ));
-    }
-    let structured_holders =
-        crate::person_phones::person_ids_for_phone(db, &conversation.external_address)
-            .await
-            .map_err(|error| InboxError::Db(error.to_string()))?;
-    if structured_holders.iter().any(|holder| *holder != person.id) {
-        return Err(InboxError::Contact(
-            "That number already belongs to another person".into(),
-        ));
-    }
-    if persons::find_by_phone(db, &conversation.external_address)
-        .await?
-        .is_some_and(|holder| holder.id != person.id)
-    {
-        return Err(InboxError::Contact(
-            "That number already belongs to another person".into(),
-        ));
-    }
-    crate::person_phones::seed_from_legacy_phone(db, person.id)
-        .await
-        .map_err(|error| InboxError::Db(error.to_string()))?;
-    crate::person_phones::set_phone(
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::link_contact_phone_on(
+        &pg,
         db,
-        person.id,
-        &conversation.external_address,
-        crate::person_phones::PhoneLabel::Mobile,
-        false,
-    )
+        actor_id,
+        conversation_id,
+        email,
+    ))
     .await
-    .map_err(|error| InboxError::Db(error.to_string()))?;
-    if person.phone.is_none() {
-        persons::set_phone(db, person.id, Some(&conversation.external_address))
-            .await?
-            .ok_or(InboxError::NotFound)?;
-    }
-    db.query(
-        "UPDATE $id SET person_id = $person, updated_at = time::now() \
-         WHERE person_id IS NONE OR person_id = $person",
-    )
-    .bind(("id", record_id(CONVERSATION, conversation_id)))
-    .bind(("person", record_id("person", person.id)))
-    .await
-    .and_then(surrealdb::IndexedResults::check)?;
-    let updated_conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if updated_conversation.person_id != Some(person.id) {
-        return Err(InboxError::Contact(
-            "That conversation is already linked to another person".into(),
-        ));
-    }
-    let updated = persons::find_by_id(db, person.id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    Ok(ContactLink::of(&updated))
 }
 
 /// Maximum length Twilio accepts for one text request.
@@ -2489,33 +1628,20 @@ pub(crate) fn is_e164(number: &str) -> bool {
 /// [`InboxError::Denied`] when the conversation is not an SMS thread or the
 /// actor lacks authority. [`InboxError::Empty`] for a blank or over-long body.
 pub async fn queue_sms_reply(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     body: &str,
 ) -> Result<Uuid, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::queue_sms_reply_on(
-            &pg,
-            db,
-            actor_id,
-            conversation_id,
-            body,
-        ))
-        .await;
-    }
-    let body = body.trim();
-    if body.is_empty() || body.chars().count() > SMS_BODY_LIMIT {
-        return Err(InboxError::Empty);
-    }
-    let conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if conversation.channel != channel::SMS {
-        return Err(InboxError::Denied);
-    }
-    authorize_social_reply(db, actor_id, &conversation).await?;
-    queue_sms_message(db, &conversation, actor_id, body).await
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::queue_sms_reply_on(
+        &pg,
+        db,
+        actor_id,
+        conversation_id,
+        body,
+    ))
+    .await
 }
 
 /// Open a text conversation with a number that has not texted the Firm first.
@@ -2530,7 +1656,7 @@ pub async fn queue_sms_reply(
 /// or over-long body.
 #[allow(clippy::too_many_arguments)]
 pub async fn open_sms_conversation(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     firm_id: Uuid,
     brand_key: Option<&str>,
@@ -2539,94 +1665,19 @@ pub async fn open_sms_conversation(
     body: &str,
     recipient_consented: bool,
 ) -> Result<(Uuid, Uuid), InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::open_sms_conversation_on(
-            &pg,
-            db,
-            actor_id,
-            firm_id,
-            brand_key,
-            provider_account,
-            to,
-            body,
-            recipient_consented,
-        ))
-        .await;
-    }
-    let to = to.trim();
-    let body = body.trim();
-    if body.is_empty() || body.chars().count() > SMS_BODY_LIMIT {
-        return Err(InboxError::Empty);
-    }
-    if !recipient_consented || !is_e164(to) || to == provider_account {
-        return Err(InboxError::Denied);
-    }
-    if !reply_actor_authorized(db, actor_id, firm_id, None).await? {
-        return Err(InboxError::Denied);
-    }
-    let thread = IngestInbound {
-        project_id: None,
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::open_sms_conversation_on(
+        &pg,
+        db,
+        actor_id,
         firm_id,
         brand_key,
-        interaction_type: Some("message"),
-        provider_post_id: None,
-        parent_provider_message_id: None,
-        visibility: Some("private"),
-        channel: channel::SMS,
         provider_account,
-        provider_message_id: "",
-        provider_thread_ref: None,
-        external_address: to,
-        external_name: None,
-        subject: None,
+        to,
         body,
-        source_page: Some(provider_account),
-        source_channel: Some(channel::SMS),
-        matter_consent: true,
-        promotional_opt_in: false,
-        email_conversation_id: None,
-        attachments: Vec::new(),
-        occurred_at: &Utc::now().to_rfc3339(),
-        raw_storage_key: None,
-    };
-    let conversation = match find_open_thread(db, &thread).await? {
-        Some(existing) => existing,
-        None => create_conversation(db, &thread, None).await?,
-    };
-    let message_id = queue_sms_message(db, &conversation, actor_id, body).await?;
-    Ok((conversation.id, message_id))
-}
-
-async fn queue_sms_message(
-    db: &SurrealDb,
-    conversation: &Conversation,
-    actor_id: Uuid,
-    body: &str,
-) -> Result<Uuid, InboxError> {
-    if crate::fi_import::is_account(&conversation.provider_account) {
-        return Err(InboxError::Denied);
-    }
-    let message_id = create_message(
-        db,
-        conversation.id,
-        direction::OUTBOUND,
-        body,
-        Some(actor_id),
-        None,
-        None,
-        delivery::QUEUED,
-        purpose::MATTER,
-        None,
-        None,
-        &Utc::now().to_rfc3339(),
-        None,
-    )
-    .await?;
-    let message = message_by_id(db, message_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    project_message(db, conversation, &message).await?;
-    Ok(message_id)
+        recipient_consented,
+    ))
+    .await
 }
 
 /// Send every queued reply, re-checking Lawyer or Clerk participation first.
@@ -2639,7 +1690,7 @@ async fn queue_sms_message(
 /// Propagates any database error. A single transport failure is recorded on
 /// that message and does not abort the rest of the queue.
 pub async fn dispatch_queued(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     transport: &dyn OutboundTransport,
 ) -> Result<DispatchReport, InboxError> {
     dispatch_queued_messages(db, transport, None).await
@@ -2651,7 +1702,7 @@ pub async fn dispatch_queued(
 ///
 /// Propagates database failures while checking and recording delivery.
 pub async fn dispatch_queued_message(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     transport: &dyn OutboundTransport,
     message_id: Uuid,
 ) -> Result<DispatchReport, InboxError> {
@@ -2659,146 +1710,15 @@ pub async fn dispatch_queued_message(
 }
 
 async fn dispatch_queued_messages(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     transport: &dyn OutboundTransport,
     message_id: Option<Uuid>,
 ) -> Result<DispatchReport, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::dispatch_queued_on(
-            &pg, db, transport, message_id,
-        ))
-        .await;
-    }
-    let queued = match message_id {
-        Some(id) => message_by_id(db, id)
-            .await?
-            .filter(|message| message.delivery_state == delivery::QUEUED)
-            .into_iter()
-            .collect(),
-        None => messages_in_state(db, delivery::QUEUED).await?,
-    };
-    dispatch_queued_surreal(db, transport, queued).await
-}
-
-/// Dispatch the selected queued Messages through the SurrealDB store.
-async fn dispatch_queued_surreal(
-    db: &SurrealDb,
-    transport: &dyn OutboundTransport,
-    queued: Vec<Message>,
-) -> Result<DispatchReport, InboxError> {
-    let mut report = DispatchReport::default();
-    for message in queued {
-        let Some(conversation) = conversation_by_id(db, message.conversation_id).await? else {
-            continue;
-        };
-        if message.purpose == purpose::PROMOTIONAL && conversation.promotional_opt_out {
-            set_delivery(db, message.id, delivery::SUPPRESSED, None).await?;
-            journal_attempt(
-                db,
-                message.id,
-                delivery::SUPPRESSED,
-                None,
-                Some("opted out"),
-            )
-            .await?;
-            report.suppressed += 1;
-            continue;
-        }
-        let allowed = queued_author_still_authorized(db, &conversation, &message).await?;
-        if !allowed || !allows_external_reply(&conversation) {
-            set_delivery(db, message.id, delivery::SUPPRESSED, None).await?;
-            journal_attempt(
-                db,
-                message.id,
-                delivery::SUPPRESSED,
-                None,
-                Some(
-                    if crate::fi_import::is_account(&conversation.provider_account) {
-                        "import source is read-only"
-                    } else if conversation.channel == channel::VOICE {
-                        "voice replies are unsupported"
-                    } else {
-                        "participation revoked"
-                    },
-                ),
-            )
-            .await?;
-            report.suppressed += 1;
-            continue;
-        }
-        let messages = messages_for(db, conversation.id).await?;
-        if is_social_channel(&conversation.channel)
-            && message.visibility.as_deref() == Some("public")
-            && (conversation.interaction_type == "direct_message"
-                || messages.iter().any(|entry| {
-                    entry.direction == direction::INBOUND
-                        && entry.visibility.as_deref() == Some("private")
-                }))
-        {
-            set_delivery(db, message.id, delivery::SUPPRESSED, None).await?;
-            journal_attempt(
-                db,
-                message.id,
-                delivery::SUPPRESSED,
-                None,
-                Some("private conversation cannot receive a public reply"),
-            )
-            .await?;
-            report.suppressed += 1;
-            continue;
-        }
-        let envelope = outbound_envelope(&conversation, &message, &messages);
-        if !reserve_dispatch(db, message.id).await? {
-            continue;
-        }
-        match transport.deliver(&envelope).await {
-            Ok(TransportOutcome::Submitted { provider_ref }) => {
-                set_delivery(db, message.id, delivery::SUBMITTED, Some(&provider_ref)).await?;
-                journal_attempt(
-                    db,
-                    message.id,
-                    delivery::SUBMITTED,
-                    Some(&provider_ref),
-                    None,
-                )
-                .await?;
-                if let Some(fresh) = message_by_id(db, message.id).await? {
-                    let _ = project_message(db, &conversation, &fresh).await;
-                }
-                report.submitted += 1;
-            }
-            Ok(TransportOutcome::Unknown) => {
-                set_delivery(db, message.id, delivery::UNKNOWN, None).await?;
-                journal_attempt(db, message.id, delivery::UNKNOWN, None, Some("timeout")).await?;
-                report.unknown += 1;
-            }
-            Ok(TransportOutcome::Rejected { detail }) | Err(detail) => {
-                set_delivery(db, message.id, delivery::FAILED, None).await?;
-                journal_attempt(db, message.id, delivery::FAILED, None, Some(&detail)).await?;
-                report.failed += 1;
-            }
-        }
-    }
-    Ok(report)
-}
-
-async fn queued_author_still_authorized(
-    db: &SurrealDb,
-    conversation: &Conversation,
-    message: &Message,
-) -> Result<bool, InboxError> {
-    match message.author_person_id {
-        Some(author_id)
-            if is_social_channel(&conversation.channel) || conversation.channel == channel::SMS =>
-        {
-            // Text and social replies retain the same Firm and participation checks.
-            social_reply_actor_still_authorized(db, author_id, conversation).await
-        }
-        Some(author_id) => {
-            participant_still_may_reply(db, author_id, conversation.project_id).await
-        }
-        None => Ok(false),
-    }
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::dispatch_queued_on(
+        &pg, db, transport, message_id,
+    ))
+    .await
 }
 
 pub(crate) fn outbound_envelope(
@@ -2837,44 +1757,24 @@ pub(crate) fn outbound_envelope(
 ///
 /// Propagates any database error.
 pub async fn apply_delivery(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     firm_id: Uuid,
     channel_name: &str,
     provider_account: &str,
     provider_ref: &str,
     incoming: &str,
 ) -> Result<Option<Uuid>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::apply_delivery_on(
-            &pg,
-            db,
-            firm_id,
-            channel_name,
-            provider_account,
-            provider_ref,
-            incoming,
-        ))
-        .await;
-    }
-    let Some(message) =
-        find_by_provider_ref(db, firm_id, channel_name, provider_account, provider_ref).await?
-    else {
-        return Ok(None);
-    };
-    let next = advance_delivery(&message.delivery_state, incoming);
-    if next == message.delivery_state {
-        return Ok(Some(message.id));
-    }
-    set_delivery(db, message.id, next, Some(provider_ref)).await?;
-    journal_attempt(db, message.id, next, Some(provider_ref), None).await?;
-    if next == delivery::DELIVERED || next == delivery::SUBMITTED {
-        if let Some(conversation) = conversation_by_id(db, message.conversation_id).await? {
-            if let Some(fresh) = message_by_id(db, message.id).await? {
-                let _ = project_message(db, &conversation, &fresh).await;
-            }
-        }
-    }
-    Ok(Some(message.id))
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::apply_delivery_on(
+        &pg,
+        db,
+        firm_id,
+        channel_name,
+        provider_account,
+        provider_ref,
+        incoming,
+    ))
+    .await
 }
 
 /// Honor a promotional opt-out and suppress queued promotional sends.
@@ -2883,61 +1783,19 @@ pub async fn apply_delivery(
 ///
 /// Propagates any database error.
 pub async fn record_promotional_opt_out(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     firm_id: Uuid,
     channel_name: &str,
     external_address: &str,
 ) -> Result<usize, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::record_promotional_opt_out_on(
-            &pg,
-            firm_id,
-            channel_name,
-            external_address,
-        ))
-        .await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {CONVERSATION_SELECT} FROM {CONVERSATION} \
-             WHERE firm_id = $firm AND channel = $channel AND external_address = $address"
-        ))
-        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
-        .bind(("channel", channel_name.to_string()))
-        .bind(("address", external_address.to_string()))
-        .await?
-        .check()?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    let mut suppressed = 0usize;
-    for row in rows
-        .into_iter()
-        .filter_map(ConversationRow::into_conversation)
-    {
-        db.query(
-            "UPDATE $id SET promotional_opt_out = true, promotional_opt_in = false, \
-             updated_at = time::now()",
-        )
-        .bind(("id", record_id(CONVERSATION, row.id)))
-        .await?
-        .check()?;
-        after_write(db, MirrorKey::InboxConversation(row.id)).await;
-        for message in messages_for(db, row.id).await? {
-            if message.purpose == purpose::PROMOTIONAL && message.delivery_state == delivery::QUEUED
-            {
-                set_delivery(db, message.id, delivery::SUPPRESSED, None).await?;
-                journal_attempt(
-                    db,
-                    message.id,
-                    delivery::SUPPRESSED,
-                    None,
-                    Some("opted out"),
-                )
-                .await?;
-                suppressed += 1;
-            }
-        }
-    }
-    Ok(suppressed)
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::record_promotional_opt_out_on(
+        &pg,
+        firm_id,
+        channel_name,
+        external_address,
+    ))
+    .await
 }
 
 /// Move a conversation to the Inbox trash, or restore it. Trash hides the
@@ -2950,7 +1808,7 @@ pub async fn record_promotional_opt_out(
 /// in the conversation's Firm. [`InboxError::NotFound`] when the conversation
 /// is missing.
 pub async fn set_trashed(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     trashed: bool,
@@ -2971,16 +1829,8 @@ pub async fn set_trashed(
     if !allowed {
         return Err(InboxError::Denied);
     }
-    if let Some(pg) = inbox_authority().await? {
-        return crate::postgres::inbox::set_trashed_on(&pg, conversation_id, trashed).await;
-    }
-    let stamp = if trashed { "time::now()" } else { "NONE" };
-    db.query(format!("UPDATE $id SET trashed_at = {stamp}"))
-        .bind(("id", record_id(CONVERSATION, conversation_id)))
-        .await?
-        .check()?;
-    after_write(db, MirrorKey::InboxConversation(conversation_id)).await;
-    Ok(())
+    let pg = inbox_authority().await?;
+    crate::postgres::inbox::set_trashed_on(&pg, conversation_id, trashed).await
 }
 
 /// Firm intake list. Message bodies are not included.
@@ -2988,7 +1838,10 @@ pub async fn set_trashed(
 /// # Errors
 ///
 /// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
-pub async fn list_intake(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<IntakeRow>, InboxError> {
+pub async fn list_intake(
+    db: &ApplicationStore,
+    actor_id: Uuid,
+) -> Result<Vec<IntakeRow>, InboxError> {
     intake_rows(db, actor_id, None).await
 }
 
@@ -3001,7 +1854,7 @@ pub async fn list_intake(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<IntakeRow
 ///
 /// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
 pub async fn list_intake_in_brand(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     brand_key: &str,
 ) -> Result<Vec<IntakeRow>, InboxError> {
@@ -3015,141 +1868,30 @@ pub async fn list_intake_in_brand(
 /// # Errors
 ///
 /// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
-pub async fn intake_brands(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<String>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        let brands: BTreeSet<String> = crate::postgres::inbox::list_intake_on(&pg, db, actor_id)
-            .await?
-            .into_iter()
-            .filter_map(|row| row.brand_key)
-            .collect();
-        return Ok(brands.into_iter().collect());
-    }
-    let actor = load_person(db, actor_id).await?;
-    let brands: BTreeSet<String> = visible_conversations(db, &actor, None)
+pub async fn intake_brands(
+    db: &ApplicationStore,
+    actor_id: Uuid,
+) -> Result<Vec<String>, InboxError> {
+    let pg = inbox_authority().await?;
+    let brands: BTreeSet<String> = crate::postgres::inbox::list_intake_on(&pg, db, actor_id)
         .await?
         .into_iter()
-        .filter_map(|conversation| conversation.brand_key)
+        .filter_map(|row| row.brand_key)
         .collect();
     Ok(brands.into_iter().collect())
 }
 
-/// The Firms whose inbox conversations this actor may see; `None` for the
-/// Owner, who reads across every Firm. A Client is refused — they read the
-/// matter log, not the inbox.
-async fn visible_firms(
-    db: &SurrealDb,
-    actor: &persons::Person,
-) -> Result<Option<Vec<Uuid>>, InboxError> {
-    if actor.role == Role::Owner {
-        return Ok(None);
-    }
-    if matches!(actor.role, Role::Lawyer | Role::Clerk | Role::Admin) {
-        return Ok(Some(
-            crate::firms::memberships_for_person(db, actor.id)
-                .await
-                .map_err(|error| InboxError::Db(error.to_string()))?
-                .into_iter()
-                .map(|membership| membership.firm_id)
-                .collect::<Vec<_>>(),
-        ));
-    }
-    Err(InboxError::Denied)
-}
-
-async fn conversations_in_brand(
-    db: &SurrealDb,
-    brand: Option<&str>,
-) -> Result<Vec<Conversation>, InboxError> {
-    let Some(brand) = brand else {
-        return all_conversations(db).await;
-    };
-    let mut response = db
-        .query(format!(
-            "SELECT {CONVERSATION_SELECT} FROM {CONVERSATION} \
-             WHERE brand_key = $brand ORDER BY updated_at DESC"
-        ))
-        .bind(("brand", brand.to_string()))
-        .await?
-        .check()?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(ConversationRow::into_conversation)
-        .collect())
-}
-
-/// Conversations the actor may see, optionally narrowed to one Brand. The
-/// Firm scope is decided here in the store, and the Brand narrowing happens
-/// beside it, before any row reaches a caller.
-async fn visible_conversations(
-    db: &SurrealDb,
-    actor: &persons::Person,
-    brand: Option<&str>,
-) -> Result<Vec<Conversation>, InboxError> {
-    let visible_firms = visible_firms(db, actor).await?;
-    let mut conversations = conversations_in_brand(db, brand).await?;
-    if let Some(firms) = visible_firms {
-        conversations.retain(|conversation| firms.contains(&conversation.firm_id));
-    }
-    Ok(conversations)
-}
-
 async fn intake_rows(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     brand: Option<&str>,
 ) -> Result<Vec<IntakeRow>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        let rows = crate::postgres::inbox::list_intake_on(&pg, db, actor_id).await?;
-        return Ok(rows
-            .into_iter()
-            .filter(|row| brand.is_none_or(|brand| row.brand_key.as_deref() == Some(brand)))
-            .collect());
-    }
-    let actor = load_person(db, actor_id).await?;
-    let conversations = visible_conversations(db, &actor, brand).await?;
-    let people = person_badges(db, &conversations).await?;
-    let mut rows = Vec::with_capacity(conversations.len());
-    for conversation in conversations {
-        let contact = sender_identity(db, &conversation).await?;
-        let delivery_state = latest_outbound_state(db, conversation.id).await?;
-        let assignee = assignee_label(db, conversation.project_id).await?;
-        let messages = messages_for(db, conversation.id).await?;
-        let person = conversation
-            .person_id
-            .and_then(|person_id| people.get(&person_id).cloned());
-        let email_sent_at = email_sent_at(&conversation.channel, &messages);
-        rows.push(IntakeRow {
-            contact,
-            id: conversation.id,
-            firm_id: conversation.firm_id,
-            brand_key: conversation.brand_key.clone(),
-            project_id: conversation.project_id,
-            channel: conversation.channel,
-            assignee,
-            unread: conversation.unread,
-            delivery: delivery_state.clone(),
-            next_action: next_action(
-                actor.role,
-                conversation.project_id.is_some(),
-                &delivery_state,
-                false,
-            )
-            .to_string(),
-            external_address: conversation.external_address,
-            external_name: conversation.external_name,
-            subject: conversation.subject,
-            direction: latest_direction(&messages),
-            preview: latest_preview(&messages),
-            person,
-            has_attachments: has_attachments(&messages),
-            sent: has_sent(&messages),
-            trashed: conversation.trashed_at.is_some(),
-            email_sent_at,
-            updated_at: conversation.updated_at,
-        });
-    }
-    Ok(rows)
+    let pg = inbox_authority().await?;
+    let rows = crate::postgres::inbox::list_intake_on(&pg, db, actor_id).await?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| brand.is_none_or(|brand| row.brand_key.as_deref() == Some(brand)))
+        .collect())
 }
 
 /// One unprocessed Firm-inbox message in the process backlog. The body is
@@ -3183,33 +1925,6 @@ pub struct ProcessState {
     /// The recorded NEF-pipeline outcome (`nef_outcome::*`), when the route
     /// ran the pipeline.
     pub nef_outcome: Option<String>,
-}
-
-#[derive(SurrealValue)]
-struct UnprocessedMessageRow {
-    id: surrealdb::types::RecordId,
-    conversation_id: surrealdb::types::RecordId,
-    provider_message_id: Option<String>,
-    body: String,
-    occurred_at: String,
-    inserted_at: surrealdb::types::Datetime,
-}
-
-#[derive(SurrealValue)]
-struct ProcessStateRow {
-    route: Option<String>,
-    /// The writer stores an RFC 3339 string, matching the message table's
-    /// string-timestamp convention (`occurred_at`); parse on the way out.
-    processed_at: Option<String>,
-    nef_outcome: Option<String>,
-}
-
-/// Parse the stored `processed_at` back into a UTC instant. Anything the
-/// parser refuses is a corrupted field, reported — never invented around.
-fn parse_processed_at(stored: &str) -> Result<DateTime<Utc>, InboxError> {
-    DateTime::parse_from_rfc3339(stored)
-        .map(|parsed| parsed.with_timezone(&Utc))
-        .map_err(|error| InboxError::Db(format!("invalid processed_at {stored:?}: {error}")))
 }
 
 /// The configured mailbox boundary for the scheduled inbox preview.
@@ -3249,9 +1964,7 @@ impl MailboxPreviewScope {
         after: Option<(DateTime<Utc>, Uuid)>,
         limit: i64,
     ) -> Result<Vec<UnprocessedRow>, InboxError> {
-        let pg = inbox_authority()
-            .await?
-            .ok_or(InboxError::PostgresAuthorityRequired)?;
+        let pg = inbox_authority().await?;
         let page = crate::postgres::inbox::MailboxPreviewPage {
             actor_id,
             firm_id: self.firm_id,
@@ -3273,7 +1986,7 @@ impl MailboxPreviewScope {
 ///
 /// A store failure or a denial for a client-tier actor.
 pub async fn unprocessed_inbox(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
 ) -> Result<Vec<UnprocessedRow>, InboxError> {
     read_unprocessed_inbox(db, actor_id, None).await
@@ -3286,7 +1999,7 @@ type AssignmentCursor = (DateTime<Utc>, Uuid);
 /// # Errors
 /// A store failure or a denial for a client-tier actor.
 pub async fn unprocessed_assignment_page(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     after: Option<AssignmentCursor>,
     limit: u16,
@@ -3295,7 +2008,7 @@ pub async fn unprocessed_assignment_page(
 }
 
 async fn read_unprocessed_inbox(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     preview: Option<(Option<AssignmentCursor>, u16)>,
 ) -> Result<Vec<UnprocessedRow>, InboxError> {
@@ -3315,77 +2028,21 @@ async fn read_unprocessed_inbox(
         return Err(InboxError::Denied);
     };
 
-    if let Some(pg) = inbox_authority().await? {
-        let Some((after, limit)) = preview else {
-            return crate::postgres::inbox::unprocessed_inbox_on(&pg, visible_firms.as_deref())
-                .await;
-        };
-        let page = crate::postgres::inbox::AssignmentPreviewPage {
-            after,
-            limit: i64::from(limit),
-        };
-        return crate::postgres::inbox::unprocessed_inbox_scoped_on(
-            &pg,
-            visible_firms.as_deref(),
-            None,
-            Some(page),
-        )
-        .await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT id, conversation_id, provider_message_id, body, occurred_at, inserted_at \
-             FROM {MESSAGE} WHERE direction = 'inbound' AND (processed_at IS NONE \
-             OR nef_outcome IN ['{}', '{}', '{}']) ORDER BY inserted_at ASC",
-            crate::inbox::nef_outcome::NO_PROJECT,
-            crate::inbox::nef_outcome::NOT_A_NOTICE,
-            crate::inbox::nef_outcome::NO_CASE_NUMBER
-        ))
-        .await?
-        .check()?;
-    let rows: Vec<UnprocessedMessageRow> = response.take(0)?;
-
-    let mut unprocessed = Vec::new();
-    for row in rows {
-        let Some(message_id) = record_uuid(&row.id) else {
-            continue;
-        };
-        let Some(conversation_id) = record_uuid(&row.conversation_id) else {
-            continue;
-        };
-        let conversation = conversation_by_id(db, conversation_id)
-            .await?
-            .ok_or(InboxError::NotFound)?;
-        if let Some(firms) = &visible_firms {
-            if !firms.contains(&conversation.firm_id) {
-                continue;
-            }
-        }
-        unprocessed.push(UnprocessedRow {
-            id: message_id,
-            conversation_id: conversation.id,
-            firm_id: conversation.firm_id,
-            project_id: conversation.project_id,
-            channel: conversation.channel,
-            provider_message_id: row.provider_message_id,
-            external_address: conversation.external_address,
-            external_name: conversation.external_name,
-            subject: conversation.subject,
-            body: row.body,
-            occurred_at: row.occurred_at,
-            inserted_at: row.inserted_at.into(),
-        });
-    }
-    if let Some((after, limit)) = preview {
-        unprocessed.retain(|row| {
-            row.project_id.is_none()
-                && row.channel == channel::EMAIL
-                && after.is_none_or(|cursor| (row.inserted_at, row.id) > cursor)
-        });
-        unprocessed.sort_unstable_by_key(|row| (row.inserted_at, row.id));
-        unprocessed.truncate(usize::from(limit));
-    }
-    Ok(unprocessed)
+    let pg = inbox_authority().await?;
+    let Some((after, limit)) = preview else {
+        return crate::postgres::inbox::unprocessed_inbox_on(&pg, visible_firms.as_deref()).await;
+    };
+    let page = crate::postgres::inbox::AssignmentPreviewPage {
+        after,
+        limit: i64::from(limit),
+    };
+    crate::postgres::inbox::unprocessed_inbox_scoped_on(
+        &pg,
+        visible_firms.as_deref(),
+        None,
+        Some(page),
+    )
+    .await
 }
 
 /// Resolve the distinct addresses on an admitted assignment preview page.
@@ -3395,7 +2052,7 @@ async fn read_unprocessed_inbox(
 /// # Errors
 /// Returns a store error, or a denial when a scheduled input crosses its Firm.
 pub async fn assignment_candidates(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     addresses: Vec<(Uuid, String)>,
     scope: Option<&MailboxPreviewScope>,
 ) -> Result<HashMap<(Uuid, String), assign_match::ResolvedAddress>, InboxError> {
@@ -3410,44 +2067,16 @@ pub async fn assignment_candidates(
     }) {
         return Err(InboxError::Denied);
     }
-    if let Some(pg) = inbox_authority().await? {
-        let addresses: Vec<_> = addresses.into_iter().collect();
-        let brand = scope.map(|scope| scope.brand_key.as_str());
-        return Ok(
-            crate::postgres::inbox::assignment_candidates_on(&pg, &addresses, brand)
-                .await?
-                .into_iter()
-                .map(|(firm_id, resolved)| ((firm_id, resolved.address.clone()), resolved))
-                .collect(),
-        );
-    }
-    if scope.is_some() {
-        return Err(InboxError::PostgresAuthorityRequired);
-    }
-    let mut resolved = HashMap::new();
-    for (firm_id, address) in addresses {
-        let person = persons::find_by_any_email(db, &address).await?;
-        let mut open_projects = Vec::new();
-        if let Some(person) = &person {
-            for participation in crate::projects::participations_for_person(db, person.id).await? {
-                let project = crate::projects::find_by_id(db, participation.project_id).await?;
-                if project.is_some_and(|project| {
-                    project.firm_id == Some(firm_id) && project.status == "open"
-                }) {
-                    open_projects.push(participation.project_id);
-                }
-            }
-        }
-        resolved.insert(
-            (firm_id, address.clone()),
-            assign_match::ResolvedAddress {
-                address,
-                person_id: person.map(|person| person.id),
-                open_projects,
-            },
-        );
-    }
-    Ok(resolved)
+    let pg = inbox_authority().await?;
+    let addresses: Vec<_> = addresses.into_iter().collect();
+    let brand = scope.map(|scope| scope.brand_key.as_str());
+    Ok(
+        crate::postgres::inbox::assignment_candidates_on(&pg, &addresses, brand)
+            .await?
+            .into_iter()
+            .map(|(firm_id, resolved)| ((firm_id, resolved.address.clone()), resolved))
+            .collect(),
+    )
 }
 
 /// The recorded process state of one message. `Ok(None)` means the message
@@ -3458,29 +2087,11 @@ pub async fn assignment_candidates(
 ///
 /// A store failure.
 pub async fn process_state(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     message_id: Uuid,
 ) -> Result<Option<ProcessState>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return crate::postgres::inbox::process_state_on(&pg, message_id).await;
-    }
-    let mut response = db
-        .query("SELECT route, processed_at, nef_outcome FROM ONLY $id")
-        .bind(("id", record_id(MESSAGE, message_id)))
-        .await?
-        .check()?;
-    let row: Option<ProcessStateRow> = response.take(0)?;
-    row.map(|row| {
-        Ok(ProcessState {
-            route: row.route,
-            processed_at: row
-                .processed_at
-                .map(|stored| parse_processed_at(&stored))
-                .transpose()?,
-            nef_outcome: row.nef_outcome,
-        })
-    })
-    .transpose()
+    let pg = inbox_authority().await?;
+    crate::postgres::inbox::process_state_on(&pg, message_id).await
 }
 
 /// Record the route, processing time, and — when the route ran the NEF
@@ -3492,7 +2103,7 @@ pub async fn process_state(
 /// An unknown route or outcome spelling, a store failure, or a mirror-write
 /// failure.
 pub async fn mark_processed(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     message_id: Uuid,
     route: &str,
     processed_at: DateTime<Utc>,
@@ -3506,28 +2117,8 @@ pub async fn mark_processed(
             return Err(InboxError::InvalidRoute(spelling.to_owned()));
         }
     }
-    if let Some(pg) = inbox_authority().await? {
-        return crate::postgres::inbox::mark_processed_on(
-            &pg,
-            message_id,
-            route,
-            processed_at,
-            outcome,
-        )
-        .await;
-    }
-    db.query(
-        "UPDATE $id SET route = $route, processed_at = $processed_at, \
-         nef_outcome = $nef_outcome, updated_at = time::now()",
-    )
-    .bind(("id", record_id(MESSAGE, message_id)))
-    .bind(("route", route))
-    .bind(("processed_at", processed_at.to_rfc3339()))
-    .bind(("nef_outcome", outcome))
-    .await?
-    .check()?;
-    after_write(db, MirrorKey::InboxMessage(message_id)).await;
-    Ok(())
+    let pg = inbox_authority().await?;
+    crate::postgres::inbox::mark_processed_on(&pg, message_id, route, processed_at, outcome).await
 }
 
 /// One message's process context: the row the classification layer reads
@@ -3541,7 +2132,7 @@ pub async fn mark_processed(
 /// A store failure, a denial for a client-tier actor, or not found
 /// (including out-of-scope).
 pub async fn process_context(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     message_id: Uuid,
 ) -> Result<ProcessContext, InboxError> {
@@ -3610,74 +2201,18 @@ pub struct ProcessContext {
 /// [`InboxError::Denied`] when the actor lacks Firm access.
 /// [`InboxError::NotFound`] when the conversation does not exist.
 pub async fn intake_detail(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<IntakeDetail, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::intake_detail_on(
-            &pg,
-            db,
-            actor_id,
-            conversation_id,
-        ))
-        .await;
-    }
-    let actor = load_person(db, actor_id).await?;
-    let conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if actor.role != Role::Owner
-        && (!matches!(actor.role, Role::Lawyer | Role::Clerk | Role::Admin)
-            || !crate::firms::memberships_for_person(db, actor_id)
-                .await
-                .map_err(|error| InboxError::Db(error.to_string()))?
-                .iter()
-                .any(|membership| membership.firm_id == conversation.firm_id))
-    {
-        return Err(InboxError::Denied);
-    }
-    let participates = match conversation.project_id {
-        Some(project_id) => sees_project(db, actor_id, actor.role, project_id).await?,
-        None => false,
-    };
-    let can_social_reply = is_social_channel(&conversation.channel)
-        && social_reply_actor_still_authorized(db, actor_id, &conversation).await?;
-    let can_sms_reply = conversation.channel == channel::SMS
-        && !crate::fi_import::is_account(&conversation.provider_account)
-        && social_reply_actor_still_authorized(db, actor_id, &conversation).await?;
-    let bodies_visible =
-        conversation.project_id.is_none() || participates || can_social_reply || can_sms_reply;
-    let messages = if bodies_visible {
-        messages_for(db, conversation.id).await?
-    } else {
-        Vec::new()
-    };
-    if bodies_visible {
-        mark_read(db, conversation.id).await?;
-    }
-    let delivery_state = latest_outbound_state(db, conversation.id).await?;
-    let contact = sender_identity(db, &conversation).await?;
-    Ok(IntakeDetail {
-        contact,
-        projects: projects_in_firm(db, conversation.firm_id).await?,
-        next_action: if can_social_reply || can_sms_reply {
-            next_action(actor.role, true, &delivery_state, true).to_string()
-        } else {
-            next_action(
-                actor.role,
-                conversation.project_id.is_some(),
-                &delivery_state,
-                false,
-            )
-            .to_string()
-        },
-        conversation,
-        messages,
-        bodies_visible,
-        can_social_reply,
-        can_sms_reply,
-    })
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::intake_detail_on(
+        &pg,
+        db,
+        actor_id,
+        conversation_id,
+    ))
+    .await
 }
 
 /// Project inbox for a participating Lawyer, Clerk, or — read-only — any
@@ -3689,47 +2224,20 @@ pub async fn intake_detail(
 /// [`InboxError::Denied`] when the actor does not participate, or is a Client.
 /// [`InboxError::NotFound`] when the conversation is not on that Project.
 pub async fn project_thread(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     project_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<ThreadView, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::project_thread_on(
-            &pg,
-            db,
-            actor_id,
-            project_id,
-            conversation_id,
-        ))
-        .await;
-    }
-    let actor = load_person(db, actor_id).await?;
-    if actor.role == Role::Client || !sees_project(db, actor_id, actor.role, project_id).await? {
-        return Err(InboxError::Denied);
-    }
-    let conversation = conversation_by_id(db, conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if conversation.project_id != Some(project_id) {
-        return Err(InboxError::NotFound);
-    }
-    let can_note = matches!(actor.role, Role::Lawyer | Role::Clerk);
-    let can_send =
-        matches!(actor.role, Role::Lawyer | Role::Clerk) && allows_external_reply(&conversation);
-    let delivery_state = latest_outbound_state(db, conversation.id).await?;
-    let messages = messages_for(db, conversation.id).await?;
-    mark_read(db, conversation.id).await?;
-    Ok(ThreadView {
-        assignee: assignee_label(db, conversation.project_id).await?,
-        delivery: delivery_state.clone(),
-        next_action: next_action(actor.role, true, &delivery_state, can_send).to_string(),
-        conversation,
-        messages,
-        can_note,
-        can_send,
-        can_attribute: matches!(actor.role, Role::Lawyer | Role::Clerk),
-    })
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::project_thread_on(
+        &pg,
+        db,
+        actor_id,
+        project_id,
+        conversation_id,
+    ))
+    .await
 }
 
 /// Conversations assigned to one Project, for a participant who may open
@@ -3739,74 +2247,15 @@ pub async fn project_thread(
 ///
 /// [`InboxError::Denied`] for a non-participant or a Client.
 pub async fn list_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Vec<IntakeRow>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::list_project_on(
-            &pg, db, actor_id, project_id,
-        ))
-        .await;
-    }
-    let actor = load_person(db, actor_id).await?;
-    if actor.role == Role::Client || !sees_project(db, actor_id, actor.role, project_id).await? {
-        return Err(InboxError::Denied);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {CONVERSATION_SELECT} FROM {CONVERSATION} WHERE project_id = $project \
-             ORDER BY updated_at DESC"
-        ))
-        .bind(("project", record_id(projects::PROJECT_TABLE, project_id)))
-        .await?
-        .check()?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    let can_send = matches!(actor.role, Role::Lawyer | Role::Clerk);
-    let conversations: Vec<Conversation> = rows
-        .into_iter()
-        .filter_map(ConversationRow::into_conversation)
-        .collect();
-    let people = person_badges(db, &conversations).await?;
-    let mut listed = Vec::new();
-    for conversation in conversations {
-        let contact = sender_identity(db, &conversation).await?;
-        let delivery_state = latest_outbound_state(db, conversation.id).await?;
-        let messages = messages_for(db, conversation.id).await?;
-        let person = conversation
-            .person_id
-            .and_then(|person_id| people.get(&person_id).cloned());
-        listed.push(IntakeRow {
-            contact,
-            id: conversation.id,
-            firm_id: conversation.firm_id,
-            brand_key: conversation.brand_key.clone(),
-            project_id: conversation.project_id,
-            channel: conversation.channel.clone(),
-            assignee: assignee_label(db, conversation.project_id).await?,
-            unread: conversation.unread,
-            next_action: next_action(
-                actor.role,
-                true,
-                &delivery_state,
-                can_send && allows_external_reply(&conversation),
-            )
-            .to_string(),
-            delivery: delivery_state,
-            external_address: conversation.external_address,
-            external_name: conversation.external_name,
-            subject: conversation.subject,
-            direction: latest_direction(&messages),
-            preview: latest_preview(&messages),
-            person,
-            has_attachments: has_attachments(&messages),
-            sent: has_sent(&messages),
-            trashed: conversation.trashed_at.is_some(),
-            email_sent_at: email_sent_at(&conversation.channel, &messages),
-            updated_at: conversation.updated_at,
-        });
-    }
-    Ok(listed)
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::list_project_on(
+        &pg, db, actor_id, project_id,
+    ))
+    .await
 }
 
 /// Unread conversations assigned to one Project — the matter dashboard's
@@ -3820,25 +2269,15 @@ pub async fn list_project(
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn unread_count_for_project(db: &SurrealDb, project_id: Uuid) -> Result<i64, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::unread_count_for_project_on(
-            &pg, project_id,
-        ))
-        .await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE count() FROM {CONVERSATION} WHERE project_id = $project \
-             AND unread = true AND trashed_at = NONE GROUP ALL"
-        ))
-        .bind(("project", record_id(projects::PROJECT_TABLE, project_id)))
-        .await?
-        .check()?;
-    // `SELECT VALUE count()` yields bare numbers — one per GROUP ALL group,
-    // and no row at all when nothing matches, which is a count of zero.
-    let counts: Vec<i64> = response.take(0)?;
-    Ok(counts.first().copied().unwrap_or(0))
+pub async fn unread_count_for_project(
+    _db: &ApplicationStore,
+    project_id: Uuid,
+) -> Result<i64, InboxError> {
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::unread_count_for_project_on(
+        &pg, project_id,
+    ))
+    .await
 }
 
 /// Whether a participating Lawyer or Clerk may relay this email thread now.
@@ -3850,29 +2289,18 @@ pub async fn unread_count_for_project(db: &SurrealDb, project_id: Uuid) -> Resul
 ///
 /// Propagates any database error.
 pub async fn clerk_may_relay_email_thread(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     email_conversation_id: Uuid,
 ) -> Result<bool, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::clerk_may_relay_email_thread_on(
-            &pg,
-            db,
-            person_id,
-            email_conversation_id,
-        ))
-        .await;
-    }
-    let Ok(person) = load_person(db, person_id).await else {
-        return Ok(false);
-    };
-    if !matches!(person.role, Role::Lawyer | Role::Clerk) {
-        return Ok(false);
-    }
-    let Some(conversation) = find_by_email_conversation(db, email_conversation_id).await? else {
-        return Ok(false);
-    };
-    participant_still_may_reply(db, person_id, conversation.project_id).await
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::clerk_may_relay_email_thread_on(
+        &pg,
+        db,
+        person_id,
+        email_conversation_id,
+    ))
+    .await
 }
 
 /// Assignment history, oldest first.
@@ -3881,25 +2309,11 @@ pub async fn clerk_may_relay_email_thread(
 ///
 /// Propagates any database error.
 pub async fn assignments(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     conversation_id: Uuid,
 ) -> Result<Vec<Assignment>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::assignments_on(&pg, conversation_id)).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {ASSIGNMENT_SELECT} FROM {ASSIGNMENT} WHERE conversation_id = $conversation \
-             ORDER BY inserted_at"
-        ))
-        .bind(("conversation", record_id(CONVERSATION, conversation_id)))
-        .await?
-        .check()?;
-    let rows: Vec<AssignmentRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(AssignmentRow::into_assignment)
-        .collect())
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::assignments_on(&pg, conversation_id)).await
 }
 
 /// Asset id for a message the actor may read, or `None` when it has no
@@ -3909,74 +2323,31 @@ pub async fn assignments(
 ///
 /// [`InboxError::Denied`] or [`InboxError::NotFound`].
 pub async fn readable_attachment(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     message_id: Uuid,
 ) -> Result<Option<Uuid>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::readable_attachment_on(
-            &pg, db, actor_id, message_id,
-        ))
-        .await;
-    }
-    let message = message_by_id(db, message_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    let conversation = conversation_by_id(db, message.conversation_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    let actor = load_person(db, actor_id).await?;
-    let allowed = match (actor.role, conversation.project_id) {
-        (Role::Owner, None) => true,
-        (Role::Owner, Some(project_id)) => {
-            sees_project(db, actor_id, Role::Owner, project_id).await?
-        }
-        (Role::Client, _) => false,
-        (_, Some(project_id)) => {
-            let sees = sees_project(db, actor_id, actor.role, project_id).await?;
-            if message.direction == direction::INTERNAL {
-                sees && matches!(actor.role, Role::Lawyer | Role::Clerk)
-            } else {
-                sees && actor.role != Role::Client
-            }
-        }
-        _ => false,
-    };
-    if !allowed {
-        return Err(InboxError::Denied);
-    }
-    Ok(message.attachment_asset_id)
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::readable_attachment_on(
+        &pg, db, actor_id, message_id,
+    ))
+    .await
 }
 
 pub async fn conversation_by_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<Conversation>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::conversation_by_id_on(&pg, id)).await;
-    }
-    let mut response = db
-        .query(format!("SELECT {CONVERSATION_SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(CONVERSATION, id)))
-        .await?
-        .check()?;
-    let row: Option<ConversationRow> = response.take(0)?;
-    let conversation = row.and_then(ConversationRow::into_conversation);
-    Ok(conversation)
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::conversation_by_id_on(&pg, id)).await
 }
 
-pub async fn message_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Message>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::message_by_id_on(&pg, id)).await;
-    }
-    let mut response = db
-        .query(format!("SELECT {MESSAGE_SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(MESSAGE, id)))
-        .await?
-        .check()?;
-    let row: Option<MessageRow> = response.take(0)?;
-    let message = row.and_then(MessageRow::into_message);
-    Ok(message)
+pub async fn message_by_id(
+    _db: &ApplicationStore,
+    id: Uuid,
+) -> Result<Option<Message>, InboxError> {
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::message_by_id_on(&pg, id)).await
 }
 
 // This stable key is part of the receipt's persistent idempotency contract.
@@ -3986,7 +2357,7 @@ pub(crate) fn acknowledgment_id(inbound_message_id: Uuid) -> Uuid {
 
 /// The system receipt reserved for an inbound message, including an unknown send.
 pub async fn acknowledgment_for(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     inbound_message_id: Uuid,
 ) -> Result<Option<Message>, InboxError> {
     message_by_id(db, acknowledgment_id(inbound_message_id)).await
@@ -3996,65 +2367,30 @@ pub async fn acknowledgment_for(
 /// A reserved row is `unknown`: a crash must never cause a second external send.
 /// This system receipt carries no Clerk authority and cannot dispatch a matter reply.
 pub async fn reserve_acknowledgment(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     inbound: &IngestedInbound,
     body: &str,
 ) -> Result<Option<Uuid>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::reserve_acknowledgment_on(
-            &pg, inbound, body,
-        ))
-        .await;
-    }
-    let id = acknowledgment_id(inbound.message_id);
-    if message_by_id(db, id).await?.is_some() {
-        return Ok(None);
-    }
-    let result = db
-        .query(
-            "CREATE ONLY $id SET conversation_id = $conversation, direction = 'outbound', \
-         body = $body, delivery_state = 'unknown', purpose = 'matter', \
-         occurred_at = $occurred, inserted_at = time::now(), updated_at = time::now()",
-        )
-        .bind(("id", record_id(MESSAGE, id)))
-        .bind((
-            "conversation",
-            record_id(CONVERSATION, inbound.conversation_id),
-        ))
-        .bind(("body", body.to_string()))
-        .bind(("occurred", Utc::now().to_rfc3339()))
-        .await?
-        .check();
-    match result {
-        Ok(_) => {
-            after_write(db, MirrorKey::InboxMessage(id)).await;
-            Ok(Some(id))
-        }
-        Err(_) if message_by_id(db, id).await?.is_some() => Ok(None),
-        Err(error) => Err(error.into()),
-    }
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::reserve_acknowledgment_on(
+        &pg, inbound, body,
+    ))
+    .await
 }
 
 /// Record provider acceptance of a reserved acknowledgment.
 pub async fn acknowledgment_submitted(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     provider_ref: Option<String>,
 ) -> Result<(), InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::acknowledgment_submitted_on(
-            &pg,
-            id,
-            provider_ref,
-        ))
-        .await;
-    }
-    db.query("UPDATE $id SET delivery_state = 'submitted', provider_ref = $provider, updated_at = time::now()")
-        .bind(("id", record_id(MESSAGE, id)))
-        .bind(("provider", provider_ref))
-        .await?.check()?;
-    after_write(db, MirrorKey::InboxMessage(id)).await;
-    Ok(())
+    let pg = inbox_authority().await?;
+    Box::pin(crate::postgres::inbox::acknowledgment_submitted_on(
+        &pg,
+        id,
+        provider_ref,
+    ))
+    .await
 }
 
 pub(crate) fn advance_delivery(current: &str, incoming: &str) -> &'static str {
@@ -4080,7 +2416,7 @@ pub(crate) fn advance_delivery(current: &str, incoming: &str) -> &'static str {
 }
 
 pub(crate) async fn participant_still_may_reply(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     project_id: Option<Uuid>,
 ) -> Result<bool, InboxError> {
@@ -4118,23 +2454,11 @@ fn has_phone_counterparty(channel_name: &str) -> bool {
     matches!(channel_name, channel::SMS | channel::VOICE)
 }
 
-async fn authorize_social_reply(
-    db: &SurrealDb,
-    actor_id: Uuid,
-    conversation: &Conversation,
-) -> Result<(), InboxError> {
-    if social_reply_actor_still_authorized(db, actor_id, conversation).await? {
-        Ok(())
-    } else {
-        Err(InboxError::Denied)
-    }
-}
-
 /// Social moderation authority belongs to the deployment Owner or the
 /// conversation's Firm Admin DRI. A matter-side Lawyer/Clerk may reply only
 /// while their Project participation remains active.
 pub(crate) async fn social_reply_actor_still_authorized(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation: &Conversation,
 ) -> Result<bool, InboxError> {
@@ -4144,7 +2468,7 @@ pub(crate) async fn social_reply_actor_still_authorized(
 /// The same authority for a Firm and optional Project, so an outbound text can
 /// be authorized before its conversation exists.
 pub(crate) async fn reply_actor_authorized(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     firm_id: Uuid,
     project_id: Option<Uuid>,
@@ -4167,7 +2491,7 @@ pub(crate) async fn reply_actor_authorized(
 }
 
 pub(crate) async fn sees_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     role: Role,
     project_id: Uuid,
@@ -4178,362 +2502,12 @@ pub(crate) async fn sees_project(
 }
 
 pub(crate) async fn load_person(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<persons::Person, InboxError> {
     persons::find_by_id(db, person_id)
         .await?
         .ok_or(InboxError::NotFound)
-}
-
-async fn find_ingress(
-    db: &SurrealDb,
-    firm_id: Uuid,
-    channel_name: &str,
-    provider_account: &str,
-    provider_message_id: &str,
-) -> Result<Option<Uuid>, InboxError> {
-    let mut response = db
-        .query(
-            "SELECT message_id FROM inbox_ingress WHERE firm_id = $firm AND channel = $channel \
-             AND provider_account = $account AND provider_message_id = $provider LIMIT 1",
-        )
-        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
-        .bind(("channel", channel_name.to_string()))
-        .bind(("account", provider_account.to_string()))
-        .bind(("provider", provider_message_id.to_string()))
-        .await?
-        .check()?;
-    let rows: Vec<IngressRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .find_map(|row| record_uuid(&row.message_id)))
-}
-
-async fn parent_message_id(
-    db: &SurrealDb,
-    conversation_id: Uuid,
-    provider_message_id: &str,
-) -> Result<Option<Uuid>, InboxError> {
-    let mut response = db
-        .query("SELECT VALUE id FROM message WHERE conversation_id = $conversation AND provider_message_id = $provider LIMIT 1")
-        .bind(("conversation", record_id(CONVERSATION, conversation_id)))
-        .bind(("provider", provider_message_id.to_string()))
-        .await?
-        .check()?;
-    let id: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(id.as_ref().and_then(record_uuid))
-}
-
-#[derive(SurrealValue)]
-struct ReferencedRow {
-    conversation_id: surrealdb::types::RecordId,
-    provider_message_id: String,
-}
-
-/// The Conversation [`ingest_inbound_threaded`] joins: same Firm, channel,
-/// and Project attribution, keyed on the provider thread id first and then
-/// on the nearest referenced Message.
-async fn find_referenced_thread(
-    db: &SurrealDb,
-    inbound: &IngestInbound<'_>,
-    references: &[String],
-) -> Result<Option<Conversation>, InboxError> {
-    let project = inbound.project_id.map(|id| record_id("project", id));
-    let mut conversation_id = None;
-    if let Some(thread) = inbound.provider_thread_ref {
-        let mut response = db
-            .query(format!(
-                "SELECT VALUE id FROM {CONVERSATION} WHERE firm_id = $firm AND channel = $channel \
-                 AND project_id = $project AND provider_thread_ref = $thread \
-                 ORDER BY inserted_at DESC LIMIT 1"
-            ))
-            .bind(("firm", record_id(crate::firms::TABLE, inbound.firm_id)))
-            .bind(("channel", inbound.channel.to_string()))
-            .bind(("project", project.clone()))
-            .bind(("thread", thread.to_string()))
-            .await?
-            .check()?;
-        let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-        conversation_id = ids.first().and_then(record_uuid);
-    }
-    if conversation_id.is_none() && !references.is_empty() {
-        let mut response = db
-            .query(format!(
-                "SELECT conversation_id, provider_message_id FROM {MESSAGE} \
-                 WHERE provider_message_id IN $references \
-                 AND conversation_id.firm_id = $firm AND conversation_id.channel = $channel \
-                 AND conversation_id.project_id = $project"
-            ))
-            .bind(("references", references.to_vec()))
-            .bind(("firm", record_id(crate::firms::TABLE, inbound.firm_id)))
-            .bind(("channel", inbound.channel.to_string()))
-            .bind(("project", project))
-            .await?
-            .check()?;
-        let rows: Vec<ReferencedRow> = response.take(0)?;
-        let hits: Vec<(String, Uuid)> = rows
-            .into_iter()
-            .filter_map(|row| Some((row.provider_message_id, record_uuid(&row.conversation_id)?)))
-            .collect();
-        conversation_id = nearest_referenced_conversation(references, &hits);
-    }
-    let Some(conversation_id) = conversation_id else {
-        return Ok(None);
-    };
-    let mut response = db
-        .query(format!("SELECT {CONVERSATION_SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(CONVERSATION, conversation_id)))
-        .await?
-        .check()?;
-    let row: Option<ConversationRow> = response.take(0)?;
-    Ok(row.and_then(ConversationRow::into_conversation))
-}
-
-async fn find_open_thread(
-    db: &SurrealDb,
-    inbound: &IngestInbound<'_>,
-) -> Result<Option<Conversation>, InboxError> {
-    let mut response = db
-        .query(format!(
-            "SELECT {CONVERSATION_SELECT} FROM {CONVERSATION} WHERE firm_id = $firm \
-             AND channel = $channel AND brand_key = $brand AND provider_account = $account \
-             AND interaction_type = $interaction \
-             AND (provider_thread_ref = $thread OR $thread IS NONE) \
-             AND project_id = $project \
-             AND external_address = $address ORDER BY inserted_at DESC LIMIT 1"
-        ))
-        .bind(("firm", record_id(crate::firms::TABLE, inbound.firm_id)))
-        .bind(("channel", inbound.channel.to_string()))
-        .bind(("brand", inbound.brand_key.map(str::to_string)))
-        .bind((
-            "interaction",
-            inbound.interaction_type.unwrap_or("message").to_string(),
-        ))
-        .bind(("thread", inbound.provider_thread_ref.map(str::to_string)))
-        .bind((
-            "project",
-            inbound.project_id.map(|id| record_id("project", id)),
-        ))
-        .bind(("account", inbound.provider_account.to_string()))
-        .bind(("address", inbound.external_address.to_string()))
-        .await?
-        .check()?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .find_map(ConversationRow::into_conversation))
-}
-
-async fn create_conversation(
-    db: &SurrealDb,
-    inbound: &IngestInbound<'_>,
-    person_id: Option<Uuid>,
-) -> Result<Conversation, InboxError> {
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET firm_id = $firm, brand_key = $brand, interaction_type = $interaction_type, \
-             provider_post_id = $provider_post_id, project_id = $project, channel = $channel, \
-             external_address = $address, external_name = $name, subject = $subject, \
-             unread = true, provider_account = $account, provider_thread_ref = $thread, \
-             source_page = $source_page, source_channel = $source_channel, \
-             matter_consent = $matter_consent, promotional_opt_in = $promotional, \
-             promotional_opt_out = false, email_conversation_id = $email_conversation, \
-             person_id = $person, inserted_at = time::now(), updated_at = time::now() \
-             RETURN {CONVERSATION_SELECT}"
-        ))
-        .bind(("id", record_id(CONVERSATION, id)))
-        .bind(("firm", record_id(crate::firms::TABLE, inbound.firm_id)))
-        .bind(("brand", inbound.brand_key.map(str::to_string)))
-        .bind(("interaction_type", inbound.interaction_type.unwrap_or("message").to_string()))
-        .bind(("provider_post_id", inbound.provider_post_id.map(str::to_string)))
-        .bind((
-            "project",
-            inbound.project_id.map(|id| record_id("project", id)),
-        ))
-        .bind(("channel", inbound.channel.to_string()))
-        .bind(("address", inbound.external_address.to_string()))
-        .bind(("name", inbound.external_name.map(str::to_string)))
-        .bind(("subject", inbound.subject.map(str::to_string)))
-        .bind(("account", inbound.provider_account.to_string()))
-        .bind(("thread", inbound.provider_thread_ref.map(str::to_string)))
-        .bind(("source_page", inbound.source_page.map(str::to_string)))
-        .bind(("source_channel", inbound.source_channel.map(str::to_string)))
-        .bind(("matter_consent", inbound.matter_consent))
-        .bind(("promotional", inbound.promotional_opt_in))
-        .bind((
-            "email_conversation",
-            inbound
-                .email_conversation_id
-                .map(|id| record_id("email_conversation", id)),
-        ))
-        .bind(("person", person_id.map(|id| record_id("person", id))))
-        .await?
-        .check()?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    let conversation = rows
-        .into_iter()
-        .find_map(ConversationRow::into_conversation)
-        .ok_or(InboxError::NotFound)?;
-    after_write(db, MirrorKey::InboxConversation(id)).await;
-    Ok(conversation)
-}
-
-async fn link_email_conversation(
-    db: &SurrealDb,
-    conversation_id: Uuid,
-    email_conversation_id: Option<Uuid>,
-) -> Result<(), InboxError> {
-    db.query("UPDATE $id SET email_conversation_id = $email, updated_at = time::now()")
-        .bind(("id", record_id(CONVERSATION, conversation_id)))
-        .bind((
-            "email",
-            email_conversation_id.map(|id| record_id("email_conversation", id)),
-        ))
-        .await?
-        .check()?;
-    after_write(db, MirrorKey::InboxConversation(conversation_id)).await;
-    Ok(())
-}
-
-async fn create_ingress(
-    db: &SurrealDb,
-    inbound: &IngestInbound<'_>,
-    message_id: Uuid,
-) -> Result<(), InboxError> {
-    let id = Uuid::now_v7();
-    db.query(
-        "CREATE $id SET firm_id = $firm, channel = $channel, provider_account = $account, \
-         provider_message_id = $provider, message_id = $message, inserted_at = time::now()",
-    )
-    .bind(("id", record_id(INGRESS, id)))
-    .bind(("firm", record_id(crate::firms::TABLE, inbound.firm_id)))
-    .bind(("channel", inbound.channel.to_string()))
-    .bind(("account", inbound.provider_account.to_string()))
-    .bind(("provider", inbound.provider_message_id.to_string()))
-    .bind(("message", record_id(MESSAGE, message_id)))
-    .await?
-    .check()?;
-    after_write(db, MirrorKey::InboxIngress(id)).await;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn create_message(
-    db: &SurrealDb,
-    conversation_id: Uuid,
-    direction_value: &str,
-    body: &str,
-    author_person_id: Option<Uuid>,
-    provider_message_id: Option<&str>,
-    provider_ref: Option<&str>,
-    delivery_state: &str,
-    purpose_value: &str,
-    visibility: Option<&str>,
-    attachment_asset_id: Option<Uuid>,
-    occurred_at: &str,
-    raw_storage_key: Option<&str>,
-) -> Result<Uuid, InboxError> {
-    let id = Uuid::now_v7();
-    db.query(
-        "CREATE $id SET conversation_id = $conversation, direction = $direction, body = $body, \
-         visibility = $visibility, alert_state = $alert_state, \
-         author_person_id = $author, provider_message_id = $provider_message, \
-         provider_ref = $provider_ref, delivery_state = $delivery, purpose = $purpose, \
-         attachment_asset_id = $attachment, raw_storage_key = $raw_storage_key, \
-         communication_id = NONE, occurred_at = $occurred, \
-         inserted_at = time::now(), updated_at = time::now()",
-    )
-    .bind(("id", record_id(MESSAGE, id)))
-    .bind(("conversation", record_id(CONVERSATION, conversation_id)))
-    .bind(("direction", direction_value.to_string()))
-    .bind((
-        "alert_state",
-        (direction_value == direction::INBOUND).then(|| "pending".to_string()),
-    ))
-    .bind(("body", body.to_string()))
-    .bind(("author", author_person_id.map(|id| record_id("person", id))))
-    .bind(("provider_message", provider_message_id.map(str::to_string)))
-    .bind(("provider_ref", provider_ref.map(str::to_string)))
-    .bind(("delivery", delivery_state.to_string()))
-    .bind(("purpose", purpose_value.to_string()))
-    .bind(("visibility", visibility.map(str::to_string)))
-    .bind((
-        "attachment",
-        attachment_asset_id.map(|id| record_id("asset", id)),
-    ))
-    .bind(("occurred", occurred_at.to_string()))
-    .bind(("raw_storage_key", raw_storage_key.map(str::to_string)))
-    .await?
-    .check()?;
-    after_write(db, MirrorKey::InboxMessage(id)).await;
-    Ok(id)
-}
-
-async fn project_all_messages(
-    db: &SurrealDb,
-    conversation: &Conversation,
-) -> Result<(), InboxError> {
-    for message in messages_for(db, conversation.id).await? {
-        project_message(db, conversation, &message).await?;
-    }
-    Ok(())
-}
-
-async fn project_message(
-    db: &SurrealDb,
-    conversation: &Conversation,
-    message: &Message,
-) -> Result<(), InboxError> {
-    let Some(project_id) = conversation.project_id else {
-        return Ok(());
-    };
-    if let Some(communication_id) = message.communication_id {
-        communications::move_to_project(db, communication_id, project_id).await?;
-        return Ok(());
-    }
-    let source_ref = format!("inbox:{}", message.id);
-    let channel_name = spine_channel(&conversation.channel, &message.direction);
-    if channel_name.is_empty() {
-        return Err(InboxError::Denied);
-    }
-    let spine_direction = if message.direction == direction::INTERNAL {
-        communications::direction::INTERNAL
-    } else if message.direction == direction::OUTBOUND {
-        communications::direction::OUTBOUND
-    } else {
-        communications::direction::INBOUND
-    };
-    let ingested = communications::ingest(
-        db,
-        &IngestArgs {
-            project_id,
-            channel: channel_name,
-            direction: spine_direction,
-            author_person_id: message.author_person_id,
-            counterparty: Some(conversation.external_address.as_str()),
-            subject: conversation.subject.as_deref(),
-            body: &message.body,
-            source_ref: Some(&source_ref),
-            asset_id: message.attachment_asset_id,
-            occurred_at: &message.occurred_at,
-        },
-    )
-    .await?;
-    db.query("UPDATE $id SET communication_id = $communication, updated_at = time::now()")
-        .bind(("id", record_id(MESSAGE, message.id)))
-        .bind((
-            "communication",
-            record_id("communication", ingested.communication_id),
-        ))
-        .await?
-        .check()?;
-    after_write(db, MirrorKey::InboxMessage(message.id)).await;
-    if ingested.deduped {
-        communications::move_to_project(db, ingested.communication_id, project_id).await?;
-    }
-    Ok(())
 }
 
 pub(crate) fn spine_channel(channel_name: &str, direction_value: &str) -> &'static str {
@@ -4561,227 +2535,8 @@ pub(crate) fn spine_channel(channel_name: &str, direction_value: &str) -> &'stat
     }
 }
 
-async fn messages_for(db: &SurrealDb, conversation_id: Uuid) -> Result<Vec<Message>, InboxError> {
-    let mut response = db
-        .query(format!(
-            "SELECT {MESSAGE_SELECT} FROM {MESSAGE} WHERE conversation_id = $conversation \
-             ORDER BY occurred_at, id"
-        ))
-        .bind(("conversation", record_id(CONVERSATION, conversation_id)))
-        .await?
-        .check()?;
-    let rows: Vec<MessageRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(MessageRow::into_message)
-        .collect())
-}
-
-async fn messages_in_state(db: &SurrealDb, state: &str) -> Result<Vec<Message>, InboxError> {
-    let mut response = db
-        .query(format!(
-            "SELECT {MESSAGE_SELECT} FROM {MESSAGE} WHERE delivery_state = $state"
-        ))
-        .bind(("state", state.to_string()))
-        .await?
-        .check()?;
-    let rows: Vec<MessageRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(MessageRow::into_message)
-        .collect())
-}
-
-async fn set_delivery(
-    db: &SurrealDb,
-    message_id: Uuid,
-    state: &str,
-    provider_ref: Option<&str>,
-) -> Result<(), InboxError> {
-    db.query(
-        "UPDATE $id SET delivery_state = $state, provider_ref = $provider, updated_at = time::now()",
-    )
-    .bind(("id", record_id(MESSAGE, message_id)))
-    .bind(("state", state.to_string()))
-    .bind(("provider", provider_ref.map(str::to_string)))
-    .await?
-    .check()?;
-    after_write(db, MirrorKey::InboxMessage(message_id)).await;
-    Ok(())
-}
-
-async fn reserve_dispatch(db: &SurrealDb, message_id: Uuid) -> Result<bool, InboxError> {
-    #[derive(SurrealValue)]
-    struct Claimed {
-        id: surrealdb::types::RecordId,
-    }
-    let mut response = db.query("UPDATE $id SET delivery_state = 'unknown', updated_at = time::now() WHERE direction = 'outbound' AND delivery_state = 'queued' RETURN id")
-        .bind(("id", record_id(MESSAGE, message_id))).await?.check()?;
-    let claimed: Vec<Claimed> = response.take(0)?;
-    let claimed = claimed
-        .iter()
-        .any(|row| record_uuid(&row.id) == Some(message_id));
-    if claimed {
-        after_write(db, MirrorKey::InboxMessage(message_id)).await;
-    }
-    Ok(claimed)
-}
-
-async fn journal_attempt(
-    db: &SurrealDb,
-    message_id: Uuid,
-    state: &str,
-    provider_ref: Option<&str>,
-    detail: Option<&str>,
-) -> Result<(), InboxError> {
-    let id = Uuid::now_v7();
-    db.query(
-        "CREATE $id SET message_id = $message, state = $state, provider_ref = $provider, \
-         detail = $detail, inserted_at = time::now()",
-    )
-    .bind(("id", record_id(ATTEMPT, id)))
-    .bind(("message", record_id(MESSAGE, message_id)))
-    .bind(("state", state.to_string()))
-    .bind(("provider", provider_ref.map(str::to_string)))
-    .bind(("detail", detail.map(str::to_string)))
-    .await?
-    .check()?;
-    after_write(db, MirrorKey::InboxDeliveryAttempt(id)).await;
-    Ok(())
-}
-
-async fn find_by_provider_ref(
-    db: &SurrealDb,
-    firm_id: Uuid,
-    channel_name: &str,
-    provider_account: &str,
-    provider_ref: &str,
-) -> Result<Option<Message>, InboxError> {
-    let mut response = db
-        .query(format!(
-            "SELECT {MESSAGE_SELECT} FROM {MESSAGE} WHERE provider_ref = $provider"
-        ))
-        .bind(("provider", provider_ref.to_string()))
-        .await?
-        .check()?;
-    let rows: Vec<MessageRow> = response.take(0)?;
-    for message in rows.into_iter().filter_map(MessageRow::into_message) {
-        let Some(conversation) = conversation_by_id(db, message.conversation_id).await? else {
-            continue;
-        };
-        if conversation.firm_id == firm_id
-            && conversation.channel == channel_name
-            && conversation.provider_account == provider_account
-        {
-            return Ok(Some(message));
-        }
-    }
-    Ok(None)
-}
-
-async fn find_by_email_conversation(
-    db: &SurrealDb,
-    email_conversation_id: Uuid,
-) -> Result<Option<Conversation>, InboxError> {
-    let mut response = db
-        .query(format!(
-            "SELECT {CONVERSATION_SELECT} FROM {CONVERSATION} \
-             WHERE email_conversation_id = $email LIMIT 1"
-        ))
-        .bind((
-            "email",
-            record_id("email_conversation", email_conversation_id),
-        ))
-        .await?
-        .check()?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .find_map(ConversationRow::into_conversation))
-}
-
-async fn all_conversations(db: &SurrealDb) -> Result<Vec<Conversation>, InboxError> {
-    let mut response = db
-        .query(format!(
-            "SELECT {CONVERSATION_SELECT} FROM {CONVERSATION} ORDER BY updated_at DESC"
-        ))
-        .await?
-        .check()?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(ConversationRow::into_conversation)
-        .collect())
-}
-
-async fn latest_outbound_state(
-    db: &SurrealDb,
-    conversation_id: Uuid,
-) -> Result<String, InboxError> {
-    let messages = messages_for(db, conversation_id).await?;
-    Ok(messages
-        .iter()
-        .rev()
-        .find(|message| message.direction == direction::OUTBOUND)
-        .map_or_else(
-            || delivery::RECEIVED.to_string(),
-            |message| message.delivery_state.clone(),
-        ))
-}
-
-/// The direction of a conversation's most recent message (`occurred_at, id`
-/// order), empty when it has none — what the list view's `?direction=`
-/// filter matches rows on (LAW-238 D3).
-fn latest_direction(messages: &[Message]) -> String {
-    messages
-        .last()
-        .map(|message| message.direction.clone())
-        .unwrap_or_default()
-}
-
-/// Whether any message on the conversation carries a filed attachment —
-/// what the list view's `?attachments=true` filter matches rows on.
-fn has_attachments(messages: &[Message]) -> bool {
-    messages
-        .iter()
-        .any(|message| message.attachment_asset_id.is_some())
-}
-
-/// Whether a firm-side Person sent any message on the conversation — what
-/// the Sent folder lists. Automated acknowledgements carry no author.
-fn has_sent(messages: &[Message]) -> bool {
-    messages.iter().any(is_sent)
-}
-
-fn is_sent(message: &Message) -> bool {
-    message.direction == direction::OUTBOUND && message.author_person_id.is_some()
-}
-
-fn email_sent_at(channel: &str, messages: &[Message]) -> Option<DateTime<Utc>> {
-    if channel != channel::EMAIL {
-        return None;
-    }
-    messages
-        .iter()
-        .filter(|message| message.direction == direction::INBOUND || is_sent(message))
-        .filter_map(|message| DateTime::parse_from_rfc3339(&message.occurred_at).ok())
-        .max()
-        .map(|date| date.with_timezone(&Utc))
-}
-
 /// How much of a message body a list row previews.
 pub(crate) const PREVIEW_CHAR_LIMIT: usize = 120;
-
-/// The preview snippet for a conversation's most recent written message,
-/// under the same `occurred_at, id` convention as [`latest_direction`]. An
-/// automated outbound message (no author) is skipped.
-pub(crate) fn latest_preview(messages: &[Message]) -> Option<String> {
-    let message = messages
-        .iter()
-        .rev()
-        .find(|message| message.direction != direction::OUTBOUND || is_sent(message))?;
-    preview_snippet(&message.body)
-}
 
 /// One message body's row-preview text: whitespace collapsed to single
 /// spaces, then ellipsized past [`PREVIEW_CHAR_LIMIT`]. A blank body
@@ -4806,7 +2561,7 @@ pub(crate) fn preview_snippet(body: &str) -> Option<String> {
 /// batched into one lookup. Conversations without a persisted association
 /// badge as nothing.
 pub(crate) async fn person_badges(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     conversations: &[Conversation],
 ) -> Result<HashMap<Uuid, PersonBadge>, InboxError> {
     let ids: Vec<Uuid> = conversations
@@ -4834,7 +2589,7 @@ pub(crate) async fn person_badges(
 }
 
 pub(crate) async fn assignee_label(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Option<Uuid>,
 ) -> Result<String, InboxError> {
     let Some(project_id) = project_id else {
@@ -4850,41 +2605,11 @@ pub(crate) async fn assignee_label(
 /// pane's picker, the triage override form, and the classifier's menu all
 /// read this list.
 pub async fn projects_in_firm(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     firm_id: Uuid,
 ) -> Result<Vec<ProjectChoice>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return crate::postgres::inbox::projects_in_firm_on(&pg, firm_id).await;
-    }
-    let mut response = db
-        .query(
-            "SELECT id, code, name, description FROM project \
-             WHERE firm_id = $firm AND string::lowercase(status) = 'open' ORDER BY name",
-        )
-        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
-        .await?
-        .check()?;
-    let rows: Vec<ProjectPick> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            Some(ProjectChoice {
-                id: record_uuid(&row.id)?,
-                code: row.code,
-                name: row.name,
-                description: row.description,
-            })
-        })
-        .collect())
-}
-
-async fn mark_read(db: &SurrealDb, conversation_id: Uuid) -> Result<(), InboxError> {
-    db.query("UPDATE $id SET unread = false, updated_at = time::now()")
-        .bind(("id", record_id(CONVERSATION, conversation_id)))
-        .await?
-        .check()?;
-    after_write(db, MirrorKey::InboxConversation(conversation_id)).await;
-    Ok(())
+    let pg = inbox_authority().await?;
+    crate::postgres::inbox::projects_in_firm_on(&pg, firm_id).await
 }
 
 /// Shared transport handle for callers that dispatch after a request returns.
@@ -4893,13 +2618,11 @@ pub type SharedTransport = Arc<dyn OutboundTransport>;
 /// Messages for an already-authorized reporting Conversation, from its active
 /// authority. The caller must resolve visibility before supplying this ID.
 pub(crate) async fn messages_for_reporting(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Vec<Message>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return crate::postgres::inbox::messages_for_on(&pg, id).await;
-    }
-    messages_for(db, id).await
+    let pg = inbox_authority().await?;
+    crate::postgres::inbox::messages_for_on(&pg, id).await
 }
 
 #[cfg(test)]
@@ -4957,7 +2680,7 @@ mod tests {
         clerk_participation: Uuid,
     }
 
-    pub(super) async fn world(db: &SurrealDb) -> World {
+    pub(super) async fn world(db: &ApplicationStore) -> World {
         let owner = person(db, "Owner", "owner@example.com", Role::Owner).await;
         let admin = person(db, "Admin", "admin@example.com", Role::Admin).await;
         let other_admin = person(db, "Other Admin", "other-admin@example.com", Role::Admin).await;
@@ -4988,10 +2711,10 @@ mod tests {
         let other_project = open_project(db, "beta-matter", "Beta Matter", firm).await;
         let foreign_project =
             open_project(db, "foreign-matter", "Foreign Matter", other_firm).await;
-        projects::designate_dri_in_surreal(db, project, lawyer, projects::DriSide::Lawyer)
+        projects::designate_dri(db, project, lawyer, projects::DriSide::Lawyer)
             .await
             .unwrap();
-        projects::designate_dri_in_surreal(db, other_project, lawyer, projects::DriSide::Lawyer)
+        projects::designate_dri(db, other_project, lawyer, projects::DriSide::Lawyer)
             .await
             .unwrap();
         let clerk_participation = projects::add_participation(
@@ -5035,14 +2758,14 @@ mod tests {
         }
     }
 
-    async fn person(db: &SurrealDb, name: &str, email: &str, role: Role) -> Uuid {
+    async fn person(db: &ApplicationStore, name: &str, email: &str, role: Role) -> Uuid {
         persons::create(db, &NewPerson::with_role(name, email, role))
             .await
             .unwrap()
             .id
     }
 
-    async fn open_firm(db: &SurrealDb, name: &str, admin_id: Uuid) -> Uuid {
+    async fn open_firm(db: &ApplicationStore, name: &str, admin_id: Uuid) -> Uuid {
         firms::create(
             db,
             &NewFirm {
@@ -5057,7 +2780,7 @@ mod tests {
         .id
     }
 
-    async fn open_project(db: &SurrealDb, code: &str, name: &str, firm_id: Uuid) -> Uuid {
+    async fn open_project(db: &ApplicationStore, code: &str, name: &str, firm_id: Uuid) -> Uuid {
         projects::create(
             db,
             &NewProject {
@@ -5319,7 +3042,7 @@ let world = world(&db).await;
                 tasks.push(tokio::spawn(crate::postgres::PostgresDb::with_test_db(
                     pg,
                     async move {
-                        let db = SurrealDb::uninitialized();
+                        let db = ApplicationStore::uninitialized();
                         let message = inbound(
                             firm,
                             channel::EMAIL,
@@ -5487,7 +3210,7 @@ let world = world(&db).await;
         });
     }
 
-    async fn assigned_sms(db: &SurrealDb, world: &World) -> Uuid {
+    async fn assigned_sms(db: &ApplicationStore, world: &World) -> Uuid {
         let ingested = ingest_inbound(
             db,
             &inbound(
@@ -5551,7 +3274,7 @@ let world = world(&db).await;
         });
     }
 
-    async fn trashed(db: &SurrealDb, actor: Uuid, conversation: Uuid) -> bool {
+    async fn trashed(db: &ApplicationStore, actor: Uuid, conversation: Uuid) -> bool {
         list_intake(db, actor)
             .await
             .unwrap()
@@ -6259,7 +3982,7 @@ let world = world(&db).await;
     }
 
     async fn assert_instagram_replies_are_attributed(
-        db: &SurrealDb,
+        db: &ApplicationStore,
         actor: Uuid,
         project_id: Uuid,
         conversation_id: Uuid,
@@ -6287,7 +4010,7 @@ let world = world(&db).await;
     }
 
     async fn assert_threads_refuses_private_reply(
-        db: &SurrealDb,
+        db: &ApplicationStore,
         world: &World,
         inbound: &IngestInbound<'_>,
     ) {
@@ -7521,7 +5244,7 @@ let world = world(&db).await;
         );
     }
 
-    pub(super) async fn ingest_for(db: &SurrealDb, firm: Uuid, provider_id: &str) -> Uuid {
+    pub(super) async fn ingest_for(db: &ApplicationStore, firm: Uuid, provider_id: &str) -> Uuid {
         let message = inbound(
             firm,
             channel::EMAIL,
@@ -7672,14 +5395,6 @@ let world = world(&db).await;
     }
 
     #[test]
-    fn processed_at_rejects_a_non_timestamp_with_the_stored_value_named() {
-        let parsed = parse_processed_at("2026-01-15T12:30:00Z").expect("rfc3339");
-        assert_eq!(parsed.to_rfc3339(), "2026-01-15T12:30:00+00:00");
-        let error = parse_processed_at("yesterday-ish").expect_err("invalid");
-        assert!(error.to_string().contains("yesterday-ish"), "{error}");
-    }
-
-    #[test]
     fn terminal_delivery_states_stay_terminal_and_the_last_signal_wins() {
         use super::delivery;
         // A terminal state never regresses, whatever arrives later.
@@ -7742,7 +5457,3 @@ let world = world(&db).await;
         });
     }
 }
-
-#[cfg(test)]
-#[path = "inbox_legacy_tests.rs"]
-mod legacy_tests;

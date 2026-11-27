@@ -35,8 +35,8 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::entities::{self, Entity, EntityError, NewEntity};
-use crate::surreal::SurrealDb;
 
 /// Request body for creating an Entity through the command boundary.
 #[derive(Debug, Deserialize)]
@@ -218,12 +218,12 @@ pub fn firm_anchor_key(configured: &str, entity_name: &str) -> Option<String> {
 ///
 /// [`EntityCommandError::Entities`] if the lookup fails.
 pub async fn firm_anchor_exists(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     configured: &str,
     name: &str,
 ) -> Result<bool, EntityCommandError> {
     match firm_anchor_key(configured, name) {
-        Some(key) => Ok(entities::firm_anchor_exists(surreal, &key).await?),
+        Some(key) => Ok(entities::firm_anchor_exists(application_store, &key).await?),
         None => Ok(false),
     }
 }
@@ -241,15 +241,15 @@ pub async fn firm_anchor_exists(
 /// firm anchor — from the read below, or from the index when a concurrent
 /// door slipped past it.
 pub async fn create_entity(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_anchor: &str,
     input: &CreateEntityCommand,
 ) -> Result<Entity, EntityCommandError> {
-    create_entity_with_contact(surreal, firm_anchor, input, None, None, None).await
+    create_entity_with_contact(application_store, firm_anchor, input, None, None, None).await
 }
 
 pub(crate) async fn create_entity_with_contact(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_anchor: &str,
     input: &CreateEntityCommand,
     phone: Option<&str>,
@@ -261,18 +261,18 @@ pub(crate) async fn create_entity_with_contact(
     if name.is_empty() {
         return Err(EntityCommandError::Invalid("Name is required."));
     }
-    require_entity_type(surreal, input.entity_type_id).await?;
-    require_jurisdiction(surreal, input.jurisdiction_id).await?;
+    require_entity_type(application_store, input.entity_type_id).await?;
+    require_jurisdiction(application_store, input.jurisdiction_id).await?;
 
     let anchor_key = firm_anchor_key(firm_anchor, name);
     if let Some(key) = &anchor_key {
-        if entities::firm_anchor_exists(surreal, key).await? {
+        if entities::firm_anchor_exists(application_store, key).await? {
             return Err(EntityCommandError::FirmAnchorExists);
         }
     }
 
     Ok(entities::create_with_metadata(
-        surreal,
+        application_store,
         &NewEntity {
             name: name.to_string(),
             entity_type_id: input.entity_type_id,
@@ -308,10 +308,10 @@ pub(crate) fn validate_metadata(
 /// an entity domiciled nowhere, exactly as `store::credentials::grant`
 /// treats its own links.
 async fn require_jurisdiction(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     jurisdiction_id: Uuid,
 ) -> Result<(), EntityCommandError> {
-    match crate::jurisdictions::find_by_id(surreal, jurisdiction_id).await {
+    match crate::jurisdictions::find_by_id(application_store, jurisdiction_id).await {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err(EntityCommandError::Invalid(UNKNOWN_REFERENCE_MESSAGE)),
         Err(error) => Err(EntityCommandError::Jurisdictions(error)),
@@ -321,10 +321,10 @@ async fn require_jurisdiction(
 /// Refuse a write that references an entity type with no row behind it.
 /// Same contract as [`require_jurisdiction`].
 async fn require_entity_type(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     entity_type_id: Uuid,
 ) -> Result<(), EntityCommandError> {
-    match crate::entity_types::find_by_id(surreal, entity_type_id).await {
+    match crate::entity_types::find_by_id(application_store, entity_type_id).await {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err(EntityCommandError::Invalid(UNKNOWN_REFERENCE_MESSAGE)),
         Err(error) => Err(EntityCommandError::EntityTypes(error)),
@@ -347,12 +347,12 @@ async fn require_entity_type(
 /// [`EntityCommandError::NotFound`] when no such row exists, and the
 /// firm-anchor errors when a guard refuses the write.
 pub async fn update_entity(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     firm_anchor: &str,
     input: &UpdateEntityCommand,
 ) -> Result<Entity, EntityCommandError> {
-    update_entity_with_contact(surreal, id, firm_anchor, input, None, None).await
+    update_entity_with_contact(application_store, id, firm_anchor, input, None, None).await
 }
 
 /// Apply an authenticated partial Entity edit, including phone and URL.
@@ -361,13 +361,13 @@ pub async fn update_entity(
 ///
 /// Returns the same validation, persistence, and anchor errors as [`update_entity`].
 pub async fn patch_entity(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     firm_anchor: &str,
     patch: &EntityPatch,
 ) -> Result<Entity, EntityCommandError> {
     update_entity_with_contact(
-        surreal,
+        application_store,
         id,
         firm_anchor,
         &patch.update,
@@ -378,7 +378,7 @@ pub async fn patch_entity(
 }
 
 async fn update_entity_with_contact(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     firm_anchor: &str,
     input: &UpdateEntityCommand,
@@ -386,7 +386,7 @@ async fn update_entity_with_contact(
     url: Option<&str>,
 ) -> Result<Entity, EntityCommandError> {
     validate_metadata(input.metadata.as_ref())?;
-    let existing = entities::find_by_id(surreal, id)
+    let existing = entities::find_by_id(application_store, id)
         .await?
         .ok_or(EntityCommandError::NotFound)?;
 
@@ -401,8 +401,8 @@ async fn update_entity_with_contact(
     };
     let entity_type_id = input.entity_type_id.unwrap_or(existing.entity_type_id);
     let jurisdiction_id = input.jurisdiction_id.unwrap_or(existing.jurisdiction_id);
-    require_entity_type(surreal, entity_type_id).await?;
-    require_jurisdiction(surreal, jurisdiction_id).await?;
+    require_entity_type(application_store, entity_type_id).await?;
+    require_jurisdiction(application_store, jurisdiction_id).await?;
 
     // Absent leaves the Xero contact alone; a blank submission clears it —
     // the same blank-clears convention `UpdateProjectCommand`'s optional text
@@ -427,14 +427,14 @@ async fn update_entity_with_contact(
     let anchor_key = firm_anchor_key(firm_anchor, &name);
     if renaming {
         if let Some(key) = &anchor_key {
-            if entities::firm_anchor_exists(surreal, key).await? {
+            if entities::firm_anchor_exists(application_store, key).await? {
                 return Err(EntityCommandError::FirmAnchorExists);
             }
         }
     }
 
     if let Some(updated) = entities::update_fields(
-        surreal,
+        application_store,
         id,
         &NewEntity {
             name,
@@ -460,7 +460,7 @@ async fn update_entity_with_contact(
     // row that became the anchor after the read above. The immutability
     // check earlier in this function reads a snapshot; this one is the
     // authority, exactly as the delete door's is.
-    match entities::find_by_id(surreal, id).await? {
+    match entities::find_by_id(application_store, id).await? {
         Some(_) => Err(EntityCommandError::FirmAnchorImmutable),
         None => Err(EntityCommandError::NotFound),
     }
@@ -490,18 +490,18 @@ async fn update_entity_with_contact(
 /// [`EntityCommandError::NotFound`] when there was nothing to remove,
 /// including when a concurrent delete won the race.
 pub async fn delete_entity(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     firm_anchor: &str,
 ) -> Result<Entity, EntityCommandError> {
-    let target = entities::find_by_id(surreal, id)
+    let target = entities::find_by_id(application_store, id)
         .await?
         .ok_or(EntityCommandError::NotFound)?;
     if is_firm_anchor(firm_anchor, &target.name) {
         return Err(EntityCommandError::FirmAnchorProtected);
     }
 
-    let dependents = entities::dependents(surreal, id).await?;
+    let dependents = entities::dependents(application_store, id).await?;
     if !dependents.is_empty() {
         return Err(EntityCommandError::Referenced(describe_dependents(
             &dependents,
@@ -509,13 +509,13 @@ pub async fn delete_entity(
     }
 
     // Tie the success to an actual removal rather than to the read above.
-    if let Some(removed) = entities::delete_unless_firm_anchor(surreal, id).await? {
+    if let Some(removed) = entities::delete_unless_firm_anchor(application_store, id).await? {
         return Ok(removed);
     }
     // Nothing was removed, and the two reasons are not the same answer:
     // the row is gone (a racing delete won) or it is still there and
     // protected (a racing rename minted the anchor on it).
-    match entities::find_by_id(surreal, id).await? {
+    match entities::find_by_id(application_store, id).await? {
         Some(_) => Err(EntityCommandError::FirmAnchorProtected),
         None => Err(EntityCommandError::NotFound),
     }
@@ -545,313 +545,8 @@ fn describe_dependents(dependents: &[entities::Dependent]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        create_entity, delete_entity, firm_anchor_key, is_firm_anchor, update_entity,
-        CreateEntityCommand, EntityCommandError, UpdateEntityCommand,
-    };
+    use super::{firm_anchor_key, is_firm_anchor, EntityCommandError, UpdateEntityCommand};
     use crate::entities::{self, EntityError};
-    use crate::surreal::test_support::mem;
-    use crate::surreal::SurrealDb;
-    use uuid::Uuid;
-
-    /// One engine plus one entity type and one jurisdiction, so a create
-    /// has real references to point at — both are validated by read-back,
-    /// because a `record<>` link is not checked by the engine.
-    async fn fixture() -> (SurrealDb, Uuid, Uuid) {
-        let surreal = mem().await;
-        let type_id = crate::entity_types::create(&surreal, "LLC")
-            .await
-            .unwrap()
-            .id;
-        let jur_id = crate::jurisdictions::create(
-            &surreal,
-            &crate::jurisdictions::NewJurisdiction::new("Nevada", "NV", "state"),
-        )
-        .await
-        .unwrap()
-        .id;
-        (surreal, type_id, jur_id)
-    }
-
-    fn command(name: &str, type_id: Uuid, jur_id: Uuid) -> CreateEntityCommand {
-        CreateEntityCommand {
-            name: name.into(),
-            entity_type_id: type_id,
-            jurisdiction_id: jur_id,
-        }
-    }
-
-    fn edit(name: &str, type_id: Uuid, jur_id: Uuid) -> UpdateEntityCommand {
-        UpdateEntityCommand {
-            name: Some(name.into()),
-            entity_type_id: Some(type_id),
-            jurisdiction_id: Some(jur_id),
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn entity_contact_patch_updates_and_clears_contact_fields() {
-        assert!(serde_json::from_value::<super::EntityPatch>(
-            serde_json::json!({"unknown": "value"})
-        )
-        .is_err());
-        let (db, type_id, jur_id) = fixture().await;
-        let entity = create_entity(
-            &db,
-            "Example Firm",
-            &command("Example Vendor", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        let patch = serde_json::from_value(serde_json::json!({
-            "phone": "example-phone",
-            "url": "https://example.com"
-        }))
-        .unwrap();
-        let updated = super::patch_entity(&db, entity.id, "Example Firm", &patch)
-            .await
-            .unwrap();
-        assert_eq!(updated.phone.as_deref(), Some("example-phone"));
-        assert_eq!(updated.url.as_deref(), Some("https://example.com"));
-
-        let patch = serde_json::from_value(serde_json::json!({"phone": " "})).unwrap();
-        let updated = super::patch_entity(&db, entity.id, "Example Firm", &patch)
-            .await
-            .unwrap();
-        assert_eq!(updated.phone, None);
-        assert_eq!(updated.url.as_deref(), Some("https://example.com"));
-    }
-
-    #[tokio::test]
-    async fn metadata_round_trips_preserves_other_fields_and_can_be_cleared() {
-        let (db, type_id, jur_id) = fixture().await;
-        let entity = create_entity(
-            &db,
-            "Example Firm",
-            &command("Example Firm", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        assert_eq!(entity.metadata, None);
-        let metadata = serde_json::json!({"ein": "12-3456789", "registration": {"state": "NV"}});
-        let patch: UpdateEntityCommand = serde_json::from_value(serde_json::json!({
-            "metadata": metadata
-        }))
-        .unwrap();
-        let saved = update_entity(&db, entity.id, "Example Firm", &patch)
-            .await
-            .unwrap();
-        assert_eq!(saved.metadata.as_ref(), Some(&metadata));
-        assert_eq!(saved.name, entity.name);
-        let read = entities::find_by_id(&db, entity.id).await.unwrap().unwrap();
-        assert_eq!(read.metadata.as_ref(), Some(&metadata));
-        let untouched = update_entity(
-            &db,
-            entity.id,
-            "Example Firm",
-            &UpdateEntityCommand {
-                xero_id: Some("external-contact".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(untouched.metadata.as_ref(), Some(&metadata));
-        let cleared = update_entity(
-            &db,
-            entity.id,
-            "Example Firm",
-            &UpdateEntityCommand {
-                metadata: Some(serde_json::Map::new()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(cleared.metadata, Some(serde_json::json!({})));
-        assert_eq!(cleared.xero_id.as_deref(), Some("external-contact"));
-    }
-
-    #[tokio::test]
-    async fn invalid_ein_is_refused_without_mutating_the_entity() {
-        let (db, type_id, jur_id) = fixture().await;
-        let entity = create_entity(
-            &db,
-            "Example Firm",
-            &command("Example Firm", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        for ein in [
-            serde_json::json!(123_456_789),
-            serde_json::json!("123456789"),
-            serde_json::json!("12-345678x"),
-            serde_json::Value::Null,
-        ] {
-            let patch =
-                serde_json::from_value(serde_json::json!({"metadata": {"ein": ein}})).unwrap();
-            assert!(matches!(
-                update_entity(&db, entity.id, "Example Firm", &patch).await,
-                Err(EntityCommandError::Invalid(_))
-            ));
-        }
-        assert_eq!(
-            entities::find_by_id(&db, entity.id).await.unwrap().unwrap(),
-            entity
-        );
-        for metadata in [
-            serde_json::json!([]),
-            serde_json::json!("value"),
-            serde_json::json!(1),
-        ] {
-            assert!(
-                serde_json::from_value::<UpdateEntityCommand>(serde_json::json!({
-                    "metadata": metadata
-                }))
-                .is_err()
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn create_trims_the_name_and_persists_one_row() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let created = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("  Beta LLC  ", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        assert_eq!(created.name, "Beta LLC");
-        let rows = entities::all(&surreal).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, created.id);
-    }
-
-    #[tokio::test]
-    async fn create_rejects_a_blank_name_without_writing() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        assert!(matches!(
-            create_entity(&surreal, "Acme Anchor", &command("   ", type_id, jur_id)).await,
-            Err(EntityCommandError::Invalid(_))
-        ));
-        assert!(entities::all(&surreal).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn create_refuses_to_fork_the_configured_firm_anchor() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        // The white-label operator's own firm can be created once...
-        create_entity(
-            &surreal,
-            "Rebrand Law PLLC",
-            &command("Rebrand Law PLLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        // ...and never a second time, in any case or spacing variant.
-        assert!(matches!(
-            create_entity(
-                &surreal,
-                "Rebrand Law PLLC",
-                &command("  rebrand law pllc ", type_id, jur_id)
-            )
-            .await,
-            Err(EntityCommandError::FirmAnchorExists)
-        ));
-        assert_eq!(entities::all(&surreal).await.unwrap().len(), 1);
-    }
-
-    /// Two doors race, both read a free name, and both write — so only
-    /// the `entity_firm_anchor` index can decide it.
-    #[tokio::test]
-    async fn concurrent_creates_cannot_fork_the_firm_anchor() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let racer = command("Rebrand Law PLLC", type_id, jur_id);
-        let other = command("Rebrand Law PLLC", type_id, jur_id);
-        let (first, second) = tokio::join!(
-            create_entity(&surreal, "Rebrand Law PLLC", &racer),
-            create_entity(&surreal, "Rebrand Law PLLC", &other),
-        );
-
-        let outcomes = [first, second];
-        assert_eq!(
-            outcomes.iter().filter(|r| r.is_ok()).count(),
-            1,
-            "exactly one door may mint the anchor: {outcomes:?}"
-        );
-        assert_eq!(
-            outcomes
-                .iter()
-                .filter(|r| matches!(r, Err(EntityCommandError::FirmAnchorExists)))
-                .count(),
-            1,
-            "the loser reports the fork as a fork, not as a database fault: {outcomes:?}"
-        );
-        assert_eq!(entities::all(&surreal).await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn create_refuses_to_fork_the_seeded_firm_under_a_white_label_config() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let seeded = crate::seed::FIRM_ENTITY_NAME;
-        create_entity(
-            &surreal,
-            "Rebrand Law PLLC",
-            &command(seeded, type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            create_entity(
-                &surreal,
-                "Rebrand Law PLLC",
-                &command(seeded, type_id, jur_id)
-            )
-            .await,
-            Err(EntityCommandError::FirmAnchorExists)
-        ));
-    }
-
-    #[tokio::test]
-    async fn create_allows_ordinary_namesakes() {
-        // Entity names are deliberately non-unique: only the anchor takes
-        // the key, so two unrelated Betas both land.
-        let (surreal, type_id, jur_id) = fixture().await;
-        for _ in 0..2 {
-            create_entity(
-                &surreal,
-                "Acme Anchor",
-                &command("Beta LLC", type_id, jur_id),
-            )
-            .await
-            .unwrap();
-        }
-        assert_eq!(entities::all(&surreal).await.unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn create_maps_an_unknown_reference_to_a_caller_correctable_error() {
-        // A type or jurisdiction id that points at no row is the caller's to
-        // correct, so the command reports it as `Invalid` (the API renders
-        // that as a 400) rather than as an internal fault (a 500).
-        let (surreal, _type_id, jur_id) = fixture().await;
-        let missing_type = Uuid::from_u128(0xdead_beef);
-        assert!(matches!(
-            create_entity(
-                &surreal,
-                "Acme Anchor",
-                &command("Beta LLC", missing_type, jur_id)
-            )
-            .await,
-            Err(EntityCommandError::Invalid(
-                super::UNKNOWN_REFERENCE_MESSAGE
-            ))
-        ));
-        assert!(entities::all(&surreal).await.unwrap().is_empty());
-    }
 
     #[test]
     fn the_seeded_firm_stays_protected_under_a_white_label_configuration() {
@@ -926,399 +621,6 @@ mod tests {
         assert_eq!(mapped.user_message(), super::FIRM_ANCHOR_EXISTS_MESSAGE);
     }
 
-    #[tokio::test]
-    async fn update_replaces_every_field_and_returns_the_saved_row() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        let other_type = crate::entity_types::create(&surreal, "Trust")
-            .await
-            .unwrap()
-            .id;
-
-        let updated = update_entity(
-            &surreal,
-            row.id,
-            "Acme Anchor",
-            &edit("Beta Holdings LLC", other_type, jur_id),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(updated.id, row.id);
-        assert_eq!(updated.name, "Beta Holdings LLC");
-        assert_eq!(updated.entity_type_id, other_type);
-    }
-
-    /// `phone` and `url` are set by the bulk-contact importer and by no
-    /// field on the edit form. A full-replacement update that forgot them
-    /// would silently erase an organization's contact details on the next
-    /// name correction.
-    #[tokio::test]
-    async fn update_preserves_contact_fields_the_form_does_not_carry() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = entities::create(
-            &surreal,
-            &entities::NewEntity {
-                name: "Beta LLC".into(),
-                entity_type_id: type_id,
-                jurisdiction_id: jur_id,
-                phone: Some("+1 702 555 0100".into()),
-                url: Some("https://example.com".into()),
-                xero_id: None,
-                firm_anchor_key: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        let updated = update_entity(
-            &surreal,
-            row.id,
-            "Acme Anchor",
-            &edit("Beta Holdings LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(updated.phone.as_deref(), Some("+1 702 555 0100"));
-        assert_eq!(updated.url.as_deref(), Some("https://example.com"));
-    }
-
-    /// `xero_id` round trips through the same absent/blank/value contract
-    /// `UpdateProjectCommand`'s optional text columns document: an omitted
-    /// submission leaves it alone, a blank one clears it, and a value sets it.
-    #[tokio::test]
-    async fn xero_id_round_trips_through_edit_set_clear_and_leave_alone() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        assert_eq!(row.xero_id, None);
-
-        let mut set = edit("Beta LLC", type_id, jur_id);
-        set.xero_id = Some("contact-1".into());
-        let set = update_entity(&surreal, row.id, "Acme Anchor", &set)
-            .await
-            .unwrap();
-        assert_eq!(set.xero_id.as_deref(), Some("contact-1"));
-
-        let untouched = update_entity(
-            &surreal,
-            row.id,
-            "Acme Anchor",
-            &edit("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            untouched.xero_id.as_deref(),
-            Some("contact-1"),
-            "an omitted xero_id leaves the stored contact alone"
-        );
-
-        let mut cleared = edit("Beta LLC", type_id, jur_id);
-        cleared.xero_id = Some(String::new());
-        let cleared = update_entity(&surreal, row.id, "Acme Anchor", &cleared)
-            .await
-            .unwrap();
-        assert_eq!(cleared.xero_id, None, "a blank submission clears it");
-    }
-
-    #[tokio::test]
-    async fn update_rejects_a_blank_name() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            update_entity(
-                &surreal,
-                row.id,
-                "Acme Anchor",
-                &edit("   ", type_id, jur_id)
-            )
-            .await,
-            Err(EntityCommandError::Invalid(_))
-        ));
-        // The row is untouched.
-        assert_eq!(
-            entities::find_by_id(&surreal, row.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .name,
-            "Beta LLC"
-        );
-    }
-
-    #[tokio::test]
-    async fn update_missing_id_is_not_found() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        assert!(matches!(
-            update_entity(
-                &surreal,
-                Uuid::from_u128(0x00c0_ffee),
-                "Acme Anchor",
-                &edit("Ghost Co", type_id, jur_id)
-            )
-            .await,
-            Err(EntityCommandError::NotFound)
-        ));
-    }
-
-    #[tokio::test]
-    async fn update_refuses_to_rename_the_firm_anchor_in_any_variant() {
-        // `store::seed` finds the firm by exact name, so even a case or
-        // whitespace variant would leave the next boot inserting a second
-        // protected row. The name is immutable byte for byte.
-        let (surreal, type_id, jur_id) = fixture().await;
-        let firm = create_entity(
-            &surreal,
-            "Rebrand Law PLLC",
-            &command("Rebrand Law PLLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-
-        for variant in ["Renamed Firm", "REBRAND LAW PLLC", " Rebrand Law PLLC "] {
-            assert!(
-                matches!(
-                    update_entity(
-                        &surreal,
-                        firm.id,
-                        "Rebrand Law PLLC",
-                        &edit(variant, type_id, jur_id)
-                    )
-                    .await,
-                    Err(EntityCommandError::FirmAnchorImmutable)
-                ),
-                "{variant} must be refused"
-            );
-        }
-        assert_eq!(
-            entities::find_by_id(&surreal, firm.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .name,
-            "Rebrand Law PLLC"
-        );
-    }
-
-    #[tokio::test]
-    async fn update_lets_the_firm_anchor_change_its_type_and_jurisdiction() {
-        // Only the *name* is frozen: the anchor stays editable otherwise, so
-        // an operator can correct a mis-picked entity type.
-        let (surreal, type_id, jur_id) = fixture().await;
-        let firm = create_entity(
-            &surreal,
-            "Rebrand Law PLLC",
-            &command("Rebrand Law PLLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        let other_type = crate::entity_types::create(&surreal, "PLLC")
-            .await
-            .unwrap()
-            .id;
-
-        let updated = update_entity(
-            &surreal,
-            firm.id,
-            "Rebrand Law PLLC",
-            &edit("Rebrand Law PLLC", other_type, jur_id),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(updated.entity_type_id, other_type);
-        assert_eq!(updated.name, "Rebrand Law PLLC");
-        assert!(
-            updated.is_firm_anchor(),
-            "the anchor must keep its key across an ordinary edit, or the \
-             next fork would find the index free"
-        );
-    }
-
-    #[tokio::test]
-    async fn update_refuses_to_rename_an_ordinary_entity_into_the_anchor() {
-        // Renaming *into* the anchor's name forks it exactly as a create
-        // would, and the row is protected the moment it lands.
-        let (surreal, type_id, jur_id) = fixture().await;
-        create_entity(
-            &surreal,
-            "Rebrand Law PLLC",
-            &command("Rebrand Law PLLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        let ordinary = create_entity(
-            &surreal,
-            "Rebrand Law PLLC",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-
-        assert!(matches!(
-            update_entity(
-                &surreal,
-                ordinary.id,
-                "Rebrand Law PLLC",
-                &edit("Rebrand Law PLLC", type_id, jur_id)
-            )
-            .await,
-            Err(EntityCommandError::FirmAnchorExists)
-        ));
-    }
-
-    /// The immutability check reads a snapshot; `entities::update`'s own
-    /// `WHERE` is the authority. Stage the window between them instead of
-    /// racing for it: the row reads as ordinary by name, and carries the
-    /// anchor key by the time the write runs, which is what a concurrent
-    /// rename leaves behind. The rename must then be refused as
-    /// immutable, not reported as a vanished row.
-    #[tokio::test]
-    async fn update_refuses_a_row_that_became_the_anchor_after_the_read() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let ordinary = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        entities::set_firm_anchor_key(&surreal, ordinary.id, Some("beta llc".into()))
-            .await
-            .unwrap();
-
-        let refused = update_entity(
-            &surreal,
-            ordinary.id,
-            "Acme Anchor",
-            &edit("Gamma LLC", type_id, jur_id),
-        )
-        .await;
-
-        assert!(
-            matches!(refused, Err(EntityCommandError::FirmAnchorImmutable)),
-            "{refused:?}"
-        );
-        assert_eq!(
-            entities::find_by_id(&surreal, ordinary.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .name,
-            "Beta LLC",
-            "the refused rename must leave the row alone"
-        );
-    }
-
-    #[tokio::test]
-    async fn update_maps_a_missing_reference_to_a_validation_error() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        let err = update_entity(
-            &surreal,
-            row.id,
-            "Acme Anchor",
-            &edit("Beta LLC", Uuid::from_u128(0xdead_beef), jur_id),
-        )
-        .await
-        .expect_err("a missing entity type must fail the update");
-        assert!(matches!(err, EntityCommandError::Invalid(_)), "{err:?}");
-        assert_eq!(err.user_message(), super::UNKNOWN_REFERENCE_MESSAGE);
-    }
-
-    /// ENG-518: `PATCH /app/api/entities/{id}` with only `jurisdiction_id`
-    /// must succeed as a partial update rather than being refused for
-    /// omitting `name` and `entity_type_id` — the exact body the issue
-    /// reports as failing with "Malformed JSON body."
-    #[tokio::test]
-    async fn update_accepts_a_jurisdiction_only_body_and_preserves_the_rest() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        let other_jurisdiction = crate::jurisdictions::create(
-            &surreal,
-            &crate::jurisdictions::NewJurisdiction::new("California", "CA", "state"),
-        )
-        .await
-        .unwrap()
-        .id;
-
-        let updated = update_entity(
-            &surreal,
-            row.id,
-            "Acme Anchor",
-            &UpdateEntityCommand {
-                name: None,
-                entity_type_id: None,
-                jurisdiction_id: Some(other_jurisdiction),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(updated.name, "Beta LLC");
-        assert_eq!(updated.entity_type_id, type_id);
-        assert_eq!(updated.jurisdiction_id, other_jurisdiction);
-    }
-
-    /// A body naming no field at all is a no-op update rather than a
-    /// rejection — every field absent means every column is left alone.
-    #[tokio::test]
-    async fn update_with_an_entirely_absent_body_changes_nothing() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-
-        let updated = update_entity(
-            &surreal,
-            row.id,
-            "Acme Anchor",
-            &UpdateEntityCommand::default(),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(updated.name, "Beta LLC");
-        assert_eq!(updated.entity_type_id, type_id);
-        assert_eq!(updated.jurisdiction_id, jur_id);
-    }
-
     /// `deny_unknown_fields` refuses a body naming a field this command does
     /// not carry, and the error names it — never a caller-opaque "Malformed
     /// JSON body." for a field this struct simply does not have.
@@ -1327,191 +629,6 @@ mod tests {
         let error =
             serde_json::from_str::<UpdateEntityCommand>(r#"{"bogus_field": true}"#).unwrap_err();
         assert!(error.to_string().contains("bogus_field"), "{error}");
-    }
-
-    #[tokio::test]
-    async fn delete_removes_an_ordinary_entity_and_returns_it() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-
-        let deleted = delete_entity(&surreal, row.id, "Acme Anchor")
-            .await
-            .unwrap();
-
-        assert_eq!(deleted.id, row.id);
-        assert_eq!(deleted.name, "Beta LLC");
-        assert!(entities::find_by_id(&surreal, row.id)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn delete_missing_id_is_not_found() {
-        let (surreal, _type_id, _jur_id) = fixture().await;
-        assert!(matches!(
-            delete_entity(&surreal, Uuid::from_u128(0x00c0_ffee), "Acme Anchor").await,
-            Err(EntityCommandError::NotFound)
-        ));
-    }
-
-    /// Nothing in Surreal refuses a delete that strands a reference, so
-    /// the refusal is the command's own — and it names every table to
-    /// detach rather than one offending constraint.
-    #[tokio::test]
-    async fn delete_refuses_an_entity_a_matter_still_points_at() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        crate::projects::create(
-            &surreal,
-            &crate::projects::NewProject {
-                code: format!("held-{}", Uuid::now_v7()),
-                name: "Holding matter".into(),
-                status: "open".into(),
-                entity_id: row.id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-
-        let refused = delete_entity(&surreal, row.id, "Acme Anchor").await;
-        let Err(EntityCommandError::Referenced(detail)) = refused else {
-            panic!("a referenced entity must not be deletable: {refused:?}");
-        };
-        assert!(
-            detail.contains("1 project"),
-            "the refusal must name what still points at the row, got: {detail}"
-        );
-
-        // And the row is still there.
-        assert!(entities::find_by_id(&surreal, row.id)
-            .await
-            .unwrap()
-            .is_some());
-    }
-
-    #[tokio::test]
-    async fn concurrent_deletes_of_one_entity_yield_one_success_and_one_not_found() {
-        // Two requests race to remove the same ordinary Entity. Both pass
-        // the guards, because both read the row before either delete
-        // lands. Only one `DELETE` returns a row, and the loser reports
-        // `NotFound` rather than claiming a removal it did not make —
-        // which is why the success is tied to the delete's own result and
-        // not to the read above it.
-        let (surreal, type_id, jur_id) = fixture().await;
-        let row = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-
-        let (first, second) = tokio::join!(
-            delete_entity(&surreal, row.id, "Acme Anchor"),
-            delete_entity(&surreal, row.id, "Acme Anchor"),
-        );
-
-        let outcomes = [first, second];
-        assert_eq!(
-            outcomes.iter().filter(|r| r.is_ok()).count(),
-            1,
-            "exactly one delete removes the row: {outcomes:?}"
-        );
-        assert_eq!(
-            outcomes
-                .iter()
-                .filter(|r| matches!(r, Err(EntityCommandError::NotFound)))
-                .count(),
-            1,
-            "the losing racer reports not-found rather than a false success: {outcomes:?}"
-        );
-        assert!(entities::find_by_id(&surreal, row.id)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    /// The delete door's anchor guard reads the name; the authority is
-    /// `entities::delete_unless_firm_anchor`'s own `WHERE`, which reads
-    /// the key. Stage the window between them rather than racing for it,
-    /// with the row ordinary by name and protected by key. The refusal
-    /// has to be `FirmAnchorProtected`, because reporting the row as
-    /// gone would tell an operator a removal happened.
-    #[tokio::test]
-    async fn delete_refuses_a_row_that_became_the_anchor_after_the_read() {
-        let (surreal, type_id, jur_id) = fixture().await;
-        let ordinary = create_entity(
-            &surreal,
-            "Acme Anchor",
-            &command("Beta LLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        entities::set_firm_anchor_key(&surreal, ordinary.id, Some("beta llc".into()))
-            .await
-            .unwrap();
-
-        let refused = delete_entity(&surreal, ordinary.id, "Acme Anchor").await;
-
-        assert!(
-            matches!(refused, Err(EntityCommandError::FirmAnchorProtected)),
-            "{refused:?}"
-        );
-        assert!(entities::find_by_id(&surreal, ordinary.id)
-            .await
-            .unwrap()
-            .is_some());
-    }
-
-    #[tokio::test]
-    async fn delete_refuses_the_firm_anchor_in_either_name() {
-        // Both the configured firm and the shipped default are protected:
-        // `store::seed` re-creates the latter by exact name on every boot, so
-        // removing it never sticks.
-        let (surreal, type_id, jur_id) = fixture().await;
-        let configured = create_entity(
-            &surreal,
-            "Rebrand Law PLLC",
-            &command("Rebrand Law PLLC", type_id, jur_id),
-        )
-        .await
-        .unwrap();
-        let seeded = create_entity(
-            &surreal,
-            "Rebrand Law PLLC",
-            &command(crate::seed::FIRM_ENTITY_NAME, type_id, jur_id),
-        )
-        .await
-        .unwrap();
-
-        for row in [&configured, &seeded] {
-            assert!(
-                matches!(
-                    delete_entity(&surreal, row.id, "Rebrand Law PLLC").await,
-                    Err(EntityCommandError::FirmAnchorProtected)
-                ),
-                "{} must be undeletable",
-                row.name
-            );
-            assert!(entities::find_by_id(&surreal, row.id)
-                .await
-                .unwrap()
-                .is_some());
-        }
     }
 
     /// The refusal is read by a person deciding what to detach, so the

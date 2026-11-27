@@ -7,10 +7,10 @@ use cloud::attachment_scanner::{
 };
 use cloud::StorageService;
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::documents::{self, DocumentIdentity, IngestArgs, MailProvenance};
 use store::inbox::InboxError;
 use store::inbox_triage::{approved_attachment, AttachmentFilingApproval, AttachmentFilingAttempt};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ fn map_scope(error: &InboxError) -> AttachmentFilingError {
 /// Refuses stale approvals, mismatched source bytes, oversized data, scanning
 /// errors, malware and store failures.
 pub async fn file_approved_attachment(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     scanner: &dyn AttachmentScanner,
     approval: &AttachmentFilingApproval,
@@ -163,7 +163,7 @@ impl AttachmentFilingError {
 /// Propagates the DBOS workflow registration error.
 pub fn register_dbos(
     dbos: &dbos::DBOS,
-    db: SurrealDb,
+    db: ApplicationStore,
     storage: Arc<dyn StorageService>,
     scanner: Arc<dyn AttachmentScanner>,
 ) -> dbos::Result<AttachmentFilingWorkflow> {

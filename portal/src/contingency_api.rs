@@ -16,7 +16,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
-use store::{contingency_terms, matter_outcomes, outcome_estimates, postgres_mirror};
+use store::{contingency_terms, matter_outcomes, outcome_estimates};
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
@@ -97,24 +97,26 @@ async fn firm_side_actor(
     project_id: Uuid,
 ) -> Result<Uuid, ApiError> {
     let actor = session.person_id.ok_or(ApiError::Forbidden)?;
-    let viewer =
-        store::access::matter_viewer(&state.surreal, session.person_id, session.role, project_id)
-            .await
-            .map_err(ApiError::Db)?;
+    let viewer = store::access::matter_viewer(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        project_id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     match viewer {
         Some(viewer) if viewer.is_firm_side() => Ok(actor),
         _ => Err(ApiError::NotFound),
     }
 }
 
-/// Open PostgreSQL with the rows a firm-side write references mirrored: the
-/// Project, its participations (and so their Persons, the actor among
-/// them), and any `notations` the write names.
+/// Open PostgreSQL for the authorized operation.
 async fn prepared_store(
-    state: &ApiState,
+    _state: &ApiState,
     operation: &'static str,
     project_id: Uuid,
-    notations: &[Uuid],
+    _notations: &[Uuid],
 ) -> Result<store::postgres::PostgresDb, Response> {
     let Ok(pg) = store::postgres::PostgresDb::from_env().await else {
         tracing::warn!(
@@ -125,40 +127,6 @@ async fn prepared_store(
         );
         return Err(refused(StatusCode::SERVICE_UNAVAILABLE));
     };
-    let surreal = &state.surreal;
-    let mirrored = async {
-        postgres_mirror::mirror(
-            surreal,
-            &pg,
-            &postgres_mirror::MirrorKey::Project(project_id),
-        )
-        .await?;
-        let participations = store::projects::participations_for_project(surreal, project_id)
-            .await
-            .map_err(|_| postgres_mirror::MirrorError::Source)?;
-        for role in participations {
-            postgres_mirror::mirror(
-                surreal,
-                &pg,
-                &postgres_mirror::MirrorKey::ProjectParticipation(role.id),
-            )
-            .await?;
-        }
-        for notation in notations {
-            postgres_mirror::mirror(
-                surreal,
-                &pg,
-                &postgres_mirror::MirrorKey::Notation(*notation),
-            )
-            .await?;
-        }
-        Ok::<_, postgres_mirror::MirrorError>(())
-    }
-    .await;
-    if let Err(error) = mirrored {
-        store_failed(operation, project_id, &error);
-        return Err(refused(StatusCode::SERVICE_UNAVAILABLE));
-    }
     Ok(pg)
 }
 

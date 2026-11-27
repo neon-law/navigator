@@ -1,8 +1,8 @@
 //! PostgreSQL-only acceptance for the Notation writer family.
 use crate::postgres::fixtures::workflow_fixture;
+use crate::postgres::fixtures::{connect, fresh_schema};
+use crate::postgres::history::Family;
 use crate::postgres::matter::with_test_db;
-use crate::postgres_backfill::family::Family;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -15,7 +15,7 @@ async fn answer_json_null_nested_values_and_chronology_are_preserved() {
     let pg = connect(&options, &database).await;
     let (person, notation, question) = workflow_fixture(&pg).await;
     crate::postgres::fixtures::activate_family(&pg, Family::Notation).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let first = answers::record(
             &unavailable,
@@ -111,7 +111,7 @@ async fn workflow_satellites_preserve_replay_ordering_and_attribution() {
     let pg = connect(&options, &database).await;
     let (person, notation, _) = workflow_fixture(&pg).await;
     crate::postgres::fixtures::activate_family(&pg, Family::Notation).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let a = notation_clauses::append(&unavailable, notation, "Synthetic first", Some(person))
             .await
@@ -234,7 +234,7 @@ async fn notation_pins_state_compare_and_swap_and_archive_replay_are_durable() {
         Some("23503")
     );
     crate::postgres::fixtures::activate_family(&pg, Family::Notation).await;
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let opened = notations::create(
             &db,
@@ -323,7 +323,7 @@ async fn notation_accessors_refuse_provisional_rows_before_scope_completion() {
             .await
             .is_err()
     );
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         assert!(crate::notations::find_by_id(&db, notation).await.is_err());
         assert!(
@@ -359,7 +359,7 @@ async fn reset_rolls_back_children_on_failure_then_retries_without_cross_notatio
     let (person, notation, question) = workflow_fixture(&pg).await;
     let (_, other, _) = workflow_fixture(&pg).await;
     crate::postgres::fixtures::activate_family(&pg, Family::Notation).await;
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         answers::record(&db, &NewAnswer::new(question, person, serde_json::json!({"safe":true})).in_notation(notation,"person__client")).await.unwrap();
         notation_clauses::append(&db, notation,"Synthetic",Some(person)).await.unwrap();
@@ -400,7 +400,7 @@ async fn archived_questionnaire_snapshots_distinguish_missing_json_null_and_nest
             .await
             .unwrap();
     crate::postgres::fixtures::activate_family(&pg, Family::Notation).await;
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         for snapshot in [None, Some(json!(null)), Some(json!({"nested":[null,{"value":null}]}))] {
             let mut new = NewNotation::new(template, person, project, "BEGIN");
@@ -457,7 +457,7 @@ async fn document_root_edits_and_archive_replay_use_postgres_without_source_pare
     let directory = tempfile::tempdir().unwrap();
     let storage: Arc<dyn cloud::StorageService> =
         Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let original = assets::ingest_content(
             &db,
@@ -608,7 +608,7 @@ async fn asset_metadata_lifecycle_and_note_key_protection_are_postgres_authorita
     let directory = tempfile::tempdir().unwrap();
     let storage: Arc<dyn cloud::StorageService> =
         Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     Box::pin(with_test_db(pg.clone(), async {
         let key = crate::notations::document_pdf_storage_key(notation);
         let args = documents::IngestArgs {
@@ -719,7 +719,7 @@ async fn native_notation_query_shapes_preserve_project_person_and_template_isola
         .fetch_one(pg.pool())
         .await
         .unwrap();
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         use crate::notations;
         let ids = |rows: Vec<notations::Notation>| {

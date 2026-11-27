@@ -29,16 +29,16 @@ use serde::Serialize;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::assets::{Asset, Restoration, RestoreError};
 use crate::postgres::PostgresDb;
 use crate::project_archives::object_key;
-use crate::surreal::SurrealDb;
 
 const OBJECT_CONTENT_TYPE: &str = "application/octet-stream";
 
 /// The stores the retention lane reads and writes.
 pub struct RetentionStores<'a> {
-    pub surreal: &'a SurrealDb,
+    pub application_store: &'a ApplicationStore,
     pub pg: &'a PostgresDb,
     pub documents: &'a Arc<dyn StorageService>,
     pub archive: &'a Arc<dyn StorageService>,
@@ -159,7 +159,7 @@ pub async fn reconcile_soft_deleted(
     now: DateTime<Utc>,
     limit: usize,
 ) -> Result<ArchiveReport, RetentionError> {
-    let rows = crate::assets::soft_deleted_unpurged(stores.surreal, limit)
+    let rows = crate::assets::soft_deleted_unpurged(stores.application_store, limit)
         .await
         .map_err(store_error)?;
     let mut chains: BTreeMap<(Uuid, String), Asset> = BTreeMap::new();
@@ -170,7 +170,7 @@ pub async fn reconcile_soft_deleted(
     }
     let mut report = ArchiveReport::default();
     for ((project_id, key), first) in chains {
-        let project = crate::projects::find_by_id(stores.surreal, project_id)
+        let project = crate::projects::find_by_id(stores.application_store, project_id)
             .await
             .map_err(store_error)?;
         let Some(firm_id) = project.and_then(|project| project.firm_id) else {
@@ -207,7 +207,7 @@ async fn archive_chain(
     };
     let archive =
         find_or_create_archive(stores.pg, firm_id, project_id, key, deleted_at, now).await?;
-    let chain = crate::assets::chain(stores.surreal, first)
+    let chain = crate::assets::chain(stores.application_store, first)
         .await
         .map_err(store_error)?;
     let mut became_archived = false;
@@ -323,7 +323,7 @@ async fn remove_active_copies(
     now: DateTime<Utc>,
 ) -> Result<bool, RetentionError> {
     let ids: Vec<Uuid> = chain.iter().map(|asset| asset.id).collect();
-    let fresh = crate::assets::find_by_ids(stores.surreal, &ids)
+    let fresh = crate::assets::find_by_ids(stores.application_store, &ids)
         .await
         .map_err(store_error)?;
     if fresh.is_empty()
@@ -355,7 +355,7 @@ async fn remove_active_copies(
     }
     for asset in &fresh {
         for key in std::iter::once(&asset.storage_key).chain(asset.secondary_storage_key.as_ref()) {
-            if crate::assets::storage_key_needed_elsewhere(stores.surreal, key, &ids)
+            if crate::assets::storage_key_needed_elsewhere(stores.application_store, key, &ids)
                 .await
                 .map_err(store_error)?
             {
@@ -417,7 +417,7 @@ pub async fn read_archived(
 /// [`RetentionError`] for a foreign or purged chain, a missing archive lane
 /// when bytes must come from it, damaged archived bytes, or a store failure.
 pub async fn restore_chain(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: Option<&PostgresDb>,
     documents: &Arc<dyn StorageService>,
     archive: Option<&Arc<dyn StorageService>>,
@@ -425,12 +425,12 @@ pub async fn restore_chain(
     asset_id: Uuid,
     now: DateTime<Utc>,
 ) -> Result<Restoration, RetentionError> {
-    let asset = crate::assets::find_by_id(surreal, asset_id)
+    let asset = crate::assets::find_by_id(application_store, asset_id)
         .await
         .map_err(store_error)?
         .filter(|asset| asset.project_id == Some(project_id))
         .ok_or(RetentionError::Restore(RestoreError::NotOnProject))?;
-    let chain = crate::assets::chain(surreal, &asset)
+    let chain = crate::assets::chain(application_store, &asset)
         .await
         .map_err(store_error)?;
     if chain.iter().any(|row| row.purged_at.is_some()) {
@@ -464,7 +464,7 @@ pub async fn restore_chain(
         }
     }
     let deleted_at = chain.iter().find_map(|row| row.deleted_at);
-    let restoration = crate::assets::restore(surreal, project_id, asset_id).await?;
+    let restoration = crate::assets::restore(application_store, project_id, asset_id).await?;
     if let (Some(pg), Some(deleted_at)) = (pg, deleted_at) {
         sqlx::query(
             "UPDATE document_chain_archive SET state = 'restored', restored_at = $4 \
@@ -495,7 +495,7 @@ pub async fn purge_archived_copies(
     expunge_record_id: Option<Uuid>,
     now: DateTime<Utc>,
 ) -> Result<usize, RetentionError> {
-    let (surreal, pg, archive) = (stores.surreal, stores.pg, stores.archive);
+    let (application_store, pg, archive) = (stores.application_store, stores.pg, stores.archive);
     let ids: Vec<Uuid> = chain.iter().map(|asset| asset.id).collect();
     let mut digests: Vec<&str> = chain
         .iter()
@@ -505,7 +505,7 @@ pub async fn purge_archived_copies(
     digests.dedup();
     let mut removed = 0;
     for digest in digests {
-        if crate::assets::digest_needed_elsewhere(surreal, project_id, digest, &ids)
+        if crate::assets::digest_needed_elsewhere(application_store, project_id, digest, &ids)
             .await
             .map_err(store_error)?
         {

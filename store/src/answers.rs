@@ -40,20 +40,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as Json};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::matter;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
 pub(crate) const TABLE: &str = "answer";
-/// The table [`Answer::question_id`] addresses.
-const QUESTION_TABLE: &str = "question";
-/// The table [`Answer::person_id`] addresses.
-const PERSON_TABLE: &str = "person";
-/// The table [`Answer::notation_id`] addresses.
-const NOTATION_TABLE: &str = "notation";
 
 /// `answers.source` — lawyer entered the answer on the client's behalf.
 pub const SOURCE_LAWYER: &str = "lawyer";
@@ -122,58 +115,12 @@ pub struct Answer {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it. Separate from [`Answer`]
-/// because the SDK owns its own `RecordId` and `Datetime`, and the
-/// conversion belongs at this seam rather than in every caller.
-#[derive(SurrealValue)]
-struct AnswerRow {
-    id: surrealdb::types::RecordId,
-    question_id: surrealdb::types::RecordId,
-    person_id: surrealdb::types::RecordId,
-    notation_id: Option<surrealdb::types::RecordId>,
-    state_name: Option<String>,
-    value: Json,
-    source: String,
-    authored_by_person_id: Option<surrealdb::types::RecordId>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl AnswerRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_answer(self) -> Option<Answer> {
-        Some(Answer {
-            id: record_uuid(&self.id)?,
-            question_id: record_uuid(&self.question_id)?,
-            person_id: record_uuid(&self.person_id)?,
-            notation_id: self.notation_id.as_ref().and_then(record_uuid),
-            state_name: self.state_name,
-            value: self.value,
-            source: self.source,
-            // A link this module could not read back is dropped to `None`
-            // rather than dropping the whole answer: authorship is an
-            // analytics dimension, and losing it must not lose the answer.
-            authored_by_person_id: self.authored_by_person_id.as_ref().and_then(record_uuid),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`AnswerRow`] from only one query.
-const SELECT: &str = "id, question_id, person_id, notation_id, state_name, value, source, \
-                      authored_by_person_id, inserted_at, updated_at";
-
 /// Errors reading or writing an answer.
 #[derive(Debug, thiserror::Error)]
 pub enum AnswerError {
     #[error(transparent)]
     Postgres(#[from] matter::MatterAuthorityError),
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back — see [`AnswerRow::into_answer`].
     #[error("writing an answer returned no usable row")]
@@ -231,23 +178,6 @@ impl NewAnswer {
     }
 }
 
-/// Read one answer out of a query response, dropping a row this module
-/// could not have written.
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Answer>, AnswerError> {
-    let row: Option<AnswerRow> = response.take(0)?;
-    Ok(row.and_then(AnswerRow::into_answer))
-}
-
-/// Read every answer out of a query response, in the order the engine
-/// returned them.
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Answer>, AnswerError> {
-    let rows: Vec<AnswerRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(AnswerRow::into_answer)
-        .collect())
-}
-
 /// Append one answer.
 ///
 /// The only writer. The record id is minted from a fresh v4 `Uuid`.
@@ -263,61 +193,22 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Answer>, AnswerEr
 ///
 /// [`AnswerError::Db`] if the insert fails — including the schema ASSERT
 /// refusing a `source` outside `lawyer`/`client`/`extracted`.
-pub async fn record(db: &SurrealDb, new: &NewAnswer) -> Result<Answer, AnswerError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let now = Utc::now();
-        let row = Answer {
-            id: Uuid::new_v4(),
-            question_id: new.question_id,
-            person_id: new.person_id,
-            notation_id: new.notation_id,
-            state_name: new.state_name.clone(),
-            value: new.value.clone(),
-            source: new.source.clone(),
-            authored_by_person_id: new.authored_by_person_id,
-            inserted_at: now,
-            updated_at: now,
-        };
-        return Ok(matter::upsert(&pg, TABLE, &row).await?);
-    }
-
-    let id = Uuid::new_v4();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             question_id = $question_id, \
-             person_id = $person_id, \
-             notation_id = $notation_id, \
-             state_name = $state_name, \
-             value = $value, \
-             source = $source, \
-             authored_by_person_id = $authored_by_person_id \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("question_id", record_id(QUESTION_TABLE, new.question_id)))
-        .bind(("person_id", record_id(PERSON_TABLE, new.person_id)))
-        .bind((
-            "notation_id",
-            new.notation_id.map(|id| record_id(NOTATION_TABLE, id)),
-        ))
-        .bind(("state_name", new.state_name.clone()))
-        .bind(("value", new.value.clone()))
-        .bind(("source", new.source.clone()))
-        .bind((
-            "authored_by_person_id",
-            new.authored_by_person_id
-                .map(|p| record_id(PERSON_TABLE, p)),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let row: Option<AnswerRow> = response.take(0)?;
-    let answer = row
-        .and_then(AnswerRow::into_answer)
-        .ok_or(AnswerError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Answer(id)).await;
-    Ok(answer)
+pub async fn record(_db: &ApplicationStore, new: &NewAnswer) -> Result<Answer, AnswerError> {
+    let pg = matter::authority_for(TABLE).await?;
+    let now = Utc::now();
+    let row = Answer {
+        id: Uuid::new_v4(),
+        question_id: new.question_id,
+        person_id: new.person_id,
+        notation_id: new.notation_id,
+        state_name: new.state_name.clone(),
+        value: new.value.clone(),
+        source: new.source.clone(),
+        authored_by_person_id: new.authored_by_person_id,
+        inserted_at: now,
+        updated_at: now,
+    };
+    Ok(matter::upsert(&pg, TABLE, &row).await?)
 }
 
 /// The most recent answer one respondent gave for one question in one
@@ -331,33 +222,15 @@ pub async fn record(db: &SurrealDb, new: &NewAnswer) -> Result<Answer, AnswerErr
 ///
 /// [`AnswerError::Db`] if the lookup fails.
 pub async fn latest_for_state(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     question_id: Uuid,
     state_name: &str,
     person_id: Uuid,
     notation_id: Uuid,
 ) -> Result<Option<Answer>, AnswerError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let rows = matter::select(&pg, TABLE, json!({"question_id": question_id, "state_name": state_name, "person_id": person_id, "notation_id": notation_id}), &["inserted_at DESC", "id DESC"]).await?;
-        return Ok(rows.into_iter().next());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM ONLY {TABLE} \
-             WHERE question_id = $question_id \
-               AND state_name = $state_name \
-               AND person_id = $person_id \
-               AND notation_id = $notation_id \
-             ORDER BY chronology_at DESC, id DESC LIMIT 1"
-        ))
-        .bind(("question_id", record_id(QUESTION_TABLE, question_id)))
-        .bind(("state_name", state_name.to_string()))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("notation_id", record_id(NOTATION_TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = matter::authority_for(TABLE).await?;
+    let rows = matter::select(&pg, TABLE, json!({"question_id": question_id, "state_name": state_name, "person_id": person_id, "notation_id": notation_id}), &["inserted_at DESC", "id DESC"]).await?;
+    Ok(rows.into_iter().next())
 }
 
 /// Every answer collected by one Notation, oldest first — the transcript
@@ -367,27 +240,19 @@ pub async fn latest_for_state(
 /// # Errors
 ///
 /// [`AnswerError::Db`] if the lookup fails.
-pub async fn for_notation(db: &SurrealDb, notation_id: Uuid) -> Result<Vec<Answer>, AnswerError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let rows = matter::select(
-            &pg,
-            TABLE,
-            json!({"notation_id": notation_id}),
-            &["inserted_at", "id"],
-        )
-        .await?;
-        return Ok(rows);
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM {TABLE} \
-             WHERE notation_id = $notation_id ORDER BY chronology_at ASC, id ASC"
-        ))
-        .bind(("notation_id", record_id(NOTATION_TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn for_notation(
+    _db: &ApplicationStore,
+    notation_id: Uuid,
+) -> Result<Vec<Answer>, AnswerError> {
+    let pg = matter::authority_for(TABLE).await?;
+    let rows = matter::select(
+        &pg,
+        TABLE,
+        json!({"notation_id": notation_id}),
+        &["inserted_at", "id"],
+    )
+    .await?;
+    Ok(rows)
 }
 
 /// Every answer one respondent gave in one Notation, oldest first — the
@@ -398,32 +263,19 @@ pub async fn for_notation(db: &SurrealDb, notation_id: Uuid) -> Result<Vec<Answe
 ///
 /// [`AnswerError::Db`] if the lookup fails.
 pub async fn for_person_in_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
     notation_id: Uuid,
 ) -> Result<Vec<Answer>, AnswerError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let rows = matter::select(
-            &pg,
-            TABLE,
-            json!({"person_id": person_id, "notation_id": notation_id}),
-            &["inserted_at", "id"],
-        )
-        .await?;
-        return Ok(rows);
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM {TABLE} \
-             WHERE person_id = $person_id AND notation_id = $notation_id \
-             ORDER BY chronology_at ASC, id ASC"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("notation_id", record_id(NOTATION_TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = matter::authority_for(TABLE).await?;
+    let rows = matter::select(
+        &pg,
+        TABLE,
+        json!({"person_id": person_id, "notation_id": notation_id}),
+        &["inserted_at", "id"],
+    )
+    .await?;
+    Ok(rows)
 }
 
 /// Every answer one respondent gave to one question in one questionnaire
@@ -433,36 +285,17 @@ pub async fn for_person_in_notation(
 ///
 /// [`AnswerError::Db`] if the lookup fails.
 pub async fn for_question_and_person(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     question_id: Uuid,
     person_id: Uuid,
     state_name: Option<&str>,
 ) -> Result<Vec<Answer>, AnswerError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let mut filter = json!({"question_id": question_id, "person_id": person_id});
-        if let Some(state) = state_name {
-            filter["state_name"] = json!(state);
-        }
-        return Ok(matter::select(&pg, TABLE, filter, &["inserted_at", "id"]).await?);
+    let pg = matter::authority_for(TABLE).await?;
+    let mut filter = json!({"question_id": question_id, "person_id": person_id});
+    if let Some(state) = state_name {
+        filter["state_name"] = json!(state);
     }
-
-    let narrowed = if state_name.is_some() {
-        " AND state_name = $state_name"
-    } else {
-        ""
-    };
-    let response = db
-        .query(format!(
-            "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM {TABLE} \
-             WHERE question_id = $question_id AND person_id = $person_id{narrowed} \
-             ORDER BY chronology_at ASC, id ASC"
-        ))
-        .bind(("question_id", record_id(QUESTION_TABLE, question_id)))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("state_name", state_name.map(ToString::to_string)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    Ok(matter::select(&pg, TABLE, filter, &["inserted_at", "id"]).await?)
 }
 
 /// The most recent answer one respondent gave, across every question and
@@ -472,30 +305,18 @@ pub async fn for_question_and_person(
 ///
 /// [`AnswerError::Db`] if the lookup fails.
 pub async fn latest_for_person(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Option<Answer>, AnswerError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let rows = matter::select(
-            &pg,
-            TABLE,
-            json!({"person_id": person_id}),
-            &["inserted_at DESC", "id DESC"],
-        )
-        .await?;
-        return Ok(rows.into_iter().next());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM ONLY {TABLE} \
-             WHERE person_id = $person_id \
-             ORDER BY chronology_at DESC, id DESC LIMIT 1"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = matter::authority_for(TABLE).await?;
+    let rows = matter::select(
+        &pg,
+        TABLE,
+        json!({"person_id": person_id}),
+        &["inserted_at DESC", "id DESC"],
+    )
+    .await?;
+    Ok(rows.into_iter().next())
 }
 
 /// Whether this Notation already carries an answer for this questionnaire
@@ -506,30 +327,18 @@ pub async fn latest_for_person(
 ///
 /// [`AnswerError::Db`] if the lookup fails.
 pub async fn exists_for_state(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
     state_name: &str,
 ) -> Result<bool, AnswerError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::find::<Answer>(
-            &pg,
-            TABLE,
-            json!({"notation_id": notation_id, "state_name": state_name}),
-        )
-        .await?
-        .is_some());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE notation_id = $notation_id AND state_name = $state_name LIMIT 1"
-        ))
-        .bind(("notation_id", record_id(NOTATION_TABLE, notation_id)))
-        .bind(("state_name", state_name.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?.is_some())
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::find::<Answer>(
+        &pg,
+        TABLE,
+        json!({"notation_id": notation_id, "state_name": state_name}),
+    )
+    .await?
+    .is_some())
 }
 
 /// Whether this respondent already gave exactly this value to this
@@ -540,34 +349,19 @@ pub async fn exists_for_state(
 ///
 /// [`AnswerError::Db`] if the lookup fails.
 pub async fn exists_with_value(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     question_id: Uuid,
     person_id: Uuid,
     value: &Json,
 ) -> Result<bool, AnswerError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::find::<Answer>(
-            &pg,
-            TABLE,
-            json!({"question_id": question_id, "person_id": person_id, "value": value}),
-        )
-        .await?
-        .is_some());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE question_id = $question_id \
-               AND person_id = $person_id \
-               AND value = $value LIMIT 1"
-        ))
-        .bind(("question_id", record_id(QUESTION_TABLE, question_id)))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("value", value.clone()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?.is_some())
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::find::<Answer>(
+        &pg,
+        TABLE,
+        json!({"question_id": question_id, "person_id": person_id, "value": value}),
+    )
+    .await?
+    .is_some())
 }
 
 /// Every answer, oldest first — the `/app/lawyer/answers` transparency listing.
@@ -575,20 +369,10 @@ pub async fn exists_with_value(
 /// # Errors
 ///
 /// [`AnswerError::Db`] if the lookup fails.
-pub async fn list_all(db: &SurrealDb) -> Result<Vec<Answer>, AnswerError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let rows = matter::select(&pg, TABLE, json!({}), &["inserted_at", "id"]).await?;
-        return Ok(rows);
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM {TABLE} \
-             ORDER BY chronology_at ASC, id ASC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn list_all(_db: &ApplicationStore) -> Result<Vec<Answer>, AnswerError> {
+    let pg = matter::authority_for(TABLE).await?;
+    let rows = matter::select(&pg, TABLE, json!({}), &["inserted_at", "id"]).await?;
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -598,22 +382,22 @@ mod tests {
         for_question_and_person, latest_for_person, latest_for_state, list_all, primitive,
         primitive_str, record, NewAnswer, SOURCE_CLIENT, SOURCE_EXTRACTED, SOURCE_LAWYER,
     };
+    use crate::application_store::ApplicationStore;
     use crate::persons::{self, NewPerson};
     use crate::questions::{self, NewQuestion};
-    use crate::surreal::SurrealDb;
     use chrono::{DateTime, Utc};
     use serde_json::{json, Value as Json};
     use uuid::Uuid;
 
     /// A question and a persisted respondent to hang answers off.
-    async fn a_question(db: &SurrealDb, code: &str) -> Uuid {
+    async fn a_question(db: &ApplicationStore, code: &str) -> Uuid {
         questions::create(db, &NewQuestion::new(code, "?", "string"))
             .await
             .unwrap()
             .id
     }
 
-    async fn a_person(db: &SurrealDb) -> Uuid {
+    async fn a_person(db: &ApplicationStore) -> Uuid {
         persons::create(
             db,
             &NewPerson::new(
@@ -626,7 +410,7 @@ mod tests {
         .id
     }
 
-    async fn a_notation(db: &SurrealDb, person_id: Uuid) -> Uuid {
+    async fn a_notation(db: &ApplicationStore, person_id: Uuid) -> Uuid {
         let project = crate::test_support::seed_project_on_firm(
             db,
             None,
@@ -728,7 +512,7 @@ mod tests {
     #[tokio::test]
     async fn value_round_trips_all_three_shapes() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let shapes: [(&str, Json); 3] = [
                 ("primitive", primitive("Libra Jones")),
@@ -769,7 +553,7 @@ mod tests {
     #[tokio::test]
     async fn value_carries_arbitrary_nesting() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let person_id = a_person(&db).await;
             let deep = json!({
@@ -788,7 +572,7 @@ mod tests {
     #[tokio::test]
     async fn a_recorded_answer_reads_back_whole() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let person_id = a_person(&db).await;
             let notation_id = a_notation(&db, person_id).await;
@@ -819,7 +603,7 @@ mod tests {
     #[tokio::test]
     async fn an_answer_may_carry_no_notation_and_no_typist() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let person_id = a_person(&db).await;
 
@@ -845,7 +629,7 @@ mod tests {
     #[tokio::test]
     async fn a_correction_appends_and_the_latest_wins() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let person_id = a_person(&db).await;
             let notation_id = a_notation(&db, person_id).await;
@@ -889,7 +673,7 @@ mod tests {
     #[tokio::test]
     async fn chronology_orders_answers_independently_of_uuid_version_and_value_precision() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let person_id = a_person(&db).await;
             let notation_id = a_notation(&db, person_id).await;
@@ -996,7 +780,7 @@ mod tests {
     #[tokio::test]
     async fn two_states_of_one_question_stay_distinct() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "entity").await;
             let person_id = a_person(&db).await;
             let notation_id = a_notation(&db, person_id).await;
@@ -1025,7 +809,7 @@ mod tests {
     #[tokio::test]
     async fn a_notation_transcript_reads_oldest_first() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let person_id = a_person(&db).await;
             let notation_id = a_notation(&db, person_id).await;
@@ -1065,7 +849,7 @@ mod tests {
     #[tokio::test]
     async fn a_two_sided_intake_separates_its_respondents() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let client = a_person(&db).await;
             let lawyer = a_person(&db).await;
@@ -1102,7 +886,7 @@ mod tests {
     #[tokio::test]
     async fn an_extracted_answer_is_visibly_machine_proposed() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let person_id = a_person(&db).await;
 
@@ -1125,7 +909,7 @@ mod tests {
     #[tokio::test]
     async fn a_source_outside_the_closed_set_is_refused_by_the_schema() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let refused = record(
                 &db,
@@ -1141,7 +925,7 @@ mod tests {
     #[tokio::test]
     async fn the_re_ask_history_of_one_step_reads_in_order() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let person_id = a_person(&db).await;
             let notation_id = a_notation(&db, person_id).await;
@@ -1184,7 +968,7 @@ mod tests {
     #[tokio::test]
     async fn the_seed_idempotence_checks_see_an_existing_answer() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let question_id = a_question(&db, "client_name").await;
             let person_id = a_person(&db).await;
             let notation_id = a_notation(&db, person_id).await;

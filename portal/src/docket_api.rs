@@ -81,9 +81,10 @@ async fn require_participant(
     role: Role,
     project_id: Uuid,
 ) -> Result<(), ApiError> {
-    let allowed = store::access::can_see_project(&state.surreal, person_id, role, project_id)
-        .await
-        .map_err(ApiError::Db)?;
+    let allowed =
+        store::access::can_see_project(&state.application_store, person_id, role, project_id)
+            .await
+            .map_err(ApiError::Db)?;
     if allowed {
         Ok(())
     } else {
@@ -144,7 +145,7 @@ async fn resolve_document(
     slug: Option<&str>,
 ) -> Result<Option<Uuid>, ApiError> {
     if let Some(id) = document_id {
-        let asset = store::assets::find_by_id(&state.surreal, id)
+        let asset = store::assets::find_by_id(&state.application_store, id)
             .await
             .map_err(ApiError::Asset)?;
         return match asset {
@@ -156,7 +157,7 @@ async fn resolve_document(
     }
     if let Some(slug) = slug.map(str::trim).filter(|slug| !slug.is_empty()) {
         let asset = store::assets::current(
-            &state.surreal,
+            &state.application_store,
             project_id,
             slug,
             store::assets::Lens::Lawyer,
@@ -184,7 +185,7 @@ async fn resolve_case(
         .filter(|number| !number.is_empty());
     if let Some(number) = docket_number {
         if let Some(case) =
-            store::cases::find_case_by_docket_number(&state.surreal, project_id, number)
+            store::cases::find_case_by_docket_number(&state.application_store, project_id, number)
                 .await
                 .map_err(map_case)?
         {
@@ -197,7 +198,7 @@ async fn resolve_case(
             .filter(|caption| !caption.is_empty())
             .unwrap_or(number);
         return store::cases::open_case(
-            &state.surreal,
+            &state.application_store,
             &store::cases::NewCase {
                 project_id,
                 caption,
@@ -211,7 +212,7 @@ async fn resolve_case(
         .await
         .map_err(map_case);
     }
-    let mut cases = store::cases::for_project(&state.surreal, project_id)
+    let mut cases = store::cases::for_project(&state.application_store, project_id)
         .await
         .map_err(map_case)?;
     match cases.len() {
@@ -232,11 +233,11 @@ async fn entry_on_project(
     project_id: Uuid,
     entry_id: Uuid,
 ) -> Result<DocketEntry, ApiError> {
-    let entry = store::cases::find_entry(&state.surreal, entry_id)
+    let entry = store::cases::find_entry(&state.application_store, entry_id)
         .await
         .map_err(map_case)?
         .ok_or(ApiError::NotFound)?;
-    let on_project = store::cases::for_project(&state.surreal, project_id)
+    let on_project = store::cases::for_project(&state.application_store, project_id)
         .await
         .map_err(map_case)?
         .iter()
@@ -255,10 +256,10 @@ pub(crate) async fn read_docket(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
-    let cases = store::cases::for_project(&state.surreal, id)
+    let cases = store::cases::for_project(&state.application_store, id)
         .await
         .map_err(map_case)?;
-    let entries = store::cases::docket_for_project(&state.surreal, id)
+    let entries = store::cases::docket_for_project(&state.application_store, id)
         .await
         .map_err(map_case)?;
     Ok(Json(ProjectDocket { cases, entries }).into_response())
@@ -302,7 +303,7 @@ pub(crate) async fn record_entry(
     let case = resolve_case(&state, id, &input).await?;
     // The same entry number on the same case is the same entry: an ingest
     // that replays a notice reads the row it recorded before.
-    if let Some(existing) = store::cases::docket(&state.surreal, case.id)
+    if let Some(existing) = store::cases::docket(&state.application_store, case.id)
         .await
         .map_err(map_case)?
         .into_iter()
@@ -311,7 +312,7 @@ pub(crate) async fn record_entry(
         return Ok((StatusCode::OK, Json(existing)).into_response());
     }
     let row = store::cases::record_entry(
-        &state.surreal,
+        &state.application_store,
         &store::cases::NewDocketEntry {
             case_id: case.id,
             entry_number: &entry_number,
@@ -344,7 +345,7 @@ pub(crate) async fn link_document(
         .ok_or_else(|| {
             ApiError::DocketInvalid("name the document by document_id or slug".into())
         })?;
-    let row = store::cases::link_document(&state.surreal, entry_id, document)
+    let row = store::cases::link_document(&state.application_store, entry_id, document)
         .await
         .map_err(map_case)?;
     Ok(Json(row).into_response())
@@ -364,7 +365,7 @@ pub(crate) async fn supersede_entry(
     let document_asset_id =
         resolve_document(&state, id, input.document_id, input.slug.as_deref()).await?;
     let row = store::cases::supersede(
-        &state.surreal,
+        &state.application_store,
         entry_id,
         &store::cases::Continuance {
             entry_number: &entry_number,

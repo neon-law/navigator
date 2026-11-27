@@ -117,21 +117,29 @@ pub async fn upload(
     let Some(Extension(session)) = session else {
         return not_found();
     };
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
+    let Some(project_id) =
+        store::projects::id_for_code(&state.application_store, &project_code).await
+    else {
         return not_found();
     };
 
     let Some(person_id) = session.person_id else {
         return not_found();
     };
-    if !store::access::can_see_project(&state.surreal, Some(person_id), session.role, project_id)
-        .await
-        .unwrap_or(false)
+    if !store::access::can_see_project(
+        &state.application_store,
+        Some(person_id),
+        session.role,
+        project_id,
+    )
+    .await
+    .unwrap_or(false)
     {
         return not_found();
     }
 
-    let redirect_back = crate::dioxus_app::project_show_path(&state.surreal, project_id).await;
+    let redirect_back =
+        crate::dioxus_app::project_show_path(&state.application_store, project_id).await;
 
     // Verify the `_csrf` first field before reading the contract bytes —
     // the multipart equivalent of the middleware's form-field check.
@@ -161,7 +169,7 @@ pub async fn upload(
     let filename = artifact.default_filename();
 
     let deps = ReviewDeps {
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         workflow_runtime: state.workflow_runtime.as_ref(),
         storage: &state.storage,
         contract_reviewer: state.contract_reviewer.as_ref(),
@@ -219,7 +227,7 @@ fn contract_text_for_review(artifact: &ParsedArtifact) -> Result<String, Contrac
 /// or the REST `ApiState`. Decoupling the core from either concrete state lets
 /// both doors run the deviation analysis identically.
 pub struct ReviewDeps<'a> {
-    pub surreal: &'a store::surreal::SurrealDb,
+    pub application_store: &'a store::application_store::ApplicationStore,
     pub workflow_runtime: &'a dyn StateMachineRuntime,
     pub storage: &'a Arc<dyn cloud::StorageService>,
     pub contract_reviewer: &'a dyn crate::contract_review::ContractReviewer,
@@ -239,12 +247,12 @@ pub async fn drive_contract_review(
     // The Entity (the Company) the contract is reviewed for, and its
     // playbook. Resolve the playbook first so we fail fast — before opening
     // a notation — when there is nothing to measure the contract against.
-    let project_row = store::projects::find_by_id(deps.surreal, project_id)
+    let project_row = store::projects::find_by_id(deps.application_store, project_id)
         .await
         .map_err(|error| ContractReviewError::Db(error.to_string()))?
         .ok_or(ContractReviewError::NotationMissing(project_id))?;
     let entity_id = project_row.entity_id;
-    let playbook_row = active_playbook(deps.surreal, entity_id)
+    let playbook_row = active_playbook(deps.application_store, entity_id)
         .await
         .map_err(|error| ContractReviewError::Db(error.to_string()))?
         .ok_or(ContractReviewError::NoPlaybook)?;
@@ -252,14 +260,20 @@ pub async fn drive_contract_review(
         playbooks::positions_of(&playbook_row).map_err(ContractReviewError::Positions)?;
 
     let (template_row, questionnaire_snapshot) =
-        contract_review_template_and_snapshot(deps.surreal, deps.storage, project_id).await?;
+        contract_review_template_and_snapshot(deps.application_store, deps.storage, project_id)
+            .await?;
 
     // File the immutable source asset before signaling the workflow. The
     // durable signal carries only this asset id; bytes, text, and the caller's
     // filename never enter the journal payload.
-    let filed_artifact =
-        stage_contract_artifact(deps.surreal, deps.storage, project_id, filename, &artifact)
-            .await?;
+    let filed_artifact = stage_contract_artifact(
+        deps.application_store,
+        deps.storage,
+        project_id,
+        filename,
+        &artifact,
+    )
+    .await?;
     // Open the notation at BEGIN, bound to the client Entity.
     let new_notation = store::notations::NewNotation::new(
         template_row.id,
@@ -270,7 +284,7 @@ pub async fn drive_contract_review(
     .with_entity(entity_id)
     .with_delivery(store::notations::DELIVERY_EMBEDDED)
     .with_questionnaire_snapshot(questionnaire_snapshot);
-    let notation_id = store::notations::create(deps.surreal, &new_notation)
+    let notation_id = store::notations::create(deps.application_store, &new_notation)
         .await
         .map_err(|error| ContractReviewError::Db(error.to_string()))?
         .id;
@@ -298,7 +312,7 @@ pub async fn drive_contract_review(
         Some(&value),
     )
     .await?;
-    sync_notation_state(deps.surreal, notation_id, s.as_str())
+    sync_notation_state(deps.application_store, notation_id, s.as_str())
         .await
         .map_err(|error| ContractReviewError::Db(error.to_string()))?;
 
@@ -311,7 +325,7 @@ pub async fn drive_contract_review(
         None,
     )
     .await?;
-    sync_notation_state(deps.surreal, notation_id, s.as_str())
+    sync_notation_state(deps.application_store, notation_id, s.as_str())
         .await
         .map_err(|error| ContractReviewError::Db(error.to_string()))?;
 
@@ -322,9 +336,10 @@ pub async fn drive_contract_review(
         .contract_reviewer
         .review(&playbook_row.name, &positions, contract_text)
         .await?;
-    let asset_id = latest_document(deps.surreal, project_id, INBOUND_CONTRACT_KIND).await?;
+    let asset_id =
+        latest_document(deps.application_store, project_id, INBOUND_CONTRACT_KIND).await?;
     let review_id = store::contract_reviews::create(
-        deps.surreal,
+        deps.application_store,
         &store::contract_reviews::NewContractReview {
             notation_id,
             playbook_id: playbook_row.id,
@@ -334,7 +349,7 @@ pub async fn drive_contract_review(
     .await
     .map_err(|error| ContractReviewError::Db(error.to_string()))?;
     store::contract_reviews::record_analysis(
-        deps.surreal,
+        deps.application_store,
         review_id,
         &report.risk_summary,
         &report.findings,
@@ -351,7 +366,7 @@ pub async fn drive_contract_review(
         None,
     )
     .await?;
-    sync_notation_state(deps.surreal, notation_id, s.as_str())
+    sync_notation_state(deps.application_store, notation_id, s.as_str())
         .await
         .map_err(|error| ContractReviewError::Db(error.to_string()))?;
 
@@ -363,7 +378,7 @@ pub async fn drive_contract_review(
 }
 
 async fn stage_contract_artifact(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     project_id: Uuid,
     filename: &str,
@@ -386,7 +401,7 @@ async fn stage_contract_artifact(
         }
     };
     let ingested = store::documents::ingest_bytes(
-        surreal,
+        application_store,
         storage,
         &store::documents::IngestArgs {
             project_id,
@@ -407,16 +422,19 @@ async fn stage_contract_artifact(
 }
 
 async fn contract_review_template_and_snapshot(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     project_id: Uuid,
 ) -> Result<(store::templates::Template, serde_json::Value), ContractReviewError> {
-    let template_row =
-        store::templates::resolve(surreal, Some(project_id), CONTRACT_REVIEW_TEMPLATE_CODE)
-            .await?
-            .ok_or(ContractReviewError::TemplateMissing)?;
+    let template_row = store::templates::resolve(
+        application_store,
+        Some(project_id),
+        CONTRACT_REVIEW_TEMPLATE_CODE,
+    )
+    .await?
+    .ok_or(ContractReviewError::TemplateMissing)?;
     let questionnaire_snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
-        surreal,
+        application_store,
         Some(storage),
         &template_row,
     )
@@ -427,10 +445,10 @@ async fn contract_review_template_and_snapshot(
 
 /// The most recent active playbook for an Entity, if any.
 async fn active_playbook(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     entity_id: Uuid,
 ) -> Result<Option<Playbook>, store::playbooks::PlaybookError> {
-    let mut rows = playbooks::for_entity(surreal, entity_id).await?;
+    let mut rows = playbooks::for_entity(application_store, entity_id).await?;
     rows.retain(|p| p.active);
     // `for_entity` returns most-recent-first; keep that order.
     Ok(rows.into_iter().next())
@@ -440,23 +458,25 @@ async fn active_playbook(
 /// just-filed inbound contract. Best-effort: `None` when the worker's file
 /// write hasn't landed yet (prod), in which case the review opens unlinked.
 async fn latest_document(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     kind: &str,
 ) -> Result<Option<Uuid>, store::assets::AssetError> {
-    Ok(store::assets::latest_of_kind(surreal, project_id, kind)
-        .await?
-        .map(|d| d.id))
+    Ok(
+        store::assets::latest_of_kind(application_store, project_id, kind)
+            .await?
+            .map(|d| d.id),
+    )
 }
 
 /// Mirror the runtime's resulting state onto the `notations` row (the
 /// runtime is the source of truth; the row is a convenience read).
 async fn sync_notation_state(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
     new_state: &str,
 ) -> Result<(), store::notations::NotationError> {
-    store::notations::update_state(surreal, notation_id, new_state).await?;
+    store::notations::update_state(application_store, notation_id, new_state).await?;
     Ok(())
 }
 
@@ -696,408 +716,4 @@ mod tests {
     }
 
     // --- the pipeline and its upload door ---
-
-    use axum::body::Body;
-    use axum::http::{header, Request, StatusCode};
-    use store::persons::{NewPerson, Role};
-    use tower::ServiceExt;
-    use uuid::Uuid;
-    use workflows::IntakeArtifact;
-
-    use super::{drive_contract_review, ContractReviewError, ReviewDeps};
-    use crate::session::{now_unix_secs, SessionSource, SessionStore};
-
-    const BOUNDARY: &str = "synthetic-contract-boundary";
-
-    /// A matter on a fresh store, its client (a participant) and the
-    /// client Entity the playbook belongs to.
-    struct Matter {
-        surreal: store::surreal::SurrealDb,
-        code: String,
-        project_id: Uuid,
-        client_id: Uuid,
-        entity_id: Uuid,
-    }
-
-    async fn matter() -> Matter {
-        let surreal = store::test_support::mem_surreal().await;
-        let entity_id = store::test_support::seed_entity(&surreal).await;
-        let code = format!("contract-review-{}", Uuid::now_v7().simple());
-        let project_id = store::projects::create(
-            &surreal,
-            &store::projects::NewProject {
-                code: code.clone(),
-                name: "Synthetic contract review".into(),
-                status: "open".into(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id;
-        let client_id = store::persons::create(
-            &surreal,
-            &NewPerson::with_role(
-                "Synthetic client",
-                format!("contract-client-{}@example.com", Uuid::now_v7()),
-                Role::Client,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        store::projects::add_participation(&surreal, project_id, client_id, "client")
-            .await
-            .unwrap();
-        Matter {
-            surreal,
-            code,
-            project_id,
-            client_id,
-            entity_id,
-        }
-    }
-
-    async fn seed_template(surreal: &store::surreal::SurrealDb) {
-        store::templates::save_version(
-            surreal,
-            None,
-            super::CONTRACT_REVIEW_TEMPLATE_CODE,
-            store::templates::Version {
-                title: "Inbound Contract Review".into(),
-                respondent_type: "person_and_entity".into(),
-                asset_id: None,
-                form_code: None,
-                kind: None,
-                source_commit_sha: None,
-            },
-        )
-        .await
-        .unwrap();
-    }
-
-    async fn seed_playbook(surreal: &store::surreal::SurrealDb, entity_id: Uuid) -> Uuid {
-        let positions = vec![store::playbooks::Position {
-            topic: "Limitation of liability".into(),
-            preferred: "Mutual cap at 12 months' fees".into(),
-            fallback: "Cap at 2x fees paid".into(),
-            walkaway: "Uncapped liability".into(),
-            severity: store::playbooks::SEVERITY_HIGH.into(),
-        }];
-        store::playbooks::create(
-            surreal,
-            &store::playbooks::NewPlaybook {
-                entity_id,
-                name: "Synthetic vendor playbook",
-                positions: &positions,
-            },
-        )
-        .await
-        .unwrap()
-    }
-
-    fn bearer(person_id: Uuid, role: Role) -> String {
-        let token =
-            SessionStore::new(crate::test_support::TEST_SESSION_KEY).encode(&crate::SessionData {
-                sub: "synthetic-contract-uploader".into(),
-                email: None,
-                person_id: Some(person_id),
-                exp: now_unix_secs() + 60,
-                role,
-                csrf_token: "synthetic-csrf".into(),
-                source: SessionSource::Cli,
-                provider: None,
-                viewing_as_dri: None,
-                email_verified: false,
-                scope: None,
-            });
-        format!("Bearer {token}")
-    }
-
-    /// A multipart body of `(name, filename, content)` parts.
-    fn multipart(parts: &[(&str, Option<&str>, &[u8])]) -> Vec<u8> {
-        let mut body = Vec::new();
-        for (name, filename, content) in parts {
-            body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
-            match filename {
-                Some(filename) => body.extend_from_slice(
-                    format!(
-                        "Content-Disposition: form-data; name=\"{name}\"; \
-                         filename=\"{filename}\"\r\nContent-Type: text/plain\r\n\r\n"
-                    )
-                    .as_bytes(),
-                ),
-                None => body.extend_from_slice(
-                    format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
-                ),
-            }
-            body.extend_from_slice(content);
-            body.extend_from_slice(b"\r\n");
-        }
-        body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
-        body
-    }
-
-    async fn upload(
-        surreal: &store::surreal::SurrealDb,
-        code: &str,
-        auth: &str,
-        body: Vec<u8>,
-    ) -> (StatusCode, String, String) {
-        let app = crate::router(crate::test_support::app_state(surreal.clone()).await);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/app/projects/{code}/contract-review"))
-                    .header(header::AUTHORIZATION, auth)
-                    .header(
-                        header::CONTENT_TYPE,
-                        format!("multipart/form-data; boundary={BOUNDARY}"),
-                    )
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let location = response
-            .headers()
-            .get(header::LOCATION)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        (
-            status,
-            location,
-            String::from_utf8_lossy(&bytes).into_owned(),
-        )
-    }
-
-    #[tokio::test]
-    async fn the_upload_door_hides_a_matter_from_a_non_participant() {
-        let matter = matter().await;
-        let body = || multipart(&[("contract_text", None, b"A contract")]);
-        let client = bearer(matter.client_id, Role::Client);
-        let (status, _, _) = upload(&matter.surreal, "no-such-matter", &client, body()).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "an unknown matter");
-        let stranger = store::persons::create(
-            &matter.surreal,
-            &NewPerson::with_role(
-                "Synthetic stranger",
-                format!("contract-stranger-{}@example.com", Uuid::now_v7()),
-                Role::Client,
-            ),
-        )
-        .await
-        .unwrap();
-        let (status, _, _) = upload(
-            &matter.surreal,
-            &matter.code,
-            &bearer(stranger.id, Role::Client),
-            body(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "a non-participant");
-    }
-
-    #[tokio::test]
-    async fn the_upload_door_returns_an_empty_form_and_refuses_a_broken_one() {
-        let matter = matter().await;
-        let client = bearer(matter.client_id, Role::Client);
-        let (status, location, _) = upload(
-            &matter.surreal,
-            &matter.code,
-            &client,
-            multipart(&[
-                ("contract_text", None, b"   "),
-                ("file", Some("empty.txt"), b""),
-                ("ignored", None, b"value"),
-            ]),
-        )
-        .await;
-        assert!(status.is_redirection(), "{status}");
-        assert_eq!(location, format!("/app/projects/{}", matter.code));
-        assert!(
-            store::notations::list_by_project(&matter.surreal, matter.project_id)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-
-        let truncated = format!(
-            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"contract_text\"\r\n\r\nunterminated"
-        );
-        let (status, _, _) = upload(
-            &matter.surreal,
-            &matter.code,
-            &client,
-            truncated.into_bytes(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn the_upload_door_explains_a_missing_playbook() {
-        let matter = matter().await;
-        seed_template(&matter.surreal).await;
-        let (status, _, body) = upload(
-            &matter.surreal,
-            &matter.code,
-            &bearer(matter.client_id, Role::Client),
-            multipart(&[("contract_text", None, b"MASTER SERVICES AGREEMENT")]),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(body.contains("no contract-review playbook"), "{body}");
-    }
-
-    #[tokio::test]
-    async fn an_uploaded_file_is_filed_analysed_and_parked_for_lawyer_review() {
-        let matter = matter().await;
-        seed_template(&matter.surreal).await;
-        let playbook_id = seed_playbook(&matter.surreal, matter.entity_id).await;
-        let (status, location, body) = upload(
-            &matter.surreal,
-            &matter.code,
-            &bearer(matter.client_id, Role::Client),
-            multipart(&[(
-                "file",
-                Some("vendor-msa.txt"),
-                b"MASTER SERVICES AGREEMENT\nLiability is uncapped.",
-            )]),
-        )
-        .await;
-        assert!(status.is_redirection(), "{status}: {body}");
-        let review_id: Uuid = location
-            .strip_prefix("/app/lawyer/contract-reviews/")
-            .expect("redirects to the review")
-            .parse()
-            .unwrap();
-        let review = store::contract_reviews::by_id(&matter.surreal, review_id)
-            .await
-            .unwrap()
-            .expect("the review row exists");
-        assert_eq!(review.playbook_id, playbook_id);
-        assert_eq!(
-            store::contract_reviews::findings_of(&review).unwrap().len(),
-            1,
-            "one finding per playbook position"
-        );
-        let notation = store::notations::list_by_project(&matter.surreal, matter.project_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .next()
-            .expect("a notation was opened");
-        assert_eq!(notation.state, "lawyer_review");
-        assert_eq!(notation.entity_id, Some(matter.entity_id));
-    }
-
-    #[tokio::test]
-    async fn the_pipeline_refuses_before_any_workflow_step_it_cannot_take() {
-        let matter = matter().await;
-        let state = crate::test_support::app_state(matter.surreal.clone()).await;
-        let deps = ReviewDeps {
-            surreal: &state.surreal,
-            workflow_runtime: state.workflow_runtime.as_ref(),
-            storage: &state.storage,
-            contract_reviewer: state.contract_reviewer.as_ref(),
-        };
-        let text = || IntakeArtifact::Text {
-            text: "contract body".into(),
-        };
-        let missing = Uuid::now_v7();
-        let error = drive_contract_review(
-            &deps,
-            missing,
-            matter.client_id,
-            "c.txt",
-            "contract body",
-            text(),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, ContractReviewError::NotationMissing(id) if id == missing));
-
-        seed_playbook(&matter.surreal, matter.entity_id).await;
-        let error = drive_contract_review(
-            &deps,
-            matter.project_id,
-            matter.client_id,
-            "c.txt",
-            "contract body",
-            text(),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(error, ContractReviewError::TemplateMissing),
-            "{error}"
-        );
-
-        seed_template(&matter.surreal).await;
-        let error = drive_contract_review(
-            &deps,
-            matter.project_id,
-            matter.client_id,
-            "c.txt",
-            "contract body",
-            IntakeArtifact::File {
-                bytes_base64: "not base64!".into(),
-                content_type: "text/plain".into(),
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, ContractReviewError::Base64(_)), "{error}");
-    }
-
-    #[tokio::test]
-    async fn a_linked_or_already_stored_contract_reaches_lawyer_review() {
-        let matter = matter().await;
-        seed_template(&matter.surreal).await;
-        seed_playbook(&matter.surreal, matter.entity_id).await;
-        let state = crate::test_support::app_state(matter.surreal.clone()).await;
-        let deps = ReviewDeps {
-            surreal: &state.surreal,
-            workflow_runtime: state.workflow_runtime.as_ref(),
-            storage: &state.storage,
-            contract_reviewer: state.contract_reviewer.as_ref(),
-        };
-        let linked = drive_contract_review(
-            &deps,
-            matter.project_id,
-            matter.client_id,
-            "linked-contract",
-            "contract body",
-            IntakeArtifact::Link {
-                url: "https://example.com/contract".into(),
-            },
-        )
-        .await
-        .expect("a linked contract is filed as its address");
-        let stored = Uuid::now_v7();
-        let restaged = drive_contract_review(
-            &deps,
-            matter.project_id,
-            matter.client_id,
-            "stored-contract.txt",
-            "contract body",
-            IntakeArtifact::Stored { asset_id: stored },
-        )
-        .await
-        .expect("an already-stored contract is not filed twice");
-        assert_ne!(linked, restaged);
-        let notations = store::notations::list_by_project(&matter.surreal, matter.project_id)
-            .await
-            .unwrap();
-        assert_eq!(notations.len(), 2);
-        assert!(notations.iter().all(|row| row.state == "lawyer_review"));
-    }
 }

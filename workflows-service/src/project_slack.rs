@@ -207,10 +207,7 @@ fn project_id(key: &str) -> Result<uuid::Uuid, LaneError> {
 #[cfg(test)]
 fn project_store_error(error: &store::projects::ProjectStoreError) -> LaneError {
     use store::projects::ProjectStoreError as Error;
-    if matches!(
-        error,
-        Error::Db(_) | Error::Postgres(_) | Error::Tenancy(_) | Error::Authority(_)
-    ) {
+    if matches!(error, Error::Postgres(_) | Error::Tenancy(_)) {
         LaneError::Store(error.to_string())
     } else {
         LaneError::Refused(error.to_string())
@@ -249,18 +246,18 @@ impl ChannelOutcome {
 /// Restate handler so the store/Slack work is unit-testable without a broker.
 #[cfg(test)]
 pub(crate) async fn ensure_internal_channel(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     slack: &Arc<dyn SlackBot>,
     project_id: uuid::Uuid,
     simulated: bool,
 ) -> Result<String, LaneError> {
-    let project = store::projects::find_by_id(surreal, project_id)
+    let project = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| project_store_error(&error))?
         .ok_or_else(|| {
             LaneError::ProjectGone("Project no longer exists for Slack notice".to_string())
         })?;
-    ensure_channel(surreal, slack, &project, simulated)
+    ensure_channel(application_store, slack, &project, simulated)
         .await
         .map(|outcome| outcome.channel_id().to_string())
 }
@@ -274,17 +271,23 @@ pub(crate) async fn ensure_internal_channel(
 /// so a row carrying only the id reads `not provisioned` until it is filled.
 /// A recorded id with no URL is backfilled; a URL already recorded is kept.
 pub(crate) async fn ensure_channel(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     slack: &Arc<dyn SlackBot>,
     project: &store::projects::Project,
     simulated: bool,
 ) -> Result<ChannelOutcome, LaneError> {
-    ensure_channel_using(ChannelStore::Facade(surreal), slack, project, simulated).await
+    ensure_channel_using(
+        ChannelStore::Facade(application_store),
+        slack,
+        project,
+        simulated,
+    )
+    .await
 }
 
 #[derive(Clone, Copy)]
 enum ChannelStore<'a> {
-    Facade(&'a store::surreal::SurrealDb),
+    Facade(&'a store::application_store::ApplicationStore),
     Postgres(&'a store::postgres::PostgresDb),
 }
 
@@ -338,8 +341,14 @@ async fn record_channel(
 ) -> Result<(), LaneError> {
     let url = cloud::slack_channel_url(channel_id);
     match storage {
-        ChannelStore::Facade(surreal) => {
-            store::projects::set_internal_slack_channel(surreal, project_id, channel_id, &url).await
+        ChannelStore::Facade(application_store) => {
+            store::projects::set_internal_slack_channel(
+                application_store,
+                project_id,
+                channel_id,
+                &url,
+            )
+            .await
         }
         ChannelStore::Postgres(pg) => {
             store::projects::set_internal_slack_channel_on(pg, project_id, channel_id, &url).await
@@ -395,18 +404,18 @@ pub struct MainPushDestination {
 
 #[cfg(test)]
 pub(crate) async fn main_push_destination(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     slack: &Arc<dyn SlackBot>,
     project_id: uuid::Uuid,
     simulated: bool,
 ) -> Result<MainPushDestination, LaneError> {
-    let project = store::projects::find_by_id(surreal, project_id)
+    let project = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| project_store_error(&error))?
         .ok_or_else(|| {
             LaneError::ProjectGone("Project no longer exists for Slack notice".to_string())
         })?;
-    let channel = ensure_channel(surreal, slack, &project, simulated).await?;
+    let channel = ensure_channel(application_store, slack, &project, simulated).await?;
     Ok(MainPushDestination {
         channel_id: channel.channel_id().to_string(),
         repository_url: project.repository_url,
@@ -525,7 +534,7 @@ mod tests {
     use uuid::Uuid;
     use workflows::CapturingSlackBot;
 
-    async fn seed_entity(db: &store::surreal::SurrealDb) -> Uuid {
+    async fn seed_entity(db: &store::application_store::ApplicationStore) -> Uuid {
         store::test_support::seed_firm_with_new_brand(db, "neon").await;
         store::test_support::seed_entity_with_parents(db).await
     }
@@ -777,35 +786,36 @@ mod tests {
     #[tokio::test]
     async fn the_destination_is_the_project_row_channel_and_repository() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             let project = create(
-                &surreal,
+                &application_store,
                 &NewProject {
                     code: "sample-push".to_string(),
                     name: "Sample Push".to_string(),
                     status: "open".to_string(),
-                    entity_id: seed_entity(&surreal).await,
+                    entity_id: seed_entity(&application_store).await,
                     ..Default::default()
                 },
             )
             .await
             .expect("create Project");
             store::projects::set_repository_url(
-                &surreal,
+                &application_store,
                 project.id,
                 Some("https://github.com/an-organization/sample-push"),
             )
             .await
             .unwrap();
-            set_internal_slack_channel_id(&surreal, project.id, "CPUSH")
+            set_internal_slack_channel_id(&application_store, project.id, "CPUSH")
                 .await
                 .unwrap()
                 .unwrap();
             let slack = Arc::new(CapturingSlackBot::new());
             let bot: Arc<dyn workflows::SlackBot> = slack.clone();
-            let destination = super::main_push_destination(&surreal, &bot, project.id, false)
-                .await
-                .expect("destination");
+            let destination =
+                super::main_push_destination(&application_store, &bot, project.id, false)
+                    .await
+                    .expect("destination");
             assert_eq!(destination.channel_id, "CPUSH");
             assert_eq!(
                 destination.repository_url.as_deref(),
@@ -830,14 +840,14 @@ mod tests {
     #[tokio::test]
     async fn ensure_creates_a_channel_once_then_reuses_it() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             let project = create(
-                &surreal,
+                &application_store,
                 &NewProject {
                     code: "sample-slack".to_string(),
                     name: "Sample Slack".to_string(),
                     status: "open".to_string(),
-                    entity_id: seed_entity(&surreal).await,
+                    entity_id: seed_entity(&application_store).await,
                     ..Default::default()
                 },
             )
@@ -846,15 +856,15 @@ mod tests {
             let slack = Arc::new(CapturingSlackBot::new());
             let bot: Arc<dyn workflows::SlackBot> = slack.clone();
 
-            let first = ensure_internal_channel(&surreal, &bot, project.id, false)
+            let first = ensure_internal_channel(&application_store, &bot, project.id, false)
                 .await
                 .expect("create channel");
-            let second = ensure_internal_channel(&surreal, &bot, project.id, false)
+            let second = ensure_internal_channel(&application_store, &bot, project.id, false)
                 .await
                 .expect("reuse channel");
             assert_eq!(first, second);
             assert_eq!(slack.created_channels(), vec!["navigator-sample-slack"]);
-            let stored = store::projects::find_by_id(&surreal, project.id)
+            let stored = store::projects::find_by_id(&application_store, project.id)
                 .await
                 .expect("read")
                 .expect("exists");
@@ -878,31 +888,31 @@ mod tests {
     #[tokio::test]
     async fn ensure_reuses_a_channel_id_already_on_the_project() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             let project = create(
-                &surreal,
+                &application_store,
                 &NewProject {
                     code: "sample-existing".to_string(),
                     name: "Sample Existing".to_string(),
                     status: "open".to_string(),
-                    entity_id: seed_entity(&surreal).await,
+                    entity_id: seed_entity(&application_store).await,
                     ..Default::default()
                 },
             )
             .await
             .expect("create Project");
-            set_internal_slack_channel_id(&surreal, project.id, "CEXISTING")
+            set_internal_slack_channel_id(&application_store, project.id, "CEXISTING")
                 .await
                 .expect("persist channel")
                 .expect("project exists");
             let slack = Arc::new(CapturingSlackBot::new());
             let bot: Arc<dyn workflows::SlackBot> = slack.clone();
-            let channel = ensure_internal_channel(&surreal, &bot, project.id, false)
+            let channel = ensure_internal_channel(&application_store, &bot, project.id, false)
                 .await
                 .expect("reuse stored channel");
             assert_eq!(channel, "CEXISTING");
             assert!(slack.created_channels().is_empty());
-            let stored = store::projects::find_by_id(&surreal, project.id)
+            let stored = store::projects::find_by_id(&application_store, project.id)
                 .await
                 .expect("read")
                 .expect("exists");
@@ -919,21 +929,21 @@ mod tests {
     #[tokio::test]
     async fn ensure_keeps_a_url_already_recorded() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             let project = create(
-                &surreal,
+                &application_store,
                 &NewProject {
                     code: "sample-kept".to_string(),
                     name: "Sample Kept".to_string(),
                     status: "open".to_string(),
-                    entity_id: seed_entity(&surreal).await,
+                    entity_id: seed_entity(&application_store).await,
                     ..Default::default()
                 },
             )
             .await
             .expect("create Project");
             store::projects::set_internal_slack_channel(
-                &surreal,
+                &application_store,
                 project.id,
                 "CKEPT",
                 "https://acme.slack.com/archives/CKEPT",
@@ -942,10 +952,10 @@ mod tests {
             .expect("persist")
             .expect("project exists");
             let bot: Arc<dyn workflows::SlackBot> = Arc::new(CapturingSlackBot::new());
-            ensure_internal_channel(&surreal, &bot, project.id, false)
+            ensure_internal_channel(&application_store, &bot, project.id, false)
                 .await
                 .expect("reuse");
-            let stored = store::projects::find_by_id(&surreal, project.id)
+            let stored = store::projects::find_by_id(&application_store, project.id)
                 .await
                 .expect("read")
                 .expect("exists");
@@ -960,9 +970,9 @@ mod tests {
     #[tokio::test]
     async fn ensure_fails_closed_when_the_project_is_gone() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             let slack: Arc<dyn workflows::SlackBot> = Arc::new(CapturingSlackBot::new());
-            let err = ensure_internal_channel(&surreal, &slack, Uuid::now_v7(), false)
+            let err = ensure_internal_channel(&application_store, &slack, Uuid::now_v7(), false)
                 .await
                 .expect_err("missing project");
             assert!(err.to_string().contains("no longer exists"), "{err:?}");
@@ -973,14 +983,14 @@ mod tests {
     #[tokio::test]
     async fn simulated_deployments_create_staging_prefixed_channels() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             let project = create(
-                &surreal,
+                &application_store,
                 &NewProject {
                     code: "sample-staging".to_string(),
                     name: "Sample Staging".to_string(),
                     status: "open".to_string(),
-                    entity_id: seed_entity(&surreal).await,
+                    entity_id: seed_entity(&application_store).await,
                     ..Default::default()
                 },
             )
@@ -988,7 +998,7 @@ mod tests {
             .expect("create Project");
             let slack = Arc::new(CapturingSlackBot::new());
             let bot: Arc<dyn workflows::SlackBot> = slack.clone();
-            ensure_internal_channel(&surreal, &bot, project.id, true)
+            ensure_internal_channel(&application_store, &bot, project.id, true)
                 .await
                 .expect("create channel");
             assert_eq!(slack.created_channels(), vec!["staging-sample-staging"]);
@@ -1047,14 +1057,14 @@ mod tests {
     #[tokio::test]
     async fn ensure_adopts_an_existing_channel_instead_of_creating_one() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             let project = create(
-                &surreal,
+                &application_store,
                 &NewProject {
                     code: "sample-adopt".to_string(),
                     name: "Sample Adopt".to_string(),
                     status: "open".to_string(),
-                    entity_id: seed_entity(&surreal).await,
+                    entity_id: seed_entity(&application_store).await,
                     ..Default::default()
                 },
             )
@@ -1069,12 +1079,12 @@ mod tests {
                 created: std::sync::Mutex::default(),
             });
             let bot: Arc<dyn workflows::SlackBot> = slack.clone();
-            let outcome = super::ensure_channel(&surreal, &bot, &project, false)
+            let outcome = super::ensure_channel(&application_store, &bot, &project, false)
                 .await
                 .expect("adopt");
             assert_eq!(outcome, super::ChannelOutcome::Adopted("GADOPTED".into()));
             assert!(slack.created.lock().expect("lock").is_empty());
-            let stored = store::projects::find_by_id(&surreal, project.id)
+            let stored = store::projects::find_by_id(&application_store, project.id)
                 .await
                 .expect("read")
                 .expect("exists");
@@ -1089,14 +1099,14 @@ mod tests {
     #[tokio::test]
     async fn ensure_fails_closed_when_the_name_is_taken_by_an_invisible_channel() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             let project = create(
-                &surreal,
+                &application_store,
                 &NewProject {
                     code: "sample-taken".to_string(),
                     name: "Sample Taken".to_string(),
                     status: "open".to_string(),
-                    entity_id: seed_entity(&surreal).await,
+                    entity_id: seed_entity(&application_store).await,
                     ..Default::default()
                 },
             )
@@ -1108,7 +1118,7 @@ mod tests {
                 created: std::sync::Mutex::default(),
             });
             let bot: Arc<dyn workflows::SlackBot> = slack;
-            let error = super::ensure_channel(&surreal, &bot, &project, false)
+            let error = super::ensure_channel(&application_store, &bot, &project, false)
                 .await
                 .expect_err("name taken");
             assert!(error.to_string().contains("cannot see"), "{error:?}");

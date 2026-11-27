@@ -51,8 +51,6 @@ const WORKTREE_PORT_SPAN: u16 = 100;
 const WORKTREE_PORT_WINDOW_START: u16 = 20_000;
 const WORKTREE_INGRESS_HTTP_PORT_BASE: u16 = 20_900;
 const WORKTREE_INGRESS_HTTPS_PORT_BASE: u16 = 21_000;
-const WORKTREE_RESTATE_INGRESS_PORT_BASE: u16 = 20_100;
-const WORKTREE_RESTATE_ADMIN_PORT_BASE: u16 = 20_200;
 const WORKTREE_RAUTHY_PORT_BASE: u16 = 20_400;
 const WORKTREE_SEAWEEDFS_S3_PORT_BASE: u16 = 20_500;
 const WORKTREE_WEB_PORT_BASE: u16 = 20_600;
@@ -67,7 +65,6 @@ const WORKTREE_CLAMAV_PORT_BASE: u16 = 21_100;
 /// `SurrealDB`, the store the workspace is porting onto (#1093). It takes
 /// one port per slot like every other tier member: isolation comes from
 /// the worktree's own cluster, so two checkouts hold two engines.
-const WORKTREE_SURREAL_PORT_BASE: u16 = 21_200;
 /// The opt-in Forgejo and its PostgreSQL server, forwarded by `dev forgejo
 /// up` (and `hudson quickstart`) on the slot's own ports.
 const WORKTREE_FORGEJO_PORT_BASE: u16 = 21_400;
@@ -630,18 +627,7 @@ fn status_report(root: &Path, base_cfg: &KindConfig, port_in_use: &dyn Fn(u16) -
                                 );
                             }
                         } else {
-                            let _ = writeln!(
-                                out,
-                                "  Restate 127.0.0.1:{}: {}",
-                                cfg.restate_ingress_port,
-                                yes_no(port_in_use(cfg.restate_ingress_port))
-                            );
-                            let _ = writeln!(
-                                out,
-                                "  Surreal 127.0.0.1:{}: {}",
-                                cfg.surreal_port,
-                                yes_no(port_in_use(cfg.surreal_port))
-                            );
+                            out.push_str("  legacy worktree requires cleanup with its original Hudson version\n");
                         }
                     }
                     Runtime::Native => out.push_str("  legacy host environment requires cleanup with its original Hudson version\n"),
@@ -784,8 +770,6 @@ fn worktree_kind_config(base: &KindConfig, root: &Path, slot: u16) -> KindConfig
     cfg.cluster = worktree_cluster_name(&base.cluster, root);
     cfg.ingress_http_port = WORKTREE_INGRESS_HTTP_PORT_BASE + slot;
     cfg.ingress_https_port = WORKTREE_INGRESS_HTTPS_PORT_BASE + slot;
-    cfg.restate_ingress_port = WORKTREE_RESTATE_INGRESS_PORT_BASE + slot;
-    cfg.restate_admin_port = WORKTREE_RESTATE_ADMIN_PORT_BASE + slot;
     cfg.rauthy_port = WORKTREE_RAUTHY_PORT_BASE + slot;
     cfg.seaweedfs_s3_port = WORKTREE_SEAWEEDFS_S3_PORT_BASE + slot;
     cfg.web_port = WORKTREE_WEB_PORT_BASE + slot;
@@ -793,7 +777,6 @@ fn worktree_kind_config(base: &KindConfig, root: &Path, slot: u16) -> KindConfig
     cfg.openobserve_port = WORKTREE_OPENOBSERVE_PORT_BASE + slot;
     cfg.openobserve_otlp_port = WORKTREE_OPENOBSERVE_OTLP_PORT_BASE + slot;
     cfg.clamav_port = WORKTREE_CLAMAV_PORT_BASE + slot;
-    cfg.surreal_port = WORKTREE_SURREAL_PORT_BASE + slot;
     cfg.forgejo_port = WORKTREE_FORGEJO_PORT_BASE + slot;
     cfg.postgres_port = WORKTREE_POSTGRES_PORT_BASE + slot;
     cfg
@@ -824,8 +807,6 @@ fn worktree_slot_has_listener(
     [
         cfg.ingress_http_port,
         cfg.ingress_https_port,
-        cfg.restate_ingress_port,
-        cfg.restate_admin_port,
         cfg.rauthy_port,
         cfg.seaweedfs_s3_port,
         cfg.web_port,
@@ -961,9 +942,7 @@ pub(super) fn verify_postgres_fixture_target(root: &Path, cfg: &KindConfig) -> R
         }
         let expected = worktree_kind_config(cfg, root, slot);
         anyhow::ensure!(
-            expected.cluster == cfg.cluster
-                && expected.postgres_port == cfg.postgres_port
-                && (database != "navigator" || expected.surreal_port == cfg.surreal_port),
+            expected.cluster == cfg.cluster && expected.postgres_port == cfg.postgres_port,
             "fixture coordinates do not match the worktree descriptor"
         );
         let RegistryLoad::Loaded(registry) = load_cluster_registry(&host_cluster_registry_path())
@@ -1782,19 +1761,12 @@ fn dev_summary(slug: &str, db_name: &str, runtime: Runtime, cfg: &KindConfig) ->
         Runtime::Kind => format!("  KIND cluster : {}\n", cfg.cluster),
         Runtime::Native => "  tier         : native host processes\n".to_string(),
     };
-    let engines = if runtime == Runtime::Kind && native_database_name(db_name) {
-        format!(
-            "  PostgreSQL port : {}\n  DBOS cohost port : {}\n",
-            cfg.postgres_port,
-            super::native_profile::dbos_port(cfg)
-                .map_or_else(|_| "invalid".into(), |port| port.to_string())
-        )
-    } else {
-        format!(
-            "  Restate port : {}\n  Surreal port : {}\n",
-            cfg.restate_ingress_port, cfg.surreal_port
-        )
-    };
+    let engines = format!(
+        "  PostgreSQL port : {}\n  DBOS cohost port : {}\n",
+        cfg.postgres_port,
+        super::native_profile::dbos_port(cfg)
+            .map_or_else(|_| "invalid".into(), |port| port.to_string())
+    );
     format!(
         "\n{rule}\n hudson dev worktree-env up — dev environment for `{slug}`\n{rule}\n\n\
          {tier}  database     : {db_name}\n{engines}  web port     : {}\n\
@@ -1870,7 +1842,7 @@ mod tests {
             "names the environment-owned database"
         );
         assert!(summary.contains(&format!("KIND cluster : {}", cfg.cluster)));
-        assert!(summary.contains(&format!("Restate port : {}", cfg.restate_ingress_port)));
+        assert!(summary.contains(&format!("PostgreSQL port : {}", cfg.postgres_port)));
         assert!(summary.contains(&format!("web port     : {}", cfg.web_port)));
         assert!(summary.contains(&format!(
             "delete-your-data web port : {}",
@@ -2027,14 +1999,6 @@ mod tests {
             first.ingress_https_port,
             WORKTREE_INGRESS_HTTPS_PORT_BASE + 7
         );
-        assert_eq!(
-            first.restate_ingress_port,
-            WORKTREE_RESTATE_INGRESS_PORT_BASE + 7
-        );
-        assert_eq!(
-            first.restate_admin_port,
-            WORKTREE_RESTATE_ADMIN_PORT_BASE + 7
-        );
         assert_eq!(first.web_port, WORKTREE_WEB_PORT_BASE + 7);
         assert_eq!(
             first.delete_your_data_web_port,
@@ -2045,7 +2009,6 @@ mod tests {
         assert_eq!(first.postgres_port, WORKTREE_POSTGRES_PORT_BASE + 7);
         assert_ne!(first.forgejo_port, second.forgejo_port);
         assert_ne!(first.postgres_port, second.postgres_port);
-        assert_ne!(first.restate_ingress_port, second.restate_ingress_port);
         assert_ne!(first.clamav_port, second.clamav_port);
 
         // ENG-437: `web` and `delete-your-data` must never share a bind
@@ -2055,8 +2018,6 @@ mod tests {
         let host_ports = [
             first.ingress_http_port,
             first.ingress_https_port,
-            first.restate_ingress_port,
-            first.restate_admin_port,
             first.clamav_port,
             first.rauthy_port,
             first.seaweedfs_s3_port,
@@ -2184,8 +2145,6 @@ mod tests {
         for port in [
             cfg.ingress_http_port,
             cfg.ingress_https_port,
-            cfg.restate_ingress_port,
-            cfg.restate_admin_port,
             cfg.rauthy_port,
             cfg.seaweedfs_s3_port,
             cfg.web_port,
@@ -2193,7 +2152,6 @@ mod tests {
             cfg.openobserve_port,
             cfg.openobserve_otlp_port,
             cfg.clamav_port,
-            cfg.surreal_port,
             cfg.forgejo_port,
             cfg.postgres_port,
         ] {
@@ -3062,7 +3020,7 @@ mod tests {
             },
         )
         .unwrap();
-        let live = cfg.restate_ingress_port;
+        let live = cfg.postgres_port;
 
         let report = status_report(temp.path(), &base, &|port| port == live);
 
@@ -3088,11 +3046,11 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains(&format!("  Restate 127.0.0.1:{live}: yes\n")),
+            report.contains("legacy worktree requires cleanup"),
             "{report}"
         );
         assert!(
-            report.contains(&format!("  Surreal 127.0.0.1:{}: no\n", cfg.surreal_port)),
+            !report.contains(&format!("  PostgreSQL 127.0.0.1:{live}")),
             "{report}"
         );
         assert!(!report.contains("host processes"), "{report}");

@@ -1,6 +1,5 @@
 //! DBOS workflow execution and recovery on disposable PostgreSQL databases.
 
-mod archives;
 mod billing_canary;
 mod billing_digest;
 mod ceo_digest;

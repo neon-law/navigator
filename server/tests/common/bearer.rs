@@ -33,19 +33,19 @@ pub fn bearer_opt(person_id: Option<Uuid>, role: Role) -> String {
 /// Bearer header for a freshly seeded person, optionally admitted to a
 /// project under a named participation (usually `"lawyer"`).
 pub async fn bearer_new_person(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     email: &str,
     role: Role,
     project: Option<(Uuid, &str)>,
 ) -> String {
     let actor = store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role(email.to_string(), email.to_string(), role),
     )
     .await
     .expect("seed the session person");
     if let Some((project_id, participation)) = project {
-        store::projects::add_participation(surreal, project_id, actor.id, participation)
+        store::projects::add_participation(application_store, project_id, actor.id, participation)
             .await
             .expect("admit the session person to the project");
     }
@@ -61,15 +61,15 @@ fn header(session: &SessionData) -> String {
 
 /// Bearer for an Admin of the Project's Firm with no Project participation.
 pub async fn bearer_project_firm_admin(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
 ) -> String {
     let admin = store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role("Firm Admin", "admin@example.com", Role::Admin),
     )
     .await
     .expect("seed the Firm Admin");
-    store::test_support::grant_project_firm_admin(surreal, project_id, admin.id).await;
+    store::test_support::grant_project_firm_admin(application_store, project_id, admin.id).await;
     bearer(admin.id, Role::Admin)
 }

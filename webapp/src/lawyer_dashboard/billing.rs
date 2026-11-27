@@ -79,7 +79,7 @@ pub async fn get_billing_day() -> Result<BillingPage, ServerFnError> {
             attorney: query.attorney,
         });
     };
-    let db = consume_context::<store::surreal::SurrealDb>();
+    let db = consume_context::<store::application_store::ApplicationStore>();
     let brand = crate::app_chrome::request_brand().await;
     let mut projects = store::access::visible_lawyer_projects_for_brand(
         &db,

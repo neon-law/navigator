@@ -495,18 +495,18 @@ pub mod derive {
     /// # Errors
     /// Any store error, as text.
     pub async fn load(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         cases: &[Case],
         our_names: &[String],
         lens: PageLens,
     ) -> Result<Vec<DiscoveryPair>, String> {
         let mut read = Vec::new();
         for case in cases {
-            for request in store::cases::discovery_requests(surreal, case.id)
+            for request in store::cases::discovery_requests(application_store, case.id)
                 .await
                 .map_err(|e| e.to_string())?
             {
-                let items = store::cases::items(surreal, request.id)
+                let items = store::cases::items(application_store, request.id)
                     .await
                     .map_err(|e| e.to_string())?;
                 read.push((request, items, case.posture.clone()));

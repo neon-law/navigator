@@ -4,7 +4,7 @@ use crate::{
         self,
         tests::database::{fee_agreement, standard},
     },
-    postgres_mirror::tests::{connect, fresh_schema},
+    postgres::fixtures::{connect, fresh_schema},
     time_entries::{NewTimeEntry, TimeEntrySource},
 };
 use chrono::Utc;

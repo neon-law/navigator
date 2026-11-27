@@ -36,20 +36,20 @@ pub struct OwnerHomeView {
 #[server]
 pub async fn owner_home_view() -> Result<OwnerHomeView, ServerFnError> {
     let role = crate::admin_listing::require_owner().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let firms = store::firms::all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let firms = store::firms::all(&application_store)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let mut cards = Vec::new();
     for firm in firms {
         let entity_name = match firm.entity_id {
-            Some(entity_id) => store::entities::find_by_id(&surreal, entity_id)
+            Some(entity_id) => store::entities::find_by_id(&application_store, entity_id)
                 .await
                 .map_err(|error| ServerFnError::new(error.to_string()))?
                 .map_or_else(|| "Unlinked entity".to_string(), |entity| entity.name),
             None => "Unlinked entity".to_string(),
         };
-        let brand_keys = store::firms::brand_keys_for_firm(&surreal, firm.id)
+        let brand_keys = store::firms::brand_keys_for_firm(&application_store, firm.id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?;
         cards.push(FirmCard {

@@ -9,17 +9,13 @@
 
 use serde::Serialize;
 use serde_json::json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::matter_record_links::{
-    one_of, party_from_record, party_record, require_party, require_project,
-    require_project_notation,
-};
+use crate::application_store::ApplicationStore;
+use crate::matter_record_links::one_of;
 use crate::postgres::matter::{self, MatterAuthorityError};
 use crate::project_references::Party;
 use crate::relationships::Endpoint;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 pub use model::fiduciary_roles::ROLES;
 
 const TABLE: &str = "fiduciary_role";
@@ -45,33 +41,6 @@ pub struct FiduciaryRoleFields {
     pub fiduciary: Party,
     pub successor_order: i64,
     pub notation_id: Option<Uuid>,
-}
-
-#[derive(SurrealValue)]
-struct FiduciaryRoleRow {
-    id: surrealdb::types::RecordId,
-    project_id: surrealdb::types::RecordId,
-    role: String,
-    fiduciary_id: surrealdb::types::RecordId,
-    successor_order: i64,
-    notation_id: Option<surrealdb::types::RecordId>,
-    inserted_at: String,
-    updated_at: String,
-}
-
-impl FiduciaryRoleRow {
-    fn into_role(self) -> Option<FiduciaryRole> {
-        Some(FiduciaryRole {
-            id: record_uuid(&self.id)?,
-            project_id: record_uuid(&self.project_id)?,
-            role: self.role,
-            fiduciary: party_from_record(&self.fiduciary_id)?,
-            successor_order: self.successor_order,
-            notation_id: self.notation_id.as_ref().and_then(record_uuid),
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
 }
 
 /// The row as PostgreSQL stores it: the fiduciary is a tagged `JSONB` link.
@@ -110,13 +79,8 @@ fn roles(rows: Vec<PgRow>) -> Vec<FiduciaryRole> {
     rows.into_iter().filter_map(PgRow::into_role).collect()
 }
 
-const SELECT: &str = "id, project_id, role, fiduciary_id, successor_order, notation_id, \
-     inserted_at, updated_at";
-
 #[derive(Debug, thiserror::Error)]
 pub enum FiduciaryRoleError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Postgres(#[from] MatterAuthorityError),
     #[error("{0}")]
@@ -128,7 +92,7 @@ pub enum FiduciaryRoleError {
 }
 
 async fn validate(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     fields: &FiduciaryRoleFields,
 ) -> Result<String, FiduciaryRoleError> {
@@ -138,7 +102,8 @@ async fn validate(
             "successor_order starts at 1".into(),
         ));
     }
-    if let Some(pg) = matter::authority().await? {
+    {
+        let pg = matter::authority().await?;
         crate::matter_record_links::require_project_on(&pg, project_id)
             .await
             .map_err(FiduciaryRoleError::Invalid)?;
@@ -147,24 +112,12 @@ async fn validate(
                 .await
                 .map_err(FiduciaryRoleError::Invalid)?;
         }
-    } else {
-        require_project(surreal, project_id)
-            .await
-            .map_err(FiduciaryRoleError::Invalid)?;
-        require_party(surreal, "fiduciary", fields.fiduciary)
-            .await
-            .map_err(FiduciaryRoleError::Invalid)?;
-        if let Some(notation_id) = fields.notation_id {
-            require_project_notation(surreal, project_id, notation_id)
-                .await
-                .map_err(FiduciaryRoleError::Invalid)?;
-        }
     }
     Ok(role)
 }
 
 async fn persist(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     id: Uuid,
     project_id: Uuid,
     role: String,
@@ -172,80 +125,49 @@ async fn persist(
     inserted_at: &str,
 ) -> Result<FiduciaryRole, FiduciaryRoleError> {
     let now = chrono::Utc::now().to_rfc3339();
-    if let Some(pg) = matter::authority().await? {
-        let row = PgRow {
-            id,
-            project_id,
-            role,
-            fiduciary_id: matter::tagged(fields.fiduciary.kind.table(), fields.fiduciary.id),
-            successor_order: fields.successor_order,
-            notation_id: fields.notation_id,
-            inserted_at: inserted_at.to_owned(),
-            updated_at: now,
-        };
-        let mut transaction = pg
-            .pool()
-            .begin()
-            .await
-            .map_err(MatterAuthorityError::from)?;
-        if !crate::matter_record_links::lock_party_on(&mut transaction, fields.fiduciary).await? {
-            let noun = match fields.fiduciary.kind {
-                Endpoint::Person => "Person",
-                Endpoint::Entity => "Entity",
-            };
-            return Err(FiduciaryRoleError::Invalid(format!(
-                "the fiduciary names no such {noun}"
-            )));
-        }
-        let stored: PgRow = match matter::upsert_on(
-            &mut *transaction,
-            TABLE,
-            serde_json::to_value(row).map_err(MatterAuthorityError::from)?,
-        )
+    let pg = matter::authority().await?;
+    let row = PgRow {
+        id,
+        project_id,
+        role,
+        fiduciary_id: matter::tagged(fields.fiduciary.kind.table(), fields.fiduciary.id),
+        successor_order: fields.successor_order,
+        notation_id: fields.notation_id,
+        inserted_at: inserted_at.to_owned(),
+        updated_at: now,
+    };
+    let mut transaction = pg
+        .pool()
+        .begin()
         .await
-        {
-            Err(MatterAuthorityError::Conflict(index)) if index == SLOT_INDEX => {
-                return Err(slot_taken(fields));
-            }
-            stored => stored?,
+        .map_err(MatterAuthorityError::from)?;
+    if !crate::matter_record_links::lock_party_on(&mut transaction, fields.fiduciary).await? {
+        let noun = match fields.fiduciary.kind {
+            Endpoint::Person => "Person",
+            Endpoint::Entity => "Entity",
         };
-        transaction
-            .commit()
-            .await
-            .map_err(MatterAuthorityError::from)?;
-        return stored
-            .into_role()
-            .ok_or(FiduciaryRoleError::WriteReturnedNothing);
+        return Err(FiduciaryRoleError::Invalid(format!(
+            "the fiduciary names no such {noun}"
+        )));
     }
-    let response = surreal
-        .query(format!(
-            "UPSERT $id SET project_id = $project_id, role = $role, \
-             fiduciary_id = $fiduciary_id, successor_order = $successor_order, \
-             notation_id = $notation_id, inserted_at = $inserted_at, updated_at = $now \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("project_id", record_id("project", project_id)))
-        .bind(("role", role))
-        .bind(("fiduciary_id", party_record(fields.fiduciary)))
-        .bind(("successor_order", fields.successor_order))
-        .bind((
-            "notation_id",
-            fields.notation_id.map(|id| record_id("notation", id)),
-        ))
-        .bind(("inserted_at", inserted_at.to_string()))
-        .bind(("now", now))
-        .await
-        .and_then(surrealdb::IndexedResults::check);
-    let mut response = match response {
-        Ok(response) => response,
-        Err(error) if retry::unique_violation(&error) == Some(SLOT_INDEX) => {
+    let stored: PgRow = match matter::upsert_on(
+        &mut *transaction,
+        TABLE,
+        serde_json::to_value(row).map_err(MatterAuthorityError::from)?,
+    )
+    .await
+    {
+        Err(MatterAuthorityError::Conflict(index)) if index == SLOT_INDEX => {
             return Err(slot_taken(fields));
         }
-        Err(error) => return Err(error.into()),
+        stored => stored?,
     };
-    let row: Option<FiduciaryRoleRow> = response.take(0)?;
-    row.and_then(FiduciaryRoleRow::into_role)
+    transaction
+        .commit()
+        .await
+        .map_err(MatterAuthorityError::from)?;
+    stored
+        .into_role()
         .ok_or(FiduciaryRoleError::WriteReturnedNothing)
 }
 
@@ -271,24 +193,13 @@ fn roster_rank(role: &FiduciaryRole) -> (usize, i64) {
 ///
 /// [`FiduciaryRoleError::Db`] if the read fails.
 pub async fn list(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<FiduciaryRole>, FiduciaryRoleError> {
-    let mut list = if let Some(pg) = matter::authority().await? {
+    let mut list = {
+        let pg = matter::authority().await?;
         let filter = json!({"project_id": project_id});
         roles(matter::select(&pg, TABLE, filter, &[]).await?)
-    } else {
-        let mut response = surreal
-            .query(format!(
-                "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project_id"
-            ))
-            .bind(("project_id", record_id("project", project_id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check)?;
-        let rows: Vec<FiduciaryRoleRow> = response.take(0)?;
-        rows.into_iter()
-            .filter_map(FiduciaryRoleRow::into_role)
-            .collect()
     };
     list.sort_by_key(roster_rank);
     Ok(list)
@@ -300,25 +211,13 @@ pub async fn list(
 ///
 /// [`FiduciaryRoleError::Db`] if the read fails.
 pub async fn find(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     id: Uuid,
 ) -> Result<Option<FiduciaryRole>, FiduciaryRoleError> {
-    if let Some(pg) = matter::authority().await? {
-        let filter = json!({"id": id, "project_id": project_id});
-        return Ok(roles(matter::select(&pg, TABLE, filter, &[]).await?).pop());
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE id = $id AND project_id = $project_id LIMIT 1"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<FiduciaryRoleRow> = response.take(0)?;
-    Ok(row.and_then(FiduciaryRoleRow::into_role))
+    let pg = matter::authority().await?;
+    let filter = json!({"id": id, "project_id": project_id});
+    Ok(roles(matter::select(&pg, TABLE, filter, &[]).await?).pop())
 }
 
 /// The row holding one (role, successor order) slot on a Project, or `None`.
@@ -327,31 +226,18 @@ pub async fn find(
 ///
 /// [`FiduciaryRoleError::Db`] if the read fails.
 pub async fn find_by_slot(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     role: &str,
     successor_order: i64,
 ) -> Result<Option<FiduciaryRole>, FiduciaryRoleError> {
-    if let Some(pg) = matter::authority().await? {
-        let filter = json!({
-            "project_id": project_id,
-            "role": role.trim(),
-            "successor_order": successor_order,
-        });
-        return Ok(roles(matter::select(&pg, TABLE, filter, &[]).await?).pop());
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE project_id = $project_id \
-             AND role = $role AND successor_order = $successor_order LIMIT 1"
-        ))
-        .bind(("project_id", record_id("project", project_id)))
-        .bind(("role", role.trim().to_string()))
-        .bind(("successor_order", successor_order))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<FiduciaryRoleRow> = response.take(0)?;
-    Ok(row.and_then(FiduciaryRoleRow::into_role))
+    let pg = matter::authority().await?;
+    let filter = json!({
+        "project_id": project_id,
+        "role": role.trim(),
+        "successor_order": successor_order,
+    });
+    Ok(roles(matter::select(&pg, TABLE, filter, &[]).await?).pop())
 }
 
 /// Store a new Fiduciary Role and return it.
@@ -362,14 +248,14 @@ pub async fn find_by_slot(
 /// below 1, a missing Project, a fiduciary with no row behind it, a Notation from another Project, or a slot already
 /// held; [`FiduciaryRoleError::Db`] if the write fails.
 pub async fn insert(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     fields: &FiduciaryRoleFields,
 ) -> Result<FiduciaryRole, FiduciaryRoleError> {
-    let role = validate(surreal, project_id, fields).await?;
+    let role = validate(application_store, project_id, fields).await?;
     let inserted_at = chrono::Utc::now().to_rfc3339();
     persist(
-        surreal,
+        application_store,
         Uuid::now_v7(),
         project_id,
         role,
@@ -386,17 +272,17 @@ pub async fn insert(
 /// [`FiduciaryRoleError::NotFound`] when the row is not on this Project;
 /// otherwise as [`insert`].
 pub async fn update(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     id: Uuid,
     fields: &FiduciaryRoleFields,
 ) -> Result<FiduciaryRole, FiduciaryRoleError> {
-    let existing = find(surreal, project_id, id)
+    let existing = find(application_store, project_id, id)
         .await?
         .ok_or(FiduciaryRoleError::NotFound)?;
-    let role = validate(surreal, project_id, fields).await?;
+    let role = validate(application_store, project_id, fields).await?;
     persist(
-        surreal,
+        application_store,
         existing.id,
         project_id,
         role,
@@ -413,22 +299,15 @@ pub async fn update(
 /// [`FiduciaryRoleError::NotFound`] when the row is not on this Project;
 /// [`FiduciaryRoleError::Db`] if the delete fails.
 pub async fn delete(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     id: Uuid,
 ) -> Result<(), FiduciaryRoleError> {
-    find(surreal, project_id, id)
+    find(application_store, project_id, id)
         .await?
         .ok_or(FiduciaryRoleError::NotFound)?;
-    if let Some(pg) = matter::authority().await? {
-        matter::delete(&pg, TABLE, json!({"id": id})).await?;
-        return Ok(());
-    }
-    surreal
-        .query("DELETE $id")
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
+    let pg = matter::authority().await?;
+    matter::delete(&pg, TABLE, json!({"id": id})).await?;
     Ok(())
 }
 
@@ -439,18 +318,11 @@ pub async fn delete(
 ///
 /// [`FiduciaryRoleError::Db`] if the delete fails.
 pub async fn delete_for_project(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<(), FiduciaryRoleError> {
-    if let Some(pg) = matter::authority().await? {
-        matter::delete(&pg, TABLE, json!({"project_id": project_id})).await?;
-        return Ok(());
-    }
-    surreal
-        .query(format!("DELETE {TABLE} WHERE project_id = $project_id"))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
+    let pg = matter::authority().await?;
+    matter::delete(&pg, TABLE, json!({"project_id": project_id})).await?;
     Ok(())
 }
 
@@ -459,11 +331,11 @@ mod tests {
     use super::*;
 
     macro_rules! with_postgres {
-        ($pg:ident, $surreal:ident, $body:block) => {{
+        ($pg:ident, $application_store:ident, $body:block) => {{
             let Some($pg) = crate::postgres::matter::tests::database().await else {
                 return;
             };
-            let $surreal = SurrealDb::uninitialized();
+            let $application_store = ApplicationStore::uninitialized();
             crate::postgres::matter::with_test_db($pg.clone(), async $body).await;
             $pg.0.close().await;
         }};
@@ -480,7 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn insert_list_update_and_delete_round_trip() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-fiduciaries").await;
             let first =
@@ -490,21 +362,25 @@ mod tests {
                 crate::postgres::matter::tests::postgres_person(&pg, "second-trustee@example.com")
                     .await;
 
-            let executor = insert(&surreal, project_id, &fields("executor", 1, first))
-                .await
-                .unwrap();
-            let trustee = insert(&surreal, project_id, &fields("trustee", 1, first))
+            let executor = insert(
+                &application_store,
+                project_id,
+                &fields("executor", 1, first),
+            )
+            .await
+            .unwrap();
+            let trustee = insert(&application_store, project_id, &fields("trustee", 1, first))
                 .await
                 .unwrap();
             let successor = insert(
-                &surreal,
+                &application_store,
                 project_id,
                 &fields("successor_trustee", 1, second),
             )
             .await
             .unwrap();
 
-            let roster: Vec<Uuid> = list(&surreal, project_id)
+            let roster: Vec<Uuid> = list(&application_store, project_id)
                 .await
                 .unwrap()
                 .into_iter()
@@ -513,7 +389,7 @@ mod tests {
             assert_eq!(roster, vec![trustee.id, successor.id, executor.id]);
 
             let updated = update(
-                &surreal,
+                &application_store,
                 project_id,
                 executor.id,
                 &fields("executor", 1, second),
@@ -523,10 +399,12 @@ mod tests {
             assert_eq!(updated.fiduciary, Party::person(second));
             assert_eq!(updated.inserted_at, executor.inserted_at);
 
-            delete(&surreal, project_id, executor.id).await.unwrap();
-            assert_eq!(list(&surreal, project_id).await.unwrap().len(), 2);
+            delete(&application_store, project_id, executor.id)
+                .await
+                .unwrap();
+            assert_eq!(list(&application_store, project_id).await.unwrap().len(), 2);
             assert!(matches!(
-                delete(&surreal, project_id, executor.id).await,
+                delete(&application_store, project_id, executor.id).await,
                 Err(FiduciaryRoleError::NotFound)
             ));
         });
@@ -534,13 +412,13 @@ mod tests {
 
     #[tokio::test]
     async fn an_entity_may_hold_the_role() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-corporate-trustee")
                     .await;
             let trust_company = crate::postgres::matter::tests::postgres_entity(&pg).await;
             let stored = insert(
-                &surreal,
+                &application_store,
                 project_id,
                 &FiduciaryRoleFields {
                     fiduciary: Party::entity(trust_company),
@@ -555,12 +433,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_fiduciary_with_no_row_behind_it_is_refused() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-one-party").await;
             for fiduciary in [Party::person(Uuid::now_v7()), Party::entity(Uuid::now_v7())] {
                 let error = insert(
-                    &surreal,
+                    &application_store,
                     project_id,
                     &FiduciaryRoleFields {
                         fiduciary,
@@ -571,13 +449,16 @@ mod tests {
                 .unwrap_err();
                 assert!(matches!(error, FiduciaryRoleError::Invalid(_)), "{error}");
             }
-            assert!(list(&surreal, project_id).await.unwrap().is_empty());
+            assert!(list(&application_store, project_id)
+                .await
+                .unwrap()
+                .is_empty());
         });
     }
 
     #[tokio::test]
     async fn an_unknown_role_or_order_below_one_is_refused() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-bad-role").await;
             let person_id =
@@ -587,7 +468,9 @@ mod tests {
                 fields("trustee", 0, person_id),
             ] {
                 assert!(matches!(
-                    insert(&surreal, project_id, &bad).await.unwrap_err(),
+                    insert(&application_store, project_id, &bad)
+                        .await
+                        .unwrap_err(),
                     FiduciaryRoleError::Invalid(_)
                 ));
             }
@@ -596,14 +479,14 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_instrument_notation_is_refused() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-no-notation").await;
             let person_id =
                 crate::postgres::matter::tests::postgres_person(&pg, "no-notation@example.com")
                     .await;
             let error = insert(
-                &surreal,
+                &application_store,
                 project_id,
                 &FiduciaryRoleFields {
                     notation_id: Some(Uuid::now_v7()),
@@ -618,19 +501,27 @@ mod tests {
 
     #[tokio::test]
     async fn one_row_holds_each_slot() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-slot").await;
             let person_id =
                 crate::postgres::matter::tests::postgres_person(&pg, "slot@example.com").await;
-            insert(&surreal, project_id, &fields("guardian", 1, person_id))
-                .await
-                .unwrap();
-            let error = insert(&surreal, project_id, &fields("guardian", 1, person_id))
-                .await
-                .unwrap_err();
+            insert(
+                &application_store,
+                project_id,
+                &fields("guardian", 1, person_id),
+            )
+            .await
+            .unwrap();
+            let error = insert(
+                &application_store,
+                project_id,
+                &fields("guardian", 1, person_id),
+            )
+            .await
+            .unwrap_err();
             assert!(matches!(error, FiduciaryRoleError::Invalid(_)), "{error}");
-            assert!(find_by_slot(&surreal, project_id, "guardian", 1)
+            assert!(find_by_slot(&application_store, project_id, "guardian", 1)
                 .await
                 .unwrap()
                 .is_some());
@@ -639,18 +530,21 @@ mod tests {
 
     #[tokio::test]
     async fn rows_are_scoped_to_their_project() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let mine = crate::postgres::matter::tests::postgres_project(&pg, "sample-mine").await;
             let other = crate::postgres::matter::tests::postgres_project(&pg, "sample-other").await;
             let person_id =
                 crate::postgres::matter::tests::postgres_person(&pg, "scoped@example.com").await;
-            let stored = insert(&surreal, mine, &fields("executor", 1, person_id))
+            let stored = insert(&application_store, mine, &fields("executor", 1, person_id))
                 .await
                 .unwrap();
-            assert!(list(&surreal, other).await.unwrap().is_empty());
-            assert!(find(&surreal, other, stored.id).await.unwrap().is_none());
-            delete_for_project(&surreal, mine).await.unwrap();
-            assert!(list(&surreal, mine).await.unwrap().is_empty());
+            assert!(list(&application_store, other).await.unwrap().is_empty());
+            assert!(find(&application_store, other, stored.id)
+                .await
+                .unwrap()
+                .is_none());
+            delete_for_project(&application_store, mine).await.unwrap();
+            assert!(list(&application_store, mine).await.unwrap().is_empty());
         });
     }
 }

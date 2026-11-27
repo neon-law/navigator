@@ -203,7 +203,7 @@ pub(crate) fn task_rows(
 /// `store::access::matter_viewer` by the time they get here.
 #[cfg(feature = "server")]
 pub(crate) async fn read_rows(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     pg: &store::postgres::PostgresDb,
     project_id: uuid::Uuid,
 ) -> Result<Vec<TaskRow>, ServerFnError> {
@@ -212,7 +212,7 @@ pub(crate) async fn read_rows(
         .map_err(crate::lawyer_project_detail::server_error)?;
     let assignee_ids: Vec<uuid::Uuid> = tasks.iter().filter_map(|row| row.assignee_id).collect();
     let names: std::collections::HashMap<uuid::Uuid, String> =
-        store::persons::find_by_ids(surreal, &assignee_ids)
+        store::persons::find_by_ids(application_store, &assignee_ids)
             .await
             .map_err(crate::lawyer_project_detail::server_error)?
             .into_iter()
@@ -246,8 +246,8 @@ pub async fn get_matter_tasks() -> Result<Vec<TaskRow>, ServerFnError> {
         .unwrap_or_default();
     let person_id = person_id.and_then(|raw| raw.parse::<uuid::Uuid>().ok());
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .map_err(crate::lawyer_project_detail::server_error)?
     else {
@@ -261,9 +261,10 @@ pub async fn get_matter_tasks() -> Result<Vec<TaskRow>, ServerFnError> {
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    let viewer = store::access::matter_viewer(&surreal, person_id, store_role, project.id)
-        .await
-        .map_err(crate::lawyer_project_detail::server_error)?;
+    let viewer =
+        store::access::matter_viewer(&application_store, person_id, store_role, project.id)
+            .await
+            .map_err(crate::lawyer_project_detail::server_error)?;
     if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
         return Err(hidden_matter());
     }
@@ -271,7 +272,7 @@ pub async fn get_matter_tasks() -> Result<Vec<TaskRow>, ServerFnError> {
     let pg = store::postgres::PostgresDb::from_env()
         .await
         .map_err(|_| crate::lawyer_project_detail::server_error("the task store is unavailable"))?;
-    read_rows(&surreal, &pg, project.id).await
+    read_rows(&application_store, &pg, project.id).await
 }
 
 /// The human word for a task's stored state. The stored snake-case word is

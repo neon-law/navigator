@@ -10,10 +10,6 @@ publish.workspace = true
 name = "workflows-service"
 path = "src/main.rs"
 
-[[bin]]
-name = "social-publish-reconciler-trigger"
-path = "src/bin/social-publish-reconciler-trigger.rs"
-
 [lib]
 path = "src/lib.rs"
 

@@ -27,7 +27,7 @@ const FEED_PATH: &str = "/facebook-page/feed";
 const PROVIDER_POST: &str = "provider-post-1";
 
 struct Fixture {
-    db: store::surreal::SurrealDb,
+    db: store::application_store::ApplicationStore,
     pg: store::postgres::PostgresDb,
     admin: Uuid,
     kms: cloud::FakeKms,
@@ -37,7 +37,7 @@ struct Fixture {
 
 impl Fixture {
     async fn new(name: &str) -> Self {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let (_, admin) = store::test_support::seed_firm_with_new_brand(&db, BRAND).await;
         let dir = tempfile::tempdir().unwrap();
         let storage = cloud::FsStorage::new(dir.path()).await.unwrap();

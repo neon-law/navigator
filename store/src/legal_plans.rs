@@ -663,8 +663,8 @@ mod tests {
             NewPlanFeeSchedule, PlanMatterType,
         };
         use super::plan;
+        use crate::postgres::fixtures::{connect, fresh_schema};
         use crate::postgres::PostgresDb;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
         use chrono::NaiveDate;
         use sqlx::Row;
         use uuid::Uuid;

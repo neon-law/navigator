@@ -154,14 +154,14 @@ mod load {
     /// stored body omits it, from the bundled source it was seeded from. A
     /// Template whose body cannot be read pins nothing and is logged.
     pub async fn pins() -> Result<BTreeMap<String, Vec<PinningTemplate>>, ServerFnError> {
-        let surreal = consume_context::<store::surreal::SurrealDb>();
+        let application_store = consume_context::<store::application_store::ApplicationStore>();
         let storage = consume_context::<std::sync::Arc<dyn cloud::StorageService>>();
-        let templates = store::templates::list_current(&surreal)
+        let templates = store::templates::list_current(&application_store)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?;
         let mut pins = BTreeMap::<String, Vec<PinningTemplate>>::new();
         for template in templates.into_iter().filter(|t| t.project_id.is_none()) {
-            let body = match store::templates::body(&surreal, &storage, &template).await {
+            let body = match store::templates::body(&application_store, &storage, &template).await {
                 Ok(body) => body,
                 Err(store::templates::TemplateBodyError::MissingBody(_)) => continue,
                 Err(error) => {

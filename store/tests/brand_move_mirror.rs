@@ -1,8 +1,8 @@
 //! Native Brand moves preserve both ownership rows, retries, and atomic rollback.
 use sqlx::Row;
+use store::application_store::ApplicationStore;
 use store::persons::{NewPerson, Role};
 use store::postgres::PostgresDb;
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 #[tokio::test]
@@ -10,7 +10,7 @@ async fn native_brand_move_preserves_owner_seat_and_atomic_retries() {
     store::test_support::with_postgres(native_brand_move_probe()).await;
 }
 
-async fn practice(db: &SurrealDb, label: &str) -> (store::firms::Firm, Uuid) {
+async fn practice(db: &ApplicationStore, label: &str) -> (store::firms::Firm, Uuid) {
     let suffix = Uuid::now_v7().simple().to_string();
     let jurisdiction = store::jurisdictions::create(
         db,
@@ -97,7 +97,7 @@ async fn assert_ownership(pg: &PostgresDb, brand_id: Uuid, expected: Uuid) {
     reason = "one ownership lifecycle proves retries, ownership repair and final-write rollback"
 )]
 async fn native_brand_move_probe() {
-    let db = SurrealDb::uninitialized();
+    let db = ApplicationStore::uninitialized();
     let (from, admin_id) = practice(&db, "Origin").await;
     let (target, _) = practice(&db, "Target").await;
     let brand = store::brands::create(

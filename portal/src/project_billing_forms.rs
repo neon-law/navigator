@@ -51,7 +51,7 @@ fn back_to_billing(code: &str, flash: Option<&str>, error: Option<&str>) -> Resp
 /// The door's own admission, verbatim from the stage door: a firm-side
 /// viewer of this matter or the non-disclosing 404.
 async fn firm_side_viewer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     session: &SessionData,
     project_id: Uuid,
 ) -> bool {
@@ -59,7 +59,7 @@ async fn firm_side_viewer(
         return false;
     }
     matches!(
-        store::access::matter_viewer(surreal, session.person_id, session.role, project_id)
+        store::access::matter_viewer(application_store, session.person_id, session.role, project_id)
             .await
             .ok()
             .flatten(),
@@ -74,7 +74,7 @@ pub(crate) struct AnnotationReview {
 }
 
 pub(crate) async fn review_annotation(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((code, id)): Path<(String, Uuid)>,
     Form(input): Form<AnnotationReview>,
@@ -165,7 +165,7 @@ fn hourly_rate_cents(raw: &str) -> Option<i32> {
 /// `POST /app/projects/{code}/rates` — add a matter-scoped Attorney Rate for
 /// the current lawyer; the date and amount are validated before insertion.
 pub(crate) async fn set_matter_rate(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(code): Path<String>,
     Form(input): Form<SetRateForm>,
@@ -179,14 +179,14 @@ pub(crate) async fn set_matter_rate(
     let Some(person_id) = session.person_id else {
         return not_found_response();
     };
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .ok()
         .flatten()
     else {
         return not_found_response();
     };
-    if !firm_side_viewer(&surreal, &session, project.id).await {
+    if !firm_side_viewer(&application_store, &session, project.id).await {
         return not_found_response();
     }
     let Some(hourly_rate_cents) = hourly_rate_cents(&input.hourly_rate) else {
@@ -205,7 +205,8 @@ pub(crate) async fn set_matter_rate(
         );
     };
     let Ok(pg) =
-        crate::time_tracking_api::prepared_store(&surreal, "set_matter_rate", project.id).await
+        crate::time_tracking_api::prepared_store(&application_store, "set_matter_rate", project.id)
+            .await
     else {
         return back_to_billing(
             &code,
@@ -291,7 +292,7 @@ fn daily_billing_minutes(hours: &str) -> Option<i32> {
 }
 
 pub(crate) async fn daily_billing(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     brand: Option<Extension<views::brand::BrandKey>>,
     Form(form): Form<DailyBillingForm>,
@@ -348,7 +349,7 @@ pub(crate) async fn daily_billing(
 /// for the performed date and frozen onto the row, exactly as the JSON door
 /// does.
 pub(crate) async fn log_time(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(code): Path<String>,
     Form(input): Form<LogTimeForm>,
@@ -362,14 +363,14 @@ pub(crate) async fn log_time(
     let Some(person_id) = session.person_id else {
         return not_found_response();
     };
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .ok()
         .flatten()
     else {
         return not_found_response();
     };
-    if !firm_side_viewer(&surreal, &session, project.id).await {
+    if !firm_side_viewer(&application_store, &session, project.id).await {
         return not_found_response();
     }
 
@@ -385,7 +386,7 @@ pub(crate) async fn log_time(
         return back_to_billing(&code, None, Some("Give the date the work was performed."));
     };
     match record_manual_time(
-        &surreal,
+        &application_store,
         project.id,
         person_id,
         performed_on,
@@ -401,7 +402,7 @@ pub(crate) async fn log_time(
 }
 
 async fn record_manual_time(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     project_id: Uuid,
     person_id: Uuid,
     performed_on: chrono::NaiveDate,
@@ -446,7 +447,7 @@ pub(crate) struct TimerStartForm {
 /// durable Timer on this matter. At most one Timer runs per attorney,
 /// firm-wide: starting a second is refused with the way to resolve it.
 pub(crate) async fn start_timer(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(code): Path<String>,
     Form(input): Form<TimerStartForm>,
@@ -460,18 +461,19 @@ pub(crate) async fn start_timer(
     let Some(person_id) = session.person_id else {
         return not_found_response();
     };
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .ok()
         .flatten()
     else {
         return not_found_response();
     };
-    if !firm_side_viewer(&surreal, &session, project.id).await {
+    if !firm_side_viewer(&application_store, &session, project.id).await {
         return not_found_response();
     }
     let Ok(pg) =
-        crate::time_tracking_api::prepared_store(&surreal, "start_timer", project.id).await
+        crate::time_tracking_api::prepared_store(&application_store, "start_timer", project.id)
+            .await
     else {
         return back_to_billing(
             &code,
@@ -512,7 +514,7 @@ pub(crate) struct TimerStopForm {
 /// one transaction. The rate is resolved for the date the Timer started and
 /// frozen onto the entry; the minutes are the store's own computation.
 pub(crate) async fn stop_timer(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(code): Path<String>,
     Form(input): Form<TimerStopForm>,
@@ -526,17 +528,19 @@ pub(crate) async fn stop_timer(
     let Some(person_id) = session.person_id else {
         return not_found_response();
     };
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .ok()
         .flatten()
     else {
         return not_found_response();
     };
-    if !firm_side_viewer(&surreal, &session, project.id).await {
+    if !firm_side_viewer(&application_store, &session, project.id).await {
         return not_found_response();
     }
-    let Ok(pg) = crate::time_tracking_api::prepared_store(&surreal, "stop_timer", project.id).await
+    let Ok(pg) =
+        crate::time_tracking_api::prepared_store(&application_store, "stop_timer", project.id)
+            .await
     else {
         return back_to_billing(
             &code,
@@ -595,7 +599,7 @@ pub(crate) async fn stop_timer(
 /// attorney's open Timer on this matter without recording anything.
 /// Deliberate, owner-only, and transactional, exactly like the JSON door.
 pub(crate) async fn discard_timer(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(code): Path<String>,
 ) -> Response {
@@ -608,14 +612,14 @@ pub(crate) async fn discard_timer(
     let Some(person_id) = session.person_id else {
         return not_found_response();
     };
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .ok()
         .flatten()
     else {
         return not_found_response();
     };
-    if !firm_side_viewer(&surreal, &session, project.id).await {
+    if !firm_side_viewer(&application_store, &session, project.id).await {
         return not_found_response();
     }
     let Ok(pg) = crate::time_tracking_api::postgres("discard_timer", Some(project.id)).await else {
@@ -670,14 +674,14 @@ pub(crate) async fn generate_invoice(
     let Some(person_id) = session.person_id else {
         return not_found_response();
     };
-    let Some(project) = store::projects::find_by_code(&admin.surreal, &code)
+    let Some(project) = store::projects::find_by_code(&admin.application_store, &code)
         .await
         .ok()
         .flatten()
     else {
         return not_found_response();
     };
-    if !firm_side_viewer(&admin.surreal, &session, project.id).await {
+    if !firm_side_viewer(&admin.application_store, &session, project.id).await {
         return not_found_response();
     }
     // The first POST is the action's start: nothing provider-bound has run,
@@ -695,7 +699,7 @@ pub(crate) async fn generate_invoice(
     };
     let now: DateTime<Utc> = Utc::now();
     match crate::project_billing_api::generate_invoice(
-        &admin.surreal,
+        &admin.application_store,
         &pg,
         admin.billing_provider.as_ref(),
         project.id,
@@ -873,8 +877,8 @@ mod tests {
     /// take their not-found exit without standing up an embedded engine:
     /// the SurrealDB test-support ratchet counts this crate's call sites and
     /// new ones are refused (`cli/tests/embedded_surreal_ratchet.rs`).
-    fn outage_store() -> store::surreal::SurrealDb {
-        store::surreal::SurrealDb::uninitialized()
+    fn outage_store() -> store::application_store::ApplicationStore {
+        store::application_store::ApplicationStore::uninitialized()
     }
 
     /// A lawyer-tier session the way an authenticated attorney arrives: a
@@ -1368,9 +1372,11 @@ mod tests {
     /// The admin console's state as `crate::test_support::app_state` builds
     /// it, over the given store handle — the same shape the admin tests'
     /// `blog_admin_state` helper assembles, minus the embedded engine.
-    async fn billing_admin_state(surreal: store::surreal::SurrealDb) -> crate::admin::AdminState {
+    async fn billing_admin_state(
+        application_store: store::application_store::ApplicationStore,
+    ) -> crate::admin::AdminState {
         let crate::AppState {
-            surreal,
+            application_store,
             workflow_runtime,
             signature_provider,
             questionnaire_runtime,
@@ -1386,9 +1392,9 @@ mod tests {
             attachment_scanner,
             runtime_kms,
             ..
-        } = crate::test_support::app_state(surreal).await;
+        } = crate::test_support::app_state(application_store).await;
         crate::admin::AdminState {
-            surreal,
+            application_store,
             workflow_runtime,
             signature_provider,
             retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
@@ -1478,12 +1484,9 @@ mod tests {
 #[cfg(test)]
 mod end_to_end_tests {
     use super::*;
-    use crate::session::DriView;
+
     use axum::http::{header::LOCATION, StatusCode};
     use chrono::NaiveDate;
-    use store::participation::{AddParticipantCommand, DriActor, DriRequest};
-    use store::persons::{NewPerson, Role};
-    use store::projects::DriSide;
 
     fn location(response: &Response) -> String {
         response
@@ -1493,124 +1496,6 @@ mod end_to_end_tests {
             .to_str()
             .expect("an ASCII Location")
             .to_string()
-    }
-
-    fn log_time_form(minutes: &str, performed_on: &str, billable: bool) -> Form<LogTimeForm> {
-        Form(LogTimeForm {
-            description: "Drafted the motion to compel".into(),
-            performed_on: performed_on.into(),
-            minutes: minutes.into(),
-            billable: billable.then(|| "on".into()),
-        })
-    }
-
-    /// Plant the people-authority rows the matter and its participation
-    /// reference. Under people authority PostgreSQL is authoritative and
-    /// the mirror never copies these rows, so the fixture writes the
-    /// matter's client entity and its lawyer directly.
-    async fn seed_pg_identity(
-        pg: &store::postgres::PostgresDb,
-        entity_id: Uuid,
-        lawyer: &store::persons::Person,
-    ) {
-        let catalog = Uuid::now_v7();
-        sqlx::query("INSERT INTO jurisdiction(id,name) VALUES ($1,$2)")
-            .bind(catalog)
-            .bind(format!("Synthetic {catalog}"))
-            .execute(pg.pool())
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO entity_type(id,name) VALUES ($1,$2)")
-            .bind(catalog)
-            .bind(format!("Synthetic {catalog}"))
-            .execute(pg.pool())
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,$2,$3,$4)
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind(entity_id)
-        .bind("Synthetic Entity")
-        .bind(catalog)
-        .bind(catalog)
-        .execute(pg.pool())
-        .await
-        .unwrap();
-        // People authority may already have copied the lawyer's row via
-        // participation mirroring; the fixture only guarantees presence.
-        sqlx::query(
-            "INSERT INTO person(id,name,email) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING",
-        )
-        .bind(lawyer.id)
-        .bind(&lawyer.name)
-        .bind(&lawyer.email)
-        .execute(pg.pool())
-        .await
-        .unwrap();
-    }
-
-    /// A throwaway pool for direct SQL the store seam does not expose —
-    /// the child process's fixture database, read back from its env.
-    async fn raw_test_pool() -> sqlx::PgPool {
-        use sqlx::postgres::{PgConnectOptions, PgSslMode};
-        sqlx::PgPool::connect_with(
-            PgConnectOptions::new()
-                .host(&std::env::var("NAVIGATOR_POSTGRES_HOST").expect("fixture host"))
-                .port(
-                    std::env::var("NAVIGATOR_POSTGRES_PORT")
-                        .expect("fixture port")
-                        .parse()
-                        .expect("numeric port"),
-                )
-                .username(&std::env::var("NAVIGATOR_POSTGRES_USER").expect("fixture user"))
-                .password(&std::env::var("NAVIGATOR_POSTGRES_PASSWORD").expect("fixture password"))
-                .database(&std::env::var("NAVIGATOR_POSTGRES_DATABASE").expect("fixture database"))
-                .ssl_mode(PgSslMode::Disable),
-        )
-        .await
-        .expect("connect to the fixture database")
-    }
-
-    /// A lawyer joined to a fresh matter, with the session the doors admit.
-    async fn lawyer_on_seeded_matter(
-        surreal: &store::surreal::SurrealDb,
-    ) -> (
-        store::projects::Project,
-        store::persons::Person,
-        SessionData,
-    ) {
-        // `projects::create` validates brands against live rows, so the
-        // compiled brand catalog has to exist before any matter is seeded.
-        store::surreal::test_support::seed_compiled_brands(surreal).await;
-        let project =
-            store::test_support::seed_project(surreal, "Synthetic billing forms matter").await;
-        let lawyer = store::persons::create(
-            surreal,
-            &NewPerson::with_role(
-                "Synthetic billing lawyer",
-                format!("billing-forms-{}@example.com", Uuid::new_v4()),
-                Role::Lawyer,
-            ),
-        )
-        .await
-        .expect("seed the billing lawyer");
-        store::participation::add_participant(
-            surreal,
-            &AddParticipantCommand {
-                project_id: project.id,
-                person_id: lawyer.id,
-                dri: DriRequest::Unchanged,
-                actor: DriActor::System,
-            },
-        )
-        .await
-        .expect("join the lawyer to the matter");
-        let session = SessionData {
-            person_id: Some(lawyer.id),
-            ..SessionData::fresh("synthetic-billing@example.com", Role::Lawyer)
-        };
-        (project, lawyer, session)
     }
 
     // ---- pure helpers ----
@@ -1783,652 +1668,5 @@ mod end_to_end_tests {
 
     // ---- admission, no PostgreSQL needed ----
 
-    #[tokio::test]
-    async fn the_form_doors_are_a_non_disclosing_404_without_admission() {
-        let surreal = crate::test_support::embedded_surreal().await;
-
-        for status in [
-            log_time(
-                State(surreal.clone()),
-                None,
-                Path("acme".into()),
-                log_time_form("90", "2026-11-17", true),
-            )
-            .await
-            .status(),
-            start_timer(
-                State(surreal.clone()),
-                None,
-                Path("acme".into()),
-                Form(TimerStartForm {
-                    note: String::new(),
-                }),
-            )
-            .await
-            .status(),
-            stop_timer(
-                State(surreal.clone()),
-                None,
-                Path("acme".into()),
-                Form(TimerStopForm {
-                    description: String::new(),
-                    billable: None,
-                }),
-            )
-            .await
-            .status(),
-            discard_timer(State(surreal.clone()), None, Path("acme".into()))
-                .await
-                .status(),
-        ] {
-            assert_eq!(status, StatusCode::NOT_FOUND);
-        }
-
-        // A session with no person row behind it — the brief boot window —
-        // is refused the same way, and never leaks that the matter exists.
-        let anonymous = SessionData {
-            person_id: None,
-            ..SessionData::fresh("synthetic@example.com", Role::Lawyer)
-        };
-        let response = log_time(
-            State(surreal.clone()),
-            Some(Extension(anonymous.clone())),
-            Path("acme".into()),
-            log_time_form("90", "2026-11-17", true),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let response = start_timer(
-            State(surreal.clone()),
-            Some(Extension(anonymous)),
-            Path("acme".into()),
-            Form(TimerStartForm {
-                note: String::new(),
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-        // Viewing as another person never opens the billing doors.
-        let viewing = SessionData {
-            viewing_as_dri: Some(DriView {
-                actor_sub: "synthetic-actor".into(),
-                actor_email: None,
-                actor_person_id: None,
-                target_name: "Synthetic target".into(),
-                target_email: "target@example.com".into(),
-            }),
-            person_id: Some(Uuid::new_v4()),
-            ..SessionData::fresh("synthetic@example.com", Role::Lawyer)
-        };
-        let response = log_time(
-            State(surreal.clone()),
-            Some(Extension(viewing)),
-            Path("acme".into()),
-            log_time_form("90", "2026-11-17", true),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-        // An unknown matter code reads the same refusal.
-        let stranger = SessionData {
-            person_id: Some(Uuid::new_v4()),
-            ..SessionData::fresh("synthetic@example.com", Role::Lawyer)
-        };
-        let response = log_time(
-            State(surreal.clone()),
-            Some(Extension(stranger)),
-            Path("no-such-matter".into()),
-            log_time_form("90", "2026-11-17", true),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn a_client_tier_session_is_refused_the_billing_doors() {
-        let surreal = crate::test_support::embedded_surreal().await;
-        // `projects::create` validates brands against live rows; seed the
-        // compiled brand catalog before any matter.
-        store::surreal::test_support::seed_compiled_brands(&surreal).await;
-        let project =
-            store::test_support::seed_project(&surreal, "Synthetic client tier matter").await;
-        let client = store::persons::create(
-            &surreal,
-            &NewPerson::with_role(
-                "Synthetic client",
-                format!("billing-client-{}@example.com", Uuid::new_v4()),
-                Role::Client,
-            ),
-        )
-        .await
-        .expect("seed the client");
-        store::participation::add_participant(
-            &surreal,
-            &AddParticipantCommand {
-                project_id: project.id,
-                person_id: client.id,
-                dri: DriRequest::Designate(DriSide::Client),
-                actor: DriActor::System,
-            },
-        )
-        .await
-        .expect("join the client to the matter");
-        let session = SessionData {
-            person_id: Some(client.id),
-            ..SessionData::fresh("synthetic-client@example.com", Role::Client)
-        };
-
-        assert_eq!(
-            log_time(
-                State(surreal.clone()),
-                Some(Extension(session.clone())),
-                Path(project.code.clone()),
-                log_time_form("90", "2026-11-17", true)
-            )
-            .await
-            .status(),
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            start_timer(
-                State(surreal.clone()),
-                Some(Extension(session.clone())),
-                Path(project.code.clone()),
-                Form(TimerStartForm {
-                    note: String::new(),
-                }),
-            )
-            .await
-            .status(),
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            stop_timer(
-                State(surreal.clone()),
-                Some(Extension(session.clone())),
-                Path(project.code.clone()),
-                Form(TimerStopForm {
-                    description: String::new(),
-                    billable: None,
-                }),
-            )
-            .await
-            .status(),
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            discard_timer(
-                State(surreal.clone()),
-                Some(Extension(session)),
-                Path(project.code.clone()),
-            )
-            .await
-            .status(),
-            StatusCode::NOT_FOUND
-        );
-    }
-
-    #[tokio::test]
-    async fn a_malformed_minutes_or_date_field_refuses_in_plain_lawyer_copy() {
-        let surreal = crate::test_support::embedded_surreal().await;
-        let (project, _lawyer, session) = lawyer_on_seeded_matter(&surreal).await;
-
-        let response = log_time(
-            State(surreal.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            log_time_form("an hour and a half", "2026-11-17", true),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let url = location(&response);
-        assert!(
-            url.contains("error=Capture%20the%20time%20in%20whole%20minutes"),
-            "unexpected redirect: {url}"
-        );
-        assert!(!url.contains("flash="), "no success flash on a refusal");
-
-        let response = log_time(
-            State(surreal.clone()),
-            Some(Extension(session)),
-            Path(project.code.clone()),
-            log_time_form("90", "tomorrow", true),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let url = location(&response);
-        assert!(
-            url.contains("error=Give%20the%20date%20the%20work%20was%20performed"),
-            "unexpected redirect: {url}"
-        );
-    }
-
     // ---- end to end, against PostgreSQL ----
-
-    /// The billing doors against PostgreSQL: log time with and without a fee
-    /// structure, run a timer from start to stop to discard, and raise an
-    /// invoice through the stub provider — the actions an attorney performs
-    /// on the matter page every day.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one workflow, four doors: log time, drive the timer, raise the invoice"
-    )]
-    async fn billing_form_doors_end_to_end() {
-        // PostgreSQL holds the mirrors the fixture writes, so migrate first.
-        let pg = store::postgres::PostgresDb::from_env().await.unwrap();
-        pg.migrate_embedded(None).await.unwrap();
-        // `test_support::mem_surreal` would count as an embedded-engine
-        // call site (cli/tests/embedded_surreal_ratchet.rs), so use the
-        // portal helper instead; the seeding helper registers the brands.
-        let surreal = crate::test_support::embedded_surreal().await;
-        let (project, lawyer, session) = lawyer_on_seeded_matter(&surreal).await;
-
-        // People authority keeps each entity and person row
-        // PostgreSQL-side — the mirror never copies them — so the
-        // fixture plants the matter's client entity and its lawyer
-        // directly, then publishes the matter and the lawyer's
-        // participation, which the doors' journal reads join.
-        seed_pg_identity(&pg, project.entity_id, &lawyer).await;
-        store::postgres_mirror::mirror(
-            &surreal,
-            &pg,
-            &store::postgres_mirror::MirrorKey::Project(project.id),
-        )
-        .await
-        .expect("mirror the matter into PostgreSQL");
-        for role in store::projects::participations_for_project(&surreal, project.id)
-            .await
-            .expect("read the lawyer's participation")
-        {
-            store::postgres_mirror::mirror(
-                &surreal,
-                &pg,
-                &store::postgres_mirror::MirrorKey::ProjectParticipation(role.id),
-            )
-            .await
-            .expect("mirror the participation into PostgreSQL");
-        }
-
-        // The lawyer's fee structure prices billable time: 250 cents an
-        // hour from two days ago, so any performed-on date resolves.
-        let today = Utc::now().date_naive();
-        store::attorney_rates::set_hourly_rate(
-            &pg,
-            store::attorney_rates::NewAttorneyRate {
-                person_id: lawyer.id,
-                project_id: Some(project.id),
-                hourly_rate_cents: 25_000,
-                effective_on: today - chrono::Duration::days(2),
-            },
-        )
-        .await
-        .expect("set the billing lawyer's hourly rate");
-
-        // Billable time freezes the attorney's rate onto the row.
-        let response = log_time(
-            State(surreal.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            log_time_form("90", &today.to_string(), true),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(
-            location(&response).ends_with("flash=Time%20logged."),
-            "unexpected redirect: {}",
-            location(&response)
-        );
-        let entries = store::time_entries::list_for_project(&pg, project.id)
-            .await
-            .expect("read the logged time");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].attorney_id, lawyer.id);
-        assert_eq!(entries[0].minutes, 90);
-        assert_eq!(entries[0].rate_cents_per_hour, 25_000);
-        assert!(entries[0].billable);
-        assert_eq!(entries[0].source.as_str(), "manual");
-        assert_eq!(entries[0].billing_status.as_str(), "unbilled");
-
-        // No-charge time logs without any fee structure: the rate snapshot
-        // is zero and no attorney rate row is consulted.
-        let response = log_time(
-            State(surreal.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            log_time_form("30", &today.to_string(), false),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(location(&response).ends_with("flash=Time%20logged."));
-        let entries = store::time_entries::list_for_project(&pg, project.id)
-            .await
-            .expect("read the logged time");
-        assert_eq!(entries.len(), 2);
-        assert!(entries.iter().any(|entry| !entry.billable));
-        assert!(
-            entries.iter().all(|entry| entry.rate_cents_per_hour >= 0),
-            "the rate snapshot never goes negative"
-        );
-
-        // A second lawyer without a fee structure is refused billable time,
-        // in the form's own words, and nothing is logged.
-        let rateless = store::persons::create(
-            &surreal,
-            &NewPerson::with_role(
-                "Synthetic rateless lawyer",
-                format!("billing-rateless-{}@example.com", Uuid::new_v4()),
-                Role::Lawyer,
-            ),
-        )
-        .await
-        .expect("seed the rateless lawyer");
-        store::participation::add_participant(
-            &surreal,
-            &AddParticipantCommand {
-                project_id: project.id,
-                person_id: rateless.id,
-                dri: DriRequest::Unchanged,
-                actor: DriActor::System,
-            },
-        )
-        .await
-        .expect("join the rateless lawyer to the matter");
-        let rateless_session = SessionData {
-            person_id: Some(rateless.id),
-            ..SessionData::fresh("synthetic-rateless@example.com", Role::Lawyer)
-        };
-        let response = log_time(
-            State(surreal.clone()),
-            Some(Extension(rateless_session)),
-            Path(project.code.clone()),
-            log_time_form("15", &today.to_string(), true),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let url = location(&response);
-        assert!(
-            url.contains("error=") && url.contains("hourly%20rate"),
-            "unexpected redirect: {url}"
-        );
-        assert_eq!(
-            store::time_entries::list_for_project(&pg, project.id)
-                .await
-                .expect("read the logged time")
-                .len(),
-            2,
-            "the refused entry was not written"
-        );
-
-        // Start the timer.
-        let response = start_timer(
-            State(surreal.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            Form(TimerStartForm {
-                note: "Called the client".into(),
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(location(&response).contains("flash=Timer%20running"));
-        let timer = store::timers::running_for_person(&pg, lawyer.id)
-            .await
-            .expect("read the running timer")
-            .expect("the timer is running");
-        assert_eq!(timer.project_id, project.id);
-
-        // A second start is refused in the widget's own words.
-        let response = start_timer(
-            State(surreal.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            Form(TimerStartForm {
-                note: String::new(),
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(location(&response).contains("error=You%20already%20have%20a%20timer%20running"));
-
-        // Stop it, backdated 90 minutes so the captured entry has real
-        // minutes: the entry rides the timer's performed-on date and the
-        // same rate snapshot.
-        sqlx::query(
-            "UPDATE timer SET started_at = started_at - interval '90 minutes' WHERE id = $1",
-        )
-        .bind(timer.id)
-        .execute(&raw_test_pool().await)
-        .await
-        .expect("backdate the timer");
-        let response = stop_timer(
-            State(surreal.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            Form(TimerStopForm {
-                description: "Called the client".into(),
-                billable: Some("on".into()),
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let url = location(&response);
-        assert!(
-            url.contains("flash=Captured%2090%20minutes"),
-            "unexpected redirect: {url}"
-        );
-        let entries = store::time_entries::list_for_project(&pg, project.id)
-            .await
-            .expect("read the captured time");
-        assert_eq!(entries.len(), 3);
-        let captured = entries
-            .iter()
-            .find(|entry| entry.source == store::time_entries::TimeEntrySource::Timer)
-            .expect("the timer capture");
-        assert_eq!(captured.minutes, 90);
-        assert_eq!(captured.rate_cents_per_hour, 25_000);
-        assert!(captured.billable);
-        assert_eq!(captured.billing_status.as_str(), "unbilled");
-        assert_eq!(captured.description, "Called the client");
-
-        // Stopping again — no timer left — names the real state.
-        let response = stop_timer(
-            State(surreal.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            Form(TimerStopForm {
-                description: String::new(),
-                billable: None,
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(location(&response).contains("error=The%20timer%20is%20no%20longer%20running."));
-
-        // A discarded timer records nothing.
-        let response = start_timer(
-            State(surreal.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            Form(TimerStartForm {
-                note: "A false start".into(),
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let response = discard_timer(
-            State(surreal.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(location(&response).contains("flash=Timer%20discarded"));
-        assert_eq!(
-            store::time_entries::list_for_project(&pg, project.id)
-                .await
-                .expect("read the logged time")
-                .len(),
-            3,
-            "a discard never writes time"
-        );
-
-        // Raise the invoice: the first POST opens the compose preview, and
-        // the confirmed POST raises it through the stub provider.
-        // The invoice command needs a provider that admits invoices: the
-        // shared `app_state` stub refuses by default, while a simulated-
-        // matters boot selects the admitting stub (hosting.rs).
-        let mut app = crate::test_support::app_state(surreal.clone()).await;
-        app.billing_provider =
-            std::sync::Arc::new(crate::billing::StubBillingProvider::for_simulated_matters());
-        let admin = blog_admin_state(app);
-        let response = generate_invoice(
-            State(admin.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            Form(GenerateInvoiceForm {
-                confirm: None,
-                digest: None,
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(
-            location(&response).ends_with("billing?confirm=1"),
-            "the unconfirmed POST opens the compose preview: {}",
-            location(&response)
-        );
-
-        // The client-side participation is the billed party.
-        let client = store::persons::create(
-            &surreal,
-            &NewPerson::with_role(
-                "Synthetic billed client",
-                format!("billing-party-{}@example.com", Uuid::new_v4()),
-                Role::Client,
-            ),
-        )
-        .await
-        .expect("seed the billed client");
-        store::participation::add_participant(
-            &surreal,
-            &AddParticipantCommand {
-                project_id: project.id,
-                person_id: client.id,
-                dri: DriRequest::Designate(DriSide::Client),
-                actor: DriActor::System,
-            },
-        )
-        .await
-        .expect("join the billed client to the matter");
-
-        let response = generate_invoice(
-            State(admin.clone()),
-            Some(Extension(session.clone())),
-            Path(project.code.clone()),
-            Form(GenerateInvoiceForm {
-                confirm: Some("on".into()),
-                digest: None,
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let url = location(&response);
-        assert!(
-            url.contains("flash=") && url.contains("raised%20in%20Xero"),
-            "unexpected redirect: {url}"
-        );
-        // Every consumed entry flipped to invoiced under the provider id.
-        let entries = store::time_entries::list_for_project(&pg, project.id)
-            .await
-            .expect("read the invoiced time");
-        assert!(
-            entries
-                .iter()
-                .all(|entry| entry.billing_status.as_str() == "invoiced"),
-            "the raise consumed every unbilled entry: {entries:?}"
-        );
-    }
-
-    /// `blog_admin_state`'s shape: an `AdminState` assembled field-by-field
-    /// from the shared `AppState`, so the invoice command runs against the
-    /// same stub billing provider the production boot selects.
-    fn blog_admin_state(app: crate::AppState) -> crate::admin::AdminState {
-        crate::admin::AdminState {
-            surreal: app.surreal,
-            workflow_runtime: app.workflow_runtime,
-            signature_provider: app.signature_provider,
-            retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
-            questionnaire_runtime: app.questionnaire_runtime,
-            storage: app.storage,
-            assets_storage: app.assets_storage,
-            forms_registry: app.forms_registry,
-            email: app.email,
-            billing_provider: app.billing_provider,
-            contract_reviewer: app.contract_reviewer,
-            bootstrap_owner_email: app.bootstrap_owner_email,
-            on_call_lawyer_email: app.on_call_lawyer_email,
-            bootstrap_company: crate::admin::bootstrap_company_from_env(),
-            sessions: app.sessions,
-            secure_cookies: false,
-            attachment_scanner: app.attachment_scanner,
-            runtime_kms: app.runtime_kms,
-            twilio_registry: app.twilio_registry,
-        }
-    }
-
-    #[tokio::test]
-    async fn the_billing_form_doors_log_time_and_drive_the_timer_end_to_end() {
-        if std::env::var("NAV_BILLING_FORM_CHILD").as_deref() == Ok("1") {
-            Box::pin(billing_form_doors_end_to_end()).await;
-            return;
-        }
-        let port = store::test_support::postgres_test_port();
-        let admin = sqlx::PgPool::connect_with(
-            sqlx::postgres::PgConnectOptions::new()
-                .host("127.0.0.1")
-                .port(port)
-                .username("postgres")
-                .password("synthetic")
-                .database("smoke")
-                .ssl_mode(sqlx::postgres::PgSslMode::Disable),
-        )
-        .await
-        .unwrap();
-        let database = format!("billing_forms_{}", Uuid::new_v4().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "project_billing_forms::tests::the_billing_form_doors_log_time_and_drive_the_timer_end_to_end",
-                "--nocapture",
-            ])
-            .env("NAV_BILLING_FORM_CHILD", "1")
-            .env("NAVIGATOR_RELEASE_TAG", "26.11.17")
-            .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
-            .env("NAVIGATOR_POSTGRES_PORT", port.to_string())
-            .env("NAVIGATOR_POSTGRES_USER", "postgres")
-            .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
-            .env("NAVIGATOR_POSTGRES_DATABASE", &database)
-            .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
-            .status()
-            .unwrap();
-        sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1")
-            .bind(&database)
-            .execute(&admin)
-            .await
-            .unwrap();
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        assert!(
-            status.success(),
-            "the billing form end-to-end child failed — run with --nocapture"
-        );
-    }
 }

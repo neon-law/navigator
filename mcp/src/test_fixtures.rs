@@ -20,8 +20,8 @@ pub static ESTATE: LazyLock<String> = LazyLock::new(|| format!("{} Estate", surn
 pub static ORGANIZATION: LazyLock<String> = LazyLock::new(organization_name);
 
 /// The Source handle: connected to nothing.
-pub fn handle() -> store::surreal::SurrealDb {
-    store::surreal::test_support::unreachable()
+pub fn handle() -> store::application_store::ApplicationStore {
+    store::test_support::uninitialized_store()
 }
 
 /// A generated full name.
@@ -49,12 +49,15 @@ pub fn email() -> String {
 }
 
 /// Register the compiled Brands, which opening a Project requires.
-pub async fn seed_brands(db: &store::surreal::SurrealDb) {
+pub async fn seed_brands(db: &store::application_store::ApplicationStore) {
     store::test_support::seed_compiled_brands_postgres(db).await;
 }
 
 /// An Entity named `name` whose Entity Type and Jurisdiction rows exist.
-pub async fn seed_entity_named(db: &store::surreal::SurrealDb, name: &str) -> Uuid {
+pub async fn seed_entity_named(
+    db: &store::application_store::ApplicationStore,
+    name: &str,
+) -> Uuid {
     let (entity_type_id, jurisdiction_id) = store::test_support::seed_entity_parents(db).await;
     store::entities::create(
         db,

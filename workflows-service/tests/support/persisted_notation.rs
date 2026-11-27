@@ -1,7 +1,7 @@
 //! Native pinned Template/Asset/Notation fixture on the caller's owning pool.
 
 use std::sync::Arc;
-use store::{postgres::PostgresDb, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, postgres::PostgresDb};
 use uuid::Uuid;
 
 #[path = "native_project.rs"]
@@ -11,7 +11,7 @@ const BODY: &str = "---\nkind: letter\ntitle: Synthetic notation\nrespondent_typ
 
 pub async fn seed(pg: &PostgresDb, storage: Arc<dyn cloud::StorageService>) -> (Uuid, Uuid) {
     PostgresDb::with_application_db(pg.clone(), async {
-        let source = SurrealDb::uninitialized();
+        let source = ApplicationStore::uninitialized();
         let (parents, admin) = native_project::matter(&source).await;
         let project = store::projects::find_by_id(&source, parents.id)
             .await
@@ -41,7 +41,7 @@ pub async fn seed(pg: &PostgresDb, storage: Arc<dyn cloud::StorageService>) -> (
         store::persons::set_email_confirmed(&source, actor.id, true)
             .await
             .unwrap();
-        store::projects::designate_dri_in_surreal(
+        store::projects::designate_dri(
             &source,
             parents.id,
             actor.id,

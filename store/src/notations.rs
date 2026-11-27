@@ -12,18 +12,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::matter;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
 pub(crate) const TABLE: &str = "notation";
-const PERSON_TABLE: &str = "person";
-const ENTITY_TABLE: &str = "entity";
-const TEMPLATE_TABLE: &str = "template";
-const NOTATION_PACKAGE_TABLE: &str = "notation_package";
 
 /// Captive client recipient: reaches the signing link through Navigator.
 pub const DELIVERY_EMBEDDED: &str = "embedded";
@@ -99,61 +94,6 @@ pub struct Notation {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct NotationRow {
-    id: surrealdb::types::RecordId,
-    template_id: surrealdb::types::RecordId,
-    package_id: Option<surrealdb::types::RecordId>,
-    person_id: surrealdb::types::RecordId,
-    entity_id: Option<surrealdb::types::RecordId>,
-    project_id: surrealdb::types::RecordId,
-    state: String,
-    delivery: String,
-    questionnaire_snapshot: Option<Json>,
-    questionnaire_snapshot_is_none: bool,
-    git_commit_sha: Option<String>,
-    template_source_commit_sha: Option<String>,
-    template_body_sha256: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl NotationRow {
-    /// `None` when a record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`].
-    fn into_notation(self) -> Option<Notation> {
-        Some(Notation {
-            id: record_uuid(&self.id)?,
-            template_id: record_uuid(&self.template_id)?,
-            package_id: self.package_id.as_ref().and_then(record_uuid),
-            person_id: record_uuid(&self.person_id)?,
-            entity_id: self.entity_id.as_ref().and_then(record_uuid),
-            project_id: record_uuid(&self.project_id)?,
-            state: self.state,
-            delivery: self.delivery,
-            questionnaire_snapshot: if self.questionnaire_snapshot_is_none {
-                None
-            } else {
-                Some(self.questionnaire_snapshot.unwrap_or(Json::Null))
-            },
-            git_commit_sha: self.git_commit_sha,
-            template_source_commit_sha: self.template_source_commit_sha,
-            template_body_sha256: self.template_body_sha256,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`NotationRow`] from only one query.
-const SELECT: &str =
-    "id, template_id, package_id, person_id, entity_id, project_id, state, delivery, \
-     questionnaire_snapshot, questionnaire_snapshot IS NONE AS questionnaire_snapshot_is_none, \
-     git_commit_sha, template_source_commit_sha, template_body_sha256, \
-     inserted_at, updated_at";
-
 /// Everything [`create`] needs to open a Notation.
 #[derive(Debug, Clone)]
 pub struct NewNotation {
@@ -224,8 +164,6 @@ pub enum NotationError {
     Postgres(#[from] sqlx::Error),
     #[error("PostgreSQL notation configuration is unavailable")]
     Configuration(#[from] crate::postgres::PostgresError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Authority(#[from] matter::MatterAuthorityError),
     #[error("notation {0} not found")]
@@ -241,34 +179,6 @@ pub(crate) fn postgres_notation(row: &sqlx::postgres::PgRow) -> Result<Notation,
     serde_json::from_value(row.try_get("row")?).map_err(|_| NotationError::WriteReturnedNothing)
 }
 
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, NotationError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(NotationError::Db)
-}
-
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Notation>, NotationError> {
-    let row: Option<NotationRow> = response.take(0)?;
-    Ok(row.and_then(NotationRow::into_notation))
-}
-
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Notation>, NotationError> {
-    let rows: Vec<NotationRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(NotationRow::into_notation)
-        .collect())
-}
-
 /// Write one archived Notation back under its original id with its frozen
 /// questionnaire, template pins, and timestamps. An identical row is left
 /// alone; a different row with the same id is a conflict.
@@ -276,70 +186,11 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Notation>, Notati
 /// # Errors
 /// [`NotationError`] on a database failure.
 pub async fn restore_archived(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation: &Notation,
 ) -> Result<crate::assets::RowRestore, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return crate::postgres::notations::restore_archived(&pg, notation).await;
-    }
-    if let Some(existing) = find_by_id(db, notation.id).await? {
-        return Ok(if &existing == notation {
-            crate::assets::RowRestore::Identical
-        } else {
-            crate::assets::RowRestore::Conflict
-        });
-    }
-    let response = writing(|| {
-        db.query(format!(
-            "CREATE $id SET template_id = $template_id, package_id = $package_id, \
-             person_id = $person_id, entity_id = $entity_id, project_id = $project_id, \
-             state = $state, delivery = $delivery, \
-             questionnaire_snapshot = $questionnaire_snapshot, git_commit_sha = $git_commit_sha, \
-             template_source_commit_sha = $template_source_commit_sha, \
-             template_body_sha256 = $template_body_sha256, inserted_at = $inserted_at, \
-             updated_at = $updated_at RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, notation.id)))
-        .bind(("template_id", record_id("template", notation.template_id)))
-        .bind((
-            "package_id",
-            notation
-                .package_id
-                .map(|id| record_id("notation_package", id)),
-        ))
-        .bind(("person_id", record_id("person", notation.person_id)))
-        .bind((
-            "entity_id",
-            notation.entity_id.map(|id| record_id("entity", id)),
-        ))
-        .bind(("project_id", record_id("project", notation.project_id)))
-        .bind(("state", notation.state.clone()))
-        .bind(("delivery", notation.delivery.clone()))
-        .bind((
-            "questionnaire_snapshot",
-            notation.questionnaire_snapshot.clone(),
-        ))
-        .bind(("git_commit_sha", notation.git_commit_sha.clone()))
-        .bind((
-            "template_source_commit_sha",
-            notation.template_source_commit_sha.clone(),
-        ))
-        .bind((
-            "template_body_sha256",
-            notation.template_body_sha256.clone(),
-        ))
-        .bind((
-            "inserted_at",
-            surrealdb::types::Datetime::from(notation.inserted_at),
-        ))
-        .bind((
-            "updated_at",
-            surrealdb::types::Datetime::from(notation.updated_at),
-        ))
-    })
-    .await?;
-    one(response)?.ok_or(NotationError::WriteReturnedNothing)?;
-    Ok(crate::assets::RowRestore::Created)
+    let pg = matter::authority_for(TABLE).await?;
+    crate::postgres::notations::restore_archived(&pg, notation).await
 }
 
 /// Open a Notation. No unique index guards this insert — see the module
@@ -354,54 +205,9 @@ pub async fn restore_archived(
 /// [`NotationError::Db`] if the insert fails, or
 /// [`NotationError::WriteReturnedNothing`] if it reports success but
 /// returns no row.
-pub async fn create(db: &SurrealDb, new: &NewNotation) -> Result<Notation, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return crate::postgres::notations::create(&pg, new).await;
-    }
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             template_id = $template_id, \
-             package_id = $package_id, \
-             person_id = $person_id, \
-             entity_id = $entity_id, \
-             project_id = $project_id, \
-             state = $state, \
-             delivery = $delivery, \
-             questionnaire_snapshot = $questionnaire_snapshot, \
-             template_source_commit_sha = $template_id.source_commit_sha, \
-             template_body_sha256 = $template_id.body_sha256 \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("template_id", record_id(TEMPLATE_TABLE, new.template_id)))
-        .bind((
-            "package_id",
-            new.package_id
-                .map(|id| record_id(NOTATION_PACKAGE_TABLE, id)),
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, new.person_id)))
-        .bind((
-            "entity_id",
-            new.entity_id.map(|e| record_id(ENTITY_TABLE, e)),
-        ))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, new.project_id),
-        ))
-        .bind(("state", new.state.clone()))
-        .bind(("delivery", new.delivery.clone()))
-        .bind(("questionnaire_snapshot", new.questionnaire_snapshot.clone()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let row: Option<NotationRow> = response.take(0)?;
-    let notation = row
-        .and_then(NotationRow::into_notation)
-        .ok_or(NotationError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Notation(id)).await;
-    Ok(notation)
+pub async fn create(_db: &ApplicationStore, new: &NewNotation) -> Result<Notation, NotationError> {
+    let pg = matter::authority_for(TABLE).await?;
+    crate::postgres::notations::create(&pg, new).await
 }
 
 /// Errors from [`pinned_body`].
@@ -429,7 +235,7 @@ pub enum PinnedBodyError {
 /// [`PinnedBodyError`] when the template version is missing, its body
 /// cannot be read, or the bytes do not match.
 pub async fn pinned_body(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     notation: &Notation,
 ) -> Result<String, PinnedBodyError> {
@@ -456,22 +262,13 @@ pub async fn pinned_body(
 /// # Errors
 ///
 /// [`NotationError::Db`] if the delete fails.
-pub async fn delete_uncommitted(db: &SurrealDb, id: Uuid) -> Result<(), NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return match crate::postgres::notations::delete_draft(&pg, id).await? {
-            crate::notation_reset::ResetOutcome::Deleted
-            | crate::notation_reset::ResetOutcome::AlreadyGone => Ok(()),
-            crate::notation_reset::ResetOutcome::Kept => {
-                Err(NotationError::ProtectedFromDeletion(id))
-            }
-        };
+pub async fn delete_uncommitted(_db: &ApplicationStore, id: Uuid) -> Result<(), NotationError> {
+    let pg = matter::authority_for(TABLE).await?;
+    match crate::postgres::notations::delete_draft(&pg, id).await? {
+        crate::notation_reset::ResetOutcome::Deleted
+        | crate::notation_reset::ResetOutcome::AlreadyGone => Ok(()),
+        crate::notation_reset::ResetOutcome::Kept => Err(NotationError::ProtectedFromDeletion(id)),
     }
-    db.query("DELETE $id")
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Notation(id)).await;
-    Ok(())
 }
 
 /// Resolve a notation by id.
@@ -479,23 +276,18 @@ pub async fn delete_uncommitted(db: &SurrealDb, id: Uuid) -> Result<(), Notation
 /// # Errors
 ///
 /// [`NotationError::Db`] if the lookup fails.
-pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Notation>, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return sqlx::query("SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE id=$1")
-            .bind(id)
-            .fetch_optional(pg.pool())
-            .await?
-            .as_ref()
-            .map(postgres_notation)
-            .transpose();
-    }
-    let response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let notation = one(response)?;
-    Ok(notation)
+pub async fn find_by_id(
+    _db: &ApplicationStore,
+    id: Uuid,
+) -> Result<Option<Notation>, NotationError> {
+    let pg = matter::authority_for(TABLE).await?;
+    sqlx::query("SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE id=$1")
+        .bind(id)
+        .fetch_optional(pg.pool())
+        .await?
+        .as_ref()
+        .map(postgres_notation)
+        .transpose()
 }
 
 /// Every notation on a Project, newest first.
@@ -504,33 +296,19 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Notation>, No
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn list_by_project(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<Notation>, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return sqlx::query(
-            "SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE project_id=$1 ORDER BY inserted_at,id",
-        )
-        .bind(project_id)
-        .fetch_all(pg.pool())
-        .await?
-        .iter()
-        .map(postgres_notation)
-        .collect();
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
-             ORDER BY inserted_at DESC"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows = many(response)?;
-    Ok(rows)
+    let pg = matter::authority_for(TABLE).await?;
+    sqlx::query(
+        "SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE project_id=$1 ORDER BY inserted_at,id",
+    )
+    .bind(project_id)
+    .fetch_all(pg.pool())
+    .await?
+    .iter()
+    .map(postgres_notation)
+    .collect()
 }
 
 /// Every notation across several Projects, newest first — the batched
@@ -541,30 +319,12 @@ pub async fn list_by_project(
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn list_by_projects(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_ids: &[Uuid],
 ) -> Result<Vec<Notation>, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return sqlx::query("SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE project_id=ANY($1) ORDER BY inserted_at DESC,id DESC")
-            .bind(project_ids).fetch_all(pg.pool()).await?.iter().map(postgres_notation).collect();
-    }
-    if project_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let keys: Vec<surrealdb::types::RecordId> = project_ids
-        .iter()
-        .map(|id| record_id(crate::projects::PROJECT_TABLE, *id))
-        .collect();
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id IN $projects \
-             ORDER BY inserted_at DESC"
-        ))
-        .bind(("projects", keys))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows = many(response)?;
-    Ok(rows)
+    let pg = matter::authority_for(TABLE).await?;
+    sqlx::query("SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE project_id=ANY($1) ORDER BY inserted_at DESC,id DESC")
+        .bind(project_ids).fetch_all(pg.pool()).await?.iter().map(postgres_notation).collect()
 }
 
 /// How far a state has progressed through its workflow — used only to pick
@@ -631,28 +391,17 @@ where
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn list_by_person(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Vec<Notation>, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::select(
-            &pg,
-            TABLE,
-            serde_json::json!({"person_id": person_id}),
-            &["inserted_at DESC", "id DESC"],
-        )
-        .await?);
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $person \
-             ORDER BY inserted_at DESC"
-        ))
-        .bind(("person", record_id(PERSON_TABLE, person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows = many(response)?;
-    Ok(rows)
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::select(
+        &pg,
+        TABLE,
+        serde_json::json!({"person_id": person_id}),
+        &["inserted_at DESC", "id DESC"],
+    )
+    .await?)
 }
 
 /// Every notation in the workspace, newest first — the lawyer "Notations"
@@ -661,24 +410,15 @@ pub async fn list_by_person(
 /// # Errors
 ///
 /// [`NotationError::Db`] if the lookup fails.
-pub async fn list_all(db: &SurrealDb) -> Result<Vec<Notation>, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::select(
-            &pg,
-            TABLE,
-            serde_json::json!({}),
-            &["inserted_at DESC", "id DESC"],
-        )
-        .await?);
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at DESC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows = many(response)?;
-    Ok(rows)
+pub async fn list_all(_db: &ApplicationStore) -> Result<Vec<Notation>, NotationError> {
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::select(
+        &pg,
+        TABLE,
+        serde_json::json!({}),
+        &["inserted_at DESC", "id DESC"],
+    )
+    .await?)
 }
 
 /// The one notation (if any) already open for this exact
@@ -689,30 +429,13 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Notation>, NotationError> {
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn find_by_project_template_person(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     template_id: Uuid,
     person_id: Uuid,
 ) -> Result<Option<Notation>, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return sqlx::query("SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE project_id=$1 AND template_id=$2 AND person_id=$3 ORDER BY inserted_at DESC LIMIT 1").bind(project_id).bind(template_id).bind(person_id).fetch_optional(pg.pool()).await?.as_ref().map(postgres_notation).transpose();
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE project_id = $project AND template_id = $template AND person_id = $person \
-             LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("template", record_id(TEMPLATE_TABLE, template_id)))
-        .bind(("person", record_id(PERSON_TABLE, person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let notation = one(response)?;
-    Ok(notation)
+    let pg = matter::authority_for(TABLE).await?;
+    sqlx::query("SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE project_id=$1 AND template_id=$2 AND person_id=$3 ORDER BY inserted_at DESC LIMIT 1").bind(project_id).bind(template_id).bind(person_id).fetch_optional(pg.pool()).await?.as_ref().map(postgres_notation).transpose()
 }
 
 /// Whether any notation exists on this Project — the matter-delete guard.
@@ -720,28 +443,17 @@ pub async fn find_by_project_template_person(
 /// # Errors
 ///
 /// [`NotationError::Db`] if the lookup fails.
-pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation WHERE project_id=$1)")
-                .bind(project_id)
-                .fetch_one(pg.pool())
-                .await?,
-        );
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM {TABLE} WHERE project_id = $project LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-    let exists = !ids.is_empty();
-    Ok(exists)
+pub async fn exists_for_project(
+    _db: &ApplicationStore,
+    project_id: Uuid,
+) -> Result<bool, NotationError> {
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation WHERE project_id=$1)")
+            .bind(project_id)
+            .fetch_one(pg.pool())
+            .await?,
+    )
 }
 
 /// Transition a notation's workflow `state`. Returns the updated row.
@@ -751,69 +463,38 @@ pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool
 /// [`NotationError::NotFound`] if the notation does not exist, or
 /// [`NotationError::Db`] for anything else.
 pub async fn update_state(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     new_state: &str,
 ) -> Result<Notation, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return matter::update(
-            &pg,
-            TABLE,
-            serde_json::json!({"id": id}),
-            serde_json::json!({"state": new_state, "updated_at": Utc::now()}),
-        )
-        .await?
-        .into_iter()
-        .next()
-        .ok_or(NotationError::NotFound(id));
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE $id SET state = $state, updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("state", new_state.to_string()))
-    })
-    .await?;
-    let row: Option<NotationRow> = response.take(0)?;
-    let notation = row
-        .and_then(NotationRow::into_notation)
-        .ok_or(NotationError::NotFound(id))?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Notation(id)).await;
-    Ok(notation)
+    let pg = matter::authority_for(TABLE).await?;
+    matter::update(
+        &pg,
+        TABLE,
+        serde_json::json!({"id": id}),
+        serde_json::json!({"state": new_state, "updated_at": Utc::now()}),
+    )
+    .await?
+    .into_iter()
+    .next()
+    .ok_or(NotationError::NotFound(id))
 }
 
 /// Reconcile a Notation projection if it still has the observed state.
 pub async fn reconcile_state(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     observed_state: &str,
     current_state: &str,
 ) -> Result<(), NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let _: Vec<Notation> = matter::update(
-            &pg,
-            TABLE,
-            serde_json::json!({"id": id, "state": observed_state}),
-            serde_json::json!({"state": current_state, "updated_at": Utc::now()}),
-        )
-        .await?;
-        return Ok(());
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE $id SET state = $current, updated_at = time::now() WHERE state = $observed RETURN {SELECT}"
-        ))
-            .bind(("id", record_id(TABLE, id)))
-            .bind(("observed", observed_state.to_owned()))
-            .bind(("current", current_state.to_owned()))
-    })
+    let pg = matter::authority_for(TABLE).await?;
+    let _: Vec<Notation> = matter::update(
+        &pg,
+        TABLE,
+        serde_json::json!({"id": id, "state": observed_state}),
+        serde_json::json!({"state": current_state, "updated_at": Utc::now()}),
+    )
     .await?;
-    let updated: Option<NotationRow> = response.take(0)?;
-    if updated.is_some() {
-        crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Notation(id))
-            .await;
-    }
     Ok(())
 }
 
@@ -826,37 +507,21 @@ pub async fn reconcile_state(
 /// [`NotationError::NotFound`] if the notation does not exist, or
 /// [`NotationError::Db`] for anything else.
 pub async fn update_questionnaire_snapshot(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     snapshot: Json,
 ) -> Result<Notation, NotationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return matter::update(
-            &pg,
-            TABLE,
-            serde_json::json!({"id": id}),
-            serde_json::json!({"questionnaire_snapshot": snapshot, "updated_at": Utc::now()}),
-        )
-        .await?
-        .into_iter()
-        .next()
-        .ok_or(NotationError::NotFound(id));
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE $id SET questionnaire_snapshot = $snapshot, updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("snapshot", snapshot.clone()))
-    })
-    .await?;
-    let row: Option<NotationRow> = response.take(0)?;
-    let notation = row
-        .and_then(NotationRow::into_notation)
-        .ok_or(NotationError::NotFound(id))?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Notation(id)).await;
-    Ok(notation)
+    let pg = matter::authority_for(TABLE).await?;
+    matter::update(
+        &pg,
+        TABLE,
+        serde_json::json!({"id": id}),
+        serde_json::json!({"questionnaire_snapshot": snapshot, "updated_at": Utc::now()}),
+    )
+    .await?
+    .into_iter()
+    .next()
+    .ok_or(NotationError::NotFound(id))
 }
 
 /// Storage-key convention for the rendered document PDF of a given notation —
@@ -887,175 +552,10 @@ pub fn certificate_of_completion_storage_key(notation_id: Uuid) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        certificate_of_completion_storage_key, create, document_pdf_storage_key, find_by_id,
-        find_by_project_template_person, furthest_along_state, list_all, list_by_person,
-        list_by_project, list_by_projects, signed_document_storage_key,
-        update_questionnaire_snapshot, update_state, NewNotation, NotationError, DELIVERY_EMBEDDED,
+        certificate_of_completion_storage_key, document_pdf_storage_key, furthest_along_state,
+        signed_document_storage_key,
     };
-    use crate::surreal::test_support::mem;
     use uuid::Uuid;
-
-    async fn a_template(surreal: &crate::surreal::SurrealDb) -> Uuid {
-        crate::templates::save_version(
-            surreal,
-            None,
-            &format!("sitting__transcript-{}", Uuid::now_v7()),
-            crate::templates::Version {
-                title: "Estate".into(),
-                respondent_type: "person".into(),
-                asset_id: None,
-                form_code: None,
-                kind: None,
-                source_commit_sha: None,
-            },
-        )
-        .await
-        .unwrap()
-        .into_model()
-        .id
-    }
-
-    async fn fs_storage() -> std::sync::Arc<dyn cloud::StorageService> {
-        let dir = std::env::temp_dir().join(format!("navigator-notations-{}", Uuid::now_v7()));
-        std::sync::Arc::new(cloud::FsStorage::new(dir).await.unwrap())
-    }
-
-    /// Sync `body` into the Project's `lease` Draft at `commit`.
-    async fn sync_lease(
-        surreal: &crate::surreal::SurrealDb,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-        project: Uuid,
-        body: &str,
-        commit: &str,
-    ) -> crate::templates::Template {
-        let asset_id =
-            crate::assets::ingest_content(surreal, storage, body.as_bytes(), "text/markdown")
-                .await
-                .unwrap();
-        crate::templates::save_version(
-            surreal,
-            Some(project),
-            "lease",
-            crate::templates::Version {
-                title: "Lease".into(),
-                respondent_type: "person".into(),
-                asset_id: Some(asset_id),
-                form_code: None,
-                kind: Some("agreement".into()),
-                source_commit_sha: Some(commit.into()),
-            },
-        )
-        .await
-        .unwrap()
-        .into_model()
-    }
-
-    /// Opening copies the Draft's commit and digest; editing `drafts/`
-    /// afterwards cuts a new version and leaves the Notation's body
-    /// byte-identical.
-    #[tokio::test]
-    async fn a_notation_keeps_the_draft_it_was_opened_from() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let project = crate::test_support::seed_project_surreal(&surreal, "matter").await;
-        let person = a_person(&surreal, "pin@example.com").await;
-        let first_commit = "1111111111111111111111111111111111111111";
-        let original = "# Lease\n\nRent is due on the first.\n";
-        let v1 = sync_lease(&surreal, &storage, project, original, first_commit).await;
-
-        let opened = create(&surreal, &NewNotation::new(v1.id, person, project, "BEGIN"))
-            .await
-            .unwrap();
-        assert_eq!(
-            opened.template_source_commit_sha.as_deref(),
-            Some(first_commit)
-        );
-        assert_eq!(
-            opened.template_body_sha256.as_deref(),
-            Some(crate::assets::sha256_hex(original.as_bytes()).as_str())
-        );
-        let before = super::pinned_body(&surreal, &storage, &opened)
-            .await
-            .unwrap();
-
-        let v2 = sync_lease(
-            &surreal,
-            &storage,
-            project,
-            "# Lease\n\nRent is due on the fifth.\n",
-            "2222222222222222222222222222222222222222",
-        )
-        .await;
-        assert_ne!(v2.id, v1.id, "the edit cut a new version");
-
-        let reread = find_by_id(&surreal, opened.id).await.unwrap().unwrap();
-        assert_eq!(reread, opened, "the Notation row is untouched");
-        let after = super::pinned_body(&surreal, &storage, &reread)
-            .await
-            .unwrap();
-        assert_eq!(after.as_bytes(), before.as_bytes());
-        assert_eq!(after, original);
-    }
-
-    /// Bytes that do not hash to the Notation's pin are never returned.
-    #[tokio::test]
-    async fn a_tampered_draft_body_fails_the_notation_closed() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let project = crate::test_support::seed_project_surreal(&surreal, "matter").await;
-        let person = a_person(&surreal, "tamper@example.com").await;
-        let body = "# Lease\n\nRent is due on the first.\n";
-        let template = sync_lease(
-            &surreal,
-            &storage,
-            project,
-            body,
-            crate::test_support::SYNTHETIC_COMMIT_SHA,
-        )
-        .await;
-        let notation = create(
-            &surreal,
-            &NewNotation::new(template.id, person, project, "BEGIN"),
-        )
-        .await
-        .unwrap();
-        let key = format!("blobs/{}", crate::assets::sha256_hex(body.as_bytes()));
-        storage
-            .put(&key, b"# Lease\n\nRent is waived.\n", "text/markdown")
-            .await
-            .unwrap();
-
-        let refused = super::pinned_body(&surreal, &storage, &notation).await;
-        assert!(
-            matches!(
-                refused,
-                Err(super::PinnedBodyError::Body(
-                    crate::templates::TemplateBodyError::DigestMismatch(_)
-                ))
-            ),
-            "{refused:?}"
-        );
-    }
-
-    async fn a_person(surreal: &crate::surreal::SurrealDb, email: &str) -> Uuid {
-        crate::persons::create(surreal, &crate::persons::NewPerson::new("Libra", email))
-            .await
-            .unwrap()
-            .id
-    }
-
-    async fn open_notation(surreal: &crate::surreal::SurrealDb) -> Uuid {
-        let project = crate::test_support::seed_project_surreal(surreal, "matter").await;
-        let template_id = a_template(surreal).await;
-        let person_id = a_person(surreal, &format!("libra-{}@example.com", Uuid::now_v7())).await;
-        create(
-            surreal,
-            &NewNotation::new(template_id, person_id, project, "BEGIN"),
-        )
-        .await
-        .unwrap()
-        .id
-    }
 
     #[test]
     fn notation_storage_keys_are_stable_per_notation_paths() {
@@ -1072,230 +572,6 @@ mod tests {
             certificate_of_completion_storage_key(id),
             "notations/00000000-0000-0000-0000-0000000000ab/certificate-of-completion.pdf"
         );
-    }
-
-    #[tokio::test]
-    async fn create_writes_a_notation_and_find_by_id_reads_it_back() {
-        let surreal = mem().await;
-        let project = crate::test_support::seed_project_surreal(&surreal, "matter").await;
-        let template_id = a_template(&surreal).await;
-        let person_id = a_person(&surreal, "libra@example.com").await;
-        let created = create(
-            &surreal,
-            &NewNotation::new(template_id, person_id, project, "BEGIN"),
-        )
-        .await
-        .unwrap();
-        assert_eq!(created.delivery, DELIVERY_EMBEDDED);
-        assert_eq!(created.state, "BEGIN");
-        assert_eq!(created.package_id, None);
-
-        let found = find_by_id(&surreal, created.id).await.unwrap().unwrap();
-        assert_eq!(found, created);
-    }
-
-    #[tokio::test]
-    async fn a_notation_can_keep_the_package_that_assembled_it() {
-        let surreal = mem().await;
-        let project = crate::test_support::seed_project_surreal(&surreal, "matter").await;
-        let template_id = a_template(&surreal).await;
-        let person_id = a_person(&surreal, "libra@example.com").await;
-        let package_id = crate::notation_packages::create(
-            &surreal,
-            &crate::notation_packages::NewNotationPackage::new(
-                "estate-package",
-                "Estate package",
-                "complex",
-                10_000,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-
-        let created = create(
-            &surreal,
-            &NewNotation::new(template_id, person_id, project, "BEGIN").with_package(package_id),
-        )
-        .await
-        .unwrap();
-        assert_eq!(created.package_id, Some(package_id));
-    }
-
-    #[tokio::test]
-    async fn a_missing_notation_reads_back_as_none() {
-        let surreal = mem().await;
-        assert!(find_by_id(&surreal, Uuid::now_v7())
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn list_by_project_reads_only_that_projects_notations() {
-        let surreal = mem().await;
-        let project_a = crate::test_support::seed_project_surreal(&surreal, "matter-a").await;
-        let project_b = crate::test_support::seed_project_surreal(&surreal, "matter-b").await;
-        let template_id = a_template(&surreal).await;
-        let person_id = a_person(&surreal, "libra@example.com").await;
-        let on_a = create(
-            &surreal,
-            &NewNotation::new(template_id, person_id, project_a, "BEGIN"),
-        )
-        .await
-        .unwrap()
-        .id;
-        create(
-            &surreal,
-            &NewNotation::new(template_id, person_id, project_b, "BEGIN"),
-        )
-        .await
-        .unwrap();
-
-        let rows = list_by_project(&surreal, project_a).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, on_a);
-    }
-
-    #[tokio::test]
-    async fn list_by_projects_batches_across_several_projects() {
-        let surreal = mem().await;
-        let project_a = crate::test_support::seed_project_surreal(&surreal, "matter-a").await;
-        let project_b = crate::test_support::seed_project_surreal(&surreal, "matter-b").await;
-        let project_c = crate::test_support::seed_project_surreal(&surreal, "matter-c").await;
-        let template_id = a_template(&surreal).await;
-        let person_id = a_person(&surreal, "libra@example.com").await;
-        create(
-            &surreal,
-            &NewNotation::new(template_id, person_id, project_a, "BEGIN"),
-        )
-        .await
-        .unwrap();
-        create(
-            &surreal,
-            &NewNotation::new(template_id, person_id, project_b, "BEGIN"),
-        )
-        .await
-        .unwrap();
-
-        let rows = list_by_projects(&surreal, &[project_a, project_b])
-            .await
-            .unwrap();
-        assert_eq!(rows.len(), 2);
-        assert!(list_by_projects(&surreal, &[project_c])
-            .await
-            .unwrap()
-            .is_empty());
-        assert!(list_by_projects(&surreal, &[]).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn list_by_person_reads_only_that_persons_notations() {
-        let surreal = mem().await;
-        let project = crate::test_support::seed_project_surreal(&surreal, "matter").await;
-        let template_id = a_template(&surreal).await;
-        let libra = a_person(&surreal, "libra@example.com").await;
-        let aries = a_person(&surreal, "aries@example.com").await;
-        create(
-            &surreal,
-            &NewNotation::new(template_id, libra, project, "BEGIN"),
-        )
-        .await
-        .unwrap();
-        create(
-            &surreal,
-            &NewNotation::new(template_id, aries, project, "BEGIN"),
-        )
-        .await
-        .unwrap();
-
-        let rows = list_by_person(&surreal, libra).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].person_id, libra);
-    }
-
-    #[tokio::test]
-    async fn list_all_reads_every_notation() {
-        let surreal = mem().await;
-        open_notation(&surreal).await;
-        open_notation(&surreal).await;
-        assert_eq!(list_all(&surreal).await.unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn find_by_project_template_person_matches_the_exact_triple() {
-        let surreal = mem().await;
-        let project = crate::test_support::seed_project_surreal(&surreal, "matter").await;
-        let template_id = a_template(&surreal).await;
-        let person_id = a_person(&surreal, "libra@example.com").await;
-        let created = create(
-            &surreal,
-            &NewNotation::new(template_id, person_id, project, "BEGIN"),
-        )
-        .await
-        .unwrap();
-
-        let found = find_by_project_template_person(&surreal, project, template_id, person_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(found.id, created.id);
-
-        let other_project = crate::test_support::seed_project_surreal(&surreal, "other").await;
-        assert!(
-            find_by_project_template_person(&surreal, other_project, template_id, person_id)
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn exists_for_project_reflects_whether_any_notation_is_open() {
-        let surreal = mem().await;
-        let project = crate::test_support::seed_project_surreal(&surreal, "matter").await;
-        assert!(!super::exists_for_project(&surreal, project).await.unwrap());
-        let template_id = a_template(&surreal).await;
-        let person_id = a_person(&surreal, "libra@example.com").await;
-        create(
-            &surreal,
-            &NewNotation::new(template_id, person_id, project, "BEGIN"),
-        )
-        .await
-        .unwrap();
-        assert!(super::exists_for_project(&surreal, project).await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn update_state_transitions_the_row() {
-        let surreal = mem().await;
-        let id = open_notation(&surreal).await;
-        let updated = update_state(&surreal, id, "lawyer_review").await.unwrap();
-        assert_eq!(updated.state, "lawyer_review");
-        assert_eq!(
-            find_by_id(&surreal, id).await.unwrap().unwrap().state,
-            "lawyer_review"
-        );
-    }
-
-    #[tokio::test]
-    async fn update_state_on_a_missing_notation_reports_not_found() {
-        let surreal = mem().await;
-        let err = update_state(&surreal, Uuid::now_v7(), "lawyer_review")
-            .await
-            .unwrap_err();
-        assert!(matches!(err, NotationError::NotFound(_)));
-    }
-
-    #[tokio::test]
-    async fn update_questionnaire_snapshot_overwrites_the_frozen_copy() {
-        let surreal = mem().await;
-        let id = open_notation(&surreal).await;
-        let alt = serde_json::json!({"states": {"replaced": true}});
-        let updated = update_questionnaire_snapshot(&surreal, id, alt.clone())
-            .await
-            .unwrap();
-        assert_eq!(updated.questionnaire_snapshot, Some(alt));
     }
 
     #[test]

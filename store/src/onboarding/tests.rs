@@ -1,5 +1,5 @@
 use super::*;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 
 #[tokio::test]
 async fn adoption_links_an_existing_upload_and_reuses_the_filing_on_retry() {
@@ -96,7 +96,7 @@ async fn only_completed_docusign_uuids_make_postgres_projects_official() {
     let Some((pg, project, notation)) = native_notation_fixture().await else {
         return;
     };
-    let disconnected = crate::surreal::SurrealDb::uninitialized();
+    let disconnected = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(pg.clone(), async {
         let envelope = Uuid::now_v7().to_string();
         let provider = crate::signatures::SignatureProvider::DocuSign;
@@ -183,7 +183,7 @@ async fn terminal_signatures_cannot_be_completed_or_reclassified() {
     let Some((pg, _, notation)) = native_notation_fixture().await else {
         return;
     };
-    let disconnected = crate::surreal::SurrealDb::uninitialized();
+    let disconnected = crate::application_store::ApplicationStore::uninitialized();
     let provider = crate::signatures::SignatureProvider::DocuSign;
     PostgresDb::with_test_db(pg.clone(), async {
         let declined = Uuid::now_v7().to_string();
@@ -214,131 +214,11 @@ async fn terminal_signatures_cannot_be_completed_or_reclassified() {
 }
 
 #[tokio::test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one revision chain covers evidence upgrade, retry, and stale-head rejection"
-)]
-async fn postgres_uploads_require_verified_evidence_and_retry_without_duplicate_revisions() {
-    let Some((pg, project, _)) = native_notation_fixture().await else {
-        return;
-    };
-    let root = tempfile::tempdir().unwrap();
-    let storage: Arc<dyn StorageService> = Arc::new(
-        cloud::FsStorage::new(root.path().to_path_buf())
-            .await
-            .unwrap(),
-    );
-    let args = IngestArgs {
-        project_id: project,
-        source: "upload",
-        filename: "onboarding.pdf",
-        kind: "onboarding",
-        content_type: "application/pdf",
-        description: None,
-        secondary_storage_key: None,
-        visibility: "client",
-    };
-    let mut identity = DocumentIdentity {
-        slug: Some("onboarding.pdf"),
-        ..Default::default()
-    };
-    file_document(&pg, &storage, &args, &identity, None, b"signed")
-        .await
-        .unwrap();
-    assert!(official_projects(&pg, &[project]).await.unwrap().is_empty());
-    let envelope = Uuid::now_v7();
-    identity.metadata = Some(serde_json::json!({"docusign_envelope_id": envelope}));
-    file_document(&pg, &storage, &args, &identity, None, b"manual-pointer")
-        .await
-        .unwrap();
-    assert!(official_projects(&pg, &[project]).await.unwrap().is_empty());
-    identity.metadata = Some(serde_json::json!({
-        "docusign_envelope_id": envelope, "verified_onboarding_envelope_id": envelope,
-    }));
-    let head = revisions(&pg, project, "onboarding.pdf").await.unwrap();
-    let expected = ExpectedHead {
-        asset_id: head[0].id,
-        version: u32::try_from(head.len()).unwrap(),
-        sha256: head[0].sha256_hex.clone(),
-    };
-    file_document(
-        &pg,
-        &storage,
-        &args,
-        &identity,
-        Some(&expected),
-        b"manual-pointer",
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        official_projects(&pg, &[project]).await.unwrap(),
-        HashSet::from([project])
-    );
-    assert!(matches!(
-        file_document(
-            &pg,
-            &storage,
-            &args,
-            &identity,
-            Some(&expected),
-            b"manual-pointer"
-        )
-        .await
-        .unwrap(),
-        Filed::Unchanged { .. }
-    ));
-    assert_eq!(
-        revisions(&pg, project, "onboarding.pdf")
-            .await
-            .unwrap()
-            .len(),
-        3
-    );
-    assert!(matches!(
-        file_document(
-            &pg,
-            &storage,
-            &args,
-            &identity,
-            Some(&expected),
-            b"different"
-        )
-        .await,
-        Err(RevisionError::HeadConflict { .. })
-    ));
-    let rows = documents(&pg, project).await.unwrap();
-    assert_eq!(
-        rows[0].metadata.as_ref().unwrap()["docusign_envelope_id"],
-        envelope.to_string()
-    );
-    assert_eq!(rows[1].visibility, "internal");
-    assert!(filed_documents(&pg, &[project])
-        .await
-        .unwrap()
-        .0
-        .contains(&project));
-    // Active import is held before Source access and leaves the native row intact.
-    let disconnected = crate::surreal::SurrealDb::uninitialized();
-    assert!(matches!(
-        crate::postgres_mirror::mirror(
-            &disconnected,
-            &pg,
-            &crate::postgres_mirror::MirrorKey::Asset(rows[0].id)
-        )
-        .await,
-        Ok(crate::postgres_mirror::Mirrored::Unchanged)
-    ));
-    assert_eq!(documents(&pg, project).await.unwrap().len(), 3);
-    pg.pool().close().await;
-}
-
-#[tokio::test]
 async fn configured_signature_writes_never_fall_back_to_another_engine() {
     let Some((pg, _, notation)) = native_notation_fixture().await else {
         return;
     };
-    let disconnected = crate::surreal::SurrealDb::uninitialized();
+    let disconnected = crate::application_store::ApplicationStore::uninitialized();
     let provider = crate::signatures::SignatureProvider::DocuSign;
     let envelope = Uuid::now_v7().to_string();
     PostgresDb::with_test_db(pg.clone(), async {

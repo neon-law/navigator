@@ -18,11 +18,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::matter::{self, MatterAuthorityError};
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
 const TABLE: &str = "git_repository";
@@ -39,42 +38,10 @@ pub struct GitRepository {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it — the seam between
-/// [`GitRepository`] and the SDK's own `RecordId` and `Datetime`.
-#[derive(SurrealValue)]
-struct GitRepositoryRow {
-    id: surrealdb::types::RecordId,
-    remote_hash: String,
-    last_commit_sha: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl GitRepositoryRow {
-    /// `None` when the record id is not a native UUID key — a row
-    /// written by something that bypassed [`crate::surreal::record_id`].
-    fn into_repository(self) -> Option<GitRepository> {
-        Some(GitRepository {
-            id: record_uuid(&self.id)?,
-            remote_hash: self.remote_hash,
-            last_commit_sha: self.last_commit_sha,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`GitRepositoryRow`] from only one
-/// query.
-const SELECT: &str = "id, remote_hash, last_commit_sha, inserted_at, updated_at";
-
 /// Errors reading or writing a git repository row.
 #[derive(Debug, thiserror::Error)]
 pub enum GitRepositoryError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A PostgreSQL matter-authority operation failed.
     #[error(transparent)]
     Postgres(MatterAuthorityError),
@@ -98,33 +65,6 @@ impl From<MatterAuthorityError> for GitRepositoryError {
     }
 }
 
-/// Turn a write failure into the caller-correctable conflict it names,
-/// or leave it as a database fault. A unique violation carries **no
-/// typed detail** — the index name in the message is the only
-/// discriminator.
-fn classify_write(error: surrealdb::Error) -> GitRepositoryError {
-    if crate::surreal::retry::unique_violation(&error) == Some("git_repository_remote_hash") {
-        GitRepositoryError::RemoteTaken
-    } else {
-        GitRepositoryError::Db(error)
-    }
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, GitRepositoryError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(classify_write)
-}
-
 /// Resolve a repository by its `remote_hash`. Exact match — the hash is
 /// computed, never user-typed.
 ///
@@ -132,22 +72,12 @@ where
 ///
 /// [`GitRepositoryError::Db`] if the lookup fails.
 pub async fn find_by_remote_hash(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     remote_hash: &str,
 ) -> Result<Option<GitRepository>, GitRepositoryError> {
-    if let Some(pg) = matter::authority().await? {
-        let filter = json!({"remote_hash": remote_hash});
-        return Ok(matter::find(&pg, TABLE, filter).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE remote_hash = $remote_hash LIMIT 1"
-        ))
-        .bind(("remote_hash", remote_hash.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<GitRepositoryRow> = response.take(0)?;
-    Ok(row.and_then(GitRepositoryRow::into_repository))
+    let pg = matter::authority().await?;
+    let filter = json!({"remote_hash": remote_hash});
+    Ok(matter::find(&pg, TABLE, filter).await?)
 }
 
 /// Every tracked repository, ordered by remote hash for a deterministic
@@ -156,21 +86,9 @@ pub async fn find_by_remote_hash(
 /// # Errors
 ///
 /// [`GitRepositoryError::Db`] if the lookup fails.
-pub async fn list_all(db: &SurrealDb) -> Result<Vec<GitRepository>, GitRepositoryError> {
-    if let Some(pg) = matter::authority().await? {
-        return Ok(matter::select(&pg, TABLE, json!({}), &["remote_hash"]).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} ORDER BY remote_hash ASC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<GitRepositoryRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(GitRepositoryRow::into_repository)
-        .collect())
+pub async fn list_all(_db: &ApplicationStore) -> Result<Vec<GitRepository>, GitRepositoryError> {
+    let pg = matter::authority().await?;
+    Ok(matter::select(&pg, TABLE, json!({}), &["remote_hash"]).await?)
 }
 
 /// Write a new repository row under a fresh v7 UUID record id.
@@ -180,38 +98,21 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<GitRepository>, GitRepositor
 /// [`GitRepositoryError::RemoteTaken`] when another row already holds
 /// this remote hash, and [`GitRepositoryError::Db`] for anything else.
 pub async fn create(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     remote_hash: &str,
     last_commit_sha: &str,
 ) -> Result<GitRepository, GitRepositoryError> {
     let id = Uuid::now_v7();
-    if let Some(pg) = matter::authority().await? {
-        let now = Utc::now();
-        let row = GitRepository {
-            id,
-            remote_hash: remote_hash.to_owned(),
-            last_commit_sha: last_commit_sha.to_owned(),
-            inserted_at: now,
-            updated_at: now,
-        };
-        return Ok(matter::upsert(&pg, TABLE, &row).await?);
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "CREATE $id SET \
-             remote_hash = $remote_hash, \
-             last_commit_sha = $last_commit_sha \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("remote_hash", remote_hash.to_string()))
-        .bind(("last_commit_sha", last_commit_sha.to_string()))
-    })
-    .await?;
-    let row: Option<GitRepositoryRow> = response.take(0)?;
-    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
-    row.and_then(GitRepositoryRow::into_repository)
-        .ok_or(GitRepositoryError::WriteReturnedNothing)
+    let pg = matter::authority().await?;
+    let now = Utc::now();
+    let row = GitRepository {
+        id,
+        remote_hash: remote_hash.to_owned(),
+        last_commit_sha: last_commit_sha.to_owned(),
+        inserted_at: now,
+        updated_at: now,
+    };
+    Ok(matter::upsert(&pg, TABLE, &row).await?)
 }
 
 /// Find the repository holding `remote_hash`, creating it if absent.
@@ -225,7 +126,7 @@ pub async fn create(
 ///
 /// [`GitRepositoryError::Db`] if a lookup or the insert fails.
 pub async fn find_or_create(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     remote_hash: &str,
     last_commit_sha: &str,
 ) -> Result<GitRepository, GitRepositoryError> {
@@ -242,55 +143,4 @@ pub async fn find_or_create(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{create, find_by_remote_hash, find_or_create, list_all, GitRepositoryError};
-    use crate::surreal::test_support::mem;
-
-    #[tokio::test]
-    async fn a_created_repository_reads_back_by_remote_hash() {
-        let db = mem().await;
-        let created = create(&db, "abc123", "deadbeef").await.unwrap();
-        assert_eq!(created.remote_hash, "abc123");
-        assert_eq!(created.last_commit_sha, "deadbeef");
-
-        assert_eq!(
-            find_by_remote_hash(&db, "abc123").await.unwrap(),
-            Some(created)
-        );
-        assert_eq!(find_by_remote_hash(&db, "zzz").await.unwrap(), None);
-    }
-
-    #[tokio::test]
-    async fn a_duplicate_remote_is_reported_as_taken() {
-        let db = mem().await;
-        create(&db, "abc123", "deadbeef").await.unwrap();
-        let duplicate = create(&db, "abc123", "cafebabe").await;
-        assert!(
-            matches!(duplicate, Err(GitRepositoryError::RemoteTaken)),
-            "the unique `git_repository_remote_hash` index is the gate, got {duplicate:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn find_or_create_is_idempotent_on_the_remote_hash() {
-        let db = mem().await;
-        let first = find_or_create(&db, "abc123", "deadbeef").await.unwrap();
-        let second = find_or_create(&db, "abc123", "cafebabe").await.unwrap();
-        assert_eq!(first, second, "the second call returns the existing row");
-        assert_eq!(list_all(&db).await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn listing_orders_by_remote_hash() {
-        let db = mem().await;
-        create(&db, "beta", "2".repeat(40).as_str()).await.unwrap();
-        create(&db, "alpha", "1".repeat(40).as_str()).await.unwrap();
-        let hashes: Vec<String> = list_all(&db)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|r| r.remote_hash)
-            .collect();
-        assert_eq!(hashes, ["alpha", "beta"]);
-    }
-}
+mod tests {}

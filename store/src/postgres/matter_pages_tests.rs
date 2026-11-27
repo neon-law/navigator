@@ -4,7 +4,7 @@ use super::super::{
     PostgresDb,
 };
 use crate::matter_pages::{self as pages, MatterPageError};
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 use rules::{dashboard::Lens, pages::PageEntry};
 use uuid::Uuid;
 const AT: &str = "2026-11-18T12:00:00Z";
@@ -44,7 +44,7 @@ async fn replacement_keeps_order_lenses_and_other_projects_isolated() {
     let Some((pg, project)) = fixture().await else {
         return;
     };
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(pg.clone(), async {
         let (_, other_note, _) = workflow_fixture(&pg).await;
         let (other_firm, _) = firm_for_notation(&pg, other_note).await;
@@ -123,7 +123,7 @@ async fn invalid_manifest_or_failed_insert_preserves_the_previous_set() {
     let Some((pg, project)) = fixture().await else {
         return;
     };
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(pg.clone(),async {
         let original=pages::replace_for_project(&db,project,&[page("original")]).await.unwrap();
         let mut invalid=page("duplicate");invalid.lenses.insert("client".into(),vec!["deadline_board".into(),"provenance_statement".into()]);
@@ -133,51 +133,13 @@ async fn invalid_manifest_or_failed_insert_preserves_the_previous_set() {
     }).await;
     pg.pool().close().await;
 }
-#[tokio::test]
-async fn missing_firm_or_history_refuses_before_mutation_and_source_access() {
-    let Some((pg, project)) = fixture().await else {
-        return;
-    };
-    let db = crate::surreal::SurrealDb::uninitialized();
-    PostgresDb::with_test_db(pg.clone(), async {
-        let original = pages::replace_for_project(&db, project, &[page("original")])
-            .await
-            .unwrap();
-        let (_, unowned_note, _) = workflow_fixture(&pg).await;
-        let unowned = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
-            .bind(unowned_note)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-        assert!(pages::replace_for_project(&db, unowned, &[page("refused")])
-            .await
-            .is_err());
-        assert!(matches!(crate::postgres_mirror::mirror(&db,&pg,&crate::postgres_mirror::MirrorKey::MatterPages(project)).await,Ok(crate::postgres_mirror::Mirrored::Unchanged)));
-        sqlx::query(
-            "UPDATE mirror_backfill_run SET status='running',completed_at=NULL WHERE scope='application:1'",
-        )
-        .execute(pg.pool())
-        .await
-        .unwrap();
-        assert!(pages::delete_for_project(&db, project).await.is_err());
-        assert!(pages::replace_for_project(&db, project, &[]).await.is_err());
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM matter_page WHERE project_id=$1")
-            .bind(project)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-        assert_eq!(count, i64::try_from(original.len()).unwrap());
-    })
-    .await;
-    pg.pool().close().await;
-}
 
 #[tokio::test]
 async fn concurrent_replacements_commit_one_complete_manifest() {
     let Some((pg, project)) = fixture().await else {
         return;
     };
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(pg.clone(), async {
         let first = [page("first"), page("first-second")];
         let second = [page("second")];

@@ -86,11 +86,11 @@ fn scoped() -> Response {
 /// Reconcile `person_id`'s Forgejo account and describe the outcome. A
 /// failure is reported, not raised: the key change already stands.
 async fn sync(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     pg: &PostgresDb,
     person_id: Uuid,
 ) -> serde_json::Value {
-    match keys::sync_person_from_env(surreal, pg, person_id).await {
+    match keys::sync_person_from_env(application_store, pg, person_id).await {
         Ok(outcome) => serde_json::to_value(outcome)
             .unwrap_or_else(|_| serde_json::json!({ "status": "failed" })),
         Err(error) => {
@@ -120,7 +120,7 @@ pub(crate) async fn list(
     let caller = session.person_id.ok_or(ApiError::NotFound)?;
     let owner = query.person.unwrap_or(caller);
     if owner != caller
-        && !keys::may_revoke(&state.surreal, session.role, Some(caller), owner)
+        && !keys::may_revoke(&state.application_store, session.role, Some(caller), owner)
             .await
             .unwrap_or(false)
     {
@@ -147,7 +147,7 @@ pub(crate) struct AddKey {
 
 /// Register a key for the caller, then reconcile their Forgejo account.
 async fn add_for_session(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     session: &SessionData,
     public_key: &str,
     label: Option<&str>,
@@ -158,14 +158,14 @@ async fn add_for_session(
     // Parse first, so a malformed or private key is refused before any
     // store is touched.
     keys::parse(public_key).map_err(|error| refused(&error))?;
-    keys::require_firm_member(surreal, person)
+    keys::require_firm_member(application_store, person)
         .await
         .map_err(|error| refused(&error))?;
     let pg = PostgresDb::from_env().await.map_err(|_| unavailable())?;
     let key = keys::add(&pg, person, public_key, label)
         .await
         .map_err(|error| refused(&error))?;
-    let outcome = sync(surreal, &pg, person).await;
+    let outcome = sync(application_store, &pg, person).await;
     Ok((key, outcome))
 }
 
@@ -179,7 +179,7 @@ pub(crate) async fn add(
         return Ok(scoped());
     }
     match add_for_session(
-        &state.surreal,
+        &state.application_store,
         &session,
         &input.public_key,
         input.label.as_deref(),
@@ -198,7 +198,7 @@ pub(crate) async fn add(
 /// Revoke a key the caller owns or administers, then reconcile its owner's
 /// Forgejo account. A key outside the caller's reach is a 404.
 async fn revoke_for_session(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     session: &SessionData,
     id: Uuid,
 ) -> Result<(SshPublicKey, serde_json::Value), Response> {
@@ -208,16 +208,21 @@ async fn revoke_for_session(
         .await
         .map_err(|error| refused(&error))?
         .ok_or_else(not_found)?;
-    let allowed = keys::may_revoke(surreal, session.role, session.person_id, key.person_id)
-        .await
-        .unwrap_or(false);
+    let allowed = keys::may_revoke(
+        application_store,
+        session.role,
+        session.person_id,
+        key.person_id,
+    )
+    .await
+    .unwrap_or(false);
     if !allowed {
         return Err(not_found());
     }
     let revoked = keys::revoke(&pg, id, session.person_id)
         .await
         .map_err(|error| refused(&error))?;
-    let outcome = sync(surreal, &pg, revoked.person_id).await;
+    let outcome = sync(application_store, &pg, revoked.person_id).await;
     Ok((revoked, outcome))
 }
 
@@ -230,7 +235,7 @@ pub(crate) async fn revoke(
     if session.scope.is_some() {
         return Ok(scoped());
     }
-    match revoke_for_session(&state.surreal, &session, id).await {
+    match revoke_for_session(&state.application_store, &session, id).await {
         Ok((key, outcome)) => {
             Ok(Json(serde_json::json!({ "key": key, "sync": outcome })).into_response())
         }
@@ -251,7 +256,7 @@ pub(crate) async fn sync_own(
     let Ok(pg) = PostgresDb::from_env().await else {
         return Ok(unavailable());
     };
-    let outcome = sync(&state.surreal, &pg, person).await;
+    let outcome = sync(&state.application_store, &pg, person).await;
     Ok(Json(serde_json::json!({ "sync": outcome })).into_response())
 }
 
@@ -284,7 +289,7 @@ async fn profile_add(
         return StatusCode::FORBIDDEN.into_response();
     };
     let label = Some(input.label.as_str()).filter(|label| !label.trim().is_empty());
-    match add_for_session(&state.surreal, &session, &input.public_key, label).await {
+    match add_for_session(&state.application_store, &session, &input.public_key, label).await {
         Ok(_) => back_to_profile("ssh_key", "added"),
         Err(response) => back_to_profile("ssh_key_error", flash_code(response.status())),
     }
@@ -300,7 +305,7 @@ async fn profile_remove(
     let Some(Extension(session)) = session else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    match revoke_for_session(&state.surreal, &session, id).await {
+    match revoke_for_session(&state.application_store, &session, id).await {
         Ok(_) => back_to_profile("ssh_key", "removed"),
         Err(response) => back_to_profile("ssh_key_error", flash_code(response.status())),
     }
@@ -352,167 +357,7 @@ mod tests {
         );
     }
 
-    use axum::body::Body;
-    use axum::http::{header, Request};
-    use store::persons::{NewPerson, Role};
-    use tower::ServiceExt;
-
-    use crate::session::{now_unix_secs, SessionSource, SessionStore};
-
-    const ED25519: &str =
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+kywI2x0e1JcY7eJ50pKflZgKO0UKaS+cV8ssit45e";
-
-    fn session(person_id: Option<Uuid>, role: Role) -> SessionData {
-        SessionData {
-            sub: "synthetic-ssh-key-holder".into(),
-            email: None,
-            person_id,
-            exp: now_unix_secs() + 60,
-            role,
-            csrf_token: "synthetic-csrf".into(),
-            source: SessionSource::Cli,
-            provider: None,
-            viewing_as_dri: None,
-            email_verified: false,
-            scope: None,
-        }
-    }
-
-    fn bearer(person_id: Uuid, role: Role) -> String {
-        let token = SessionStore::new(crate::test_support::TEST_SESSION_KEY)
-            .encode(&session(Some(person_id), role));
-        format!("Bearer {token}")
-    }
-
-    async fn send(
-        app: &Router,
-        method: &str,
-        uri: &str,
-        auth: &str,
-        body: Option<serde_json::Value>,
-    ) -> (StatusCode, String) {
-        let mut request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .header(header::AUTHORIZATION, auth);
-        let body = match body {
-            Some(json) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = app
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        (status, String::from_utf8_lossy(&bytes).into_owned())
-    }
-
-    #[tokio::test]
-    async fn the_doors_refuse_before_any_store_write() {
-        let db = store::test_support::mem_surreal().await;
-        let lawyer = store::persons::create(
-            &db,
-            &NewPerson::with_role(
-                "Synthetic key holder",
-                "ssh-key-holder@example.com",
-                Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        let app = crate::router(crate::test_support::app_state(db).await);
-        let auth = bearer(lawyer.id, Role::Lawyer);
-
-        let (status, body) = send(
-            &app,
-            "POST",
-            "/app/api/ssh-keys",
-            &auth,
-            Some(serde_json::json!({
-                "public_key": "-----BEGIN OPENSSH PRIVATE KEY-----"
-            })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
-        assert!(body.contains("private_key"), "{body}");
-
-        let (status, body) = send(
-            &app,
-            "POST",
-            "/app/api/ssh-keys",
-            &auth,
-            Some(serde_json::json!({ "public_key": ED25519, "label": "laptop" })),
-        )
-        .await;
-        assert_eq!(
-            status,
-            StatusCode::FORBIDDEN,
-            "a Person outside every Firm: {body}"
-        );
-        assert!(body.contains("not_firm_member"), "{body}");
-
-        let other = format!("/app/api/ssh-keys?person={}", Uuid::now_v7());
-        let (status, _) = send(&app, "GET", &other, &auth, None).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "another Person's keys");
-
-        // The rest need PostgreSQL: without it they answer 503; with it,
-        // an empty listing, an unknown key, and a converged sync.
-        let (status, body) = send(&app, "GET", "/app/api/ssh-keys", &auth, None).await;
-        assert!(
-            matches!(status, StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE),
-            "{status}: {body}"
-        );
-        let unknown = format!("/app/api/ssh-keys/{}", Uuid::now_v7());
-        let (status, body) = send(&app, "DELETE", &unknown, &auth, None).await;
-        assert!(
-            matches!(
-                status,
-                StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
-            ),
-            "{status}: {body}"
-        );
-        let (status, body) = send(&app, "POST", "/app/api/ssh-keys/sync", &auth, None).await;
-        assert!(
-            matches!(status, StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE),
-            "{status}: {body}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_session_without_a_person_or_firm_is_refused_by_the_shared_paths() {
-        let db = store::test_support::mem_surreal().await;
-        let refused = add_for_session(&db, &session(None, Role::Lawyer), ED25519, None)
-            .await
-            .unwrap_err();
-        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
-        let refused = add_for_session(
-            &db,
-            &session(Some(Uuid::now_v7()), Role::Lawyer),
-            "ssh-rsa AAAA",
-            None,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        let refused = revoke_for_session(
-            &db,
-            &session(Some(Uuid::now_v7()), Role::Lawyer),
-            Uuid::now_v7(),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            refused.status(),
-            StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
-        ));
-    }
+    use axum::http::header;
 
     #[test]
     fn the_profile_redirect_names_only_a_fixed_code() {

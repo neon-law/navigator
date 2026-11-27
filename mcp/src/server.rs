@@ -29,7 +29,7 @@ pub struct McpState {
     /// The store. `persons` lives here, so every tool that resolves a
     /// person — and the lawyer-tier gate on the side-effecting tools —
     /// reads it.
-    pub surreal: store::surreal::SurrealDb,
+    pub application_store: store::application_store::ApplicationStore,
     pub questionnaire_runtime: Arc<dyn StateMachineRuntime>,
     /// Object storage. `portal::bootstrap` always populates it; the
     /// `Option` is for test fixtures that exercise only the read-only
@@ -74,11 +74,11 @@ pub struct McpState {
 impl McpState {
     #[must_use]
     pub fn new(
-        surreal: store::surreal::SurrealDb,
+        application_store: store::application_store::ApplicationStore,
         questionnaire_runtime: Arc<dyn StateMachineRuntime>,
     ) -> Self {
         Self {
-            surreal,
+            application_store,
             questionnaire_runtime,
             storage: None,
             email: None,
@@ -310,8 +310,8 @@ mod tests {
     use tower::ServiceExt;
     use workflows::InMemoryRuntime;
 
-    fn state(surreal: &store::surreal::SurrealDb) -> McpState {
-        McpState::new(surreal.clone(), Arc::new(InMemoryRuntime::new()))
+    fn state(application_store: &store::application_store::ApplicationStore) -> McpState {
+        McpState::new(application_store.clone(), Arc::new(InMemoryRuntime::new()))
     }
 
     async fn call(router: axum::Router, body: Value) -> (StatusCode, Value) {
@@ -341,10 +341,10 @@ mod tests {
     }
 
     /// A lawyer-tier caller, whom the HTTP door admits to the CRM writers.
-    async fn lawyer(surreal: &store::surreal::SurrealDb) -> String {
+    async fn lawyer(application_store: &store::application_store::ApplicationStore) -> String {
         let email = crate::test_fixtures::email();
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 crate::test_fixtures::person_name(),
                 email.clone(),
@@ -519,8 +519,8 @@ mod tests {
     #[tokio::test]
     async fn tools_call_refuses_a_gated_tool_without_dispatching() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let router = build_router(state(&surreal));
+            let application_store = crate::test_fixtures::handle();
+            let router = build_router(state(&application_store));
             let (_, body) = call(
                 router,
                 json!({
@@ -549,8 +549,8 @@ mod tests {
     #[tokio::test]
     async fn tools_call_still_reports_an_unknown_tool_as_unknown() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let router = build_router(state(&surreal));
+            let application_store = crate::test_fixtures::handle();
+            let router = build_router(state(&application_store));
             let (_, body) = call(
                 router,
                 json!({
@@ -574,9 +574,9 @@ mod tests {
     #[tokio::test]
     async fn tools_call_create_person_inserts_a_row() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let caller = lawyer(&surreal).await;
-            let router = build_router(state(&surreal));
+            let application_store = crate::test_fixtures::handle();
+            let caller = lawyer(&application_store).await;
+            let router = build_router(state(&application_store));
             let (_, body) = call_as(
                 router,
                 Some(&caller),
@@ -594,7 +594,9 @@ mod tests {
             assert_ne!(body["result"]["isError"].as_bool(), Some(true));
             assert_eq!(body["result"]["structuredContent"]["name"], "Libra");
 
-            let rows = store::persons::list_directory(&surreal).await.unwrap();
+            let rows = store::persons::list_directory(&application_store)
+                .await
+                .unwrap();
             assert!(rows.iter().any(|row| row.email == "libra@example.com"));
         })
         .await;
@@ -603,9 +605,9 @@ mod tests {
     #[tokio::test]
     async fn tools_call_show_person_returns_an_existing_row() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let caller = lawyer(&surreal).await;
-            let router = build_router(state(&surreal));
+            let application_store = crate::test_fixtures::handle();
+            let caller = lawyer(&application_store).await;
+            let router = build_router(state(&application_store));
             // Seed via the create tool so the test exercises both surfaces.
             let (_, _) = call_as(
                 router.clone(),
@@ -652,15 +654,15 @@ mod tests {
     #[tokio::test]
     async fn tools_call_list_jurisdictions_returns_seeded_rows() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             store::jurisdictions::create(
-                &surreal,
+                &application_store,
                 &store::jurisdictions::NewJurisdiction::new("Nevada", "NV", "state"),
             )
             .await
             .unwrap();
 
-            let router = build_router(state(&surreal));
+            let router = build_router(state(&application_store));
             let (_, body) = call(
                 router,
                 json!({
@@ -732,9 +734,9 @@ mod tests {
     #[tokio::test]
     async fn tools_call_with_invalid_arguments_is_iserror_result() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let caller = lawyer(&surreal).await;
-            let router = build_router(state(&surreal));
+            let application_store = crate::test_fixtures::handle();
+            let caller = lawyer(&application_store).await;
+            let router = build_router(state(&application_store));
             let (_, body) = call_as(
                 router,
                 Some(&caller),

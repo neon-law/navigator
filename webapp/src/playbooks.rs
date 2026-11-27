@@ -95,9 +95,9 @@ pub async fn get_playbook_list() -> Result<PlaybookListView, ServerFnError> {
     .await?;
     let sort = query.sort.unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let names = company_names(&surreal).await?;
-    let mut rows: Vec<PlaybookRow> = store::playbooks::all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let names = company_names(&application_store).await?;
+    let mut rows: Vec<PlaybookRow> = store::playbooks::all(&application_store)
         .await
         .map_err(server_error)?
         .into_iter()
@@ -299,8 +299,8 @@ pub async fn get_playbook_new_form() -> Result<PlaybookNewView, ServerFnError> {
     >()
     .await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let companies = company_choices(&surreal).await?;
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let companies = company_choices(&application_store).await?;
 
     Ok(PlaybookNewView {
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
@@ -440,15 +440,15 @@ pub async fn get_playbook_edit_form() -> Result<PlaybookEditView, ServerFnError>
     >()
     .await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let row = store::playbooks::by_id(&surreal, id)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let row = store::playbooks::by_id(&application_store, id)
         .await
         .map_err(server_error)?;
 
     let fields = match row {
         Some(row) => {
             let stored = store::playbooks::positions_of(&row).unwrap_or_default();
-            let entity_name = company_names(&surreal)
+            let entity_name = company_names(&application_store)
                 .await?
                 .get(&row.entity_id)
                 .cloned()
@@ -597,9 +597,9 @@ async fn csrf_token() -> String {
 /// Every Entity id to its name, for resolving each playbook's company.
 #[cfg(feature = "server")]
 async fn company_names(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
 ) -> Result<std::collections::HashMap<uuid::Uuid, String>, ServerFnError> {
-    Ok(store::entities::all(surreal)
+    Ok(store::entities::all(application_store)
         .await
         .map_err(server_error)?
         .into_iter()
@@ -610,9 +610,9 @@ async fn company_names(
 /// Every Entity as a `<select>` option for the create form.
 #[cfg(feature = "server")]
 async fn company_choices(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
 ) -> Result<Vec<CompanyChoice>, ServerFnError> {
-    Ok(store::entities::all(surreal)
+    Ok(store::entities::all(application_store)
         .await
         .map_err(server_error)?
         .into_iter()

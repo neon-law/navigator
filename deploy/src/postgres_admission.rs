@@ -20,7 +20,7 @@ async fn verify_target(database: Option<&str>) -> Result<Vec<&'static str>, Post
             return Err(PostgresError::History);
         }
     }
-    Ok(store::postgres_backfill::family::Family::all()
+    Ok(store::postgres::history::Family::all()
         .iter()
         .map(|family| family.scope())
         .collect())

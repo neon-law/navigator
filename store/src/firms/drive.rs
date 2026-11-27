@@ -1,8 +1,8 @@
 //! PostgreSQL reads and writes for a Firm's Google Drive switch.
 
 use super::{authorize_manage_firm, FirmError};
+use crate::application_store::ApplicationStore;
 use crate::persons::Role;
-use crate::surreal::SurrealDb;
 use uuid::Uuid;
 
 /// Whether the Firm's Projects use Google Drive folders. A Firm without a saved choice has Drive off.
@@ -28,7 +28,7 @@ pub async fn google_drive(firm_id: Uuid) -> Result<bool, FirmError> {
 /// [`FirmError::NotAuthorized`] for anyone but an Owner who manages the Firm, and
 /// [`FirmError::DriveSettingsUnavailable`] when PostgreSQL cannot be reached.
 pub async fn set_google_drive(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
@@ -37,7 +37,7 @@ pub async fn set_google_drive(
     if actor_role != Role::Owner {
         return Err(FirmError::NotAuthorized);
     }
-    authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
+    authorize_manage_firm(application_store, actor_role, actor_person_id, firm_id).await?;
     let db = crate::postgres::PostgresDb::application()
         .await
         .map_err(|_| FirmError::DriveSettingsUnavailable)?;

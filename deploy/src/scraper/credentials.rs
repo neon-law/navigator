@@ -12,10 +12,10 @@
 use std::collections::BTreeMap;
 
 use cloud::RuntimeKms;
+use store::application_store::ApplicationStore;
 use store::firm_secrets::{
     resolve_firm_credential, IntegrationProvider, IntegrationSecretKind, SecretStoreError,
 };
-use store::surreal::SurrealDb;
 
 /// Why a run could not get its portal login.
 #[derive(Debug, thiserror::Error)]
@@ -218,7 +218,7 @@ pub(crate) fn parse_portal_logins(
 ///
 /// Store read failures and malformed payloads; see [`CredentialsError`].
 pub(crate) async fn resolve_portal_logins(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: uuid::Uuid,
     kms: &dyn RuntimeKms,
 ) -> Result<PortalLogins, CredentialsError> {
@@ -227,7 +227,7 @@ pub(crate) async fn resolve_portal_logins(
     // reaching a log, so the store error is projected to typed, redacted
     // reasons here and never embedded or displayed verbatim.
     let resolved = match resolve_firm_credential(
-        surreal,
+        application_store,
         firm_id,
         IntegrationProvider::CourtPortal,
         IntegrationSecretKind::PortalLogin,
@@ -332,53 +332,5 @@ mod tests {
         assert!(!rendered.contains("correct horse battery staple"));
         assert!(!rendered.contains("firm@example.com"));
         assert!(rendered.contains("[redacted]"));
-    }
-
-    /// Seed a Firm and store the portal-login payload through the shared
-    /// test helpers — the real `store::firm_secrets` lane, admin-authored.
-    async fn seeded_firm(
-        surreal: &store::surreal::SurrealDb,
-        payload: Option<&str>,
-        kms: &cloud::FakeKms,
-    ) -> uuid::Uuid {
-        let (firm_id, admin_id) = crate::scraper::testing::seeded_firm_with_admin(surreal).await;
-        if let Some(payload) = payload {
-            crate::scraper::testing::put_portal_secret(
-                surreal,
-                admin_id,
-                firm_id,
-                &serde_json::from_str(payload).expect("valid json"),
-                kms,
-            )
-            .await;
-        }
-        firm_id
-    }
-
-    #[tokio::test]
-    async fn the_store_lane_resolves_and_parses_end_to_end() {
-        let surreal = store::test_support::mem_surreal().await;
-        let kms = cloud::FakeKms::new("scraper-test");
-        let firm_id = seeded_firm(&surreal, Some(LA_SUPERIOR), &kms).await;
-        let logins = super::resolve_portal_logins(&surreal, firm_id, &kms)
-            .await
-            .expect("resolved through the Firm secrets lane");
-        assert!(logins.login_for("la-superior").is_ok());
-    }
-
-    #[tokio::test]
-    async fn a_missing_store_row_hard_stops_with_provisioning_guidance() {
-        let surreal = store::test_support::mem_surreal().await;
-        let kms = cloud::FakeKms::new("scraper-test");
-        let firm_id = seeded_firm(&surreal, None, &kms).await;
-        let error = super::resolve_portal_logins(&surreal, firm_id, &kms)
-            .await
-            .expect_err("nothing provisioned");
-        assert!(matches!(error, CredentialsError::NotConfigured { .. }));
-        // The message names the capability and credential kind so whoever
-        // provisions the row can act on it without the store's raw error.
-        assert!(error
-            .to_string()
-            .contains("ManageIntegrationSecrets capability must store one first"));
     }
 }

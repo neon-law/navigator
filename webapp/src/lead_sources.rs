@@ -149,11 +149,11 @@ pub async fn lead_sources() -> Result<LeadSourcesView, ServerFnError> {
     else {
         return Ok(LeadSourcesView::default());
     };
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let person = crate::admin_listing::injected_person_id()
         .await
         .ok_or_else(|| ServerFnError::new("admin access required"))?;
-    let brands = store::posts::manageable_brand_keys(&surreal, store_role, person)
+    let brands = store::posts::manageable_brand_keys(&application_store, store_role, person)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let http = reqwest::Client::builder()

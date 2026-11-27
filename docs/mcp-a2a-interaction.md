@@ -202,8 +202,7 @@ Each behavior described above is grounded by a test or a BDD feature, so the doc
 - **Welcome-email lookup→confirm→send, as a story** —
   [`welcome_chain.feature`](../features/tests/features/welcome_chain.feature).
 - **Bulk-import reasons reach the text Part** — the MCP tests `validation_reject_explains_why_in_the_text_content` and
-  `failed_row_reason_reaches_the_text_content` in [`bulk_import.rs`](../mcp/src/tools/bulk_import.rs), plus
-  `unknown_jurisdiction_fails_only_its_row` in [`import/tests/apply.rs`](../import/tests/apply.rs).
+  `failed_row_reason_reaches_the_text_content` in [`bulk_import.rs`](../mcp/src/tools/bulk_import.rs).
 - **Bulk-import contract and validation** — [`bulk-contact-import.md`](bulk-contact-import.md), grounded by
   [`bulk_import_engagement.feature`](../features/tests/features/bulk_import_engagement.feature).
 - **Welcome-email audit trail across surfaces** —

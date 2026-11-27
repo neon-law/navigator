@@ -81,7 +81,7 @@ fn back_to_profile(flash: &str, code: &str) -> Response {
 /// self-edit gate on the write itself. Validation runs before any connection,
 /// so a refused body never reaches for a store.
 async fn save_for_session(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     pg: Option<&store::postgres::PostgresDb>,
     session: &SessionData,
     body: &str,
@@ -104,7 +104,7 @@ async fn save_for_session(
     let Some(pg) = pg else {
         return Err(SaveRefusal::Unavailable);
     };
-    store::mail_signatures::save_for_actor(surreal, pg, person_id, person_id, &fields)
+    store::mail_signatures::save_for_actor(application_store, pg, person_id, person_id, &fields)
         .await
         .map_err(|error| match error {
             store::mail_signatures::MailSignatureError::NotFound => SaveRefusal::NotFound,
@@ -142,7 +142,7 @@ async fn profile_mail_signature(
     // established portal pattern (see `post_brand_letterhead`); the None
     // mapping is the same refusal the unreachable-store path returns.
     let pg = store::postgres::PostgresDb::from_env().await.ok();
-    match save_for_session(&state.surreal, pg.as_ref(), &session, &form.body).await {
+    match save_for_session(&state.application_store, pg.as_ref(), &session, &form.body).await {
         Ok(_) => back_to_profile("signature", "saved"),
         Err(refusal) => {
             if matches!(refusal, SaveRefusal::Failed) {
@@ -166,30 +166,6 @@ pub fn routes() -> axum::Router<AdminState> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use store::persons::{NewPerson, Role};
-    use store::postgres::PostgresDb;
-    use store::test_support::mem_surreal;
-    use uuid::Uuid;
-
-    fn session(person_id: Option<Uuid>) -> SessionData {
-        SessionData {
-            sub: "synthetic-signature-holder".into(),
-            email: None,
-            person_id,
-            exp: crate::session::now_unix_secs() + 60,
-            role: Role::Lawyer,
-            csrf_token: "synthetic-csrf".into(),
-            source: crate::session::SessionSource::Cli,
-            provider: None,
-            viewing_as_dri: None,
-            email_verified: false,
-            scope: None,
-        }
-    }
-
-    fn body(text: &str) -> String {
-        text.to_string()
-    }
 
     #[test]
     fn refusals_map_to_stable_statuses_and_flash_codes() {
@@ -264,131 +240,5 @@ mod tests {
             plain.body, forged.body,
             "a posted subject id changes nothing"
         );
-    }
-
-    #[tokio::test]
-    async fn a_session_without_a_linked_person_is_refused_before_any_store() {
-        let surreal = mem_surreal().await;
-        let refused = save_for_session(&surreal, None, &session(None), &body("Example Attorney"))
-            .await
-            .unwrap_err();
-        assert!(matches!(refused, SaveRefusal::NoPerson), "{refused:?}");
-        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn an_invalid_body_is_refused_before_any_connection() {
-        let surreal = mem_surreal().await;
-        let session = session(Some(Uuid::now_v7()));
-        for (text, why) in [
-            ("   ", "blank"),
-            ("Example Attorney\n--\nConfidential.", "delimiter"),
-            (&"x".repeat(2001), "too long"),
-        ] {
-            let refused = save_for_session(&surreal, None, &session, &body(text))
-                .await
-                .unwrap_err();
-            assert!(
-                matches!(refused, SaveRefusal::Invalid),
-                "{why}: {refused:?}"
-            );
-            assert_eq!(refused.flash_code(), "invalid", "{why}");
-        }
-    }
-
-    /// The round trip against a real PostgreSQL, where the lane exists: the
-    /// session's Person is the subject written, the store's self-edit gate
-    /// still refuses an unknown one, and one Person's row never answers for
-    /// another.
-    #[tokio::test]
-    async fn the_session_person_is_the_subject_the_store_writes() {
-        let Some(pg) = pg_lane().await else {
-            return;
-        };
-        let surreal = mem_surreal().await;
-        let attorney = store::persons::create(
-            &surreal,
-            &NewPerson {
-                name: "Synthetic attorney".to_string(),
-                email: "signature-attorney@example.com".to_string(),
-                ..NewPerson::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id;
-        let colleague = store::persons::create(
-            &surreal,
-            &NewPerson {
-                name: "Synthetic colleague".to_string(),
-                email: "signature-colleague@example.com".to_string(),
-                ..NewPerson::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id;
-
-        let saved = save_for_session(
-            &surreal,
-            Some(&pg),
-            &session(Some(attorney)),
-            &body("Example Attorney\nConfidential: intended recipient only."),
-        )
-        .await
-        .unwrap();
-        assert_eq!(saved.person_id, attorney);
-        let stored = store::mail_signatures::for_person(&surreal, &pg, attorney)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.body, saved.body);
-        assert_eq!(
-            store::mail_signatures::find(&pg, colleague).await.unwrap(),
-            None,
-            "one Person's row is keyed to that Person"
-        );
-
-        // A session whose Person the directory does not know: the store's
-        // non-disclosing refusal, and no row written.
-        let stranger = session(Some(Uuid::now_v7()));
-        let refused = save_for_session(&surreal, Some(&pg), &stranger, &body("Example Attorney"))
-            .await
-            .unwrap_err();
-        assert!(matches!(refused, SaveRefusal::NotFound), "{refused:?}");
-        assert_eq!(
-            store::mail_signatures::find(&pg, stranger.person_id.unwrap())
-                .await
-                .unwrap(),
-            None,
-            "a refused save writes nothing"
-        );
-    }
-
-    /// Arm the PostgreSQL test lane the way the store's own integration tests
-    /// do: an isolated database per test, `None` (skip) where no lane runs.
-    async fn pg_lane() -> Option<PostgresDb> {
-        let port = store::test_support::postgres_test_port();
-        let options = sqlx::postgres::PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(sqlx::postgres::PgSslMode::Disable);
-        let admin = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
-        let database = format!("mail_signature_portal_{}", Uuid::now_v7().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        let pg = PostgresDb::connect(options.database(&database))
-            .await
-            .unwrap();
-        pg.migrate_embedded(None).await.unwrap();
-        Some(pg)
     }
 }

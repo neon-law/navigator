@@ -1,11 +1,11 @@
 //! Native Project deletion must finish on its admitted PostgreSQL pool.
+use store::application_store::ApplicationStore;
 use store::persons::Role;
 use store::postgres::PostgresDb;
 use store::projects::{self, ProjectCommandError};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
-async fn entity(db: &SurrealDb) -> Uuid {
+async fn entity(db: &ApplicationStore) -> Uuid {
     let id = Uuid::new_v4();
     let jurisdiction = store::jurisdictions::create(
         db,
@@ -37,7 +37,7 @@ async fn entity(db: &SurrealDb) -> Uuid {
     .id
 }
 
-async fn fixture(db: &SurrealDb) -> (Uuid, Uuid) {
+async fn fixture(db: &ApplicationStore) -> (Uuid, Uuid) {
     let admin = store::persons::create(
         db,
         &store::persons::NewPerson::with_role(
@@ -96,11 +96,9 @@ async fn fixture(db: &SurrealDb) -> (Uuid, Uuid) {
 #[tokio::test]
 async fn deleting_an_empty_project_finishes_without_a_source_connection() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (id, _) = fixture(&db).await;
-        let deleted = projects::delete_project_with_surreal(&db, id)
-            .await
-            .unwrap();
+        let deleted = projects::delete_project(&db, id).await.unwrap();
         assert_eq!(deleted.id, id);
         assert!(projects::find_by_id(&db, id).await.unwrap().is_none());
     })
@@ -110,13 +108,13 @@ async fn deleting_an_empty_project_finishes_without_a_source_connection() {
 #[tokio::test]
 async fn a_participating_person_still_protects_the_project_from_deletion() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (id, admin) = fixture(&db).await;
         projects::add_participation(&db, id, admin, "lawyer")
             .await
             .unwrap();
         assert!(matches!(
-            projects::delete_project_with_surreal(&db, id).await,
+            projects::delete_project(&db, id).await,
             Err(ProjectCommandError::Referenced(table)) if table == "person_project_roles"
         ));
         assert!(projects::find_by_id(&db, id).await.unwrap().is_some());
@@ -134,7 +132,7 @@ async fn a_participating_person_still_protects_the_project_from_deletion() {
 #[tokio::test]
 async fn an_unavailable_configured_pool_does_not_fall_back_to_source() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (id, _) = fixture(&db).await;
         let pg = PostgresDb::application().await.unwrap();
         let observer = sqlx::PgPool::connect_with(pg.pool().connect_options().as_ref().clone())
@@ -142,7 +140,7 @@ async fn an_unavailable_configured_pool_does_not_fall_back_to_source() {
             .unwrap();
         pg.pool().close().await;
         assert!(matches!(
-            projects::delete_project_with_surreal(&db, id).await,
+            projects::delete_project(&db, id).await,
             Err(ProjectCommandError::Db(_))
         ));
         let remains: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM project WHERE id=$1)")
@@ -159,7 +157,7 @@ async fn an_unavailable_configured_pool_does_not_fall_back_to_source() {
 #[tokio::test]
 async fn removing_participation_finishes_on_postgres_and_preserves_other_projects() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (project, person) = fixture(&db).await;
         let (other_project, other_person) = fixture(&db).await;
         let role = projects::add_participation(&db, project, person, "lawyer")
@@ -193,9 +191,9 @@ async fn removing_participation_finishes_on_postgres_and_preserves_other_project
 async fn native_participation_removal_keeps_the_last_lawyer_guard_and_absent_error() {
     use store::participation::{self, DriActor, RemoveParticipantError};
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (project, first) = fixture(&db).await;
-        projects::designate_dri_in_surreal(&db, project, first, projects::DriSide::Lawyer)
+        projects::designate_dri(&db, project, first, projects::DriSide::Lawyer)
             .await
             .unwrap();
         let first_row = projects::participation_for_person(&db, first, project)
@@ -223,7 +221,7 @@ async fn native_participation_removal_keeps_the_last_lawyer_guard_and_absent_err
         )
         .await
         .unwrap();
-        projects::designate_dri_in_surreal(&db, project, second.id, projects::DriSide::Lawyer)
+        projects::designate_dri(&db, project, second.id, projects::DriSide::Lawyer)
             .await
             .unwrap();
         let second_row = projects::participation_for_person(&db, second.id, project)
@@ -260,7 +258,7 @@ async fn native_participation_removal_keeps_the_last_lawyer_guard_and_absent_err
 #[tokio::test]
 async fn participation_removal_refuses_failed_postgres_admission_without_source_fallback() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (project, person) = fixture(&db).await;
         let role = projects::add_participation(&db, project, person, "lawyer")
             .await

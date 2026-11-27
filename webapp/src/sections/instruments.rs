@@ -256,33 +256,34 @@ fn workflow_of(code: &str, frontmatter: Option<&str>) -> Vec<String> {
 /// A store read failure, as text.
 #[allow(clippy::too_many_lines)]
 pub async fn load(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn cloud::StorageService>>,
     project_id: Uuid,
     lawyer: bool,
 ) -> Result<Vec<Instrument>, String> {
-    let mut notations = store::notations::list_by_project(surreal, project_id)
+    let mut notations = store::notations::list_by_project(application_store, project_id)
         .await
         .map_err(|e| e.to_string())?;
     notations.reverse();
     let template_ids: Vec<Uuid> = notations.iter().map(|n| n.template_id).collect();
-    let templates = store::templates::find_by_ids(surreal, &template_ids)
+    let templates = store::templates::find_by_ids(application_store, &template_ids)
         .await
         .map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(notations.len());
     let mut asked: Vec<String> = Vec::new();
     for notation in notations {
         let template = templates.iter().find(|t| t.id == notation.template_id);
-        let answers = store::answers::for_notation(surreal, notation.id)
+        let answers = store::answers::for_notation(application_store, notation.id)
             .await
             .map_err(|e| e.to_string())?;
         let question_ids: Vec<Uuid> = answers.iter().map(|a| a.question_id).collect();
-        let codes: HashMap<Uuid, String> = store::questions::find_by_ids(surreal, &question_ids)
-            .await
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|q| (q.id, q.code))
-            .collect();
+        let codes: HashMap<Uuid, String> =
+            store::questions::find_by_ids(application_store, &question_ids)
+                .await
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|q| (q.id, q.code))
+                .collect();
         let keyed: Vec<(String, Option<String>)> = answers
             .iter()
             .map(|a| {
@@ -293,7 +294,7 @@ pub async fn load(
             })
             .collect();
         let body = match storage {
-            Some(storage) => store::notations::pinned_body(surreal, storage, &notation)
+            Some(storage) => store::notations::pinned_body(application_store, storage, &notation)
                 .await
                 .ok(),
             None => None,
@@ -314,14 +315,14 @@ pub async fn load(
             template.map(|t| t.code.as_str()).unwrap_or_default(),
             doc.as_ref().and_then(|d| d.frontmatter.as_deref()),
         );
-        let signatures = store::signatures::for_notation(surreal, notation.id)
+        let signatures = store::signatures::for_notation(application_store, notation.id)
             .await
             .map_err(|e| e.to_string())?;
         let signer_ids: Vec<Uuid> = signatures
             .iter()
             .filter_map(|s| s.signer_person_id)
             .collect();
-        let signers = store::persons::find_by_ids(surreal, &signer_ids)
+        let signers = store::persons::find_by_ids(application_store, &signer_ids)
             .await
             .map_err(|e| e.to_string())?;
         let signer_names = signatures
@@ -334,7 +335,7 @@ pub async fn load(
             })
             .collect();
         let review = if lawyer {
-            store::contract_reviews::latest_for_notation(surreal, notation.id)
+            store::contract_reviews::latest_for_notation(application_store, notation.id)
                 .await
                 .map_err(|e| e.to_string())?
         } else {
@@ -353,10 +354,10 @@ pub async fn load(
             signatures,
             signer_names,
             review,
-            notarizations: store::notarizations::for_notation(surreal, notation.id)
+            notarizations: store::notarizations::for_notation(application_store, notation.id)
                 .await
                 .map_err(|e| e.to_string())?,
-            filings: store::filings::for_notation(surreal, notation.id)
+            filings: store::filings::for_notation(application_store, notation.id)
                 .await
                 .map_err(|e| e.to_string())?,
             answers: answers
@@ -374,12 +375,13 @@ pub async fn load(
     // Name each open term by its question's prompt where one is stored.
     asked.sort_unstable();
     asked.dedup();
-    let prompts: HashMap<String, String> = store::questions::find_by_codes(surreal, &asked)
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|q| (q.code, q.prompt))
-        .collect();
+    let prompts: HashMap<String, String> =
+        store::questions::find_by_codes(application_store, &asked)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|q| (q.code, q.prompt))
+            .collect();
     for term in out
         .iter_mut()
         .flat_map(|i| i.open_terms.iter_mut().chain(i.agreed_terms.iter_mut()))
@@ -434,7 +436,7 @@ pub fn relink(href: &mut String, code: &str, notation_id: Uuid) {
 ///
 /// A store read failure, as text.
 pub async fn load_sections(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn cloud::StorageService>>,
     project: &store::projects::Project,
     on_page: OnPage<'_>,
@@ -443,8 +445,8 @@ pub async fn load_sections(
     use super::estate::{derive, EstateViews};
 
     let lawyer = cx.lens == super::PageLens::Lawyer;
-    let instruments = load(surreal, storage, project.id, lawyer).await?;
-    let records = ModuleRecords::load(surreal, project.id, lawyer).await?;
+    let instruments = load(application_store, storage, project.id, lawyer).await?;
+    let records = ModuleRecords::load(application_store, project.id, lawyer).await?;
     let name = |party: &store::project_references::Party| records.name(party);
     cx.estate = EstateViews {
         instruments: derive::instrument_cards(&instruments, &project.code, lawyer),
@@ -454,7 +456,7 @@ pub async fn load_sections(
         fiduciaries: derive::fiduciaries(&records.fiduciaries, name),
         assets: derive::assets(&records.assets),
     };
-    let assets = store::assets::for_project(surreal, project.id)
+    let assets = store::assets::for_project(application_store, project.id)
         .await
         .map_err(|e| e.to_string())?;
     cx.closing = super::transactional::derive::views(&super::transactional::derive::Inputs {
@@ -496,7 +498,7 @@ struct ModuleRecords {
 
 impl ModuleRecords {
     async fn load(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         project_id: Uuid,
         lawyer: bool,
     ) -> Result<Self, String> {
@@ -506,16 +508,16 @@ impl ModuleRecords {
             if lawyer {
                 return Ok(true);
             }
-            is_enabled(surreal, project_id, module)
+            is_enabled(application_store, project_id, module)
                 .await
                 .map_err(|e| e.to_string())
         };
         let (fiduciaries, assets) = if reads(Module::Estate).await? {
             (
-                store::fiduciary_roles::list(surreal, project_id)
+                store::fiduciary_roles::list(application_store, project_id)
                     .await
                     .map_err(|e| e.to_string())?,
-                store::estate_assets::list(surreal, project_id)
+                store::estate_assets::list(application_store, project_id)
                     .await
                     .map_err(|e| e.to_string())?,
             )
@@ -523,7 +525,7 @@ impl ModuleRecords {
             (Vec::new(), Vec::new())
         };
         let holdings = if reads(Module::CapTable).await? {
-            store::cap_table_holdings::list(surreal, project_id)
+            store::cap_table_holdings::list(application_store, project_id)
                 .await
                 .map_err(|e| e.to_string())?
         } else {
@@ -542,17 +544,21 @@ impl ModuleRecords {
                 .collect()
         };
         let mut names = HashMap::new();
-        for person in
-            store::persons::find_by_ids(surreal, &ids(store::relationships::Endpoint::Person))
-                .await
-                .map_err(|e| e.to_string())?
+        for person in store::persons::find_by_ids(
+            application_store,
+            &ids(store::relationships::Endpoint::Person),
+        )
+        .await
+        .map_err(|e| e.to_string())?
         {
             names.insert(person.id, person.name);
         }
-        for entity in
-            store::entities::find_by_ids(surreal, &ids(store::relationships::Endpoint::Entity))
-                .await
-                .map_err(|e| e.to_string())?
+        for entity in store::entities::find_by_ids(
+            application_store,
+            &ids(store::relationships::Endpoint::Entity),
+        )
+        .await
+        .map_err(|e| e.to_string())?
         {
             names.insert(entity.id, entity.name);
         }

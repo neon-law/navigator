@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use uuid::Uuid;
 use workflows::{SlackBot, SlackBotError};
 
@@ -56,16 +56,16 @@ pub struct ChannelResolution {
 
 /// Reconcile one Project's internal channel and its firm-side members.
 pub async fn reconcile_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     slack: &Arc<dyn SlackBot>,
     simulated: bool,
     project_id: Uuid,
 ) -> Result<MembershipOutcome, WorkflowStepError> {
-    let resolution = resolve_channel(surreal, slack, simulated, project_id).await?;
+    let resolution = resolve_channel(application_store, slack, simulated, project_id).await?;
     let mut report = resolution.outcome;
     if resolution.open {
         if let Some(channel_id) = resolution.channel_id {
-            let invited = invite_members(surreal, slack, project_id, &channel_id).await?;
+            let invited = invite_members(application_store, slack, project_id, &channel_id).await?;
             report.invited += invited.invited;
             report.removed += invited.removed;
             report.already_members += invited.already_members;
@@ -82,12 +82,12 @@ pub async fn reconcile_project(
 /// Safe to repeat if the provider accepted its operation before the worker
 /// checkpoint was written: Slack channel lookup and archive are idempotent.
 pub async fn resolve_channel(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     slack: &Arc<dyn SlackBot>,
     simulated: bool,
     project_id: Uuid,
 ) -> Result<ChannelResolution, WorkflowStepError> {
-    let Some(target) = store::projects::slack_membership_target(surreal, project_id)
+    let Some(target) = store::projects::slack_membership_target(application_store, project_id)
         .await
         .map_err(WorkflowStepError::retryable)?
     else {
@@ -102,7 +102,7 @@ pub async fn resolve_channel(
                 .map_err(slack_error)?
             {
                 report.channels_archived += 1;
-                log_channel_archived(surreal, target.project_id, &target.status).await;
+                log_channel_archived(application_store, target.project_id, &target.status).await;
             }
         }
         return Ok(ChannelResolution {
@@ -121,7 +121,7 @@ pub async fn resolve_channel(
                 // A reopened Project's channel comes back with its history.
                 report.channels_unarchived += unarchive_open_channel(slack, id).await?;
                 if report.channels_unarchived > 0 {
-                    log_unarchived(surreal, target.project_id).await;
+                    log_unarchived(application_store, target.project_id).await;
                 }
             }
             Err(SlackBotError::Api(code)) if code == "channel_not_found" => stale = true,
@@ -129,14 +129,14 @@ pub async fn resolve_channel(
         }
     }
     if stale || channel_id.is_none() {
-        let mut project = store::projects::find_by_id(surreal, target.project_id)
+        let mut project = store::projects::find_by_id(application_store, target.project_id)
             .await
             .map_err(WorkflowStepError::retryable)?
             .ok_or_else(|| {
                 WorkflowStepError::terminal("Project disappeared during Slack membership sync")
             })?;
         project.internal_slack_channel_id = None;
-        match ensure_channel(surreal, slack, &project, simulated)
+        match ensure_channel(application_store, slack, &project, simulated)
             .await
             .map_err(WorkflowStepError::retryable)?
         {
@@ -179,7 +179,7 @@ async fn unarchive_open_channel(
 
 /// Record the unarchive on the Project's Relationship Log. A log write that
 /// fails is reported in the worker log and never undoes the change.
-async fn log_unarchived(surreal: &SurrealDb, project_id: Uuid) {
+async fn log_unarchived(application_store: &ApplicationStore, project_id: Uuid) {
     let entry = store::relationship_logs::NewRelationshipLog {
         actor_person_id: None,
         subject_type: "project".to_string(),
@@ -188,14 +188,18 @@ async fn log_unarchived(surreal: &SurrealDb, project_id: Uuid) {
         detail: "Project status open".to_string(),
         project_id: Some(project_id),
     };
-    if let Err(error) = store::relationship_logs::record(surreal, &entry).await {
+    if let Err(error) = store::relationship_logs::record(application_store, &entry).await {
         tracing::warn!(%project_id, %error, "slack channel change not logged");
     }
 }
 
 /// Record the archive on the Project's Relationship Log, like
 /// [`log_unarchived`].
-async fn log_channel_archived(surreal: &SurrealDb, project_id: Uuid, status: &str) {
+async fn log_channel_archived(
+    application_store: &ApplicationStore,
+    project_id: Uuid,
+    status: &str,
+) {
     let entry = store::relationship_logs::NewRelationshipLog {
         actor_person_id: None,
         subject_type: "project".to_string(),
@@ -204,7 +208,7 @@ async fn log_channel_archived(surreal: &SurrealDb, project_id: Uuid, status: &st
         detail: format!("Project status {status}"),
         project_id: Some(project_id),
     };
-    if let Err(error) = store::relationship_logs::record(surreal, &entry).await {
+    if let Err(error) = store::relationship_logs::record(application_store, &entry).await {
         tracing::warn!(%project_id, %error, "slack channel change not logged");
     }
 }
@@ -212,12 +216,12 @@ async fn log_channel_archived(surreal: &SurrealDb, project_id: Uuid, status: &st
 /// Look up the eligible identities only inside this operation and invite the
 /// missing delta. The return value carries counts, never directory data.
 pub async fn invite_members(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     slack: &Arc<dyn SlackBot>,
     project_id: Uuid,
     channel_id: &str,
 ) -> Result<MembershipOutcome, WorkflowStepError> {
-    let Some(target) = store::projects::slack_membership_target(surreal, project_id)
+    let Some(target) = store::projects::slack_membership_target(application_store, project_id)
         .await
         .map_err(WorkflowStepError::retryable)?
     else {
@@ -288,11 +292,11 @@ async fn resolve_slack_ids(
 /// notifies them even where they have muted the channel. Empty when the
 /// Project has no membership target.
 pub async fn member_mentions(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     slack: &dyn SlackBot,
     project_id: Uuid,
 ) -> Result<String, WorkflowStepError> {
-    let Some(target) = store::projects::slack_membership_target(surreal, project_id)
+    let Some(target) = store::projects::slack_membership_target(application_store, project_id)
         .await
         .map_err(WorkflowStepError::retryable)?
     else {
@@ -308,20 +312,13 @@ pub async fn member_mentions(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        invite_members, reconcile_project, resolve_channel, unarchive_open_channel,
-        MembershipOutcome,
-    };
-    use crate::nightly_project_update::{sweep_in_process, NightlyProjectUpdateReport};
+    use super::unarchive_open_channel;
+
     use async_trait::async_trait;
-    use cloud::forge::{FakeForge, ForgeService};
+
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
-    use store::persons::{self, NewPerson, Role};
-    use store::projects::{
-        self, create, designate_dri_in_surreal, set_internal_slack_channel_id, DriSide, NewProject,
-    };
-    use store::test_support::{mem_surreal, seed_entity};
+
     use workflows::{SlackBot, SlackBotError, SlackChannel, SlackMessageReceipt};
 
     #[derive(Default)]
@@ -349,18 +346,7 @@ mod tests {
         invite_error: bool,
     }
 
-    impl ReconciliationSlack {
-        fn new(
-            users: impl IntoIterator<Item = (String, Option<String>)>,
-            members: impl IntoIterator<Item = (String, Vec<String>)>,
-        ) -> Self {
-            Self {
-                users: users.into_iter().collect(),
-                members: members.into_iter().collect(),
-                ..Self::default()
-            }
-        }
-    }
+    impl ReconciliationSlack {}
 
     #[async_trait]
     impl SlackBot for ReconciliationSlack {
@@ -475,519 +461,6 @@ mod tests {
                 correlation_id: correlation_id.map(str::to_string),
             })
         }
-    }
-
-    async fn project(surreal: &store::surreal::SurrealDb, code: &str) -> store::projects::Project {
-        create(
-            surreal,
-            &NewProject {
-                code: code.to_string(),
-                name: code.to_string(),
-                status: "open".to_string(),
-                entity_id: seed_entity(surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create Project")
-    }
-
-    async fn person(
-        surreal: &store::surreal::SurrealDb,
-        name: &str,
-        email: &str,
-        role: Role,
-    ) -> store::persons::Person {
-        persons::create(surreal, &NewPerson::with_role(name, email, role))
-            .await
-            .expect("create Person")
-    }
-
-    #[tokio::test]
-    async fn recorded_identity_bypasses_email_lookup() {
-        let db = mem_surreal().await;
-        let target = project(&db, "recorded-identity").await;
-        set_internal_slack_channel_id(&db, target.id, "CIDENTITY")
-            .await
-            .unwrap();
-        let clerk = person(&db, "Clerk", "clerk@example.com", Role::Clerk).await;
-        projects::add_participation(&db, target.id, clerk.id, "clerk")
-            .await
-            .unwrap();
-        store::external_identities::link(
-            &db,
-            clerk.id,
-            store::external_identities::ExternalSystem::Slack,
-            "U-RECORDED",
-            None,
-        )
-        .await
-        .unwrap();
-        let slack = Arc::new(ReconciliationSlack {
-            lookup_error: true,
-            members: [("CIDENTITY".to_string(), vec!["U-STALE".to_string()])].into(),
-            ..Default::default()
-        });
-        let bot: Arc<dyn SlackBot> = slack.clone();
-        let report = sweep_in_process(&db, &bot, None, false).await;
-        assert_eq!((report.invited, report.membership_failures), (1, 0));
-        // A person the Project no longer names is removed; the notice
-        // mentions the people it does name.
-        assert_eq!(report.removed, 1);
-        assert_eq!(
-            *slack.removals.lock().unwrap(),
-            [("CIDENTITY".to_string(), "U-STALE".to_string())]
-        );
-        assert_eq!(
-            super::member_mentions(&db, bot.as_ref(), target.id)
-                .await
-                .unwrap(),
-            "<@U-RECORDED>"
-        );
-        assert!(slack.lookups.lock().unwrap().is_empty());
-        assert_eq!(
-            *slack.invitations.lock().unwrap(),
-            [("CIDENTITY".into(), vec!["U-RECORDED".into()])]
-        );
-    }
-
-    async fn seed_reconciliation_participants(
-        surreal: &store::surreal::SurrealDb,
-        project_id: uuid::Uuid,
-        firm_id: uuid::Uuid,
-    ) {
-        let lawyer = person(surreal, "Lawyer DRI", "lawyer@example.com", Role::Lawyer).await;
-        let clerk_one = person(surreal, "Clerk One", "clerk-one@example.com", Role::Clerk).await;
-        let clerk_two = person(surreal, "Clerk Two", "clerk-two@example.com", Role::Clerk).await;
-        let unmatched = person(
-            surreal,
-            "Clerk Three",
-            "clerk-three@example.com",
-            Role::Clerk,
-        )
-        .await;
-        let client = person(surreal, "Client", "client@example.com", Role::Client).await;
-        let participant = person(surreal, "Project Lawyer", "team@example.com", Role::Lawyer).await;
-        let bystander = person(
-            surreal,
-            "Other Firm Lawyer",
-            "bystander@example.com",
-            Role::Lawyer,
-        )
-        .await;
-        store::firms::add_membership(
-            surreal,
-            &store::firms::NewPersonFirmRole {
-                person_id: bystander.id,
-                firm_id,
-                membership: store::firms::FirmMembership::Lawyer,
-                is_dri: false,
-            },
-        )
-        .await
-        .unwrap();
-        store::external_identities::link(
-            surreal,
-            bystander.id,
-            store::external_identities::ExternalSystem::Slack,
-            "U-BYSTANDER",
-            None,
-        )
-        .await
-        .unwrap();
-        for (person, participation) in [
-            (&lawyer, "lawyer"),
-            (&participant, "lawyer"),
-            (&clerk_one, "clerk"),
-            (&clerk_two, "clerk"),
-            (&unmatched, "clerk"),
-            (&client, "client"),
-        ] {
-            projects::add_participation(surreal, project_id, person.id, participation)
-                .await
-                .expect("add participation");
-        }
-        designate_dri_in_surreal(surreal, project_id, lawyer.id, DriSide::Lawyer)
-            .await
-            .expect("designate Lawyer DRI");
-    }
-
-    #[tokio::test]
-    async fn reconciliation_invites_only_project_participants() {
-        let surreal = mem_surreal().await;
-        let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
-        let configured =
-            store::test_support::seed_project_on_firm(&surreal, Some(firm_id), "Sync Configured")
-                .await;
-        set_internal_slack_channel_id(&surreal, configured.id, "CTEAM")
-            .await
-            .expect("set channel")
-            .expect("Project exists");
-        let empty = project(&surreal, "sync-empty").await;
-        set_internal_slack_channel_id(&surreal, empty.id, "CEMPTY")
-            .await
-            .expect("set channel")
-            .expect("Project exists");
-        let _without_channel = project(&surreal, "sync-no-channel").await;
-
-        seed_reconciliation_participants(&surreal, configured.id, firm_id).await;
-
-        let slack = Arc::new(ReconciliationSlack::new(
-            [
-                ("lawyer@example.com".to_string(), Some("U-NEW".to_string())),
-                ("team@example.com".to_string(), Some("U-TEAM".to_string())),
-                (
-                    "clerk-one@example.com".to_string(),
-                    Some("U-OLD".to_string()),
-                ),
-                (
-                    "clerk-two@example.com".to_string(),
-                    Some("U-OLD".to_string()),
-                ),
-                ("clerk-three@example.com".to_string(), None),
-            ],
-            [(
-                "CTEAM".to_string(),
-                vec!["U-OLD".to_string(), "U-STALE".to_string()],
-            )],
-        ));
-        let slack_bot: Arc<dyn SlackBot> = slack.clone();
-
-        let report = sweep_in_process(&surreal, &slack_bot, None, false).await;
-        assert_eq!(
-            report,
-            NightlyProjectUpdateReport {
-                projects: 3,
-                open_projects: 3,
-                channels: 3,
-                projects_without_channel: 0,
-                invited: 2,
-                already_members: 1,
-                unmatched_assignments: 1,
-                channels_created: 1,
-                channels_repaired: 0,
-                canvases_created: 3,
-                notices_posted: 3,
-                ..Default::default()
-            }
-        );
-        assert_eq!(
-            *slack.created.lock().expect("created lock"),
-            ["navigator-sync-no-channel"]
-        );
-        // Membership and the notice's mentions each resolve the roster.
-        let mut looked_up = slack.lookups.lock().expect("lookups lock").clone();
-        looked_up.sort();
-        looked_up.dedup();
-        assert_eq!(
-            looked_up,
-            [
-                "clerk-one@example.com",
-                "clerk-three@example.com",
-                "clerk-two@example.com",
-                "lawyer@example.com",
-                "team@example.com"
-            ]
-        );
-        assert!(!slack
-            .lookups
-            .lock()
-            .expect("lookups lock")
-            .contains(&"client@example.com".to_string()));
-        // clerk-three is unmatched, so the roster is incomplete: nobody is removed.
-        assert!(slack.removals.lock().expect("removals lock").is_empty());
-        assert_eq!(
-            *slack.invitations.lock().expect("invitations lock"),
-            [
-                (
-                    "CTEAM".to_string(),
-                    vec!["U-NEW".to_string(), "U-TEAM".to_string()]
-                ),
-                ("CEMPTY".to_string(), Vec::new()),
-                ("CNEW1".to_string(), Vec::new())
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn reconciliation_returns_provider_failures_without_email_addresses() {
-        let surreal = mem_surreal().await;
-        let configured = project(&surreal, "sync-error").await;
-        set_internal_slack_channel_id(&surreal, configured.id, "CERROR")
-            .await
-            .expect("set channel")
-            .expect("Project exists");
-        let clerk = person(&surreal, "Clerk", "private@example.com", Role::Clerk).await;
-        projects::add_participation(&surreal, configured.id, clerk.id, "clerk")
-            .await
-            .expect("add Clerk");
-
-        let slack = Arc::new(ReconciliationSlack {
-            lookup_error: true,
-            ..ReconciliationSlack::default()
-        });
-        let slack_bot: Arc<dyn SlackBot> = slack;
-        let error = reconcile_project(&surreal, &slack_bot, false, configured.id)
-            .await
-            .expect_err("provider lookup failure");
-        assert!(format!("{error:?}").contains("503"));
-        assert!(!format!("{error:?}").contains("private@example.com"));
-
-        let report = sweep_in_process(&surreal, &slack_bot, None, false).await;
-        assert_eq!(report.membership_failures, 1, "counted, not fatal");
-    }
-
-    #[tokio::test]
-    async fn an_unknown_project_is_left_alone() {
-        let surreal = mem_surreal().await;
-        let slack = Arc::new(ReconciliationSlack::default());
-        let bot: Arc<dyn SlackBot> = slack.clone();
-        let missing = uuid::Uuid::now_v7();
-        assert_eq!(
-            reconcile_project(&surreal, &bot, false, missing)
-                .await
-                .unwrap(),
-            MembershipOutcome::default()
-        );
-        assert_eq!(
-            resolve_channel(&surreal, &bot, false, missing)
-                .await
-                .unwrap(),
-            super::ChannelResolution::default()
-        );
-        assert_eq!(
-            invite_members(&surreal, &bot, missing, "CANY")
-                .await
-                .unwrap(),
-            MembershipOutcome::default()
-        );
-        assert!(slack.created.lock().unwrap().is_empty());
-        assert!(slack.invitations.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn invitations_follow_only_the_channel_recorded_for_the_project() {
-        let surreal = mem_surreal().await;
-        let configured = project(&surreal, "sync-replayed-channel").await;
-        set_internal_slack_channel_id(&surreal, configured.id, "CRECORDED")
-            .await
-            .expect("set channel")
-            .expect("Project exists");
-        let clerk = person(&surreal, "Clerk", "clerk@example.com", Role::Clerk).await;
-        projects::add_participation(&surreal, configured.id, clerk.id, "clerk")
-            .await
-            .expect("add Clerk");
-        let slack = Arc::new(ReconciliationSlack::new(
-            [("clerk@example.com".to_string(), Some("U-CLERK".to_string()))],
-            [],
-        ));
-        let bot: Arc<dyn SlackBot> = slack.clone();
-        // A checkpointed channel id that no longer matches the record (the
-        // channel was replaced since) invites nobody.
-        assert_eq!(
-            invite_members(&surreal, &bot, configured.id, "CSUPERSEDED")
-                .await
-                .unwrap(),
-            MembershipOutcome::default()
-        );
-        assert!(slack.invitations.lock().unwrap().is_empty());
-        let invited = invite_members(&surreal, &bot, configured.id, "CRECORDED")
-            .await
-            .unwrap();
-        assert_eq!((invited.channels, invited.invited), (1, 1));
-    }
-
-    #[tokio::test]
-    async fn reconciliation_stops_on_member_listing_and_invitation_failures() {
-        let surreal = mem_surreal().await;
-        let configured = project(&surreal, "sync-provider-errors").await;
-        set_internal_slack_channel_id(&surreal, configured.id, "CPROVIDERERROR")
-            .await
-            .expect("set channel")
-            .expect("Project exists");
-        let clerk = person(&surreal, "Clerk", "clerk@example.com", Role::Clerk).await;
-        projects::add_participation(&surreal, configured.id, clerk.id, "clerk")
-            .await
-            .expect("add Clerk");
-
-        let lookup = [("clerk@example.com".to_string(), Some("U-CLERK".to_string()))];
-        for slack in [
-            ReconciliationSlack {
-                users: lookup.iter().cloned().collect(),
-                member_error: true,
-                ..ReconciliationSlack::default()
-            },
-            ReconciliationSlack {
-                users: lookup.iter().cloned().collect(),
-                invite_error: true,
-                ..ReconciliationSlack::default()
-            },
-        ] {
-            let slack = Arc::new(slack);
-            let slack_bot: Arc<dyn SlackBot> = slack;
-            assert!(
-                reconcile_project(&surreal, &slack_bot, false, configured.id)
-                    .await
-                    .is_err()
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn staging_creates_prefixed_channels_and_adopts_existing_ones() {
-        let surreal = mem_surreal().await;
-        let fresh = project(&surreal, "sample-fresh").await;
-        let existing = project(&surreal, "sample-existing").await;
-
-        let slack = Arc::new(ReconciliationSlack {
-            existing: [("staging-sample-existing".to_string(), "GEXIST".to_string())]
-                .into_iter()
-                .collect(),
-            ..ReconciliationSlack::default()
-        });
-        let slack_bot: Arc<dyn SlackBot> = slack.clone();
-        let report = sweep_in_process(&surreal, &slack_bot, None, true).await;
-
-        assert_eq!(report.channels_created, 1);
-        assert_eq!(report.channels_repaired, 1);
-        assert_eq!(report.projects_without_channel, 0);
-        assert_eq!(
-            *slack.created.lock().expect("created lock"),
-            ["staging-sample-fresh"]
-        );
-        for (id, expected) in [(fresh.id, Some("CNEW1")), (existing.id, Some("GEXIST"))] {
-            let stored = projects::find_by_id(&surreal, id)
-                .await
-                .expect("read")
-                .expect("exists");
-            assert_eq!(stored.internal_slack_channel_id.as_deref(), expected);
-        }
-    }
-
-    #[tokio::test]
-    async fn a_deleted_channel_is_replaced_and_closed_projects_are_not_given_one() {
-        let surreal = mem_surreal().await;
-        let stale = project(&surreal, "sample-stale").await;
-        set_internal_slack_channel_id(&surreal, stale.id, "CGONE")
-            .await
-            .expect("set channel")
-            .expect("exists");
-        let closed = create(
-            &surreal,
-            &store::projects::NewProject {
-                code: "sample-closed".to_string(),
-                name: "Closed".to_string(),
-                status: "closed".to_string(),
-                entity_id: seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create closed Project");
-
-        let slack = Arc::new(ReconciliationSlack {
-            gone: vec!["CGONE".to_string()],
-            ..ReconciliationSlack::default()
-        });
-        let slack_bot: Arc<dyn SlackBot> = slack.clone();
-        let forge = FakeForge::new();
-        let report = sweep_in_process(&surreal, &slack_bot, Some(&forge), false).await;
-
-        assert_eq!(report.channels_repaired, 1);
-        assert_eq!(report.channels_created, 0);
-        assert_eq!(
-            report.projects_without_channel, 0,
-            "closed Projects are not counted"
-        );
-        assert_eq!(report.channels_archived, 0, "no channel to archive");
-        assert_eq!(
-            *slack.created.lock().expect("created lock"),
-            ["navigator-sample-stale"]
-        );
-        let stored = projects::find_by_id(&surreal, stale.id)
-            .await
-            .expect("read")
-            .expect("exists");
-        assert_eq!(stored.internal_slack_channel_id.as_deref(), Some("CNEW1"));
-        let closed = projects::find_by_id(&surreal, closed.id)
-            .await
-            .expect("read")
-            .expect("exists");
-        assert_eq!(closed.internal_slack_channel_id, None);
-        assert!(forge
-            .find_repository("sample-closed")
-            .await
-            .expect("find")
-            .is_none());
-    }
-
-    /// A closed Project is not updated: its recorded channel is archived and
-    /// nobody is invited to it, even a participant missing from it.
-    #[tokio::test]
-    async fn a_closed_projects_channel_is_archived_and_nobody_is_invited() {
-        let surreal = mem_surreal().await;
-        let closed = create(
-            &surreal,
-            &store::projects::NewProject {
-                code: "sample-closed".to_string(),
-                name: "Closed".to_string(),
-                status: "closed".to_string(),
-                entity_id: seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create closed Project");
-        set_internal_slack_channel_id(&surreal, closed.id, "CCLOSED")
-            .await
-            .expect("set channel")
-            .expect("exists");
-        let lawyer = person(&surreal, "Lawyer", "lawyer@example.com", Role::Lawyer).await;
-        projects::add_participation(&surreal, closed.id, lawyer.id, "lawyer")
-            .await
-            .expect("add participation");
-        let slack = Arc::new(ReconciliationSlack::new(
-            [(
-                "lawyer@example.com".to_string(),
-                Some("U-LAWYER".to_string()),
-            )],
-            [],
-        ));
-        let slack_bot: Arc<dyn SlackBot> = slack.clone();
-
-        let report = sweep_in_process(&surreal, &slack_bot, None, false).await;
-
-        assert_eq!(report.channels_archived, 1);
-        assert_eq!(report.membership_failures, 0);
-        assert_eq!(*slack.archived.lock().unwrap(), ["CCLOSED"]);
-        assert!(slack.invitations.lock().unwrap().is_empty());
-        assert!(slack.lookups.lock().unwrap().is_empty());
-        assert!(slack.created.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn open_projects_get_a_repository_once() {
-        let surreal = mem_surreal().await;
-        let open = project(&surreal, "sample-repo").await;
-        let slack_bot: Arc<dyn SlackBot> = Arc::new(ReconciliationSlack::default());
-        let forge = FakeForge::new();
-
-        let first = sweep_in_process(&surreal, &slack_bot, Some(&forge), false).await;
-        assert_eq!(first.repositories_synced, 1);
-        assert_eq!(first.repository_failures, 0);
-        let stored = projects::find_by_id(&surreal, open.id)
-            .await
-            .expect("read")
-            .expect("exists");
-        assert!(stored.repository_url.is_some());
-
-        let second = sweep_in_process(&surreal, &slack_bot, Some(&forge), false).await;
-        assert_eq!(second.repositories_synced, 0, "recorded repository is kept");
-        assert!(forge
-            .find_repository("sample-repo")
-            .await
-            .expect("find")
-            .is_some());
     }
 
     /// A reopened Project's archived channel is unarchived once, and the

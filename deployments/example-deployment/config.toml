@@ -46,7 +46,6 @@ NAVIGATOR_FORGEJO_ADMISSION_DOMAINS = "example.invalid"
 NAVIGATOR_ASSETS_BUCKET = "example-assets"
 NAVIGATOR_DOCUMENTS_BUCKET = "example-documents"
 NAVIGATOR_EXPORTS_BUCKET = "example-exports"
-NAVIGATOR_SURREAL_ARCHIVES_BUCKET = "example-surreal-archives"
 NAVIGATOR_LOGS_BUCKET = "example-automation-home-logs"
 NAVIGATOR_APPLICATIONS_BUCKET = "example-applications"
 NAVIGATOR_ARCHIVES_BUCKET = "example-archives"
@@ -67,13 +66,6 @@ NAVIGATOR_PRIMARY_DOMAIN = "example.invalid"
 CANONICAL_HOST = "navigator.example.invalid"
 NAV_BASE_URL = "https://navigator.example.invalid/"
 NAVIGATOR_ASSET_BASE_URL = "https://navigator.example.invalid/assets"
-NAVIGATOR_WORKFLOWS_HOST = "workflows.example.invalid"
-NAVIGATOR_WORKFLOWS_URL = "https://workflows.example.invalid/"
-# Public Restate Cloud request-signing key; synthetic fixture value.
-RESTATE_IDENTITY_KEY = "publickeyv1_test-identity-key"
-# Restate Cloud admin endpoint. `ops ship` registers the worker against the
-# `restate` CLI environment whose admin_base_url matches; synthetic value.
-RESTATE_ADMIN_URL = "https://restate-admin.example.invalid:9070"
 SLACK_GENERAL_CHANNEL_ID = "C0000000002"
 SLACK_FINANCE_CHANNEL_ID = "C0000000001"
 SLACK_MESSAGES_CHANNEL_ID = "C0000000003"
@@ -98,9 +90,7 @@ OAUTH_APPLE_CLIENT_ID = "com.example.navigator"
 NAVIGATOR_SMS_NUMBER = "+15550100000"
 
 # --- Forge -----------------------------------------------------------------
-# The automation home runs the engineering webhook receiver, so the five-tuple
-# applies to this row and to no other. Two members are coordinates; the HMAC
-# secret, the Restate ingress URL, and the bearer are key material.
+# The automation home runs the engineering webhook receiver.
 NAVIGATOR_FORGE_BACKEND = "github"
 NAVIGATOR_GITHUB_ORG = "neon-law-source-code"
 NAVIGATOR_GIT_HOST = "git.example.invalid"
@@ -116,9 +106,5 @@ DOCUSIGN_BASE_URL = "https://demo.docusign.example/restapi"
 DOCUSIGN_OAUTH_BASE = "account-d.docusign.example"
 DOCUSIGN_SIGNER_EMAIL = "signer@example.com"
 
-# --- SurrealDB -------------------------------------------------------------
-NAVIGATOR_SURREAL_ENDPOINT = "wss://example-automation-home.surreal.example/rpc"
-NAVIGATOR_SURREAL_NAMESPACE = "navigator"
-NAVIGATOR_SURREAL_DATABASE = "navigator"
 NAVIGATOR_GITHUB_AUTOMATION_HOME = "true"
 NAVIGATOR_SMS_TEST_RECIPIENTS_DEPLOYMENT = "false"

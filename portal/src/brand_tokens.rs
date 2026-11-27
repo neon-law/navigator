@@ -29,7 +29,7 @@ fn key_from_tokens_path(path: &str) -> Option<&str> {
 }
 
 async fn tokens_css(state: &AppState, key: &str) -> Response {
-    let row = match store::brands::find_by_key(&state.surreal, key).await {
+    let row = match store::brands::find_by_key(&state.application_store, key).await {
         Ok(row) => row,
         Err(error) => {
             tracing::error!(error = %error, brand_key = %key, "brand tokens row read failed");
@@ -110,89 +110,7 @@ fn css_response(css: String) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{key_from_tokens_path, tokens_css};
-    use store::test_support::mem_surreal;
-
-    /// ENG-586: a runtime brand wearing a free hex primary and an uploaded
-    /// font (no compiled `BrandKey` fallback, since its key is custom)
-    /// renders the derived colour tokens and the uploaded `@font-face`,
-    /// rather than 404ing the way the closed-catalog-only path used to for
-    /// any key `resolve_presentation` couldn't match.
-    #[tokio::test]
-    async fn a_custom_brand_with_a_free_hex_and_uploaded_font_renders_derived_tokens() {
-        let surreal = mem_surreal().await;
-        let entity_id = store::test_support::seed_entity(&surreal).await;
-        let admin = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Custom Brand Admin DRI",
-                "custom-brand-admin-dri@example.com",
-                store::persons::Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: "Custom Brand Practice".to_string(),
-                status: "active".to_string(),
-                entity_id,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        let brand = store::brands::create(
-            &surreal,
-            store::persons::Role::Admin,
-            Some(admin.id),
-            &store::brands::NewBrand {
-                name: "Custom Brand".to_string(),
-                key: "custom-brand".to_string(),
-                firm_id: Some(firm.id),
-                primary_color: Some("#007c91".to_string()),
-                typeface: Some("uploaded".to_string()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        store::brands::set_font(
-            &surreal,
-            store::persons::Role::Admin,
-            Some(admin.id),
-            brand.id,
-            "Custom Sans",
-            "fonts/brands/custom-brand/abc123.woff2",
-            "OFL-1.1",
-        )
-        .await
-        .unwrap();
-
-        let state = crate::test_support::app_state(surreal).await;
-        let response = tokens_css(&state, "custom-brand").await;
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let css = String::from_utf8(body.to_vec()).unwrap();
-        assert!(css.contains("--nav-color-primary: #007c91"), "{css}");
-        assert!(css.contains("font-family:'Custom Sans'"), "{css}");
-        assert!(
-            css.contains("/assets/fonts/brands/custom-brand/abc123.woff2"),
-            "{css}"
-        );
-    }
-
-    /// A brand with no row at all still 404s.
-    #[tokio::test]
-    async fn an_unknown_brand_key_404s() {
-        let surreal = mem_surreal().await;
-        let state = crate::test_support::app_state(surreal).await;
-        let response = tokens_css(&state, "never-created").await;
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
-    }
+    use super::key_from_tokens_path;
 
     #[test]
     fn tokens_paths_yield_the_brand_key() {

@@ -91,7 +91,7 @@ pub async fn list_client_projects() -> Result<ClientProjectsView, ServerFnError>
         .unwrap_or_default();
     let person_id = person_id.and_then(|raw| raw.parse::<uuid::Uuid>().ok());
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let axum::Extension(brand) = dioxus_fullstack_core::FullstackContext::extract::<
         axum::Extension<views::brand::BrandKey>,
         _,
@@ -100,7 +100,7 @@ pub async fn list_client_projects() -> Result<ClientProjectsView, ServerFnError>
     let projects = store::access::ClientPortal {
         brand: brand.as_str(),
     }
-    .visible_projects(&surreal, person_id, store::persons::Role::Client)
+    .visible_projects(&application_store, person_id, store::persons::Role::Client)
     .await
     .map_err(|e| ServerFnError::new(e.clone()))?;
 

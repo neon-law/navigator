@@ -79,7 +79,7 @@ impl BrowserSession {
         // rustls, not native-tls: the static musl `navigator` cannot link
         // OpenSSL. Pin the process crypto provider first, since the workspace
         // compiles both ring and aws-lc-rs and rustls will not pick one.
-        store::surreal::install_tls_provider();
+        store::tls::install_provider();
         let mut builder = match ClientBuilder::rustls() {
             Ok(builder) => builder,
             Err(error) => {

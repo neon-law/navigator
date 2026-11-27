@@ -90,7 +90,7 @@ async fn a_lawyer_takes_a_referral_through_the_review_queue_without_sending_mail
 }
 
 async fn seed_review(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     pg: &PostgresDb,
 ) -> (persons::Person, persons::Person, Uuid) {
     use store::firms::{self, FirmMembership, NewPersonFirmRole};
@@ -170,7 +170,7 @@ async fn seed_review(
 }
 
 async fn check_review() {
-    let db = store::surreal::SurrealDb::uninitialized();
+    let db = store::application_store::ApplicationStore::uninitialized();
     let pg = PostgresDb::from_env().await.unwrap();
     let (lawyer, outsider, staged_id) = seed_review(&db, &pg).await;
     let email = Arc::new(CapturingEmail::new());

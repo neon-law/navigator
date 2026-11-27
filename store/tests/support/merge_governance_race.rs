@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::time::Duration;
 use store::person_merge::{PersonMergeError, PersonMergeReport};
 use store::persons::Role;
-use store::{postgres::PostgresDb, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, postgres::PostgresDb};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -58,7 +58,7 @@ async fn wait_on_owned_row(
 #[tokio::test]
 async fn lawyer_merge_rechecks_the_locked_kept_tier_after_owner_promotion() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = PostgresDb::application().await.unwrap();
         let kept = store::persons::create(&db, &store::persons::NewPerson::with_role(
             "Synthetic kept lawyer", format!("kept-{}@example.test", Uuid::new_v4()), Role::Lawyer,
@@ -90,7 +90,7 @@ async fn lawyer_merge_rechecks_the_locked_kept_tier_after_owner_promotion() {
         jobs.spawn(async move {
             PostgresDb::with_application_db(worker, async {
                 store::person_merge::merge_by_email_as_actor(
-                    &SurrealDb::uninitialized(), &keep_email, &drop_email, Role::Lawyer,
+                    &ApplicationStore::uninitialized(), &keep_email, &drop_email, Role::Lawyer,
                 ).await
             }).await.expect("genuine native application admission")
         });

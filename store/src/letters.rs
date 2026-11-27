@@ -5,16 +5,13 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::mailrooms::{self, MailroomError};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
 pub(crate) const TABLE: &str = "letter";
-/// The Source table linked by `mailroom_id`.
-const MAILROOM_TABLE: &str = "mailroom";
 
 /// Mail arriving at a mailroom.
 pub const DIRECTION_INCOMING: &str = "incoming";
@@ -50,52 +47,12 @@ pub struct NewLetter {
     pub summary: String,
 }
 
-/// The row as the engine reads and writes it — the seam between
-/// [`Letter`] and the SDK's own `RecordId` and `Datetime`.
-#[derive(SurrealValue)]
-struct LetterRow {
-    id: surrealdb::types::RecordId,
-    mailroom_id: surrealdb::types::RecordId,
-    project_id: Option<surrealdb::types::RecordId>,
-    direction: String,
-    sender: String,
-    recipient: String,
-    summary: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl LetterRow {
-    /// `None` when a record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`].
-    fn into_letter(self) -> Option<Letter> {
-        Some(Letter {
-            id: record_uuid(&self.id)?,
-            mailroom_id: record_uuid(&self.mailroom_id)?,
-            project_id: self.project_id.as_ref().and_then(record_uuid),
-            direction: self.direction,
-            sender: self.sender,
-            recipient: self.recipient,
-            summary: self.summary,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`LetterRow`] from only one query.
-const SELECT: &str = "id, mailroom_id, project_id, direction, sender, recipient, summary, \
-                      inserted_at, updated_at";
-
 /// Errors reading or writing a letter.
 #[derive(Debug, thiserror::Error)]
 pub enum LetterError {
     #[error(transparent)]
     Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// Reading the mailroom a write links to failed.
     #[error(transparent)]
     Mailroom(#[from] MailroomError),
@@ -118,7 +75,7 @@ pub enum LetterError {
 /// [`LetterError::NoSuchMailroom`] when the mailroom does not exist —
 /// checked before writing — and
 /// a database error if the insert fails, including an invalid direction.
-pub async fn record(db: &SurrealDb, new: &NewLetter) -> Result<Letter, LetterError> {
+pub async fn record(db: &ApplicationStore, new: &NewLetter) -> Result<Letter, LetterError> {
     record_with_id(db, Uuid::now_v7(), new).await
 }
 
@@ -128,13 +85,11 @@ pub async fn record(db: &SurrealDb, new: &NewLetter) -> Result<Letter, LetterErr
 /// partial archive/database failure can finish the same letter without
 /// allocating a second one.
 pub async fn record_with_id(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     new: &NewLetter,
 ) -> Result<Letter, LetterError> {
-    let pg = crate::postgres::matter::authority_for(TABLE)
-        .await?
-        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
     if mailrooms::find_by_id(db, new.mailroom_id).await?.is_none() {
         return Err(LetterError::NoSuchMailroom(new.mailroom_id));
     }
@@ -177,18 +132,9 @@ pub async fn record_with_id(
 /// # Errors
 ///
 /// [`LetterError::Db`] if the lookup fails.
-pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Letter>, LetterError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return Ok(crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id})).await?);
-    }
-
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<LetterRow> = response.take(0)?;
-    Ok(row.and_then(LetterRow::into_letter))
+pub async fn find_by_id(_db: &ApplicationStore, id: Uuid) -> Result<Option<Letter>, LetterError> {
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    Ok(crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id})).await?)
 }
 
 /// The letter at this mailroom with this sender and summary, if any —
@@ -198,33 +144,18 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Letter>, Lett
 ///
 /// [`LetterError::Db`] if the lookup fails.
 pub async fn find_by_mailroom_sender_summary(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     mailroom_id: Uuid,
     sender: &str,
     summary: &str,
 ) -> Result<Option<Letter>, LetterError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return Ok(crate::postgres::matter::find(
-            &pg,
-            TABLE,
-            serde_json::json!({"mailroom_id": mailroom_id,"sender": sender,"summary": summary}),
-        )
-        .await?);
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE mailroom_id = $mailroom_id AND sender = $sender AND summary = $summary \
-             LIMIT 1"
-        ))
-        .bind(("mailroom_id", record_id(MAILROOM_TABLE, mailroom_id)))
-        .bind(("sender", sender.to_string()))
-        .bind(("summary", summary.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<LetterRow> = response.take(0)?;
-    Ok(row.and_then(LetterRow::into_letter))
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    Ok(crate::postgres::matter::find(
+        &pg,
+        TABLE,
+        serde_json::json!({"mailroom_id": mailroom_id,"sender": sender,"summary": summary}),
+    )
+    .await?)
 }
 
 /// Every letter, oldest first — the lawyer listing's order.
@@ -232,28 +163,12 @@ pub async fn find_by_mailroom_sender_summary(
 /// # Errors
 ///
 /// [`LetterError::Db`] if the lookup fails.
-pub async fn list_all(db: &SurrealDb) -> Result<Vec<Letter>, LetterError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return Ok(crate::postgres::matter::select(
-            &pg,
-            TABLE,
-            serde_json::json!({}),
-            &["inserted_at", "id"],
-        )
-        .await?);
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC, id ASC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<LetterRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(LetterRow::into_letter)
-        .collect())
+pub async fn list_all(_db: &ApplicationStore) -> Result<Vec<Letter>, LetterError> {
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    Ok(
+        crate::postgres::matter::select(&pg, TABLE, serde_json::json!({}), &["inserted_at", "id"])
+            .await?,
+    )
 }
 
 /// How many letters exist. The production-emptiness gate asks this of
@@ -262,27 +177,13 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Letter>, LetterError> {
 /// # Errors
 ///
 /// [`LetterError::Db`] if the count fails.
-pub async fn count(db: &SurrealDb) -> Result<i64, LetterError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return sqlx::query_scalar("SELECT count(*) FROM letter")
-            .fetch_one(pg.pool())
-            .await
-            .map_err(crate::postgres::matter::MatterAuthorityError::from)
-            .map_err(LetterError::from);
-    }
-
-    let mut response = db
-        .query(format!("SELECT count() FROM {TABLE} GROUP ALL"))
+pub async fn count(_db: &ApplicationStore) -> Result<i64, LetterError> {
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    sqlx::query_scalar("SELECT count(*) FROM letter")
+        .fetch_one(pg.pool())
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let counts: Vec<CountRow> = response.take(0)?;
-    Ok(counts.first().map_or(0, |c| c.count))
-}
-
-/// The one-field shape `SELECT count() ... GROUP ALL` returns.
-#[derive(SurrealValue)]
-struct CountRow {
-    count: i64,
+        .map_err(crate::postgres::matter::MatterAuthorityError::from)
+        .map_err(LetterError::from)
 }
 
 #[cfg(test)]
@@ -292,13 +193,13 @@ mod tests {
         LetterError, NewLetter, DIRECTION_INCOMING, DIRECTION_OUTGOING,
     };
     use crate::addresses::{self, NewAddress};
+    use crate::application_store::ApplicationStore;
     use crate::mailrooms;
-    use crate::surreal::SurrealDb;
     use crate::test_support;
-    use crate::test_support::seed_project_surreal;
+    use crate::test_support::seed_project_id;
     use uuid::Uuid;
 
-    async fn a_mailroom(db: &SurrealDb, name: &str) -> Uuid {
+    async fn a_mailroom(db: &ApplicationStore, name: &str) -> Uuid {
         let address = addresses::create(
             db,
             &NewAddress {
@@ -329,7 +230,7 @@ mod tests {
     #[tokio::test]
     async fn a_recorded_letter_reads_back_by_id() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let mailroom_id = a_mailroom(&db, "HQ").await;
 
             let written = record(&db, &a_letter(mailroom_id, "Form 990 reminder"))
@@ -362,10 +263,10 @@ mod tests {
     #[tokio::test]
     async fn a_letter_scoped_to_a_project_reads_back_with_it() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let mailroom_id = a_mailroom(&db, "HQ").await;
             test_support::seed_compiled_brands_postgres(&db).await;
-            let project_id = seed_project_surreal(&db, "matter").await;
+            let project_id = seed_project_id(&db, "matter").await;
 
             let mut letter = a_letter(mailroom_id, "Engagement notice");
             letter.project_id = Some(project_id);
@@ -384,41 +285,10 @@ mod tests {
         .await;
     }
 
-    /// ENG-310: a row written before this field existed has no value for it
-    /// at all — not the engine's default, an absent field entirely. The
-    /// reader must tolerate that rather than fail the whole row.
-    #[tokio::test]
-    async fn a_historical_letter_with_no_project_id_reads_as_none() {
-        let db = crate::surreal::test_support::mem().await;
-        let mailroom_id = Uuid::now_v7();
-        let id = Uuid::now_v7();
-        db.query(
-            "CREATE $id SET mailroom_id = $mailroom_id, direction = $direction, \
-                   sender = $sender, recipient = $recipient, summary = $summary",
-        )
-        .bind(("id", crate::surreal::record_id(super::TABLE, id)))
-        .bind((
-            "mailroom_id",
-            crate::surreal::record_id("mailroom", mailroom_id),
-        ))
-        .bind(("direction", DIRECTION_INCOMING.to_string()))
-        .bind(("sender", "IRS".to_string()))
-        .bind(("recipient", "Acme".to_string()))
-        .bind(("summary", "Pre-ENG-310 mail".to_string()))
-        .await
-        .unwrap();
-
-        let read = crate::postgres_mirror::from_source(find_by_id(&db, id))
-            .await
-            .unwrap()
-            .expect("row reads back");
-        assert_eq!(read.project_id, None);
-    }
-
     #[tokio::test]
     async fn a_letter_at_a_mailroom_that_does_not_exist_is_refused() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let nowhere = Uuid::now_v7();
 
             let refused = record(&db, &a_letter(nowhere, "Ghost mail")).await;
@@ -433,7 +303,7 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_direction_is_refused_by_the_schema() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let mailroom_id = a_mailroom(&db, "HQ").await;
             let mut sideways = a_letter(mailroom_id, "Sideways mail");
             sideways.direction = "sideways".into();
@@ -451,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn both_directions_are_accepted() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let mailroom_id = a_mailroom(&db, "HQ").await;
             for direction in [DIRECTION_INCOMING, DIRECTION_OUTGOING] {
                 let mut letter = a_letter(mailroom_id, direction);
@@ -467,7 +337,7 @@ mod tests {
     #[tokio::test]
     async fn the_seeders_natural_key_finds_only_that_letter() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let mailroom_id = a_mailroom(&db, "HQ").await;
             let written = record(&db, &a_letter(mailroom_id, "Form 990 reminder"))
                 .await
@@ -492,7 +362,7 @@ mod tests {
     #[tokio::test]
     async fn a_letter_is_scoped_to_its_own_mailroom() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let hq = a_mailroom(&db, "HQ").await;
             let annex = a_mailroom(&db, "Annex").await;
             record(&db, &a_letter(hq, "Form 990 reminder"))
@@ -513,7 +383,7 @@ mod tests {
     #[tokio::test]
     async fn counting_an_empty_table_is_zero_rather_than_an_error() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             assert_eq!(count(&db).await.unwrap(), 0);
             let mailroom_id = a_mailroom(&db, "HQ").await;
             record(&db, &a_letter(mailroom_id, "One")).await.unwrap();

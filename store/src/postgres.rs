@@ -15,12 +15,14 @@ pub mod cases;
 pub mod catalog;
 /// PostgreSQL authority for Communications and the email tables.
 pub mod communications;
+pub mod history;
 /// PostgreSQL authority for a Person's and an Entity's identity detail.
 pub mod identity;
 /// Authority provenance for an exclusively created application database.
 pub mod native_origin;
 pub mod notation_creation_attempts;
 pub mod people;
+mod record_metadata;
 /// PostgreSQL authority for the review surface — review documents and
 /// document comments.
 pub mod review;
@@ -259,15 +261,6 @@ impl PostgresDb {
             .await
             .cloned()
     }
-    /// PostgreSQL serves application calls. Only an explicit importer Source
-    /// read can select the compatibility accessor; missing configuration fails closed.
-    pub async fn configured() -> Result<Option<Self>, PostgresError> {
-        if crate::postgres_mirror::reading_source() {
-            return Ok(None);
-        }
-        Box::pin(Self::application()).await.map(Some)
-    }
-
     /// Connect an application only after its complete historical enrollment.
     /// Operators and migrations use `from_env` before activation instead.
     pub async fn application() -> Result<Self, PostgresError> {
@@ -288,17 +281,15 @@ impl PostgresDb {
         {
             return Ok(());
         }
-        if !crate::postgres_mirror::backfilled(self)
+        if !history::global_completed(self)
             .await
             .map_err(|_| PostgresError::History)?
         {
             return Err(PostgresError::History);
         }
-        Box::pin(crate::postgres_backfill::family::require_runtime_scopes(
-            self,
-        ))
-        .await
-        .map_err(|_| PostgresError::History)
+        Box::pin(history::require_runtime_scopes(self))
+            .await
+            .map_err(|_| PostgresError::History)
     }
     async fn connect_env() -> Result<Self, PostgresError> {
         let get = |key: &str| std::env::var(key).map_err(|_| PostgresError::Configuration);

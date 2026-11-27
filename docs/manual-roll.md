@@ -92,8 +92,7 @@ headed for production, or any time `DEPLOY_AUTOMATION_ENABLED` is unset.
 Every command runs from this checkout with `--deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"`. Set that variable to the
 approved private root containing the `deployments/` directory. Set `STAGING_ROW` and `PRODUCTION_ROW` to the directory
 names supplied to you by the operator, and keep those values in the operator's local shell. `TAG` is the release tag to
-roll; `ROW` is the selected deployment directory. `ROW_RESTATE_ENV` is that row's named Restate CLI environment:
-`staging` for the staging row and `production` for the production row.
+roll; `ROW` is the selected deployment directory.
 
 For the ordered GKE service overlays, `ops ship` selects the staging variant when the selected row's
 `NAVIGATOR_PUBLIC_HOST` begins with `staging.` and selects production otherwise. Both variants render the selected row's
@@ -125,12 +124,12 @@ Deployments it records itself, so after a hand roll of production, that record s
 
 ## Tools and sessions
 
-Install `gcloud` with `gke-gcloud-auth-plugin`, `kubectl`, `sops`, `cosign`, `gh`, `restate`, `curl`, and `python3`.
-`ops ship` verifies every image signature with `cosign`, and refuses with `No such file or directory` when it is absent.
-`ops ship` writes its own GKE credentials and a short-lived `oauth2accesstoken` registry login for `cosign` to a scratch
-directory it deletes on exit, so a `KUBECONFIG` pointing at KIND or a Docker config without a registry login does not
-affect the roll. A roll rides on three sessions that expire independently, and every login is a browser or TTY flow only
-the operator can run. Probe all three before starting:
+Install `gcloud` with `gke-gcloud-auth-plugin`, `kubectl`, `sops`, `cosign`, `gh`, `curl`, and `python3`. `ops ship`
+verifies every image signature with `cosign`, and refuses with `No such file or directory` when it is absent. `ops ship`
+writes its own GKE credentials and a short-lived `oauth2accesstoken` registry login for `cosign` to a scratch directory
+it deletes on exit, so a `KUBECONFIG` pointing at KIND or a Docker config without a registry login does not affect the
+roll. A roll rides on two sessions that expire independently, and every login is a browser or TTY flow only the operator
+can run. Probe both before starting:
 
 ```bash
 case "$(uname -s)" in
@@ -140,7 +139,6 @@ command -v gke-gcloud-auth-plugin >/dev/null \
   || echo "gke-gcloud-auth-plugin missing: gcloud components install gke-gcloud-auth-plugin" >&2
 gcloud auth print-access-token >/dev/null                     && echo "user session OK"
 gcloud auth application-default print-access-token >/dev/null && echo "ADC OK"
-restate whoami 2>&1 >/dev/null | grep -q 'credentials have expired' && echo "restate DEAD" >&2
 ```
 
 Run whichever login faulted. Refreshing one does nothing for the others.
@@ -148,14 +146,11 @@ Run whichever login faulted. Refreshing one does nothing for the others.
 ```bash
 gcloud auth login                                     # browser
 gcloud auth application-default login                 # browser, a separate credential
-restate cloud login                                   # browser, once per machine
-restate cloud environments configure "$RESTATE_ACCOUNT/$ROW_RESTATE_ENV"  # TTY, once per row
 ```
 
-`restate whoami` exits `0` on expired credentials and reports them only on stderr, so the grep is the test. `kubectl`
-and `navigator` fall back to the user session when ADC is unavailable; `sops` reads ADC alone. A dead ADC therefore
-surfaces first as an `Unauthenticated` or `invalid_rapt` decrypt error at `ops secrets apply`, which is a stale ADC and
-not a missing KMS grant. Use personal, short-lived credentials, never a service-account JSON key.
+When ADC is unavailable, `kubectl` and `navigator` can use the user session. `sops` requires ADC.
+
+Refresh ADC if `ops secrets apply` reports `Unauthenticated` or `invalid_rapt`. Use personal, short-lived credentials.
 
 The `PATH` export must be in the shell that runs `navigator`: `ops ship` shells out to `kubectl`, which reports
 `executable gke-gcloud-auth-plugin not found` when the plugin is installed but off `PATH`.
@@ -300,9 +295,9 @@ from source. The same limit applies to a rollback target.
 
 `ops ship --dry-run` validates the selected row and required local settings. For a full or image-only roll it also
 validates the release tag and renders and parses the embedded manifests; `--restart-only` plans restarts without a
-release tag. It performs no authentication, cloud or cluster reads, image checks, live Secret checks, drift diff,
-Restate request, or public endpoint request. Its operation summary is a local plan only; it does not show what differs
-from the live cluster. `--quiet --dry-run` keeps the summary sanitized and does not upload a transcript.
+release tag. It performs no authentication, cloud or cluster reads, image checks, live Secret checks, drift diff, or
+public endpoint request. Its operation summary is a local plan only; it does not show what differs from the live
+cluster. `--quiet --dry-run` keeps the summary sanitized and does not upload a transcript.
 
 Before a real roll, `ops ship` performs the authenticated context, IAM, image, Secret Manager, live Secret, service
 object, and asset checks before its first write. It fetches the row's cluster credentials itself. To check your grants
@@ -325,90 +320,32 @@ every impersonated answer is `no`. Read another operator's grants from `gcloud p
 
 This offline plan works from the deployment tree and embedded manifests without cloud tools or credentials. It confirms
 local configuration and parses manifest source, but it does not diff the live cluster or verify published image
-availability, Secret Manager versions, live Secrets, IAM, assets, Restate, or public endpoints. Review the operation
-summary, then perform the external image and access checks above. A live ship repeats authenticated checks before
-mutation. There is no live object diff preview in this command; the plan is not evidence of drift-free or
-deployment-ready state.
+availability, Secret Manager versions, live Secrets, IAM, assets, or public endpoints. Review the operation summary,
+then perform the external image and access checks above. A live ship repeats authenticated checks before mutation. There
+is no live object diff preview in this command; the plan is not evidence of drift-free or deployment-ready state.
 
 ## 6. Ship
 
-`RESTATE_ADMIN_TOKEN` is admin-scoped and belongs to no row, so it stays out of SOPS. Read it from the `restate` CLI's
-own session immediately before `ops ship`, confirm the admin URL matches the row's recorded `RESTATE_ADMIN_URL`, and
-unset both afterwards. Never print the token or write it to a file.
-
 ```bash
-restate_cfg() {  # <section> <key> -> value from the restate CLI config, never echoed
-  python3 - "$1" "$2" <<'PY'
-import os, re, sys
-section, key = sys.argv[1], sys.argv[2]
-home = os.environ.get("RESTATE_CLI_CONFIG_HOME", os.path.expanduser("~/.config/restate"))
-current = None
-for line in open(os.path.join(home, "config.toml")):
-    line = line.strip()
-    match = re.match(r"^\[(.+)\]$", line)
-    if match:
-        current = match.group(1)
-    elif current == section and "=" in line:
-        name, value = line.split("=", 1)
-        if name.strip() == key:
-            print(value.strip().strip('"'))
-            break
-PY
-}
-RESTATE_ADMIN_TOKEN="$(restate_cfg global.cloud access_token)"
-RESTATE_ADMIN_URL="$(restate_cfg "$ROW_RESTATE_ENV" admin_base_url)"
-[ "$RESTATE_ADMIN_URL" = "$(sed -n 's/^RESTATE_ADMIN_URL = "\(.*\)"$/\1/p' "$NAVIGATOR_DEPLOYMENTS_DIR/deployments/$ROW/config.toml")" ] \
-  || { echo "admin_base_url does not match $ROW's RESTATE_ADMIN_URL; stop" >&2; exit 1; }
-export RESTATE_ADMIN_TOKEN RESTATE_ADMIN_URL
 "$NAVIGATOR_BIN" ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" \
   --image-digests "$IMAGE_DIGESTS"
-unset RESTATE_ADMIN_TOKEN RESTATE_ADMIN_URL
 ```
 
-The session token lasts about a day; log in to Restate Cloud again if extraction fails or `ops ship` reports a Restate
-auth error. Never dump the config file to inspect it. A token printed by accident is burned: log out of Restate Cloud
-and log in again.
+Use `--restart-only` in place of `--tag` after a secret-only change. If a late command times out, verify the Deployment
+before retrying the roll.
 
-Use `--restart-only` in place of `--tag` after a secret-only change, so pods re-read `envFrom`.
-
-A real `ops ship` can lose a late `kubectl` call to `net/http: TLS handshake timeout` after both Deployments have
-rolled. A nonzero exit there is a reason to verify, not proof the roll failed: go to step 8 and read what landed before
-retrying.
-
-## 7. Restate registration
-
-`ops ship` re-registers the worker, because Restate resolves a worker's handler list at registration and a stale list
-drops webhook submissions silently. To confirm the registration is current, compare the worker's own manifest with what
-Restate holds:
-
-```bash
-WF=$(sed -n 's/^NAVIGATOR_WORKFLOWS_HOST = "\(.*\)"$/\1/p' "$NAVIGATOR_DEPLOYMENTS_DIR/deployments/$ROW/config.toml")
-curl -s --http2 -H "Accept: application/vnd.restate.endpointmanifest.v3+json" "https://$WF/discover"
-restate -y -e "$ROW_RESTATE_ENV" services list
-restate -y -e "$ROW_RESTATE_ENV" service describe "$RESTATE_SERVICE"
-```
-
-**Every `restate` command takes an explicit `-e "$ROW_RESTATE_ENV"`.** An unflagged command resolves its environment
-from `$RESTATE_ENVIRONMENT` or the CLI's saved current environment, which can name the other row. A register URL names
-where services point, not which environment registers them, so an unflagged `deployment register` can put one row's
-services onto the other row's worker. Read `deployment register`'s confirmation output before accepting it. Before any
-`--force`, confirm `restate -e "$ROW_RESTATE_ENV" deployment describe "$RESTATE_DEPLOYMENT_ID"` reports `Invocations:
-0`; a nonzero count is a human decision.
-
-## 8. Verify
+## 7. Verify
 
 ```bash
 ./.agents/skills/deploy-staging/scripts/verify-row.sh "$ROW" "$TAG"
 ```
 
 It is read-only. It checks that every Navigator image in the row's Deployments and CronJobs is on `TAG` and in the row's
-registry, that pods are ready, that the public host answers `200`, that the workflows host is reachable over TLS (a
-`400` is expected from that protocol endpoint), and that the GORP Serif font files serve as `font/woff2`. When the row
-sets `NAVIGATOR_DBOS_ENABLED = "true"`, it also reads the current six-hour slot's `Heartbeat-<date>T<hour>` run from
-`dbos.workflow_status` in a read-only `psql` session on `navigator-postgres-0`: `SUCCESS` passes, `PENDING` prints
-`WAIT` (re-run in a few minutes), and a missing or failed run fails the row. Pod readiness covers PostgreSQL: `web`'s
-`/app/readyz` names `postgres` when its configured database does not answer. Read every line, not only the exit status.
-Then confirm the release the public host reports:
+registry, pod readiness, the public host, font delivery, and the current DBOS Heartbeat. The script reads Heartbeat from
+`dbos.workflow_status` in a read-only PostgreSQL session. `SUCCESS` passes, `PENDING` prints `WAIT` (re-run in a few
+minutes), and a missing or failed run fails the row. Pod readiness covers PostgreSQL: `web`'s `/app/readyz` names
+`postgres` when its configured database does not answer. Read every line, not only the exit status. Then confirm the
+release the public host reports:
 
 ```bash
 curl -fsS "https://$(sed -n 's/^NAVIGATOR_PUBLIC_HOST = "\(.*\)"$/\1/p' "$NAVIGATOR_DEPLOYMENTS_DIR/deployments/$ROW/config.toml")/version" \
@@ -422,13 +359,13 @@ are operator-supplied and uploaded with `--content-type=font/woff2`.
 Before blaming the tag for a symptom, run the same check against the tag the row was serving. A symptom that reproduces
 on the old tag is not the tag's fault, and rolling back will not fix it.
 
-## 9. Roll back
+## 8. Roll back
 
 Roll back with `ops ship --tag "$OUTGOING_TAG" --image-digests "$OUTGOING_IMAGE_DIGESTS"`, repeating steps 4 through 8
 for that tag. The registry keeps the ten newest versions per image. A `workflow_dispatch` of `release-deploy.yml` with
 `rollback: true` and a `tag` production has a successful recorded Deployment for reships that tag through staging first.
 
-## 10. Remove the kubectl context
+## 9. Remove the kubectl context
 
 Delete the row's kubeconfig entries once it is verified, so a later unflagged `kubectl` cannot reach it by accident:
 

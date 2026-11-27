@@ -197,7 +197,7 @@ pub struct SortableState {
 }
 
 /// Run a read-only admin listing on the server: read the injected viewer
-/// role and `SurrealDb`, run `query`, and project each row to cell text.
+/// role and `ApplicationStore`, run `query`, and project each row to cell text.
 ///
 /// A `store::<table>` module exposes plain functions, each with its own error
 /// type, so this takes the read as a closure over the handle and lets the
@@ -212,7 +212,7 @@ pub struct SortableState {
 /// [`require_lawyer`]'s refusal for a non-lawyer caller, or whatever the
 /// caller's read returns.
 #[cfg(feature = "server")]
-pub async fn load_surreal<T, Fut, Q, F>(
+pub async fn load_store<T, Fut, Q, F>(
     query: Q,
     title_suffix: &str,
     heading: &str,
@@ -220,15 +220,19 @@ pub async fn load_surreal<T, Fut, Q, F>(
     project: F,
 ) -> Result<AdminListingView, ServerFnError>
 where
-    Q: FnOnce(store::surreal::SurrealDb) -> Fut,
+    Q: FnOnce(store::application_store::ApplicationStore) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<T>, ServerFnError>>,
     F: Fn(T) -> Vec<String>,
 {
     // Gate before running the read, so a non-lawyer caller never triggers it.
     let role = require_lawyer().await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let rows = query(surreal).await?.into_iter().map(project).collect();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let rows = query(application_store)
+        .await?
+        .into_iter()
+        .map(project)
+        .collect();
 
     Ok(view(role, title_suffix, heading, headers, rows).await)
 }
@@ -413,7 +417,7 @@ pub(crate) async fn injected_person_id() -> Option<uuid::Uuid> {
 /// `500` instead — the same line `webapp::lawyer_dashboard` draws.
 #[cfg(feature = "server")]
 pub async fn require_lawyer_in_matters(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
 ) -> Result<(ViewerRole, MatterScope), ServerFnError> {
     let role = require_lawyer().await?;
     if role.is_admin_tier() {
@@ -428,16 +432,17 @@ pub async fn require_lawyer_in_matters(
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    let visible = store::access::visible_projects_as_lawyer(surreal, person_id, store_role)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "matter-scoped listing: visible_projects_as_lawyer failed");
-            dioxus_fullstack_core::FullstackContext::commit_http_status(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            );
-            ServerFnError::new(error.clone())
-        })?;
+    let visible =
+        store::access::visible_projects_as_lawyer(application_store, person_id, store_role)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "matter-scoped listing: visible_projects_as_lawyer failed");
+                dioxus_fullstack_core::FullstackContext::commit_http_status(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    None,
+                );
+                ServerFnError::new(error.clone())
+            })?;
 
     Ok((
         role,

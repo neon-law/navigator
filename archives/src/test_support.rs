@@ -4,7 +4,7 @@
 //! machinery can meet: a retention-locked bucket (create-only — plain
 //! writes and deletes are panics, because no archive code path may reach
 //! them) and the unlocked overwrite lane. Its `retention_locked` reports
-//! which mode it is in, driving [`crate::runner`]'s destination choice the
+//! which mode it is in, driving the destination choice the
 //! way a real GCS bucket policy does.
 
 use std::collections::BTreeMap;

@@ -128,7 +128,7 @@ async fn archive(
 /// so an unreadable row or timestamp skips staging rather than fabricating a
 /// clock the SLA deadline would silently trust.
 async fn landing_time(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     message_id: uuid::Uuid,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
     let message = store::inbox::message_by_id(db, message_id)
@@ -144,7 +144,7 @@ async fn landing_time(
 /// message. The firm is resolved exactly as ingest resolved it. If staging
 /// fails, the archived mail and triage entry remain available for review.
 pub(crate) async fn stage_for_review(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     email: &InboundEmail,
     inbound: &store::inbox::IngestedInbound,
     outcome: &LaneOutcome,

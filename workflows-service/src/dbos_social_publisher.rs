@@ -38,7 +38,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use dbos::{CancellationToken, StepOptions, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use uuid::Uuid;
 use workflows::trigger::ServiceTargetError;
 use workflows::{SocialPublishReport, SocialPublishRequest};
@@ -189,7 +189,7 @@ impl PublisherContext {
 /// inbound-notice recovery takes.
 #[derive(Clone)]
 pub struct ReconcilerContext {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     publisher: Publisher,
     social_publisher: SocialPublishWorkflow,
     alert_ingress: (String, String),
@@ -199,14 +199,14 @@ pub struct ReconcilerContext {
 impl ReconcilerContext {
     /// Configure the reconciler and its authenticated alert ingress.
     pub fn from_lookup(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         publisher: Publisher,
         social_publisher: SocialPublishWorkflow,
         get: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ServiceTargetError> {
         let alert_ingress = workflows::trigger::dbos_ingress(&get)?;
         Ok(Self {
-            surreal,
+            application_store,
             publisher,
             social_publisher,
             alert_ingress,
@@ -306,11 +306,11 @@ async fn publish_post(
     dbos::sleep::<SocialPublishDbosError>(delay).await?;
 
     let post_id = request.post_id;
-    let surreal = publisher.surreal().clone();
+    let application_store = publisher.application_store().clone();
     let snapshot = dbos::step("load-scheduled-post", move || {
-        let surreal = surreal.clone();
+        let application_store = application_store.clone();
         async move {
-            scheduled_post_snapshot(&surreal, post_id, request.publish_at)
+            scheduled_post_snapshot(&application_store, post_id, request.publish_at)
                 .await
                 .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Snapshot))
         }
@@ -472,11 +472,11 @@ async fn mark_post_published(
     publisher: &Publisher,
     post_id: Uuid,
 ) -> dbos::Result<(), SocialPublishDbosError> {
-    let surreal = publisher.surreal().clone();
+    let application_store = publisher.application_store().clone();
     dbos::step("mark-post-published", move || {
-        let surreal = surreal.clone();
+        let application_store = application_store.clone();
         async move {
-            store::posts::publish_scheduled(&surreal, post_id)
+            store::posts::publish_scheduled(&application_store, post_id)
                 .await
                 .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Provider))?;
             Ok(())
@@ -492,11 +492,11 @@ async fn reconcile(
     context: &ReconcilerContext,
     request: ReconcileRequest,
 ) -> dbos::Result<ReconcileReport, SocialPublishDbosError> {
-    let surreal = context.surreal.clone();
+    let application_store = context.application_store.clone();
     let scheduled = dbos::step("load-scheduled-social-posts", move || {
-        let surreal = surreal.clone();
+        let application_store = application_store.clone();
         async move {
-            store::social_publications::due_or_future_scheduled(&surreal, 100)
+            store::social_publications::due_or_future_scheduled(&application_store, 100)
                 .await
                 .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Snapshot))
         }
@@ -507,11 +507,11 @@ async fn reconcile(
         start_publisher_child(&context.social_publisher, *post_id, *publish_at, index).await?;
     }
 
-    let surreal = context.surreal.clone();
+    let application_store = context.application_store.clone();
     let alerts = dbos::step("load-pending-inbound-notices", move || {
-        let surreal = surreal.clone();
+        let application_store = application_store.clone();
         async move {
-            store::inbox_alerts::awaiting_reconciliation(&surreal, 15)
+            store::inbox_alerts::awaiting_reconciliation(&application_store, 15)
                 .await
                 .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Snapshot))
         }

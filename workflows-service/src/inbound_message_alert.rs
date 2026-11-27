@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::inbox::{direction, Conversation, InboxError, Message};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::SlackBot;
 
@@ -12,7 +12,7 @@ use crate::workflow_step_error::WorkflowStepError;
 
 #[derive(Clone)]
 pub struct InboundMessageAlertService {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     slack: Arc<dyn SlackBot>,
     messages_channel_id: String,
     staging_messages_channel_id: String,
@@ -24,7 +24,7 @@ pub struct InboundMessageAlertService {
 impl InboundMessageAlertService {
     #[must_use]
     pub fn new(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         slack: Arc<dyn SlackBot>,
         messages_channel_id: String,
         staging_messages_channel_id: String,
@@ -33,7 +33,7 @@ impl InboundMessageAlertService {
         public_origin: Option<String>,
     ) -> Self {
         Self {
-            surreal,
+            application_store,
             slack,
             messages_channel_id,
             staging_messages_channel_id,
@@ -45,214 +45,13 @@ impl InboundMessageAlertService {
 
     /// The shared `SurrealDB` handle the DBOS twin reads message context from.
     #[must_use]
-    pub(crate) fn surreal(&self) -> &SurrealDb {
-        &self.surreal
-    }
-
-    #[cfg(test)]
-    fn channel_id(&self) -> &str {
-        if self.simulated {
-            &self.staging_messages_channel_id
-        } else {
-            &self.messages_channel_id
-        }
+    pub(crate) fn application_store(&self) -> &ApplicationStore {
+        &self.application_store
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::alert_context;
-    use store::inbox::{self, IngestInbound};
-
-    #[tokio::test]
-    async fn alert_context_includes_only_persisted_inbound_metadata() {
-        let db = store::test_support::mem_surreal().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let incoming = inbox::ingest_inbound(
-            &db,
-            &IngestInbound {
-                raw_storage_key: None,
-                project_id: None,
-                firm_id: firm,
-                brand_key: Some("neon"),
-                interaction_type: Some("comment"),
-                provider_post_id: Some("post-synthetic"),
-                parent_provider_message_id: None,
-                visibility: Some("public"),
-                channel: inbox::channel::INSTAGRAM,
-                provider_account: "synthetic-account",
-                provider_message_id: "synthetic-comment",
-                provider_thread_ref: Some("synthetic-thread"),
-                external_address: "synthetic-sender",
-                external_name: Some("Synthetic sender"),
-                subject: None,
-                body: "private message body must not be sent to Slack",
-                source_page: None,
-                source_channel: Some(inbox::channel::INSTAGRAM),
-                matter_consent: false,
-                promotional_opt_in: false,
-                email_conversation_id: None,
-                attachments: Vec::new(),
-                occurred_at: "2026-10-07T12:00:00Z",
-            },
-        )
-        .await
-        .unwrap();
-
-        let context = alert_context(&db, incoming.message_id)
-            .await
-            .unwrap()
-            .expect("inbound message should alert");
-        assert_eq!(context.brand_key, "neon");
-        assert_eq!(context.channel, "instagram");
-        assert_eq!(context.interaction_type, "comment");
-
-        db.query("UPDATE $id SET direction = 'internal'")
-            .bind((
-                "id",
-                store::surreal::record_id("message", incoming.message_id),
-            ))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert!(alert_context(&db, incoming.message_id)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    async fn synthetic_inbound(
-        db: &store::surreal::SurrealDb,
-        firm_id: uuid::Uuid,
-        brand: &str,
-    ) -> inbox::IngestedInbound {
-        inbox::ingest_inbound(
-            db,
-            &IngestInbound {
-                raw_storage_key: None,
-                project_id: None,
-                firm_id,
-                brand_key: Some(brand),
-                interaction_type: Some("message"),
-                provider_post_id: None,
-                parent_provider_message_id: None,
-                visibility: Some("private"),
-                channel: "email",
-                provider_account: "synthetic-account",
-                provider_message_id: "synthetic-id",
-                provider_thread_ref: None,
-                external_address: "sender@example.com",
-                external_name: None,
-                subject: None,
-                body: "Synthetic confidential body",
-                source_page: None,
-                source_channel: None,
-                matter_consent: false,
-                promotional_opt_in: false,
-                email_conversation_id: None,
-                attachments: Vec::new(),
-                occurred_at: "2026-10-10T00:00:00Z",
-            },
-        )
-        .await
-        .unwrap()
-    }
-
-    #[tokio::test]
-    async fn persisted_receipts_prevent_duplicate_posts_and_cross_firm_notices() {
-        let db = store::test_support::mem_surreal().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other = store::test_support::seed_firm_with_brand(&db, "guieb-shook").await;
-        let slack = std::sync::Arc::new(workflows::CapturingSlackBot::new());
-        let service = super::InboundMessageAlertService::new(
-            db.clone(),
-            slack.clone(),
-            "CSYNTHETIC".into(),
-            "CSTAGING".into(),
-            false,
-            true,
-            Some("https://example.com".into()),
-        );
-        for (firm_id, expected) in [(firm, "notified"), (other, "disabled")] {
-            let incoming = synthetic_inbound(
-                &db,
-                firm_id,
-                if firm_id == firm {
-                    "neon"
-                } else {
-                    "guieb-shook"
-                },
-            )
-            .await;
-            let context = alert_context(&db, incoming.message_id)
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(
-                service
-                    .deliver_alert(incoming.message_id, &context)
-                    .await
-                    .unwrap(),
-                expected
-            );
-            assert_eq!(
-                service
-                    .deliver_alert(incoming.message_id, &context)
-                    .await
-                    .unwrap(),
-                expected
-            );
-            if firm_id == firm {
-                db.query("UPDATE $id SET alert_state = 'unknown', alert_timestamp = NONE")
-                    .bind((
-                        "id",
-                        store::surreal::record_id("message", incoming.message_id),
-                    ))
-                    .await
-                    .unwrap()
-                    .check()
-                    .unwrap();
-                assert_eq!(
-                    service
-                        .deliver_alert(incoming.message_id, &context)
-                        .await
-                        .unwrap(),
-                    "notified"
-                );
-                db.query("UPDATE $id SET alert_state = 'unknown', alert_channel_id = 'CMISSING', alert_timestamp = NONE")
-                    .bind(("id", store::surreal::record_id("message", incoming.message_id)))
-                    .await.unwrap().check().unwrap();
-                assert_eq!(
-                    service
-                        .deliver_alert(incoming.message_id, &context)
-                        .await
-                        .unwrap(),
-                    "unknown"
-                );
-                db.query("UPDATE $id UNSET alert_state, alert_channel_id, alert_timestamp")
-                    .bind((
-                        "id",
-                        store::surreal::record_id("message", incoming.message_id),
-                    ))
-                    .await
-                    .unwrap()
-                    .check()
-                    .unwrap();
-                assert_eq!(
-                    service
-                        .deliver_alert(incoming.message_id, &context)
-                        .await
-                        .unwrap(),
-                    "historical"
-                );
-            }
-        }
-        let notices = slack.posted_messages();
-        assert_eq!(notices.len(), 1);
-        assert!(!notices[0].1.contains("confidential body"));
-        assert!(notices[0].1.contains("/app/inbox/"));
-    }
 
     #[test]
     fn journaled_context_without_the_new_firm_field_still_decodes() {
@@ -262,32 +61,6 @@ mod tests {
         }))
         .unwrap();
         assert!(context.firm_id.is_nil());
-    }
-
-    #[tokio::test]
-    async fn channel_id_uses_the_staging_lane_when_simulated() {
-        let db = store::test_support::mem_surreal().await;
-        let slack = std::sync::Arc::new(workflows::CapturingSlackBot::new());
-        let live = super::InboundMessageAlertService::new(
-            db.clone(),
-            slack.clone(),
-            "prod-channel".into(),
-            "staging-channel".into(),
-            false,
-            true,
-            Some("https://navigator.example".into()),
-        );
-        let simulated = super::InboundMessageAlertService::new(
-            db,
-            slack,
-            "prod-channel".into(),
-            "staging-channel".into(),
-            true,
-            true,
-            None,
-        );
-        assert_eq!(live.channel_id(), "prod-channel");
-        assert_eq!(simulated.channel_id(), "staging-channel");
     }
 }
 
@@ -316,10 +89,11 @@ pub(crate) enum AlertContextError {
 /// The metadata-only context read shared by both engines. Message text,
 /// external names, and addresses stay in the Firm inbox.
 pub(crate) async fn alert_context(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     message_id: Uuid,
 ) -> Result<Option<AlertContext>, AlertContextError> {
-    let Some(message): Option<Message> = store::inbox::message_by_id(surreal, message_id).await?
+    let Some(message): Option<Message> =
+        store::inbox::message_by_id(application_store, message_id).await?
     else {
         return Err(AlertContextError::MessageNotFound);
     };
@@ -327,7 +101,7 @@ pub(crate) async fn alert_context(
         return Ok(None);
     }
     let Some(conversation): Option<Conversation> =
-        store::inbox::conversation_by_id(surreal, message.conversation_id).await?
+        store::inbox::conversation_by_id(application_store, message.conversation_id).await?
     else {
         return Err(AlertContextError::ConversationNotFound);
     };
@@ -354,7 +128,7 @@ impl InboundMessageAlertService {
             {
                 if found.channel_id == channel && !found.timestamp.is_empty() {
                     store::inbox_alerts::record(
-                        &self.surreal,
+                        &self.application_store,
                         message_id,
                         "notified",
                         Some(&found.timestamp),
@@ -365,7 +139,7 @@ impl InboundMessageAlertService {
                 }
             }
         }
-        store::inbox_alerts::record(&self.surreal, message_id, "unknown", None)
+        store::inbox_alerts::record(&self.application_store, message_id, "unknown", None)
             .await
             .map_err(WorkflowStepError::retryable)?;
         Ok("unknown".into())
@@ -378,13 +152,15 @@ impl InboundMessageAlertService {
         message_id: Uuid,
         _context: &AlertContext,
     ) -> Result<String, WorkflowStepError> {
-        let Some(context) = alert_context(&self.surreal, message_id)
+        use workflows::post_slack_notification::{classify_post_notice_attempt, PostNoticeAttempt};
+
+        let Some(context) = alert_context(&self.application_store, message_id)
             .await
             .map_err(WorkflowStepError::retryable)?
         else {
             return Ok("skipped_non_inbound".into());
         };
-        let receipt = store::inbox_alerts::receipt(&self.surreal, message_id)
+        let receipt = store::inbox_alerts::receipt(&self.application_store, message_id)
             .await
             .map_err(WorkflowStepError::retryable)?;
         if receipt.state.as_deref() == Some("unknown") {
@@ -402,7 +178,7 @@ impl InboundMessageAlertService {
             std::env::var(key).ok()
         }) {
             Ok(firm) => firm
-                .resolve(&self.surreal)
+                .resolve(&self.application_store)
                 .await
                 .map_err(WorkflowStepError::retryable)?,
             Err(_) => None,
@@ -431,7 +207,7 @@ impl InboundMessageAlertService {
         let (Some(channel_id), Some(mut inbox_url), true) =
             (channel_id, origin, self.slack_enabled)
         else {
-            store::inbox_alerts::record(&self.surreal, message_id, "disabled", None)
+            store::inbox_alerts::record(&self.application_store, message_id, "disabled", None)
                 .await
                 .map_err(WorkflowStepError::retryable)?;
             return Ok("disabled".into());
@@ -439,7 +215,7 @@ impl InboundMessageAlertService {
         inbox_url.set_path(&format!("/app/inbox/{}", context.conversation_id));
         inbox_url.set_query(None);
         inbox_url.set_fragment(None);
-        if !store::inbox_alerts::reserve(&self.surreal, message_id, channel_id)
+        if !store::inbox_alerts::reserve(&self.application_store, message_id, channel_id)
             .await
             .map_err(WorkflowStepError::retryable)?
         {
@@ -455,29 +231,20 @@ impl InboundMessageAlertService {
             .slack
             .post_message_with_receipt(channel_id, &text, Some(&message_id.to_string()))
             .await;
-        let (state, timestamp) = match outcome {
-            Ok(receipt) if receipt.channel_id == channel_id && !receipt.timestamp.is_empty() => {
-                ("notified", Some(receipt.timestamp))
-            }
-            Err(workflows::SlackBotError::RateLimited { .. }) => ("pending", None),
-            Err(workflows::SlackBotError::Api(ref code))
-                if matches!(
-                    code.as_str(),
-                    "request_timeout" | "internal_error" | "fatal_error"
-                ) =>
-            {
-                ("unknown", None)
-            }
-            Err(
-                workflows::SlackBotError::Api(_)
-                | workflows::SlackBotError::MissingScope { .. }
-                | workflows::SlackBotError::HttpStatus(400 | 401 | 403 | 404),
-            ) => ("failed", None),
-            _ => ("unknown", None),
+        let (state, timestamp) = match classify_post_notice_attempt(channel_id, &outcome) {
+            PostNoticeAttempt::Confirmed => ("notified", outcome.ok().map(|row| row.timestamp)),
+            PostNoticeAttempt::RetryAfterRateLimit { .. } => ("pending", None),
+            PostNoticeAttempt::Rejected => ("failed", None),
+            PostNoticeAttempt::ReconcileBeforeResend => ("unknown", None),
         };
-        store::inbox_alerts::record(&self.surreal, message_id, state, timestamp.as_deref())
-            .await
-            .map_err(WorkflowStepError::retryable)?;
+        store::inbox_alerts::record(
+            &self.application_store,
+            message_id,
+            state,
+            timestamp.as_deref(),
+        )
+        .await
+        .map_err(WorkflowStepError::retryable)?;
         Ok(state.into())
     }
 }

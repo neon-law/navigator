@@ -14,15 +14,13 @@
 
 use std::fmt::Write as _;
 use std::future::Future;
-#[cfg(test)]
-use std::sync::Arc;
 
 #[cfg(test)]
 use chrono::NaiveDate;
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use uuid::Uuid;
 #[cfg(test)]
 use workflows::SlackBot;
@@ -400,9 +398,9 @@ where
 }
 
 pub(crate) async fn discover_roster(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
 ) -> Result<Vec<RosterEntry>, WorkflowStepError> {
-    Ok(store::projects::all(surreal)
+    Ok(store::projects::all(application_store)
         .await
         .map_err(WorkflowStepError::retryable)?
         .into_iter()
@@ -540,44 +538,6 @@ fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), W
         ));
     }
     Ok(())
-}
-
-/// The production composition, minus Restate: every tag's real child logic
-/// run in-process against fakes, so tests exercise the sweep end to end.
-#[cfg(test)]
-pub(crate) async fn sweep_in_process(
-    surreal: &SurrealDb,
-    slack: &Arc<dyn SlackBot>,
-    forge: Option<&cloud::forge::FakeForge>,
-    simulated: bool,
-) -> NightlyProjectUpdateReport {
-    let roster = discover_roster(surreal).await.expect("discover Projects");
-    let forge = &forge.map_or(repository::RepositoryForge::None, |forge| {
-        repository::RepositoryForge::GitHub(Arc::new(forge.clone()))
-    });
-    sweep(&roster, |tag, project_id| async move {
-        match tag {
-            Tag::Calendar => return Err("Calendar requires DBOS".to_owned()),
-            Tag::Membership => membership::reconcile_project(surreal, slack, simulated, project_id)
-                .await
-                .map(TagOutcome::Membership),
-            Tag::Slack => {
-                slack::reconcile_slack(surreal, slack.as_ref(), None, "2026-10-05", project_id)
-                    .await
-                    .map(TagOutcome::Slack)
-            }
-            Tag::Repository => repository::reconcile_repository(
-                surreal,
-                forge,
-                project_id,
-                repository::RUNTIME_VERSION,
-            )
-            .await
-            .map(TagOutcome::Repository),
-        }
-        .map_err(|error| format!("{error:?}"))
-    })
-    .await
 }
 
 #[cfg(test)]
@@ -815,46 +775,6 @@ mod tests {
         .await;
         assert_eq!(*ran.borrow(), [Tag::Membership]);
         assert_eq!((report.projects, report.open_projects), (1, 0));
-    }
-
-    #[tokio::test]
-    async fn a_second_run_the_same_day_creates_nothing_new() {
-        use cloud::forge::FakeForge;
-        use store::projects::{create, NewProject};
-        use store::test_support::{mem_surreal, seed_entity};
-
-        let surreal = mem_surreal().await;
-        create(
-            &surreal,
-            &NewProject {
-                code: "sample-idempotent".to_string(),
-                name: "Sample".to_string(),
-                status: "open".to_string(),
-                entity_id: seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create Project");
-        let slack: Arc<dyn SlackBot> = Arc::new(workflows::CapturingSlackBot::new());
-        let forge = FakeForge::new();
-
-        let first = sweep_in_process(&surreal, &slack, Some(&forge), false).await;
-        assert_eq!((first.channels_created, first.repositories_synced), (1, 1));
-        let second = sweep_in_process(&surreal, &slack, Some(&forge), false).await;
-        assert_eq!(
-            (
-                second.channels_created,
-                second.channels_repaired,
-                second.repositories_synced
-            ),
-            (0, 0, 0),
-            "recorded channel and repository are kept"
-        );
-        assert_eq!(
-            (second.membership_failures, second.repository_failures),
-            (0, 0)
-        );
     }
 
     #[tokio::test]

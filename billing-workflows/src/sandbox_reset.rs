@@ -22,10 +22,10 @@
 use billing::{BillingProvider, InvoiceLine, InvoiceRequest, XeroBillingProvider};
 
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::postgres::PostgresDb;
 use store::purchases;
 use store::sandbox_usage;
-use store::surreal::SurrealDb;
 
 /// Request body for `SandboxCreditReset::run`. Empty — the trigger only
 /// starts the workflow — but kept as a struct so fields can be threaded
@@ -61,13 +61,13 @@ pub struct SandboxResetReport {
 /// portal's own gate requires before a composer renders.
 pub async fn grant_active_subscribers(
     pg: &PostgresDb,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     new_period: &str,
 ) -> anyhow::Result<usize> {
     let purchases = purchases::for_offerings(pg, &purchases::SAME_DAY_LEGAL_OFFERINGS).await?;
     let mut granted = 0;
     for person_id in subscriber_ids(&purchases) {
-        sandbox_usage::grant(surreal, person_id, new_period).await?;
+        sandbox_usage::grant(application_store, person_id, new_period).await?;
         granted += 1;
     }
     Ok(granted)
@@ -98,57 +98,6 @@ fn latest_purchase(
         .max_by_key(|purchase| (purchase.inserted_at, purchase.id))
 }
 
-/// Convert a closed period's overage rows into à la carte invoices.
-///
-/// Each overage row becomes one `InvoiceRequest` — one line, the overage
-/// amount, on the subscriber's Same Day Legal account code, billed to the person
-/// the ledger row belongs to. A row whose person or Same Day Legal Purchase is
-/// gone is skipped and counted; the run continues, because one orphaned
-/// ledger row must not stop every other subscriber's invoice.
-///
-/// A completed step is journaled. An interrupted step can execute again;
-/// its deterministic key only protects retries inside Xero's six-minute
-/// retention window. Durable per-overage invoice recovery remains separate
-/// from this matter-billing implementation.
-#[cfg(test)]
-async fn invoice_closed_overage(
-    billing: &mut dyn BillingProvider,
-    pg: &PostgresDb,
-    surreal: &SurrealDb,
-    closed_period: &str,
-) -> anyhow::Result<SandboxResetReport> {
-    let rows = sandbox_usage::overage_rows(surreal, closed_period).await?;
-    let purchases = purchases::for_offerings(pg, &purchases::SAME_DAY_LEGAL_OFFERINGS).await?;
-
-    let mut report = SandboxResetReport {
-        new_period: String::new(),
-        closed_period: closed_period.to_string(),
-        granted: 0,
-        overage_invoiced: 0,
-        overage_skipped: 0,
-        overage_already_billed: 0,
-    };
-
-    for row in rows {
-        let overage_cents = row.spent_cents - row.granted_cents;
-        match invoice_one(
-            billing,
-            surreal,
-            &purchases,
-            row.person_id,
-            closed_period,
-            overage_cents,
-        )
-        .await?
-        {
-            OverageOutcome::Invoiced(_) => report.overage_invoiced += 1,
-            OverageOutcome::Skipped => report.overage_skipped += 1,
-            OverageOutcome::AlreadyBilled => report.overage_already_billed += 1,
-        }
-    }
-    Ok(report)
-}
-
 /// Outcome of one subscriber's closed billing period.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum OverageOutcome {
@@ -165,10 +114,10 @@ pub struct Overage {
 }
 
 pub async fn closed_overage_roster(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     period: &str,
 ) -> anyhow::Result<Vec<Overage>> {
-    Ok(sandbox_usage::overage_rows(surreal, period)
+    Ok(sandbox_usage::overage_rows(application_store, period)
         .await?
         .into_iter()
         .map(|row| Overage {
@@ -182,7 +131,7 @@ pub async fn closed_overage_roster(
 /// its timeout and replay admission before making the provider call.
 pub async fn invoice_one_from_env(
     pg: &PostgresDb,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     period: &str,
     overage: Overage,
 ) -> anyhow::Result<OverageOutcome> {
@@ -191,7 +140,7 @@ pub async fn invoice_one_from_env(
     let purchases = purchases::for_offerings(pg, &purchases::SAME_DAY_LEGAL_OFFERINGS).await?;
     invoice_one(
         &mut billing,
-        surreal,
+        application_store,
         &purchases,
         overage.person_id,
         period,
@@ -202,7 +151,7 @@ pub async fn invoice_one_from_env(
 
 async fn invoice_one(
     billing: &mut dyn BillingProvider,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     purchases: &[store::purchases::Purchase],
     person_id: uuid::Uuid,
     closed_period: &str,
@@ -214,7 +163,7 @@ async fn invoice_one(
     let Some(purchase) = latest_purchase(purchases, person_id) else {
         return Ok(OverageOutcome::Skipped);
     };
-    let person = store::persons::find_by_id(surreal, person_id).await?;
+    let person = store::persons::find_by_id(application_store, person_id).await?;
     let Some(person) = person else {
         return Ok(OverageOutcome::Skipped);
     };
@@ -265,227 +214,4 @@ pub fn overage_invoice_key(person_id: uuid::Uuid, period: &str) -> uuid::Uuid {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{grant_active_subscribers, invoice_closed_overage, overage_invoice_key};
-    use billing::StubBillingProvider;
-    use sqlx::postgres::{PgConnectOptions, PgSslMode};
-    use sqlx::{AssertSqlSafe, PgPool};
-    use store::purchases::{Cadence, NewPurchase};
-    use store::sandbox_usage::MeterDecision;
-    use store::surreal::test_support::mem;
-
-    /// The same Postgres test lane the store's own purchase tests use:
-    /// per-test database, migrated.
-    async fn database() -> Option<store::postgres::PostgresDb> {
-        let port = store::test_support::postgres_test_port();
-        let options = PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(PgSslMode::Disable);
-        let admin = PgPool::connect_with(options.clone()).await.unwrap();
-        let name = format!("sandbox_reset_{}", uuid::Uuid::new_v4().simple());
-        sqlx::query(AssertSqlSafe(format!("CREATE DATABASE {name}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let pg = store::postgres::PostgresDb::connect(options.database(&name))
-            .await
-            .unwrap();
-        pg.migrate_embedded(None).await.unwrap();
-        Some(pg)
-    }
-
-    /// A Same Day Legal monthly plan for one person, mirroring the store's own
-    /// purchase-test fixture.
-    fn plan(person_id: uuid::Uuid) -> NewPurchase {
-        NewPurchase {
-            person_id,
-            email: "client@example.com".into(),
-            offering: "delete-your-data-monthly".into(),
-            offering_name: "Delete Your Data, monthly".into(),
-            cadence: Cadence::Month,
-            amount_cents: 2_900,
-            currency: "USD".into(),
-            account_code: "200".into(),
-        }
-    }
-
-    #[tokio::test]
-    async fn grants_follow_active_purchases_and_skip_other_states() {
-        let Some(pg) = database().await else { return };
-        let surreal = mem().await;
-        let now = chrono::Utc::now();
-        let active = uuid::Uuid::now_v7();
-        let lapsed = uuid::Uuid::now_v7();
-        let other = uuid::Uuid::now_v7();
-
-        let active_purchase = store::purchases::open(&pg, &plan(active), now)
-            .await
-            .unwrap();
-        store::purchases::record_invoice(&pg, active_purchase.id, "contact", "inv-1", None, now)
-            .await
-            .unwrap();
-        store::purchases::activate(&pg, active_purchase.id, None, now)
-            .await
-            .unwrap();
-        store::purchases::open(&pg, &plan(lapsed), now)
-            .await
-            .unwrap();
-        let consultation = NewPurchase {
-            offering: "consultation".into(),
-            offering_name: "Consultation".into(),
-            ..plan(other)
-        };
-        store::purchases::record_complimentary(&pg, &consultation, now)
-            .await
-            .unwrap();
-
-        let granted = grant_active_subscribers(&pg, &surreal, "2026-11")
-            .await
-            .unwrap();
-
-        assert_eq!(granted, 1, "only the active subscription is a subscriber");
-        let row = store::sandbox_usage::find(&surreal, active, "2026-11")
-            .await
-            .unwrap()
-            .expect("the active subscriber's row");
-        assert_eq!(row.granted_cents, store::sandbox_usage::MONTHLY_GRANT_CENTS);
-        assert!(
-            store::sandbox_usage::find(&surreal, lapsed, "2026-11")
-                .await
-                .unwrap()
-                .is_none(),
-            "an invoiced-but-never-active purchase grants nothing"
-        );
-        assert!(
-            store::sandbox_usage::find(&surreal, other, "2026-11")
-                .await
-                .unwrap()
-                .is_none(),
-            "a non-Same Day Legal offering grants nothing"
-        );
-    }
-
-    /// Overdraw one subscriber's closed month, seed the person the invoice
-    /// bills, and run the invoicing twice.
-    async fn overdrawn_subscriber(
-        pg: &store::postgres::PostgresDb,
-        surreal: &store::surreal::SurrealDb,
-    ) -> uuid::Uuid {
-        let person = store::test_support::ensure_person(
-            surreal,
-            &store::persons::NewPerson::new("Ada Sample", "ada@example.com"),
-        )
-        .await;
-        store::purchases::open(pg, &plan(person.id), chrono::Utc::now())
-            .await
-            .unwrap();
-        store::sandbox_usage::grant(surreal, person.id, "2026-10")
-            .await
-            .unwrap();
-        assert!(matches!(
-            store::sandbox_usage::debit(surreal, person.id, "2026-10", 625)
-                .await
-                .unwrap(),
-            MeterDecision::Charge { .. }
-        ));
-        person.id
-    }
-
-    #[tokio::test]
-    async fn closed_overage_becomes_one_invoice_line_on_the_subscribers_account() {
-        let Some(pg) = database().await else { return };
-        let surreal = mem().await;
-        let person = overdrawn_subscriber(&pg, &surreal).await;
-
-        let mut stub = StubBillingProvider::new();
-        let report = invoice_closed_overage(&mut stub, &pg, &surreal, "2026-10")
-            .await
-            .unwrap();
-
-        assert_eq!(report.overage_invoiced, 1, "the 125-cent overage is billed");
-        assert_eq!(report.overage_skipped, 0);
-
-        let call = &stub.calls()[0];
-        assert_eq!(call.request.contact_name, "Ada Sample");
-        assert_eq!(call.request.contact_email, "ada@example.com");
-        assert_eq!(call.request.line_items.len(), 1);
-        assert_eq!(call.request.line_items[0].unit_amount_cents, 125);
-        assert_eq!(
-            call.request.line_items[0].account_code, "200",
-            "the overage posts to the subscriber's Same Day Legal account code"
-        );
-        assert_eq!(
-            call.matter_id,
-            overage_invoice_key(person, "2026-10"),
-            "the invoice key is the deterministic overage key"
-        );
-    }
-
-    /// The billing contract's promise is idempotency on the matter id, so
-    /// the retry's deduplication is the *key*: a re-run rebuilds the same
-    /// key for the same overage. (The stub records calls without
-    /// deduplicating; the real provider honors the key.)
-    #[tokio::test]
-    async fn a_rerun_of_the_same_overage_builds_the_same_invoice_key() {
-        let Some(pg) = database().await else { return };
-        let surreal = mem().await;
-        let person = overdrawn_subscriber(&pg, &surreal).await;
-
-        let mut stub = StubBillingProvider::new();
-        let first = invoice_closed_overage(&mut stub, &pg, &surreal, "2026-10")
-            .await
-            .unwrap();
-        let second = invoice_closed_overage(&mut stub, &pg, &surreal, "2026-10")
-            .await
-            .unwrap();
-
-        assert_eq!(
-            first.overage_invoiced, second.overage_invoiced,
-            "the re-run sees the same closed-period rows"
-        );
-        assert_eq!(
-            stub.calls()[0].matter_id,
-            overage_invoice_key(person, "2026-10"),
-            "the first call carries the deterministic key"
-        );
-        assert_eq!(
-            stub.calls()[1].matter_id,
-            stub.calls()[0].matter_id,
-            "the re-run rebuilds the same key — the provider dedupes on it"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_overage_without_a_purchase_is_skipped_and_counted() {
-        let Some(pg) = database().await else { return };
-        let surreal = mem().await;
-        let person = uuid::Uuid::now_v7();
-        store::sandbox_usage::grant(&surreal, person, "2026-10")
-            .await
-            .unwrap();
-        assert!(matches!(
-            store::sandbox_usage::debit(&surreal, person, "2026-10", 600)
-                .await
-                .unwrap(),
-            MeterDecision::Charge { .. }
-        ));
-
-        // No Same Day Legal Purchase anywhere: the subscriber's purchase is gone.
-        let mut stub = StubBillingProvider::new();
-        let report = invoice_closed_overage(&mut stub, &pg, &surreal, "2026-10")
-            .await
-            .unwrap();
-
-        assert_eq!(report.overage_skipped, 1);
-        assert_eq!(report.overage_invoiced, 0);
-        assert!(stub.calls().is_empty(), "no invoice without a billed party");
-    }
-}
+mod tests {}

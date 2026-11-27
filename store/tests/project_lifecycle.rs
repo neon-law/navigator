@@ -21,18 +21,18 @@ fn at(value: &str) -> chrono::DateTime<chrono::Utc> {
     value.parse().expect("valid RFC 3339 test time")
 }
 
-async fn open_matter(_: &store::surreal::SurrealDb, code: &str) -> Uuid {
+async fn open_matter(_: &store::application_store::ApplicationStore, code: &str) -> Uuid {
     native_project::create(code).await.id
 }
 
 /// Supply valid reopening attestation before exercising lifecycle retention rules.
 async fn reopen(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     id: Uuid,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<Project, ProjectCommandError> {
     let lawyer = store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role(
             "Synthetic attesting lawyer",
             "attesting-lawyer@example.com",
@@ -42,7 +42,7 @@ async fn reopen(
     .await
     .expect("create attesting lawyer");
     store::projects::transition_project_attested(
-        surreal,
+        application_store,
         id,
         Transition::Reopen,
         None,
@@ -53,14 +53,17 @@ async fn reopen(
     .await
 }
 
-async fn reload(surreal: &store::surreal::SurrealDb, id: Uuid) -> Project {
-    store::projects::find_by_id(surreal, id)
+async fn reload(
+    application_store: &store::application_store::ApplicationStore,
+    id: Uuid,
+) -> Project {
+    store::projects::find_by_id(application_store, id)
         .await
         .expect("query")
         .expect("matter still exists")
 }
 
-async fn set_opened_at(_: &store::surreal::SurrealDb, id: Uuid, opened_at: &str) {
+async fn set_opened_at(_: &store::application_store::ApplicationStore, id: Uuid, opened_at: &str) {
     let pg = store::postgres::PostgresDb::application().await.unwrap();
     sqlx::query("UPDATE project SET inserted_at=$2 WHERE id=$1")
         .bind(id)
@@ -70,7 +73,7 @@ async fn set_opened_at(_: &store::surreal::SurrealDb, id: Uuid, opened_at: &str)
         .unwrap();
 }
 
-async fn file_asset(_: &store::surreal::SurrealDb, project_id: Uuid, kind: &str) {
+async fn file_asset(_: &store::application_store::ApplicationStore, project_id: Uuid, kind: &str) {
     let pg = store::postgres::PostgresDb::application().await.unwrap();
     sqlx::query("INSERT INTO asset(id,project_id,storage_key,content_type,byte_size,sha256_hex,kind,visibility) VALUES ($1,$2,$3,'application/pdf',1,$4,$5,'internal')")
         .bind(Uuid::new_v4()).bind(project_id)
@@ -80,13 +83,13 @@ async fn file_asset(_: &store::surreal::SurrealDb, project_id: Uuid, kind: &str)
 }
 
 async fn close_active(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     id: Uuid,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<Project, ProjectCommandError> {
-    seed_signed_onboarding(surreal, id, dri_person(surreal).await).await;
+    seed_signed_onboarding(application_store, id, dri_person(application_store).await).await;
     transition_project_with_reason(
-        surreal,
+        application_store,
         id,
         Transition::Close,
         Some(ClosureReason::EngagementCompleted),
@@ -98,17 +101,24 @@ async fn close_active(
 #[tokio::test]
 async fn close_reasons_follow_the_pre_close_lifecycle_and_pitch_offboarding_gate() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let pitch = open_matter(&surreal, "pitch-reason").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let pitch = open_matter(&application_store, "pitch-reason").await;
 
         assert!(matches!(
-            transition_project_with_reason(&surreal, pitch, Transition::Close, None, None,).await,
+            transition_project_with_reason(
+                &application_store,
+                pitch,
+                Transition::Close,
+                None,
+                None,
+            )
+            .await,
             Err(ProjectCommandError::Invalid(_))
         ));
-        file_asset(&surreal, pitch, "onboarding").await;
+        file_asset(&application_store, pitch, "onboarding").await;
         assert!(matches!(
             transition_project_with_reason(
-                &surreal,
+                &application_store,
                 pitch,
                 Transition::Close,
                 Some(ClosureReason::EngagementCompleted),
@@ -118,9 +128,9 @@ async fn close_reasons_follow_the_pre_close_lifecycle_and_pitch_offboarding_gate
             Err(ProjectCommandError::Invalid(_))
         ));
 
-        file_asset(&surreal, pitch, "offboarding").await;
+        file_asset(&application_store, pitch, "offboarding").await;
         let closed = transition_project_with_reason(
-            &surreal,
+            &application_store,
             pitch,
             Transition::Close,
             Some(ClosureReason::PitchDeclined),
@@ -136,12 +146,12 @@ async fn close_reasons_follow_the_pre_close_lifecycle_and_pitch_offboarding_gate
 #[tokio::test]
 async fn close_reason_is_exposed_and_reopen_clears_it_without_touching_historical_rows() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "reason-round-trip").await;
-        seed_signed_onboarding(&surreal, id, dri_person(&surreal).await).await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "reason-round-trip").await;
+        seed_signed_onboarding(&application_store, id, dri_person(&application_store).await).await;
 
         let closed = transition_project_with_reason(
-            &surreal,
+            &application_store,
             id,
             Transition::Close,
             Some(ClosureReason::ClientTerminated),
@@ -151,10 +161,10 @@ async fn close_reason_is_exposed_and_reopen_clears_it_without_touching_historica
         .expect("active close");
         assert_eq!(closed.closure_reason.as_deref(), Some("client_terminated"));
 
-        let reopened = reopen(&surreal, id, None).await.expect("reopen");
+        let reopened = reopen(&application_store, id, None).await.expect("reopen");
         assert!(reopened.closure_reason.is_none());
 
-        let historical = open_matter(&surreal, "historical-close").await;
+        let historical = open_matter(&application_store, "historical-close").await;
         let pg = store::postgres::PostgresDb::application().await.unwrap();
         sqlx::query("UPDATE project SET status='closed',closed_at=$2 WHERE id=$1")
             .bind(historical)
@@ -163,7 +173,7 @@ async fn close_reason_is_exposed_and_reopen_clears_it_without_touching_historica
             .await
             .expect("historical write");
         let unchanged = transition_project_with_reason(
-            &surreal,
+            &application_store,
             historical,
             Transition::Close,
             Some(ClosureReason::PitchDeclined),
@@ -197,10 +207,12 @@ fn assert_invariant(row: &Project) {
 #[tokio::test]
 async fn closing_stamps_the_close_date_that_starts_retention() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "close-me").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "close-me").await;
 
-        let closed = close_active(&surreal, id, None).await.expect("close");
+        let closed = close_active(&application_store, id, None)
+            .await
+            .expect("close");
         assert_eq!(closed.status, "closed");
         assert!(closed.closed_at.is_some());
         assert_invariant(&closed);
@@ -211,15 +223,15 @@ async fn closing_stamps_the_close_date_that_starts_retention() {
 #[tokio::test]
 async fn an_effective_date_corrects_an_already_closed_matter() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "correct-close").await;
-        set_opened_at(&surreal, id, "2000-01-01T00:00:00Z").await;
-        close_active(&surreal, id, None)
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "correct-close").await;
+        set_opened_at(&application_store, id, "2000-01-01T00:00:00Z").await;
+        close_active(&application_store, id, None)
             .await
             .expect("initial close");
 
         let corrected = transition_project_with_reason(
-            &surreal,
+            &application_store,
             id,
             Transition::Close,
             Some(ClosureReason::EngagementCompleted),
@@ -238,12 +250,12 @@ async fn an_effective_date_corrects_an_already_closed_matter() {
 #[tokio::test]
 async fn archiving_accepts_an_effective_date() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "effective-archive").await;
-        set_opened_at(&surreal, id, "2000-01-01T00:00:00Z").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "effective-archive").await;
+        set_opened_at(&application_store, id, "2000-01-01T00:00:00Z").await;
 
         let archived = transition_project(
-            &surreal,
+            &application_store,
             id,
             Transition::Archive,
             Some(at("2001-02-03T04:05:06Z")),
@@ -261,17 +273,17 @@ async fn archiving_accepts_an_effective_date() {
 #[tokio::test]
 async fn effective_dates_are_bounded_by_matter_open_and_now() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "bounded-close").await;
-        set_opened_at(&surreal, id, "2000-01-01T00:00:00Z").await;
-        seed_signed_onboarding(&surreal, id, dri_person(&surreal).await).await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "bounded-close").await;
+        set_opened_at(&application_store, id, "2000-01-01T00:00:00Z").await;
+        seed_signed_onboarding(&application_store, id, dri_person(&application_store).await).await;
 
         for (label, effective_at) in [
             ("before matter-open", "1999-12-31T23:59:59Z"),
             ("in the future", "9999-01-01T00:00:00Z"),
         ] {
             let error = transition_project_with_reason(
-                &surreal,
+                &application_store,
                 id,
                 Transition::Close,
                 Some(ClosureReason::EngagementCompleted),
@@ -283,7 +295,7 @@ async fn effective_dates_are_bounded_by_matter_open_and_now() {
                 matches!(error, ProjectCommandError::Invalid(_)),
                 "{error:?}"
             );
-            let unchanged = reload(&surreal, id).await;
+            let unchanged = reload(&application_store, id).await;
             assert_eq!(unchanged.status, "open", "{label}");
             assert!(unchanged.closed_at.is_none(), "{label}");
         }
@@ -294,16 +306,18 @@ async fn effective_dates_are_bounded_by_matter_open_and_now() {
 #[tokio::test]
 async fn attested_reopening_records_a_backdated_effective_date_without_retention() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "dated-reopen").await;
-        set_opened_at(&surreal, id, "2000-01-01T00:00:00Z").await;
-        close_active(&surreal, id, None).await.expect("close");
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "dated-reopen").await;
+        set_opened_at(&application_store, id, "2000-01-01T00:00:00Z").await;
+        close_active(&application_store, id, None)
+            .await
+            .expect("close");
 
         let effective = at("2001-02-03T04:05:06Z");
-        let reopened = reopen(&surreal, id, Some(effective))
+        let reopened = reopen(&application_store, id, Some(effective))
             .await
             .expect("attested backdated reopen");
-        let (current, history) = store::projects::status_with_history(&surreal, reopened)
+        let (current, history) = store::projects::status_with_history(&application_store, reopened)
             .await
             .expect("read committed lifecycle history");
         assert_eq!(current.status, "open");
@@ -317,10 +331,11 @@ async fn attested_reopening_records_a_backdated_effective_date_without_retention
             .recorded_at
             .is_some_and(|recorded| recorded > effective));
         assert_eq!(event.reason.as_deref(), Some("new_matter_event"));
-        let lawyer = store::persons::find_by_email_ci(&surreal, "attesting-lawyer@example.com")
-            .await
-            .expect("read attesting lawyer")
-            .expect("attesting lawyer exists");
+        let lawyer =
+            store::persons::find_by_email_ci(&application_store, "attesting-lawyer@example.com")
+                .await
+                .expect("read attesting lawyer")
+                .expect("attesting lawyer exists");
         assert_eq!(event.attesting_person_id, Some(lawyer.id));
     })
     .await;
@@ -329,11 +344,11 @@ async fn attested_reopening_records_a_backdated_effective_date_without_retention
 #[tokio::test]
 async fn reopening_clears_the_close_date() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "reopen-me").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "reopen-me").await;
 
-        close_active(&surreal, id, None).await.expect("close");
-        let reopened = reopen(&surreal, id, None)
+        close_active(&application_store, id, None).await.expect("close");
+        let reopened = reopen(&application_store, id, None)
             .await
             .expect("reopen");
 
@@ -352,13 +367,15 @@ async fn reopening_clears_the_close_date() {
 #[tokio::test]
 async fn archiving_a_closed_matter_preserves_its_original_close_date() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "archive-closed").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "archive-closed").await;
 
-        let closed = close_active(&surreal, id, None).await.expect("close");
+        let closed = close_active(&application_store, id, None)
+            .await
+            .expect("close");
         let original = closed.closed_at.clone().expect("stamped");
 
-        let archived = transition_project(&surreal, id, Transition::Archive, None)
+        let archived = transition_project(&application_store, id, Transition::Archive, None)
             .await
             .expect("archive");
         assert_eq!(archived.status, "archived");
@@ -377,10 +394,10 @@ async fn archiving_a_closed_matter_preserves_its_original_close_date() {
 #[tokio::test]
 async fn archiving_an_open_matter_stamps_a_close_date() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "archive-open").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "archive-open").await;
 
-        let archived = transition_project(&surreal, id, Transition::Archive, None)
+        let archived = transition_project(&application_store, id, Transition::Archive, None)
             .await
             .expect("archive");
         assert_eq!(archived.status, "archived");
@@ -398,17 +415,17 @@ async fn archiving_an_open_matter_stamps_a_close_date() {
 #[tokio::test]
 async fn archived_is_terminal() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "terminal").await;
-        transition_project(&surreal, id, Transition::Archive, None)
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "terminal").await;
+        transition_project(&application_store, id, Transition::Archive, None)
             .await
             .expect("archive");
 
         for forbidden in [Transition::Reopen, Transition::Close] {
             let result = if forbidden == Transition::Reopen {
-                reopen(&surreal, id, None).await
+                reopen(&application_store, id, None).await
             } else {
-                transition_project(&surreal, id, forbidden, None).await
+                transition_project(&application_store, id, forbidden, None).await
             };
             let err = result.expect_err("archived refuses this transition");
             assert!(
@@ -417,7 +434,7 @@ async fn archived_is_terminal() {
             );
         }
 
-        let row = reload(&surreal, id).await;
+        let row = reload(&application_store, id).await;
         assert_eq!(row.status, "archived", "the refused calls changed nothing");
         assert_invariant(&row);
     })
@@ -429,14 +446,16 @@ async fn archived_is_terminal() {
 #[tokio::test]
 async fn re_applying_a_transition_is_a_no_op() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "idempotent").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "idempotent").await;
 
-        let first = close_active(&surreal, id, None).await.expect("close");
+        let first = close_active(&application_store, id, None)
+            .await
+            .expect("close");
         let stamp = first.closed_at.clone().expect("stamped");
 
         let second = transition_project_with_reason(
-            &surreal,
+            &application_store,
             id,
             Transition::Close,
             Some(ClosureReason::EngagementCompleted),
@@ -451,10 +470,10 @@ async fn re_applying_a_transition_is_a_no_op() {
         );
 
         // Re-archiving is the one no-op permitted out of the terminal state.
-        transition_project(&surreal, id, Transition::Archive, None)
+        transition_project(&application_store, id, Transition::Archive, None)
             .await
             .expect("archive");
-        let again = transition_project(&surreal, id, Transition::Archive, None)
+        let again = transition_project(&application_store, id, Transition::Archive, None)
             .await
             .expect("re-archive is a no-op, not a failure");
         assert_eq!(again.status, "archived");
@@ -468,13 +487,13 @@ async fn re_applying_a_transition_is_a_no_op() {
 #[tokio::test]
 async fn closing_after_a_reopen_starts_a_fresh_retention_window() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let id = open_matter(&surreal, "round-trip").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let id = open_matter(&application_store, "round-trip").await;
 
-        let first = close_active(&surreal, id, None).await.expect("close");
+        let first = close_active(&application_store, id, None).await.expect("close");
         let first_stamp = first.closed_at.clone().expect("stamped");
 
-        let reopened = reopen(&surreal, id, None)
+        let reopened = reopen(&application_store, id, None)
             .await
             .expect("reopen");
         // The load-bearing step: the reopen actually cleared the stamp, so
@@ -486,7 +505,7 @@ async fn closing_after_a_reopen_starts_a_fresh_retention_window() {
         );
 
         let second = transition_project_with_reason(
-            &surreal,
+            &application_store,
             id,
             Transition::Close,
             Some(ClosureReason::EngagementCompleted),
@@ -508,8 +527,8 @@ async fn closing_after_a_reopen_starts_a_fresh_retention_window() {
 #[tokio::test]
 async fn an_unknown_matter_is_not_found() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let err = transition_project(&surreal, Uuid::now_v7(), Transition::Close, None)
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        let err = transition_project(&application_store, Uuid::now_v7(), Transition::Close, None)
             .await
             .expect_err("unknown id");
         assert!(matches!(err, ProjectCommandError::NotFound), "{err:?}");

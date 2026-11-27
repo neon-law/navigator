@@ -7,25 +7,17 @@
 //! and copying for historical rows without assuming a certificate is a case number.
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use surrealdb::types::{RecordId, SurrealValue};
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::legal_plans::{LegalPlan, PlanMatterType};
 use crate::postgres::PostgresDb;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const TABLE: &str = "plan_intake";
 
 pub(crate) mod postgres;
 #[cfg(test)]
 pub(crate) mod postgres_tests;
-const SELECT: &str = "id, firm_id, conversation_id, source_message_id, provider, member_name, \
-     member_email, member_person_id, member_entity_id, plan_member_id, benefit_code, plan_number, \
-     plan_matter_type, plan_state, assigned_at, legal_plan_id, legal_plan_name, plan_portal_only, \
-     fee_covered_benefit, fee_plan_fee_cents, fee_supplemental_flat_cents, \
-     fee_supplemental_hourly_cents, fee_effective_on, conflict_summary, conflict_blocking, \
-     conflict_checked, status, project_id, accepted_by, decided_at, decline_reason, \
-     inserted_at, updated_at";
 
 /// A parsed plan assignment held for a person's confirmation.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -170,8 +162,6 @@ pub struct AcceptInput {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlanIntakeError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// The configured PostgreSQL server could not be reached.
     #[error("PostgreSQL: {0}")]
     Postgres(#[from] crate::postgres::PostgresError),
@@ -227,98 +217,6 @@ pub enum PlanIntakeError {
     LegalPlan(#[from] crate::legal_plans::LegalPlanError),
     #[error("start Legal Plan Onboarding: {0}")]
     Onboarding(String),
-}
-
-#[derive(SurrealValue)]
-struct StagedRow {
-    id: RecordId,
-    firm_id: RecordId,
-    conversation_id: RecordId,
-    source_message_id: RecordId,
-    provider: String,
-    member_name: Option<String>,
-    member_email: Option<String>,
-    member_person_id: Option<RecordId>,
-    member_entity_id: Option<RecordId>,
-    plan_member_id: Option<String>,
-    benefit_code: Option<String>,
-    plan_number: Option<String>,
-    plan_matter_type: String,
-    plan_state: Option<String>,
-    assigned_at: surrealdb::types::Datetime,
-    legal_plan_id: Option<String>,
-    legal_plan_name: Option<String>,
-    plan_portal_only: bool,
-    fee_covered_benefit: Option<String>,
-    fee_plan_fee_cents: Option<i32>,
-    fee_supplemental_flat_cents: Option<i32>,
-    fee_supplemental_hourly_cents: Option<i32>,
-    fee_effective_on: Option<String>,
-    conflict_summary: Option<String>,
-    conflict_blocking: bool,
-    conflict_checked: bool,
-    status: String,
-    project_id: Option<RecordId>,
-    accepted_by: Option<RecordId>,
-    decided_at: Option<surrealdb::types::Datetime>,
-    decline_reason: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl StagedRow {
-    fn into_staged(self) -> Option<StagedAssignment> {
-        Some(StagedAssignment {
-            id: record_uuid(&self.id)?,
-            firm_id: record_uuid(&self.firm_id)?,
-            conversation_id: record_uuid(&self.conversation_id)?,
-            source_message_id: record_uuid(&self.source_message_id)?,
-            provider: self.provider,
-            member_name: self.member_name,
-            member_email: self.member_email,
-            member_person_id: self.member_person_id.as_ref().and_then(record_uuid),
-            member_entity_id: self.member_entity_id.as_ref().and_then(record_uuid),
-            plan_member_id: self.plan_member_id,
-            benefit_code: self.benefit_code,
-            plan_number: self.plan_number,
-            plan_case_number: None,
-            notice_matter_type: None,
-            plan_matter_type: self.plan_matter_type,
-            plan_state: self.plan_state,
-            assigned_at: self.assigned_at.into(),
-            // A legal_plan row lives in PostgreSQL; the source keeps the
-            // bare UUID, like the project's plan columns do.
-            legal_plan_id: self
-                .legal_plan_id
-                .and_then(|raw| Uuid::parse_str(&raw).ok()),
-            legal_plan_name: self.legal_plan_name,
-            plan_portal_only: self.plan_portal_only,
-            fee_covered_benefit: self.fee_covered_benefit,
-            fee_plan_fee_cents: self.fee_plan_fee_cents,
-            fee_supplemental_flat_cents: self.fee_supplemental_flat_cents,
-            fee_supplemental_hourly_cents: self.fee_supplemental_hourly_cents,
-            fee_effective_on: self
-                .fee_effective_on
-                .and_then(|raw| NaiveDate::parse_from_str(&raw, "%Y-%m-%d").ok()),
-            conflict_summary: self
-                .conflict_summary
-                .unwrap_or_default()
-                .lines()
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
-                .collect(),
-            conflict_blocking: self.conflict_blocking,
-            conflict_checked: self.conflict_checked,
-            status: self.status,
-            project_id: self.project_id.as_ref().and_then(record_uuid),
-            accepted_by: self.accepted_by.as_ref().and_then(record_uuid),
-            decided_at: self.decided_at.map(Into::into),
-            take_started_at: None,
-            decline_reason: self.decline_reason,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
 }
 
 /// Classify a notice's matter-type words into the closed plan vocabulary.
@@ -462,13 +360,13 @@ struct StagingContext {
 }
 
 async fn staging_context(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: Option<&PostgresDb>,
     input: &StageInput,
     matter_type: Option<PlanMatterType>,
 ) -> Result<StagingContext, PlanIntakeError> {
     let assignment = &input.assignment;
-    let member = anchor_member(surreal, assignment).await?;
+    let member = anchor_member(application_store, assignment).await?;
     let (member_person_id, member_entity_id) = match member {
         Some((person_id, entity_id)) => (Some(person_id), Some(entity_id)),
         None => (None, None),
@@ -492,7 +390,7 @@ async fn staging_context(
     // runs it again at acceptance; the staged report is what the review
     // screen shows so the attorney sees conflicts before clicking.
     let (conflict_summary, conflict_blocking, conflict_checked) =
-        conflict_report(surreal, member).await?;
+        conflict_report(application_store, member).await?;
 
     Ok(StagingContext {
         member_person_id,
@@ -513,7 +411,7 @@ async fn staging_context(
 /// without a contact email or a printed name stages unanchored; the
 /// review screen resolves the member before acceptance.
 async fn anchor_member(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     assignment: &crate::plan_assignment::Assignment,
 ) -> Result<Option<(Uuid, Uuid)>, PlanIntakeError> {
     let Some(email) = &assignment.contact_email else {
@@ -524,16 +422,16 @@ async fn anchor_member(
     let Some(member_name) = &assignment.member_name else {
         return Ok(None);
     };
-    let person = member_person(surreal, member_name, email).await?;
+    let person = member_person(application_store, member_name, email).await?;
     if !same_member_name(&person.name, member_name) {
         return Ok(None);
     }
-    let entity = create_human_entity(surreal, member_name).await?;
+    let entity = create_human_entity(application_store, member_name).await?;
     Ok(Some((person.id, entity)))
 }
 
 async fn member_person(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     name: &str,
     email: &str,
 ) -> Result<crate::persons::Person, PlanIntakeError> {
@@ -550,11 +448,11 @@ async fn member_person(
     {
         return Err(PlanIntakeError::InvalidMember);
     }
-    let person = match crate::persons::find_by_any_email(surreal, &email).await? {
+    let person = match crate::persons::find_by_any_email(application_store, &email).await? {
         Some(person) => person,
         None => {
             crate::persons::find_or_create(
-                surreal,
+                application_store,
                 &crate::persons::NewPerson::with_role(
                     name.trim(),
                     email,
@@ -572,14 +470,15 @@ async fn member_person(
 
 /// The pre-write conflict report for the confirmed member.
 async fn conflict_report(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     member: Option<(Uuid, Uuid)>,
 ) -> Result<(Vec<String>, bool, bool), PlanIntakeError> {
     match member {
         Some((person_id, entity_id)) => {
-            let report = crate::conflicts::check_new_matter(surreal, person_id, entity_id)
-                .await
-                .map_err(PlanIntakeError::Conflict)?;
+            let report =
+                crate::conflicts::check_new_matter(application_store, person_id, entity_id)
+                    .await
+                    .map_err(PlanIntakeError::Conflict)?;
             Ok((report.summary_lines(), report.has_blocking(), true))
         }
         None => Ok((Vec::new(), false, false)),
@@ -587,9 +486,7 @@ async fn conflict_report(
 }
 
 async fn write_authority() -> Result<PostgresDb, PlanIntakeError> {
-    PostgresDb::configured()
-        .await?
-        .ok_or(PlanIntakeError::PostgresRequired)
+    Ok(PostgresDb::application().await?)
 }
 
 /// Stage one parsed assignment for a person's confirmation. Idempotent per
@@ -605,18 +502,20 @@ async fn write_authority() -> Result<PostgresDb, PlanIntakeError> {
 /// [`PlanIntakeError`] for database or reference-data failures, or a
 /// failing conflict check.
 pub async fn stage(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: Option<&PostgresDb>,
     input: &StageInput,
 ) -> Result<StagedAssignment, PlanIntakeError> {
     let authority = write_authority().await?;
-    if let Some(existing) = find_by_source_message(surreal, input.source_message_id).await? {
+    if let Some(existing) =
+        find_by_source_message(application_store, input.source_message_id).await?
+    {
         return Ok(existing);
     }
 
     let assignment = &input.assignment;
     let matter_type = matter_type_from_notice(assignment.matter_type.as_deref().unwrap_or(""));
-    let context = staging_context(surreal, pg, input, matter_type).await?;
+    let context = staging_context(application_store, pg, input, matter_type).await?;
     let now = Utc::now();
     let (fee_covered_benefit, fee_plan_fee_cents, flat, hourly, fee_effective_on) =
         match context.fee {
@@ -684,24 +583,24 @@ pub struct Accepted {
 ///
 /// Returns an error when the actor is outside the Brand's Firm or a lookup fails.
 pub async fn review_firm(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_id: Uuid,
     brand: &str,
 ) -> Result<Uuid, PlanIntakeError> {
     use crate::firms::FirmMembership;
     use crate::persons::Role;
 
-    let person = crate::persons::find_by_id(surreal, actor_id)
+    let person = crate::persons::find_by_id(application_store, actor_id)
         .await?
         .ok_or(PlanIntakeError::NotFound)?;
-    let firm = crate::firms::firm_id_for_brand_key(surreal, brand)
+    let firm = crate::firms::firm_id_for_brand_key(application_store, brand)
         .await?
         .ok_or(PlanIntakeError::NotFound)?;
     if person.role == Role::Owner {
         return Ok(firm);
     }
     if person.role.is_lawyer_tier()
-        && crate::firms::membership_for_person(surreal, actor_id, firm)
+        && crate::firms::membership_for_person(application_store, actor_id, firm)
             .await?
             .is_some_and(|role| {
                 matches!(
@@ -716,13 +615,13 @@ pub async fn review_firm(
 }
 
 async fn scoped_assignment(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     staged_id: Uuid,
     actor_id: Uuid,
     brand: &str,
 ) -> Result<StagedAssignment, PlanIntakeError> {
-    let firm = review_firm(surreal, actor_id, brand).await?;
-    find_by_id(surreal, staged_id)
+    let firm = review_firm(application_store, actor_id, brand).await?;
+    find_by_id(application_store, staged_id)
         .await?
         .filter(|row| row.firm_id == firm)
         .ok_or(PlanIntakeError::NotFound)
@@ -736,7 +635,7 @@ async fn scoped_assignment(
 /// Returns an error when the row is outside the Firm, already decided, or
 /// the verified email cannot identify the named client.
 pub async fn resolve_member(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     staged_id: Uuid,
     actor_id: Uuid,
@@ -746,7 +645,7 @@ pub async fn resolve_member(
 ) -> Result<(), PlanIntakeError> {
     write_authority().await?;
     let _lock = postgres::lock(pg, &format!("plan-intake/{staged_id}")).await?;
-    let mut row = scoped_assignment(surreal, staged_id, actor_id, brand).await?;
+    let mut row = scoped_assignment(application_store, staged_id, actor_id, brand).await?;
     if row.status != Status::Staged.as_str() || row.take_started_at.is_some() {
         return Err(PlanIntakeError::NotStaged);
     }
@@ -769,11 +668,11 @@ pub async fn resolve_member(
                 .as_deref()
                 .or(name)
                 .ok_or(PlanIntakeError::InvalidMember)?;
-            let person = member_person(surreal, name, email).await?;
+            let person = member_person(application_store, name, email).await?;
             if !same_member_name(&person.name, name) {
                 return Err(PlanIntakeError::ConflictingMember);
             }
-            let entity_id = create_human_entity(surreal, name).await?;
+            let entity_id = create_human_entity(application_store, name).await?;
             row.member_name = Some(name.to_owned());
             row.member_email = Some(email.trim().to_ascii_lowercase());
             row.member_person_id = Some(person.id);
@@ -783,7 +682,7 @@ pub async fn resolve_member(
             postgres::save_member(pg, &row).await?;
             (person.id, entity_id)
         };
-    let (summary, blocking, checked) = conflict_report(surreal, Some(member)).await?;
+    let (summary, blocking, checked) = conflict_report(application_store, Some(member)).await?;
     row.conflict_summary = summary;
     row.conflict_blocking = blocking;
     row.conflict_checked = checked;
@@ -841,7 +740,7 @@ fn confirmed_case<'a>(
 }
 
 async fn open_on_acceptance(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     staged: &StagedAssignment,
     plan: &LegalPlan,
     person_id: Uuid,
@@ -857,7 +756,7 @@ async fn open_on_acceptance(
         )
     });
     Ok(crate::projects::open_matter_for_intake(
-        surreal,
+        application_store,
         &crate::projects::OpenMatterCommand {
             firm_id: Some(staged.firm_id),
             name,
@@ -922,12 +821,15 @@ async fn mark_accepted(
 /// Returns an error for an inaccessible or declined notice, an unresolved
 /// member or Legal Plan, or a Project open that fails its checks.
 pub async fn accept(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     staged_id: Uuid,
     input: &AcceptInput,
 ) -> Result<Accepted, PlanIntakeError> {
-    accept_with_onboarding(surreal, pg, staged_id, input, |_| async { Ok(()) }).await
+    accept_with_onboarding(application_store, pg, staged_id, input, |_| async {
+        Ok(())
+    })
+    .await
 }
 
 /// The verified referral and fee schedule provided to the onboarding step.
@@ -951,7 +853,7 @@ pub struct PlanOnboarding {
     reason = "the ordered take steps share one reservation and its retry boundary"
 )]
 pub async fn accept_with_onboarding<F>(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     staged_id: Uuid,
     input: &AcceptInput,
@@ -965,8 +867,13 @@ where
     }
     write_authority().await?;
     let mut lock = postgres::lock(pg, &format!("plan-intake/{staged_id}")).await?;
-    let mut staged =
-        scoped_assignment(surreal, staged_id, input.acting_person_id, &input.brand).await?;
+    let mut staged = scoped_assignment(
+        application_store,
+        staged_id,
+        input.acting_person_id,
+        &input.brand,
+    )
+    .await?;
     if staged.status == Status::Accepted.as_str() {
         if staged.accepted_by != Some(input.acting_person_id) {
             return Err(PlanIntakeError::NotFound);
@@ -1014,7 +921,7 @@ where
     let code = crate::projects::normalize_code(&input.code).ok_or(
         crate::projects::OpenMatterError::Invalid("Project code is required."),
     )?;
-    if let Some(existing) = crate::projects::find_by_code(surreal, &code).await? {
+    if let Some(existing) = crate::projects::find_by_code(application_store, &code).await? {
         if existing.id != staged.id {
             return Err(crate::projects::OpenMatterError::CodeConflict.into());
         }
@@ -1024,7 +931,7 @@ where
     staged.plan_portal_only = plan.portal.is_some();
 
     let project = match open_on_acceptance(
-        surreal,
+        application_store,
         &staged,
         plan,
         person_id,
@@ -1038,7 +945,7 @@ where
         Err(error) => {
             // A successful open may be followed by an attestation write
             // failure. Keep that Project's reservation for the next retry.
-            if crate::projects::find_by_id(surreal, staged.id)
+            if crate::projects::find_by_id(application_store, staged.id)
                 .await?
                 .is_none()
             {
@@ -1048,7 +955,7 @@ where
         }
     };
     crate::projects::set_plan_columns(
-        surreal,
+        application_store,
         pg,
         project.id,
         &crate::projects::PlanColumns {
@@ -1090,7 +997,7 @@ where
 
     // The plan's SLA deadlines, from the email-landing time.
     create_plan_deadlines(
-        surreal,
+        application_store,
         project.id,
         &staged,
         plan,
@@ -1121,7 +1028,7 @@ where
 /// Returns an error when the row is outside the Firm, a Project has opened,
 /// the assignment was already decided, or a lookup or write fails.
 pub async fn decline_from_review(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     staged_id: Uuid,
     actor_id: Uuid,
@@ -1130,8 +1037,8 @@ pub async fn decline_from_review(
 ) -> Result<StagedAssignment, PlanIntakeError> {
     write_authority().await?;
     let _lock = postgres::lock(pg, &format!("plan-intake/{staged_id}")).await?;
-    let row = scoped_assignment(surreal, staged_id, actor_id, brand).await?;
-    if crate::projects::find_by_id(surreal, row.id)
+    let row = scoped_assignment(application_store, staged_id, actor_id, brand).await?;
+    if crate::projects::find_by_id(application_store, row.id)
         .await?
         .is_some()
     {
@@ -1140,7 +1047,7 @@ pub async fn decline_from_review(
     if row.take_started_at.is_some() {
         postgres::release_case(pg, staged_id).await?;
     }
-    decline(surreal, staged_id, reason).await
+    decline(application_store, staged_id, reason).await
 }
 
 /// Decline a staged assignment without opening a matter. The record and
@@ -1151,12 +1058,12 @@ pub async fn decline_from_review(
 ///
 /// [`PlanIntakeError::NotStaged`] when the record was already decided.
 pub(crate) async fn decline(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     staged_id: Uuid,
     reason: &str,
 ) -> Result<StagedAssignment, PlanIntakeError> {
     let authority = write_authority().await?;
-    let staged = find_by_id(surreal, staged_id)
+    let staged = find_by_id(application_store, staged_id)
         .await?
         .ok_or(PlanIntakeError::NotFound)?;
     if staged.status != Status::Staged.as_str() || staged.take_started_at.is_some() {
@@ -1177,20 +1084,11 @@ pub(crate) async fn decline(
 ///
 /// [`PlanIntakeError`] for database failures.
 pub async fn find_by_id(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<StagedAssignment>, PlanIntakeError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(postgres::find_by_id(&pg, id)).await;
-    }
-    let mut response = surreal
-        .query(format!("SELECT {SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(TABLE, id)))
-        .await?
-        .check()?;
-    Ok(response
-        .take::<Option<StagedRow>>(0)?
-        .and_then(StagedRow::into_staged))
+    let pg = PostgresDb::application().await?;
+    Box::pin(postgres::find_by_id(&pg, id)).await
 }
 
 /// The staged assignment one notice's ingested message produced, or none.
@@ -1200,22 +1098,11 @@ pub async fn find_by_id(
 ///
 /// [`PlanIntakeError`] for database failures.
 pub async fn find_by_source_message(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     source_message_id: Uuid,
 ) -> Result<Option<StagedAssignment>, PlanIntakeError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(postgres::find_by_source_message(&pg, source_message_id)).await;
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE source_message_id = $source_message_id LIMIT 1"
-        ))
-        .bind(("source_message_id", record_id("message", source_message_id)))
-        .await?
-        .check()?;
-    Ok(response
-        .take::<Option<StagedRow>>(0)?
-        .and_then(StagedRow::into_staged))
+    let pg = PostgresDb::application().await?;
+    Box::pin(postgres::find_by_source_message(&pg, source_message_id)).await
 }
 
 /// A firm's staged assignments, newest first. The review screen's queue.
@@ -1224,42 +1111,31 @@ pub async fn find_by_source_message(
 ///
 /// [`PlanIntakeError`] for database failures.
 pub async fn list_by_firm(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     firm_id: Uuid,
 ) -> Result<Vec<StagedAssignment>, PlanIntakeError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(postgres::list_by_firm(&pg, firm_id)).await;
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE firm_id = $firm_id \
-             ORDER BY assigned_at DESC LIMIT 100"
-        ))
-        .bind(("firm_id", record_id("firm", firm_id)))
-        .await?
-        .check()?;
-    let rows: Vec<StagedRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(StagedRow::into_staged)
-        .collect())
+    let pg = PostgresDb::application().await?;
+    Box::pin(postgres::list_by_firm(&pg, firm_id)).await
 }
 
 /// Create a fresh `Human` entity for a solo natural person — the same
 /// fallback the self-serve retainer walk uses, so a plan member with no
 /// pre-existing entity still anchors a matter.
-async fn create_human_entity(surreal: &SurrealDb, label: &str) -> Result<Uuid, PlanIntakeError> {
-    let type_id = crate::entity_types::find_or_create(surreal, "Human")
+async fn create_human_entity(
+    application_store: &ApplicationStore,
+    label: &str,
+) -> Result<Uuid, PlanIntakeError> {
+    let type_id = crate::entity_types::find_or_create(application_store, "Human")
         .await?
         .id;
     let jurisdiction_id = crate::jurisdictions::find_or_create(
-        surreal,
+        application_store,
         &crate::jurisdictions::NewJurisdiction::new("United States", "US", "country"),
     )
     .await?
     .id;
     Ok(crate::entities::create(
-        surreal,
+        application_store,
         &crate::entities::NewEntity {
             name: label.to_string(),
             entity_type_id: type_id,
@@ -1341,7 +1217,7 @@ async fn resolve_plan_and_fee(
 /// - a portal-confirmation reminder when the plan's acceptance is
 ///   confirmed on the provider's portal instead of by reply email.
 async fn create_plan_deadlines(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     staged: &StagedAssignment,
     plan: &LegalPlan,
@@ -1351,7 +1227,7 @@ async fn create_plan_deadlines(
     let acceptance_due = acceptance_due(staged.assigned_at, plan.acceptance_sla_hours);
 
     let acceptance_deadline = crate::project_deadlines::create(
-        surreal,
+        application_store,
         &crate::project_deadlines::NewDeadline {
             project_id,
             title: Some("Plan acceptance window".to_string()),
@@ -1378,12 +1254,13 @@ async fn create_plan_deadlines(
     // An acceptance inside the SLA closes its own clock; a late one stays
     // open and overdue, which is exactly what the daily alert should show.
     if accepted_at <= acceptance_due {
-        crate::project_deadlines::complete(surreal, project_id, acceptance_deadline.id).await?;
+        crate::project_deadlines::complete(application_store, project_id, acceptance_deadline.id)
+            .await?;
     }
 
     if let Some(days) = plan.turnaround_sla_days {
         crate::project_deadlines::create(
-            surreal,
+            application_store,
             &crate::project_deadlines::NewDeadline {
                 project_id,
                 title: Some("Plan turnaround deadline".to_string()),
@@ -1411,7 +1288,7 @@ async fn create_plan_deadlines(
 
     if staged.plan_portal_only {
         crate::project_deadlines::create(
-            surreal,
+            application_store,
             &crate::project_deadlines::NewDeadline {
                 project_id,
                 title: Some(format!("Confirm acceptance on the {} portal", plan.name)),
@@ -1444,165 +1321,12 @@ async fn create_plan_deadlines(
 #[cfg(test)]
 mod tests {
     use super::{
-        accept, acceptance_due, decline, find_by_id, list_by_firm, matter_type_from_notice,
-        plan_for_provider, stage, suggest_code, turnaround_due, AcceptInput, PlanIntakeError,
-        StageInput, Status,
+        acceptance_due, matter_type_from_notice, plan_for_provider, suggest_code, turnaround_due,
     };
-    use crate::legal_plans::{LegalPlan, NewLegalPlan, NewPlanFeeSchedule, PlanMatterType};
-    use crate::plan_assignment::{fixtures, parse, Assignment, PlanProvider};
-    use crate::postgres::PostgresDb;
-    use crate::test_support::{mem_surreal, seed_firm_with_brand};
-    use chrono::{Duration, NaiveDate, TimeZone, Utc};
+    use crate::legal_plans::{LegalPlan, PlanMatterType};
+
+    use chrono::{Duration, TimeZone, Utc};
     use uuid::Uuid;
-
-    /// An ARAG-shaped staged input with the notice's fields spelled out —
-    /// staging tests exercise staging, not parsing.
-    fn arag_input(firm_id: Uuid, landing_at: chrono::DateTime<Utc>) -> StageInput {
-        StageInput {
-            firm_id,
-            conversation_id: Uuid::now_v7(),
-            source_message_id: Uuid::now_v7(),
-            landing_at,
-            provider: "arag".to_string(),
-            assignment: Assignment {
-                provider: PlanProvider::Arag,
-                case_number: "4900000-001".to_string(),
-                member_name: Some("Dana Example".to_string()),
-                member_number: Some("AR-004512".to_string()),
-                plan_number: Some("PLAN-778812".to_string()),
-                matter_type: Some("Document Review".to_string()),
-                effective_date: None,
-                contact_email: Some("dana@example.com".to_string()),
-                state: Some("nv".to_string()),
-            },
-        }
-    }
-
-    /// A LegalShield-shaped staged input, distinct from the ARAG one so
-    /// queue tests can order two rows.
-    fn legal_shield_input(firm_id: Uuid, landing_at: chrono::DateTime<Utc>) -> StageInput {
-        StageInput {
-            firm_id,
-            conversation_id: Uuid::now_v7(),
-            source_message_id: Uuid::now_v7(),
-            landing_at,
-            provider: "legal_shield".to_string(),
-            assignment: Assignment {
-                provider: PlanProvider::LegalShield,
-                case_number: "CERT-330291".to_string(),
-                member_name: Some("Harper Sample".to_string()),
-                member_number: Some("LS-902441".to_string()),
-                plan_number: Some("CERT-330291".to_string()),
-                matter_type: Some("Consumer Contract Review".to_string()),
-                effective_date: None,
-                contact_email: Some("riley@example.com".to_string()),
-                state: Some("ny".to_string()),
-            },
-        }
-    }
-
-    fn arag_plan() -> NewLegalPlan {
-        NewLegalPlan {
-            name: "ARAG".into(),
-            contact: None,
-            portal: None,
-            acceptance_sla_hours: Some(24),
-            turnaround_sla_days: Some(10),
-            reporting_requirements: None,
-        }
-    }
-
-    fn schedule(firm_id: Uuid, plan_id: Uuid) -> NewPlanFeeSchedule {
-        NewPlanFeeSchedule {
-            firm_id,
-            legal_plan_id: plan_id,
-            matter_type: PlanMatterType::DocumentReview,
-            state: "nv".into(),
-            covered_benefit: "Will review".into(),
-            plan_fee_cents: 15_000,
-            supplemental_hourly_cents: Some(25_000),
-            supplemental_flat_cents: None,
-            effective_on: NaiveDate::from_ymd_opt(2026, 1, 1).expect("calendar date"),
-        }
-    }
-
-    /// The firm row on PostgreSQL, keyed to the SurrealDB firm a brand was
-    /// seeded under — open_matter verifies the brand maps to the same firm
-    /// that owns the plan.
-    async fn plan_firm(pg: &PostgresDb, firm_id: Uuid) {
-        sqlx::query(
-            "INSERT INTO firm (id,name,slug,status) \
-             VALUES ($1,'Synthetic Plan Firm',$2,'active')",
-        )
-        .bind(firm_id)
-        .bind(format!("pi-{}", Uuid::new_v4().simple()))
-        .execute(pg.pool())
-        .await
-        .expect("firm inserts");
-    }
-
-    /// The firm's ARAG plan and its Nevada fee quote.
-    async fn arag_plan_on(
-        pg: &PostgresDb,
-        firm_id: Uuid,
-        name: &str,
-        portal: Option<&str>,
-    ) -> LegalPlan {
-        let plan = crate::legal_plans::create(
-            pg,
-            firm_id,
-            &NewLegalPlan {
-                name: name.into(),
-                portal: portal.map(str::to_string),
-                ..arag_plan()
-            },
-        )
-        .await
-        .expect("the plan creates");
-        crate::legal_plans::add_fee_schedule(pg, &schedule(firm_id, plan.id))
-            .await
-            .expect("the fee schedule creates");
-        plan
-    }
-
-    /// A PostgreSQL lane when CI has one; none skips the test.
-    async fn postgres() -> Option<PostgresDb> {
-        let port = crate::test_support::postgres_test_port();
-        let options = sqlx::postgres::PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(sqlx::postgres::PgSslMode::Disable);
-        let admin = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
-        let database = format!("plan_intake_test_{}", Uuid::now_v7().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        let pg = PostgresDb::connect(options.database(&database))
-            .await
-            .unwrap();
-        pg.migrate_embedded(None).await.unwrap();
-        Some(pg)
-    }
-
-    fn accept_input(_plan_id: Uuid, attorney_id: Uuid, attestation: bool) -> AcceptInput {
-        AcceptInput {
-            attestation,
-            acting_person_id: attorney_id,
-            brand: "neon".to_string(),
-            code: "plan-ar-004512".to_string(),
-            name: None,
-            plan_case_number: Some("4900000-001".to_owned()),
-            plan_matter_type: "document_review".to_string(),
-            plan_state: Some("nv".to_string()),
-        }
-    }
 
     #[test]
     fn classification_only_suggests_a_supported_type_with_explicit_evidence() {
@@ -1705,462 +1429,5 @@ mod tests {
         );
         assert_eq!(suggest_code("Dana Sample", None, None), "sample-plan");
         assert_eq!(suggest_code("", None, None), "");
-    }
-
-    #[tokio::test]
-    async fn source_context_cannot_stage_or_decide_an_assignment() {
-        let source = crate::surreal::SurrealDb::uninitialized();
-        let input = arag_input(Uuid::now_v7(), Utc::now());
-        let stage_error = crate::postgres_mirror::from_source(stage(&source, None, &input))
-            .await
-            .unwrap_err();
-        assert!(stage_error
-            .to_string()
-            .contains("Plan Intake writes require PostgreSQL authority"));
-        let decline_error =
-            crate::postgres_mirror::from_source(decline(&source, Uuid::now_v7(), "reason"))
-                .await
-                .unwrap_err();
-        assert!(decline_error
-            .to_string()
-            .contains("Plan Intake writes require PostgreSQL authority"));
-    }
-
-    #[tokio::test]
-    async fn staging_anchors_the_member_and_records_the_conflict_check_pre_write() {
-        let surreal = mem_surreal().await;
-        let landing = Utc::now();
-        let staged = stage(&surreal, None, &arag_input(Uuid::now_v7(), landing))
-            .await
-            .expect("staging succeeds");
-
-        // The member anchor: a Role::Client person for the notice's
-        // contact email, and a fresh entity beside it.
-        let person = crate::persons::find_by_email_ci(&surreal, "dana@example.com")
-            .await
-            .expect("person lookup")
-            .expect("the member person exists");
-        assert_eq!(staged.member_person_id, Some(person.id));
-        assert_eq!(person.role, crate::persons::Role::Client);
-        assert!(staged.member_entity_id.is_some());
-
-        // The notice's fields, carried for the review screen.
-        assert_eq!(staged.plan_member_id.as_deref(), Some("AR-004512"));
-        assert_eq!(staged.plan_number.as_deref(), Some("PLAN-778812"));
-        assert_eq!(staged.benefit_code, None);
-        assert_eq!(staged.plan_matter_type, "document_review");
-        assert_eq!(staged.plan_state.as_deref(), Some("nv"));
-        assert_eq!(staged.assigned_at, landing);
-        assert_eq!(staged.provider, "arag");
-
-        // The conflict check ran against the anchored member in an empty
-        // graph and found nothing blocking.
-        assert!(staged.conflict_checked);
-        assert!(!staged.conflict_blocking);
-
-        // Staging never opens a matter — no project row exists, and the
-        // record is staged with nothing accepted.
-        assert_eq!(staged.status, Status::Staged.as_str());
-        assert!(staged.project_id.is_none());
-        assert!(staged.accepted_by.is_none());
-    }
-
-    #[tokio::test]
-    async fn staging_is_idempotent_per_source_message() {
-        let surreal = mem_surreal().await;
-        let input = arag_input(Uuid::now_v7(), Utc::now());
-        let first = stage(&surreal, None, &input).await.expect("first stage");
-        let second = stage(&surreal, None, &input).await.expect("replay stage");
-        assert_eq!(first.id, second.id);
-        assert_eq!(second.member_person_id, first.member_person_id);
-    }
-
-    #[tokio::test]
-    async fn a_notice_without_a_contact_email_stages_unanchored() {
-        let surreal = mem_surreal().await;
-        let mut input = arag_input(Uuid::now_v7(), Utc::now());
-        input.assignment.contact_email = None;
-        let staged = stage(&surreal, None, &input)
-            .await
-            .expect("staging succeeds");
-        assert!(staged.member_person_id.is_none());
-        assert!(staged.member_entity_id.is_none());
-        assert!(!staged.conflict_checked);
-        assert!(staged.conflict_summary.is_empty());
-    }
-
-    #[tokio::test]
-    async fn the_parsed_notice_stages_with_its_fields_intact() {
-        // Parser to workflow: the real LegalShield fixture through the
-        // parser stages with its fields intact.
-        let surreal = mem_surreal().await;
-        let assignment = parse(
-            PlanProvider::LegalShield,
-            "Member Assignment",
-            &fixtures::legal_shield_assignment_text(),
-        )
-        .expect("the LegalShield fixture parses");
-        let staged = stage(
-            &surreal,
-            None,
-            &StageInput {
-                firm_id: Uuid::now_v7(),
-                conversation_id: Uuid::now_v7(),
-                source_message_id: Uuid::now_v7(),
-                landing_at: Utc::now(),
-                provider: PlanProvider::LegalShield.as_str().to_string(),
-                assignment,
-            },
-        )
-        .await
-        .expect("staging succeeds");
-        assert_eq!(staged.member_name.as_deref(), Some("Harper Sample"));
-        assert_eq!(staged.member_email.as_deref(), Some("riley@example.com"));
-        assert_eq!(staged.plan_member_id.as_deref(), Some("LS-902441"));
-        assert_eq!(staged.plan_number.as_deref(), Some("CERT-330291"));
-        assert_eq!(staged.plan_state.as_deref(), Some("ny"));
-        assert_eq!(staged.provider, "legal_shield");
-        assert_eq!(staged.plan_matter_type, "document_review");
-        assert!(staged.member_person_id.is_some());
-    }
-
-    #[tokio::test]
-    async fn a_staged_assignment_declines_with_a_reason_without_opening_a_matter() {
-        let surreal = mem_surreal().await;
-        let staged = stage(&surreal, None, &arag_input(Uuid::now_v7(), Utc::now()))
-            .await
-            .expect("staging succeeds");
-        let declined = decline(
-            &surreal,
-            staged.id,
-            "The member's matter is outside our practice areas.",
-        )
-        .await
-        .expect("decline succeeds");
-        assert_eq!(declined.status, Status::Declined.as_str());
-        assert!(declined.project_id.is_none());
-        assert_eq!(
-            declined.decline_reason.as_deref(),
-            Some("The member's matter is outside our practice areas.")
-        );
-        // The member's person and entity remain directory data.
-        assert!(staged.member_person_id.is_some());
-        // Deciding again refuses.
-        assert!(matches!(
-            decline(&surreal, staged.id, "again").await,
-            Err(PlanIntakeError::NotStaged)
-        ));
-    }
-
-    async fn plan_attorney(surreal: &crate::surreal::SurrealDb) -> crate::persons::Person {
-        crate::persons::create(
-            surreal,
-            &crate::persons::NewPerson::with_role(
-                "Pisces Attorney",
-                "plan-intake-attorney@example.com",
-                crate::persons::Role::Owner,
-            ),
-        )
-        .await
-        .expect("the attorney exists")
-    }
-
-    #[tokio::test]
-    async fn acceptance_refuses_to_open_without_the_attorney_attestation() {
-        let Some(pg) = postgres().await else {
-            eprintln!("skipping: no PostgreSQL test lane");
-            return;
-        };
-        let surreal = mem_surreal().await;
-        let firm_id = seed_firm_with_brand(&surreal, "neon").await;
-        plan_firm(&pg, firm_id).await;
-        let plan = arag_plan_on(&pg, firm_id, "ARAG", None).await;
-        // The same notice redelivered: restage dedupes on the source
-        // message, so both stage calls share one input.
-        let input = arag_input(firm_id, Utc::now());
-        let staged = stage(&surreal, Some(&pg), &input)
-            .await
-            .expect("staging succeeds");
-        let attorney = plan_attorney(&surreal).await;
-
-        // The plan and fee resolved at staging from the firm's schedule.
-        assert_eq!(staged.legal_plan_id, Some(plan.id));
-        assert_eq!(staged.fee_plan_fee_cents, Some(15_000));
-
-        // Without the attorney's click the open refuses, no matter exists,
-        // and the staged record stays staged.
-        let refused = accept(
-            &surreal,
-            &pg,
-            staged.id,
-            &accept_input(plan.id, attorney.id, false),
-        )
-        .await
-        .expect_err("an unattested acceptance refuses");
-        assert!(matches!(
-            refused,
-            PlanIntakeError::Open(crate::projects::OpenMatterError::AttestationRequired)
-        ));
-        assert!(
-            crate::projects::find_by_code(&surreal, "plan-ar-004512")
-                .await
-                .expect("project lookup")
-                .is_none(),
-            "no matter may exist without the attorney's attestation"
-        );
-        let record = find_by_id(&surreal, staged.id)
-            .await
-            .expect("record lookup")
-            .expect("the record exists");
-        assert_eq!(record.status, Status::Staged.as_str());
-        assert!(record.project_id.is_none());
-
-        // The parser itself never opens a project either: staging is the
-        // only automated step, and it wrote none.
-        let staged_again = stage(&surreal, Some(&pg), &input)
-            .await
-            .expect("restaging is idempotent");
-        assert_eq!(staged_again.id, staged.id);
-        assert!(staged_again.project_id.is_none());
-    }
-
-    #[tokio::test]
-    async fn acceptance_opens_the_matter_with_plan_columns_and_deadlines() {
-        let Some(pg) = postgres().await else {
-            eprintln!("skipping: no PostgreSQL test lane");
-            return;
-        };
-        let surreal = mem_surreal().await;
-        let firm_id = seed_firm_with_brand(&surreal, "neon").await;
-        plan_firm(&pg, firm_id).await;
-        let plan = arag_plan_on(&pg, firm_id, "ARAG", None).await;
-        let landing = Utc::now();
-        let staged = stage(&surreal, Some(&pg), &arag_input(firm_id, landing))
-            .await
-            .expect("staging succeeds");
-        let attorney = plan_attorney(&surreal).await;
-
-        let accepted = accept(
-            &surreal,
-            &pg,
-            staged.id,
-            &accept_input(plan.id, attorney.id, true),
-        )
-        .await
-        .expect("the attested acceptance opens the matter");
-        let record = accepted.staged;
-        assert_eq!(record.status, Status::Accepted.as_str());
-        assert_eq!(record.accepted_by, Some(attorney.id));
-        assert_eq!(record.project_id, Some(accepted.project_id));
-
-        // The matter, opened with the member as its client of record and
-        // the plan columns filled — the assignment date from the landing,
-        // not the acceptance.
-        let project = crate::projects::find_by_code(&surreal, "plan-ar-004512")
-            .await
-            .expect("project lookup")
-            .expect("the matter exists");
-        assert_eq!(project.id, accepted.project_id);
-        let participations = crate::projects::participations_for_project(&surreal, project.id)
-            .await
-            .expect("project participations");
-        assert!(participations.iter().any(|participation| {
-            participation.person_id == record.member_person_id.unwrap()
-                && crate::projects::PARTICIPATION_CLIENT_SIDE
-                    .contains(&participation.participation.as_str())
-        }));
-        assert_eq!(project.plan_matter_type.as_deref(), Some("document_review"));
-        assert_eq!(project.plan_state.as_deref(), Some("nv"));
-        assert_eq!(project.plan_member_id.as_deref(), Some("AR-004512"));
-        assert_eq!(project.plan_case_number.as_deref(), Some("4900000-001"));
-        assert_eq!(
-            project.plan_assigned_on.as_deref(),
-            Some(landing.date_naive().to_string().as_str())
-        );
-        assert_eq!(
-            project.plan_accepted_on.as_deref(),
-            Some(Utc::now().date_naive().to_string().as_str())
-        );
-        assert_eq!(project.legal_plan_id, Some(plan.id));
-        // The kit catalog has no plan-matter kit yet: the column stays
-        // empty and the flow falls back cleanly.
-        assert_eq!(project.kit_version, None);
-
-        // The deadlines: the acceptance clock from the landing instant,
-        // the turnaround from acceptance.
-        let deadlines = crate::project_deadlines::list(&surreal, project.id)
-            .await
-            .expect("deadline list");
-        assert_eq!(
-            deadlines.len(),
-            2,
-            "an email-plan record gets exactly two SLA deadlines"
-        );
-        let acceptance = deadlines
-            .iter()
-            .find(|deadline| deadline.title.as_deref() == Some("Plan acceptance window"))
-            .expect("the acceptance deadline exists");
-        assert_eq!(
-            acceptance.due_at,
-            acceptance_due(landing, Some(24)).to_rfc3339()
-        );
-        assert_eq!(
-            acceptance.status,
-            crate::project_deadlines::STATUS_COMPLETE,
-            "an on-time acceptance closes its own clock"
-        );
-        let turnaround = deadlines
-            .iter()
-            .find(|deadline| deadline.title.as_deref() == Some("Plan turnaround deadline"))
-            .expect("the turnaround deadline exists");
-        // The turnaround clock starts at the acceptance instant — the same
-        // reading the record keeps as decided_at — so the deadline and the
-        // record agree by construction. The small tolerance only absorbs
-        // datetime round-trip precision in storage.
-        let decided = record
-            .decided_at
-            .expect("the acceptance records its instant");
-        let due = chrono::DateTime::parse_from_rfc3339(&turnaround.due_at)
-            .expect("due parses")
-            .with_timezone(&Utc);
-        let expected = turnaround_due(decided, 10);
-        assert!(
-            (due - expected).abs() <= chrono::Duration::seconds(2),
-            "the turnaround deadline starts at the acceptance instant: {due} vs {expected}"
-        );
-        assert_eq!(turnaround.status, "open");
-
-        // The accepted fee quote, from the schedule.
-        assert_eq!(record.fee_plan_fee_cents, Some(15_000));
-        assert_eq!(record.fee_supplemental_hourly_cents, Some(25_000));
-        assert_eq!(record.fee_covered_benefit.as_deref(), Some("Will review"));
-    }
-
-    #[tokio::test]
-    async fn a_late_acceptance_leaves_the_acceptance_deadline_open_for_the_alert() {
-        let Some(pg) = postgres().await else {
-            eprintln!("skipping: no PostgreSQL test lane");
-            return;
-        };
-        let surreal = mem_surreal().await;
-        let firm_id = seed_firm_with_brand(&surreal, "neon").await;
-        plan_firm(&pg, firm_id).await;
-        let plan = arag_plan_on(&pg, firm_id, "ARAG", None).await;
-        let landing = Utc::now() - Duration::hours(48);
-        let staged = stage(&surreal, Some(&pg), &arag_input(firm_id, landing))
-            .await
-            .expect("staging succeeds");
-        let attorney = plan_attorney(&surreal).await;
-
-        let accepted = accept(
-            &surreal,
-            &pg,
-            staged.id,
-            &accept_input(plan.id, attorney.id, true),
-        )
-        .await
-        .expect("the attested acceptance opens the matter even though it is late");
-
-        let deadlines = crate::project_deadlines::list(&surreal, accepted.project_id)
-            .await
-            .expect("deadline list");
-        let acceptance = deadlines
-            .iter()
-            .find(|deadline| deadline.title.as_deref() == Some("Plan acceptance window"))
-            .expect("the acceptance deadline exists");
-        // The clock is due from the landing, and a late acceptance leaves
-        // it open and overdue — exactly what the daily alert should show.
-        assert_eq!(
-            acceptance.due_at,
-            acceptance_due(landing, Some(24)).to_rfc3339()
-        );
-        assert_eq!(acceptance.status, "open");
-    }
-
-    #[tokio::test]
-    async fn a_portal_only_plan_schedules_the_manual_portal_confirmation() {
-        let Some(pg) = postgres().await else {
-            eprintln!("skipping: no PostgreSQL test lane");
-            return;
-        };
-        let surreal = mem_surreal().await;
-        let firm_id = seed_firm_with_brand(&surreal, "neon").await;
-        plan_firm(&pg, firm_id).await;
-        let plan = crate::legal_plans::create(
-            &pg,
-            firm_id,
-            &NewLegalPlan {
-                name: "ARAG Portal".into(),
-                portal: Some("portal.arag.example".into()),
-                contact: None,
-                acceptance_sla_hours: None,
-                turnaround_sla_days: None,
-                reporting_requirements: None,
-            },
-        )
-        .await
-        .expect("an open-ended plan");
-        let input = arag_input(firm_id, Utc::now());
-        let staged = stage(&surreal, Some(&pg), &input)
-            .await
-            .expect("staging succeeds");
-        assert!(
-            staged.plan_portal_only,
-            "a plan with a portal accepts on the portal"
-        );
-        let attorney = plan_attorney(&surreal).await;
-
-        let accepted = accept(
-            &surreal,
-            &pg,
-            staged.id,
-            &accept_input(plan.id, attorney.id, true),
-        )
-        .await
-        .expect("the attested acceptance opens the matter");
-
-        let deadlines = crate::project_deadlines::list(&surreal, accepted.project_id)
-            .await
-            .expect("deadline list");
-        assert_eq!(deadlines.len(), 3);
-        assert!(deadlines
-            .iter()
-            .all(|d| d.title.as_deref() != Some("Plan turnaround deadline")));
-        assert!(deadlines.iter().any(|deadline| deadline
-            .title
-            .as_deref()
-            .is_some_and(|title| title.contains("portal"))));
-    }
-
-    #[tokio::test]
-    async fn the_review_queue_lists_a_firms_staged_assignments_newest_first() {
-        let surreal = mem_surreal().await;
-        let firm_id = Uuid::now_v7();
-        let other_firm = Uuid::now_v7();
-        let older = stage(
-            &surreal,
-            None,
-            &arag_input(firm_id, Utc::now() - Duration::hours(2)),
-        )
-        .await
-        .expect("staging succeeds");
-        let newer = stage(&surreal, None, &legal_shield_input(firm_id, Utc::now()))
-            .await
-            .expect("staging succeeds");
-        stage(&surreal, None, &arag_input(other_firm, Utc::now()))
-            .await
-            .expect("staging succeeds");
-
-        let queue = list_by_firm(&surreal, firm_id).await.expect("queue list");
-        assert_eq!(
-            queue.iter().map(|staged| staged.id).collect::<Vec<_>>(),
-            vec![newer.id, older.id]
-        );
-        // The detail lookup by id.
-        let one = find_by_id(&surreal, older.id)
-            .await
-            .expect("lookup")
-            .expect("the record exists");
-        assert_eq!(one.id, older.id);
     }
 }

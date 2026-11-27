@@ -67,9 +67,9 @@ fn the_search_tools_are_read_only_and_run_without_confirmation() {
 #[tokio::test]
 async fn the_dispatcher_refuses_a_tool_outside_the_catalog() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::test_support::unreachable();
+        let application_store = store::test_support::uninitialized_store();
         let state = mcp::McpState::new(
-            surreal,
+            application_store,
             std::sync::Arc::new(workflows::InMemoryRuntime::new()),
         );
         let err = call_tool(&state, None, "search_case_lawz", &json!({}))
@@ -83,9 +83,9 @@ async fn the_dispatcher_refuses_a_tool_outside_the_catalog() {
 #[tokio::test]
 async fn dispatch_without_backends_degrades_to_search_unavailable() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::test_support::unreachable();
+        let application_store = store::test_support::uninitialized_store();
         let state = mcp::McpState::new(
-            surreal,
+            application_store,
             std::sync::Arc::new(workflows::InMemoryRuntime::new()),
         );
         for tool in the_new_tools() {
@@ -111,9 +111,9 @@ async fn a_dispatched_search_proxies_the_terms_and_nothing_else() {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "results": [] })))
             .mount(&server)
             .await;
-        let surreal = store::surreal::test_support::unreachable();
+        let application_store = store::test_support::uninitialized_store();
         let mut state = mcp::McpState::new(
-            surreal,
+            application_store,
             std::sync::Arc::new(workflows::InMemoryRuntime::new()),
         );
         state.search = Some(SearchBackends {

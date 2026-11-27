@@ -1,6 +1,6 @@
 //! Financial tagged-link relinking is relational; no graph convergence is inferred.
 use serde_json::Value;
-use store::{postgres::PostgresDb, project_references::Party, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, postgres::PostgresDb, project_references::Party};
 use uuid::Uuid;
 
 struct Fixture {
@@ -9,7 +9,7 @@ struct Fixture {
     dropped: Uuid,
 }
 
-async fn holding(db: &SurrealDb, project: Uuid, party: Party, class: &str) {
+async fn holding(db: &ApplicationStore, project: Uuid, party: Party, class: &str) {
     store::cap_table_holdings::insert(
         db,
         project,
@@ -24,7 +24,7 @@ async fn holding(db: &SurrealDb, project: Uuid, party: Party, class: &str) {
     .unwrap();
 }
 
-async fn fiduciary(db: &SurrealDb, project: Uuid, party: Party, role: &str, order: i64) {
+async fn fiduciary(db: &ApplicationStore, project: Uuid, party: Party, role: &str, order: i64) {
     store::fiduciary_roles::insert(
         db,
         project,
@@ -40,7 +40,7 @@ async fn fiduciary(db: &SurrealDb, project: Uuid, party: Party, role: &str, orde
 }
 
 async fn seed(pg: &PostgresDb) -> Fixture {
-    let db = SurrealDb::uninitialized();
+    let db = ApplicationStore::uninitialized();
     let project = super::native_project::create("synthetic-financial-tagged-merge").await;
     let mut people = Vec::new();
     for name in ["Synthetic kept party", "Synthetic dropped party"] {
@@ -99,7 +99,7 @@ async fn rows(pg: &PostgresDb, table: &str, project: Uuid) -> Vec<Value> {
 async fn financial_person_tags_move_without_changing_same_uuid_entity_tags_or_row_metadata() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let fixture = seed(&pg).await;
         let mut before = Vec::new();
         for table in ["cap_table_holding", "fiduciary_role"] {
@@ -151,7 +151,7 @@ async fn financial_person_tags_move_without_changing_same_uuid_entity_tags_or_ro
 async fn colliding_financial_person_lines_refuse_merge_and_roll_back_affected_rows() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let fixture = seed(&pg).await;
         holding(&db, fixture.project, Party::person(fixture.kept), "synthetic person preferred").await;
         let before = super::merge_fixture::snapshot(&pg).await;

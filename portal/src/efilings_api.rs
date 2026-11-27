@@ -33,10 +33,14 @@ async fn require_participant(
     session: &crate::SessionData,
     project_id: Uuid,
 ) -> Result<(), ApiError> {
-    let allowed =
-        store::access::can_see_project(&state.surreal, session.person_id, session.role, project_id)
-            .await
-            .map_err(ApiError::Db)?;
+    let allowed = store::access::can_see_project(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        project_id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     if allowed {
         Ok(())
     } else {
@@ -60,7 +64,7 @@ pub(crate) async fn list_efilings(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, &session, id).await?;
-    let rows = store::efiling_transactions::list(&state.surreal, id)
+    let rows = store::efiling_transactions::list(&state.application_store, id)
         .await
         .map_err(map_efiling)?;
     Ok(Json(rows).into_response())
@@ -75,7 +79,7 @@ pub(crate) async fn record_efiling(
 ) -> Result<Response, ApiError> {
     require_participant(&state, &session, id).await?;
     let row = store::efiling_transactions::record(
-        &state.surreal,
+        &state.application_store,
         &store::efiling_transactions::EfilingReport {
             project_id: id,
             transaction_id: input.transaction_id,

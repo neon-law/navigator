@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::{participation, projects};
 use crate::contact_sync;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 use crate::projects::NewProject;
 
 #[tokio::test]

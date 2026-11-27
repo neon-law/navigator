@@ -111,12 +111,12 @@ pub fn storage_keys_for_asset(asset: &store::assets::Asset) -> Vec<String> {
 /// [`ExpungeError::BadCategory`] for an unknown category, or the
 /// underlying repo / storage / database error.
 pub async fn expunge(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     req: ExpungeRequest<'_>,
 ) -> Result<Uuid, ExpungeError> {
     // (1) Admin-only — the gate lives in the primitive itself.
-    match store::persons::find_by_id(surreal, req.authorized_by).await? {
+    match store::persons::find_by_id(application_store, req.authorized_by).await? {
         Some(p) if p.role.is_admin_tier() => {}
         _ => return Err(ExpungeError::NotAdmin),
     }
@@ -132,7 +132,7 @@ pub async fn expunge(
     }
 
     // (2) Rewrite history — shells git, so off the async pool.
-    let project_code = store::projects::find_by_id(surreal, req.project_id)
+    let project_code = store::projects::find_by_id(application_store, req.project_id)
         .await?
         .ok_or(ExpungeError::ProjectNotFound(req.project_id))?
         .code;
@@ -169,7 +169,8 @@ pub async fn expunge(
     //     not true, for an unattached row.
     for key in &req.storage_keys {
         let referenced_by_another_matter =
-            store::assets::referenced_by_another_project(surreal, req.project_id, key).await?;
+            store::assets::referenced_by_another_project(application_store, req.project_id, key)
+                .await?;
         if referenced_by_another_matter {
             // Loud, not silent: an order that requires the bytes actually
             // destroyed needs a human to reach the other matter.
@@ -188,7 +189,7 @@ pub async fn expunge(
 
     // (4) Record the expunge — who / when / category, not content.
     let id = expunge_records::record(
-        surreal,
+        application_store,
         &expunge_records::NewExpunge {
             project_id: req.project_id,
             path: req.path,

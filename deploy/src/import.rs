@@ -56,7 +56,7 @@ struct TemplateFrontmatter {
 /// are skipped — they're recorded in [`ImportReport::violations`] for
 /// the caller to report.
 pub async fn import_directory(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     dir: &Path,
 ) -> anyhow::Result<ImportReport> {
@@ -93,7 +93,7 @@ pub async fn import_directory(
             continue;
         }
         if let Some(parsed) = parse_frontmatter(&contents) {
-            persist_template(surreal, storage, path, &parsed, &mut report).await?;
+            persist_template(application_store, storage, path, &parsed, &mut report).await?;
         }
     }
     Ok(report)
@@ -155,7 +155,7 @@ fn question_codes_from_frontmatter(fm: &TemplateFrontmatter) -> BTreeSet<String>
 }
 
 async fn persist_template(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     path: &Path,
     fm: &TemplateFrontmatter,
@@ -168,7 +168,8 @@ async fn persist_template(
     let source = std::fs::read_to_string(path)?;
     let body = rules::clauses::compile(&source).map_err(anyhow::Error::msg)?;
     let asset_id =
-        store::assets::ingest_content(surreal, storage, body.as_bytes(), "text/markdown").await?;
+        store::assets::ingest_content(application_store, storage, body.as_bytes(), "text/markdown")
+            .await?;
     // Route through `save_version` (the same seam `template_source`'s
     // repo-backed import uses) rather than a raw insert: it appends a new
     // version when the spec changed, is a no-op when it didn't, and — the
@@ -178,7 +179,7 @@ async fn persist_template(
     // repo commit, and the version-identity tuple deliberately excludes it
     // anyway (provenance only).
     let saved = store::templates::save_version(
-        surreal,
+        application_store,
         None,
         &code,
         store::templates::Version {
@@ -199,7 +200,7 @@ async fn persist_template(
     }
 
     for q_code in question_codes_from_frontmatter(fm) {
-        if store::questions::find_by_code(surreal, &q_code)
+        if store::questions::find_by_code(application_store, &q_code)
             .await?
             .is_some()
         {
@@ -208,7 +209,7 @@ async fn persist_template(
         // `find_or_create` rather than a bare create: two imports racing on
         // one auto-imported code would otherwise surface `CodeTaken`.
         store::questions::find_or_create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new(
                 q_code.clone(),
                 format!("(auto-imported) {q_code}"),

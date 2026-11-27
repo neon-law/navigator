@@ -16,11 +16,8 @@ name = "navigator-migrate"
 path = "src/bin/navigator-migrate.rs"
 
 [features]
-# Shared PostgreSQL and compatibility fixture APIs, without an embedded engine.
 # Unit tests also reach these helpers through cfg(test).
 test-support = []
-# Only explicit compatibility runs compile the embedded SurrealDB engine.
-surreal-compatibility = ["surrealdb/kv-mem"]
 
 [dependencies]
 addr.workspace = true
@@ -62,11 +59,7 @@ serde_json.workspace = true
 sqlx = { workspace = true, features = ["migrate"] }
 serde_yaml.workspace = true
 sha2.workspace = true
-# Remote transport and schema compatibility; the engine is an explicit opt-in.
-surrealdb.workspace = true
-# The TLS provider `store::surreal::install_tls_provider` registers. Pinned to
-# the same 0.23 rustls surrealdb links, so the provider lands in the instance
-# that actually performs the `wss://` handshake.
+# TLS provider used by PostgreSQL and HTTP clients.
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 strum.workspace = true
 thiserror.workspace = true

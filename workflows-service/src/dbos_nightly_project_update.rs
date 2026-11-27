@@ -9,7 +9,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use dbos::{StepOptions, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use uuid::Uuid;
 use workflows::SlackBot;
 
@@ -48,7 +48,7 @@ pub enum NightlyError {
 /// Firm's bot for the Project-channel tags (ENG-392).
 #[derive(Clone)]
 pub struct Context {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     slack: Arc<dyn SlackBot>,
     bots: Arc<dyn ProjectSlackBots>,
     outcome_channel: String,
@@ -61,7 +61,7 @@ pub struct Context {
 impl Context {
     #[must_use]
     pub fn new(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         slack: Arc<dyn SlackBot>,
         bots: Arc<dyn ProjectSlackBots>,
         outcome_channel: String,
@@ -69,7 +69,7 @@ impl Context {
         providers: Providers,
     ) -> Self {
         Self {
-            surreal,
+            application_store,
             slack,
             bots,
             outcome_channel,
@@ -139,11 +139,11 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> 
             .await?;
             tracing::info!(%ran_on, %started_at, "DBOS Nightly Project Update started");
 
-            let surreal = parent.context.surreal.clone();
+            let application_store = parent.context.application_store.clone();
             let roster = dbos::step("discover-projects", move || {
-                let surreal = surreal.clone();
+                let application_store = application_store.clone();
                 async move {
-                    nightly::discover_roster(&surreal)
+                    nightly::discover_roster(&application_store)
                         .await
                         .map_err(|_| dbos::Error::Application(NightlyError::Roster))
                 }
@@ -154,12 +154,12 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> 
             store::project_folder_reconcile::visit_nightly_roster(
                 roster.iter().filter(|project| project.open).map(|project| project.project_id).collect::<Vec<_>>(),
                 |project_id| {
-                    let surreal = parent.context.surreal.clone();
+                    let application_store = parent.context.application_store.clone();
                     async move {
                         dbos::step(&format!("converge-project-folders-{project_id}"), move || {
-                            let surreal = surreal.clone();
+                            let application_store = application_store.clone();
                             async move { Ok::<_, dbos::Error<NightlyError>>(
-                                store::project_folder_reconcile::nightly_from_env(&surreal, project_id).await,
+                                store::project_folder_reconcile::nightly_from_env(&application_store, project_id).await,
                             ) }
                         }).await
                     }
@@ -282,7 +282,7 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                                 let context = context.clone();
                                 async move {
                                     nightly::calendar::reconcile(
-                                        &context.surreal,
+                                        &context.application_store,
                                         project_id,
                                         context.portal_origin.as_deref(),
                                     )
@@ -300,7 +300,7 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                             async move {
                                 let slack = project_bot(&context, project_id).await?;
                                 crate::nightly_project_update::membership::resolve_channel(
-                                    &context.surreal,
+                                    &context.application_store,
                                     &slack,
                                     context.simulated,
                                     project_id,
@@ -320,7 +320,7 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                                     async move {
                                         let slack = project_bot(&context, project_id).await?;
                                         crate::nightly_project_update::membership::invite_members(
-                                            &context.surreal,
+                                            &context.application_store,
                                             &slack,
                                             project_id,
                                             &channel_id,
@@ -350,7 +350,7 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                             async move {
                                 let slack = project_bot(&context, project_id).await?;
                                 crate::nightly_project_update::slack::upsert_canvas(
-                                    &context.surreal,
+                                    &context.application_store,
                                     slack.as_ref(),
                                     context.portal_origin.as_deref(),
                                     &ran_on,
@@ -369,7 +369,7 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                             async move {
                                 let slack = project_bot(&context, project_id).await?;
                                 crate::nightly_project_update::slack::post_notice(
-                                    &context.surreal,
+                                    &context.application_store,
                                     slack.as_ref(),
                                     &context.repository_forge,
                                     &ran_on,
@@ -407,7 +407,7 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                             let context = context.clone();
                             async move {
                                 crate::nightly_project_update::repository::reconcile_repository(
-                                    &context.surreal,
+                                    &context.application_store,
                                     &context.repository_forge,
                                     project_id,
                                     &context.runtime_version,
@@ -434,7 +434,7 @@ async fn project_bot(
 ) -> Result<Arc<dyn SlackBot>, dbos::Error<NightlyError>> {
     context
         .bots
-        .for_project(&context.surreal, project_id)
+        .for_project(&context.application_store, project_id)
         .await
         .map_err(|_| dbos::Error::Application(NightlyError::Step))
 }
@@ -462,7 +462,7 @@ pub(crate) async fn unlaunched_workflow() -> NightlyWorkflow {
         &dbos,
         Context::new(
             // Never launched, so never reads its store.
-            store::surreal::SurrealDb::uninitialized(),
+            store::application_store::ApplicationStore::uninitialized(),
             Arc::new(workflows::CapturingSlackBot::new()),
             Arc::new(crate::firm_slack::SharedSlackBot(Arc::new(
                 workflows::CapturingSlackBot::new(),

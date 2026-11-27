@@ -380,7 +380,7 @@ mod tests {
         use super::super::{correct, current, history, record, MatterOutcomeError, MatterResult};
         use super::settled;
         use crate::firm_side::tests::matter;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
+        use crate::postgres::fixtures::{connect, fresh_schema};
 
         #[tokio::test]
         async fn only_a_firm_side_participant_records_or_reads_an_outcome() {

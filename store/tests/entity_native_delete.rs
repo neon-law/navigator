@@ -1,12 +1,12 @@
 //! Entity deletion reads native references without consulting a Source engine.
+use store::application_store::ApplicationStore;
 use store::entities::{self, Entity, EntityError, NewEntity};
 use store::entity_commands::{self, EntityCommandError};
 use store::postgres::{identity::AuthorityError, PostgresDb};
 use store::relationships::{self, Endpoint, NewRelationship};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
-async fn entity(db: &SurrealDb, id: Uuid) -> Entity {
+async fn entity(db: &ApplicationStore, id: Uuid) -> Entity {
     let jurisdiction = store::jurisdictions::create(
         db,
         &store::jurisdictions::NewJurisdiction::new(
@@ -37,7 +37,7 @@ async fn entity(db: &SurrealDb, id: Uuid) -> Entity {
     .unwrap()
 }
 
-async fn person(db: &SurrealDb) -> Uuid {
+async fn person(db: &ApplicationStore) -> Uuid {
     store::persons::create(
         db,
         &store::persons::NewPerson::with_role(
@@ -51,7 +51,13 @@ async fn person(db: &SurrealDb) -> Uuid {
     .id
 }
 
-async fn relationship(db: &SurrealDb, from: Endpoint, from_id: Uuid, to: Endpoint, to_id: Uuid) {
+async fn relationship(
+    db: &ApplicationStore,
+    from: Endpoint,
+    from_id: Uuid,
+    to: Endpoint,
+    to_id: Uuid,
+) {
     relationships::record(
         db,
         &NewRelationship {
@@ -73,7 +79,7 @@ async fn relationship(db: &SurrealDb, from: Endpoint, from_id: Uuid, to: Endpoin
 #[tokio::test]
 async fn unreferenced_native_entity_deletes_and_absent_entity_is_not_found() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let target = entity(&db, Uuid::new_v4()).await;
         assert!(entities::dependents(&db, target.id)
             .await
@@ -98,7 +104,7 @@ async fn unreferenced_native_entity_deletes_and_absent_entity_is_not_found() {
 #[tokio::test]
 async fn native_dependent_counts_preserve_all_categories_order_and_endpoint_kinds() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         // The same UUID exists in two legitimate tables. Only typed Entity
         // graph endpoints may prevent this Entity from being removed.
         let same_id_person = person(&db).await;
@@ -141,7 +147,7 @@ async fn native_dependent_counts_preserve_all_categories_order_and_endpoint_kind
 #[tokio::test]
 async fn native_firm_anchor_remains_protected_by_command_and_delete_statement() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let catalog = entity(&db, Uuid::new_v4()).await;
         let anchor = entity_commands::create_entity(
             &db,
@@ -173,7 +179,7 @@ async fn native_firm_anchor_remains_protected_by_command_and_delete_statement() 
 #[tokio::test]
 async fn native_dependent_count_failure_never_reads_source_or_deletes_entity() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let target = entity(&db, Uuid::new_v4()).await;
         let pg = PostgresDb::application().await.unwrap();
         let observer = sqlx::PgPool::connect_with(pg.pool().connect_options().as_ref().clone())

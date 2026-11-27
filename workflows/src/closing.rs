@@ -45,10 +45,10 @@ pub fn closes_matter(state: &StateName) -> bool {
 /// callers wrap it in `ctx.run`. Idempotent and monotonic — see
 /// [`store::projects::close_for_notation`].
 pub async fn close_matter(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
 ) -> Result<(), CloseError> {
-    store::projects::close_for_notation(surreal, notation_id).await?;
+    store::projects::close_for_notation(application_store, notation_id).await?;
     Ok(())
 }
 

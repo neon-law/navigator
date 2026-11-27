@@ -121,7 +121,7 @@ async fn a_full_archive_run_performs_zero_deletes() {
 
     store::test_support::with_postgres(async {
         let pg = store::postgres::PostgresDb::application().await.unwrap();
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         store::persons::create(
             &db,
             &store::persons::NewPerson::with_role(

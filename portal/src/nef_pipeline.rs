@@ -106,7 +106,7 @@ pub(crate) async fn process_nef(
     // cases per matter is the point, so this is the same resolution the
     // CLI's ingest performs against its manifest's dockets.
     let case = store::cases::ensure_case(
-        &state.surreal,
+        &state.application_store,
         &store::cases::NewCase {
             project_id,
             caption: notice.case_name.as_deref().unwrap_or(&case_no),
@@ -127,7 +127,7 @@ pub(crate) async fn process_nef(
     // Each message keeps its own original and attachments even when its
     // docket entry already exists. Stable slugs make a replay converge.
     let existing = if let Some(doc_no) = notice.doc_no.as_deref() {
-        store::cases::docket(&state.surreal, case.id)
+        store::cases::docket(&state.application_store, case.id)
             .await
             .map_err(|error| case_error(&error))?
             .into_iter()
@@ -157,7 +157,7 @@ pub(crate) async fn process_nef(
         .filed_at
         .map(|date| date.format("%Y-%m-%dT00:00:00Z").to_string());
     let entry = store::cases::ensure_entry(
-        &state.surreal,
+        &state.application_store,
         &store::cases::NewDocketEntry {
             case_id: case.id,
             entry_number: &doc_no,
@@ -301,7 +301,7 @@ async fn file_notice_documents(
             subject: row.subject.as_deref().unwrap_or_default(),
         };
         store::documents::ingest_bytes_with_mail_provenance_once(
-            &state.surreal,
+            &state.application_store,
             &state.storage,
             &args,
             &identity,
@@ -323,7 +323,7 @@ pub(crate) async fn raw_source(
     row: &store::inbox::UnprocessedRow,
 ) -> Result<Option<Vec<u8>>, ApiError> {
     // An import can keep the raw source directly on the normalized message.
-    if let Some(message) = store::inbox::message_by_id(&state.surreal, row.id)
+    if let Some(message) = store::inbox::message_by_id(&state.application_store, row.id)
         .await
         .map_err(map_inbox)?
     {
@@ -334,24 +334,26 @@ pub(crate) async fn raw_source(
     let Some(provider_message_id) = row.provider_message_id.as_deref() else {
         return Ok(None);
     };
-    let Some(conversation) = store::inbox::conversation_by_id(&state.surreal, row.conversation_id)
-        .await
-        .map_err(map_inbox)?
+    let Some(conversation) =
+        store::inbox::conversation_by_id(&state.application_store, row.conversation_id)
+            .await
+            .map_err(map_inbox)?
     else {
         return Ok(None);
     };
     let Some(email_conversation_id) = conversation.email_conversation_id else {
         return Ok(None);
     };
-    let raw_key = store::email_conversations::messages(&state.surreal, email_conversation_id)
-        .await
-        .map_err(|error| map_email(&error))?
-        .into_iter()
-        .find(|hop| {
-            hop.direction == store::email_conversations::DIRECTION_FROM_EXTERNAL
-                && hop.provider_message_id.as_deref() == Some(provider_message_id)
-        })
-        .and_then(|hop| hop.raw_storage_key);
+    let raw_key =
+        store::email_conversations::messages(&state.application_store, email_conversation_id)
+            .await
+            .map_err(|error| map_email(&error))?
+            .into_iter()
+            .find(|hop| {
+                hop.direction == store::email_conversations::DIRECTION_FROM_EXTERNAL
+                    && hop.provider_message_id.as_deref() == Some(provider_message_id)
+            })
+            .and_then(|hop| hop.raw_storage_key);
     let Some(key) = raw_key else {
         return Ok(None);
     };
@@ -410,12 +412,12 @@ async fn attachment_bytes(
     state: &crate::api::ApiState,
     row: &store::inbox::UnprocessedRow,
 ) -> Result<Vec<InboundAttachment>, ApiError> {
-    let assets = store::inbox::message_assets(&state.surreal, row.firm_id, row.id)
+    let assets = store::inbox::message_assets(&state.application_store, row.firm_id, row.id)
         .await
         .map_err(map_inbox)?;
     let mut attachments = Vec::with_capacity(assets.len());
     for asset_link in assets {
-        let asset = store::assets::find_by_id(&state.surreal, asset_link.asset_id)
+        let asset = store::assets::find_by_id(&state.application_store, asset_link.asset_id)
             .await
             .map_err(ApiError::Asset)?
             .ok_or_else(|| {

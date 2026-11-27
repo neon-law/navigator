@@ -1,5 +1,5 @@
 use super::PostgresDb;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 use crate::projects::NewProject;
 use uuid::Uuid;
 
@@ -35,11 +35,8 @@ pub(super) async fn fixture() -> Option<Fixture> {
         .execute(pg.pool())
         .await
         .unwrap();
-    crate::postgres::fixtures::activate_family(
-        &pg,
-        crate::postgres_backfill::family::Family::Notation,
-    )
-    .await;
+    crate::postgres::fixtures::activate_family(&pg, crate::postgres::history::Family::Notation)
+        .await;
     Some(Fixture {
         pg,
         input: NewProject {
@@ -126,7 +123,7 @@ async fn visible_project_lists_and_code_lookups_respect_participation_side() {
         }
     }
 
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     super::tenancy::with_test_authority(pg.clone(), true, async {
         for (role, expected) in [
             (Role::Admin, ["visible-a", "visible-b"]),
@@ -654,6 +651,3 @@ pub(super) async fn insert_person(pg: &PostgresDb, role: &str) -> Uuid {
         .unwrap();
     id
 }
-
-#[path = "project_compatibility_tests.rs"]
-mod compatibility;

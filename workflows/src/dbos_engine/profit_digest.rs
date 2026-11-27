@@ -91,23 +91,31 @@ pub fn contingent_matters(cash: &FirmProjectedCash) -> usize {
 /// Reads each active Firm as its Admin DRI, the Owner-or-Admin viewer both
 /// store rollups require.
 pub struct StoreProfitSource {
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     pg: store::postgres::PostgresDb,
 }
 
 impl StoreProfitSource {
     #[must_use]
-    pub fn new(surreal: store::surreal::SurrealDb, pg: store::postgres::PostgresDb) -> Self {
-        Self { surreal, pg }
+    pub fn new(
+        application_store: store::application_store::ApplicationStore,
+        pg: store::postgres::PostgresDb,
+    ) -> Self {
+        Self {
+            application_store,
+            pg,
+        }
     }
 
     async fn admin_dri(&self, firm_id: Uuid) -> Result<Option<Uuid>, ProfitDigestError> {
-        Ok(store::firms::memberships_for_firm(&self.surreal, firm_id)
-            .await
-            .map_err(|_| ProfitDigestError::Read)?
-            .into_iter()
-            .find(|role| role.is_dri && role.membership == store::firms::FirmMembership::Admin)
-            .map(|role| role.person_id))
+        Ok(
+            store::firms::memberships_for_firm(&self.application_store, firm_id)
+                .await
+                .map_err(|_| ProfitDigestError::Read)?
+                .into_iter()
+                .find(|role| role.is_dri && role.membership == store::firms::FirmMembership::Admin)
+                .map(|role| role.person_id),
+        )
     }
 }
 
@@ -120,7 +128,7 @@ impl ProfitSource for StoreProfitSource {
                 ProfitDigestError::Read
             }
         };
-        let firms = store::firms::all(&self.surreal)
+        let firms = store::firms::all(&self.application_store)
             .await
             .map_err(|error| failed("Firm")(&error))?;
         let mut out = Vec::new();
@@ -129,15 +137,20 @@ impl ProfitSource for StoreProfitSource {
                 tracing::warn!(firm_id = %firm.id, "ProfitDigest skips a Firm with no Admin DRI");
                 continue;
             };
-            let cash =
-                store::projected_cash::firm_rollup(&self.surreal, &self.pg, viewer, firm.id, on)
-                    .await
-                    .map_err(|error| failed("projected cash")(&error))?;
+            let cash = store::projected_cash::firm_rollup(
+                &self.application_store,
+                &self.pg,
+                viewer,
+                firm.id,
+                on,
+            )
+            .await
+            .map_err(|error| failed("projected cash")(&error))?;
             if contingent_matters(&cash) == 0 {
                 continue;
             }
             let calibration = store::outcome_calibration::firm_calibration(
-                &self.surreal,
+                &self.application_store,
                 &self.pg,
                 viewer,
                 firm.id,

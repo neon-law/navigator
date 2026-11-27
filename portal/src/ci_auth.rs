@@ -37,7 +37,7 @@ use crate::CanonicalHost;
 #[derive(Clone)]
 pub struct CiAuthState {
     pub sessions: SessionStore,
-    pub surreal: store::surreal::SurrealDb,
+    pub application_store: store::application_store::ApplicationStore,
     pub github_oidc: GitHubOidc,
     pub forgejo_oidc: ForgejoOidc,
     pub canonical_host: CanonicalHost,
@@ -214,7 +214,7 @@ async fn mint_inner(
     if brand.is_some_and(|brand| brand.as_str() != project.brand) {
         return Err(MintError::Forbidden(UNBOUND.into()));
     }
-    let actor = lawyer_dri_actor(&state.surreal, &project, kind).await?;
+    let actor = lawyer_dri_actor(&state.application_store, &project, kind).await?;
     let exp = now_unix_secs() + CI_SESSION_TTL_SECS;
     let session = SessionData {
         sub: actor
@@ -288,8 +288,9 @@ async fn mint_forgejo_inner(
         .forgejo_oidc
         .spend_token(token, claims.exp)
         .map_err(|error| MintError::Unauthorized(error.to_string()))?;
-    let project = resolve_forgejo_project(&state.surreal, &claims.iss, &claims.repository).await?;
-    let actor = lawyer_dri_actor(&state.surreal, &project, kind).await?;
+    let project =
+        resolve_forgejo_project(&state.application_store, &claims.iss, &claims.repository).await?;
+    let actor = lawyer_dri_actor(&state.application_store, &project, kind).await?;
     let exp = (now_unix_secs() + CI_SESSION_TTL_SECS).min(claims.exp);
     let session = SessionData {
         sub: actor
@@ -406,7 +407,7 @@ async fn resolve_project(
     if owner != claims.repository_owner || code.is_empty() {
         return Err(MintError::Forbidden(UNBOUND.into()));
     }
-    let projects = store::projects::all(&state.surreal)
+    let projects = store::projects::all(&state.application_store)
         .await
         .map_err(|error| MintError::Internal(error.to_string()))?;
     let mut matches: Vec<&store::projects::Project> = projects
@@ -447,7 +448,7 @@ async fn resolve_project(
 }
 
 async fn resolve_forgejo_project(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     issuer: &str,
     repository: &str,
 ) -> Result<store::projects::Project, MintError> {
@@ -456,7 +457,7 @@ async fn resolve_forgejo_project(
             "this Forgejo Actions run is not bound to a live project".into(),
         ));
     };
-    let matches: Vec<store::projects::Project> = store::projects::all(surreal)
+    let matches: Vec<store::projects::Project> = store::projects::all(application_store)
         .await
         .map_err(|error| MintError::Internal(error.to_string()))?
         .into_iter()
@@ -483,11 +484,11 @@ enum CiSessionKind {
 }
 
 async fn lawyer_dri_actor(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project: &store::projects::Project,
     kind: CiSessionKind,
 ) -> Result<store::persons::Person, MintError> {
-    let people = store::projects::lawyer_dri_people(surreal, project.id)
+    let people = store::projects::lawyer_dri_people(application_store, project.id)
         .await
         .map_err(|error| MintError::Internal(error.to_string()))?;
     let Some(person) = people
@@ -671,20 +672,20 @@ mod tests {
     /// A live Project bound to `claims.repository`, carrying no lawyer-tier
     /// lawyer DRI — the shared refusal both doors below hit.
     async fn project_with_no_lawyer_dri(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         code: &str,
         brand: &str,
     ) -> store::projects::Project {
-        if store::brands::find_by_key(surreal, brand)
+        if store::brands::find_by_key(application_store, brand)
             .await
             .unwrap()
             .is_none()
         {
-            store::test_support::seed_compiled_brands_postgres(surreal).await;
+            store::test_support::seed_compiled_brands_postgres(application_store).await;
         }
-        let entity_id = store::test_support::seed_entity_with_parents(surreal).await;
+        let entity_id = store::test_support::seed_entity_with_parents(application_store).await;
         let project = store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: code.to_string(),
                 brand: brand.into(),
@@ -697,7 +698,7 @@ mod tests {
         .await
         .unwrap();
         store::projects::set_repository_url(
-            surreal,
+            application_store,
             project.id,
             Some(&format!("https://github.com/neon-law-staging/{code}")),
         )
@@ -706,10 +707,14 @@ mod tests {
         project
     }
 
-    fn ci_state(surreal: store::surreal::SurrealDb, repository: &str, jti: &str) -> CiAuthState {
+    fn ci_state(
+        application_store: store::application_store::ApplicationStore,
+        repository: &str,
+        jti: &str,
+    ) -> CiAuthState {
         CiAuthState {
             sessions: SessionStore::new("test-ci-auth-session-key"),
-            surreal,
+            application_store,
             github_oidc: GitHubOidc::fixed(GitHubActionsClaims {
                 repository: repository.to_string(),
                 repository_owner: "neon-law-staging".to_string(),
@@ -724,24 +729,32 @@ mod tests {
     }
 
     /// A live Project `acme` with a lawyer DRI, recorded at `repository_url`.
-    async fn project_at(surreal: &store::surreal::SurrealDb, repository_url: &str, brand: &str) {
-        if let Some(project) = store::projects::all(surreal)
+    async fn project_at(
+        application_store: &store::application_store::ApplicationStore,
+        repository_url: &str,
+        brand: &str,
+    ) {
+        if let Some(project) = store::projects::all(application_store)
             .await
             .unwrap()
             .into_iter()
             .find(|project| project.code == "acme")
         {
-            store::projects::set_repository_url(surreal, project.id, Some(repository_url))
-                .await
-                .unwrap();
+            store::projects::set_repository_url(
+                application_store,
+                project.id,
+                Some(repository_url),
+            )
+            .await
+            .unwrap();
             return;
         }
-        let project = project_with_no_lawyer_dri(surreal, "acme", brand).await;
-        store::projects::set_repository_url(surreal, project.id, Some(repository_url))
+        let project = project_with_no_lawyer_dri(application_store, "acme", brand).await;
+        store::projects::set_repository_url(application_store, project.id, Some(repository_url))
             .await
             .unwrap();
         let lawyer = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Lawyer Example",
                 "lawyer@example.com",
@@ -750,8 +763,8 @@ mod tests {
         )
         .await
         .unwrap();
-        store::projects::designate_dri_in_surreal(
-            surreal,
+        store::projects::designate_dri(
+            application_store,
             project.id,
             lawyer.id,
             store::projects::DriSide::Lawyer,
@@ -763,14 +776,18 @@ mod tests {
     /// A GitHub run of `<owner>/acme` against a deployment whose GitHub
     /// organization is `org` and whose Forgejo issuer is `forgejo.example`.
     async fn forgejo_fallback_mint(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         repository_url: &str,
         owner: &str,
         org: Option<&str>,
         forgejo_oidc: ForgejoOidc,
     ) -> (StatusCode, serde_json::Value) {
-        project_at(surreal, repository_url, "neon").await;
-        let mut state = ci_state(surreal.clone(), &format!("{owner}/acme"), "fallback-jti");
+        project_at(application_store, repository_url, "neon").await;
+        let mut state = ci_state(
+            application_store.clone(),
+            &format!("{owner}/acme"),
+            "fallback-jti",
+        );
         state.github_oidc = GitHubOidc::fixed(GitHubActionsClaims {
             repository: format!("{owner}/acme"),
             repository_owner: owner.to_string(),
@@ -799,7 +816,7 @@ mod tests {
     #[tokio::test]
     async fn the_deployment_org_binds_a_project_recorded_at_its_trusted_forgejo_url() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let (status, body) = forgejo_fallback_mint(
                 &db,
                 FORGEJO_URL,
@@ -817,7 +834,7 @@ mod tests {
     #[tokio::test]
     async fn the_exact_github_url_binds_without_the_fallback() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let (status, body) = forgejo_fallback_mint(
                 &db,
                 "https://github.com/example-org/acme",
@@ -835,7 +852,7 @@ mod tests {
     #[tokio::test]
     async fn the_forgejo_fallback_refuses_every_run_it_does_not_trust() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             for (case, repository_url, owner, org, forgejo_oidc) in [
                 (
                     "a same-named repository under a foreign owner",
@@ -918,7 +935,7 @@ mod tests {
         use crate::test_support::{sign_rs256_claims, test_oidc_jwks_rsa, TEST_OIDC_KID};
         use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         store::test_support::seed_firm_with_new_brand(&db, "iep-defenders").await;
         project_at(&db, "https://github.com/example/acme", "iep-defenders").await;
         let mut state = ci_state(db, "example/acme", "unused");
@@ -957,7 +974,7 @@ mod tests {
     #[tokio::test]
     async fn the_seed_door_names_a_ci_seed_write_when_no_lawyer_dri_exists() {
         store::test_support::with_required_postgres(async {
-            let postgres = store::surreal::SurrealDb::uninitialized();
+            let postgres = store::application_store::ApplicationStore::uninitialized();
             project_with_no_lawyer_dri(&postgres, "no-dri-seed", "neon").await;
             let state = ci_state(postgres, "neon-law-staging/no-dri-seed", "seed-door-jti");
 
@@ -975,10 +992,10 @@ mod tests {
     #[tokio::test]
     async fn the_document_door_names_verification_not_a_write_when_no_lawyer_dri_exists() {
         store::test_support::with_required_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
-            project_with_no_lawyer_dri(&surreal, "no-dri-document", "neon").await;
+            let application_store = store::application_store::ApplicationStore::uninitialized();
+            project_with_no_lawyer_dri(&application_store, "no-dri-document", "neon").await;
             let state = ci_state(
-                surreal,
+                application_store,
                 "neon-law-staging/no-dri-document",
                 "document-door-jti",
             );

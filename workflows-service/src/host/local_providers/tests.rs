@@ -110,7 +110,7 @@ fn explicit_delivery_configuration_is_never_silently_replaced() {
             }
         }
     }
-    let source = SurrealDb::uninitialized();
+    let source = ApplicationStore::uninitialized();
     let bot = || Arc::new(CapturingSlackBot::new()) as Arc<dyn workflows::SlackBot>;
     assert!(general_nag::Context::from_lookup(source.clone(), bot(), true, |_| None).is_err());
     assert!(dri_digest::Context::from_lookup(source.clone(), bot(), true, |_| None).is_err());
@@ -119,7 +119,7 @@ fn explicit_delivery_configuration_is_never_silently_replaced() {
     );
 }
 
-async fn seed_invoice(source: &SurrealDb, providers: &LocalProviders) -> String {
+async fn seed_invoice(source: &ApplicationStore, providers: &LocalProviders) -> String {
     let (matter, admin) = native_project::matter(source).await;
     let firm = matter
         .firm_id
@@ -170,7 +170,7 @@ async fn detached_native_handlers_use_captured_effects_and_the_owned_postgres_st
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
         let providers = local();
-        let source = SurrealDb::uninitialized();
+        let source = ApplicationStore::uninitialized();
         let invoice = seed_invoice(&source, &providers).await;
         let nag = providers.general_nag(source.clone(), pg.clone());
         assert_eq!(
@@ -273,7 +273,7 @@ async fn injected_store_refuses_damaged_history_and_closed_pool_without_fallback
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
         let providers = local();
-        let context = providers.general_nag(SurrealDb::uninitialized(), pg.clone());
+        let context = providers.general_nag(ApplicationStore::uninitialized(), pg.clone());
         let damaged_schema = sqlx::query("UPDATE public._sqlx_migrations SET success=false WHERE version=(SELECT max(version) FROM public._sqlx_migrations)")
             .execute(pg.pool())
             .await

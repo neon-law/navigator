@@ -149,7 +149,7 @@ pub fn is_document_intake(state: &StateName) -> bool {
 /// construction: the same bytes dedup to the same blob, so a Restate
 /// replay is safe.
 pub async fn dispatch_document_intake(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     notation_id: Uuid,
     payload: &IntakePayload,
@@ -157,9 +157,9 @@ pub async fn dispatch_document_intake(
     if rules::kind::Kind::parse(&payload.kind).is_none() {
         return Err(IntakeError::UnknownKind(payload.kind.clone()));
     }
-    let project_id = notation_project_id(surreal, notation_id).await?;
+    let project_id = notation_project_id(application_store, notation_id).await?;
     if let IntakeArtifact::Stored { asset_id } = &payload.artifact {
-        let asset = store::assets::find_by_id(surreal, *asset_id)
+        let asset = store::assets::find_by_id(application_store, *asset_id)
             .await?
             .ok_or(IntakeError::StoredAssetMissing)?;
         if asset.project_id != Some(project_id) {
@@ -187,17 +187,17 @@ pub async fn dispatch_document_intake(
         secondary_storage_key: None,
         visibility: store::documents::visibility::INTERNAL,
     };
-    Ok(store::documents::ingest_bytes(surreal, storage, &args, &bytes).await?)
+    Ok(store::documents::ingest_bytes(application_store, storage, &args, &bytes).await?)
 }
 
 /// Resolve a notation to the project it belongs to (every notation
 /// belongs to exactly one project). [`store::documents::ingest_bytes`]
 /// is project-scoped, but step dispatch only carries the notation id.
 async fn notation_project_id(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Uuid, IntakeError> {
-    store::notations::find_by_id(surreal, notation_id)
+    store::notations::find_by_id(application_store, notation_id)
         .await?
         .map(|n| n.project_id)
         .ok_or(IntakeError::NotationNotFound(notation_id))

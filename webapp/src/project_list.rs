@@ -310,23 +310,28 @@ fn project_row(
 /// firm-side.
 #[cfg(feature = "server")]
 async fn accessible_projects(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Option<uuid::Uuid>,
     role: store::persons::Role,
 ) -> Result<Vec<store::projects::Project>, ServerFnError> {
     use store::persons::Role;
 
     if role == Role::Owner {
-        return store::projects::all(surreal).await.map_err(loader_error);
+        return store::projects::all(application_store)
+            .await
+            .map_err(loader_error);
     }
-    let mut matters = store::access::visible_projects_as_lawyer(surreal, person_id, role)
+    let mut matters = store::access::visible_projects_as_lawyer(application_store, person_id, role)
         .await
         .map_err(loader_error)?;
     if role != Role::Admin {
         return Ok(matters);
     }
     let mut administered = std::collections::HashMap::new();
-    for project in store::projects::all(surreal).await.map_err(loader_error)? {
+    for project in store::projects::all(application_store)
+        .await
+        .map_err(loader_error)?
+    {
         if matters.iter().any(|m| m.id == project.id) {
             continue;
         }
@@ -335,17 +340,26 @@ async fn accessible_projects(
                 if let std::collections::hash_map::Entry::Vacant(entry) =
                     administered.entry(firm_id)
                 {
-                    let allowed =
-                        store::projects::can_administer_project(surreal, person_id, role, &project)
-                            .await
-                            .map_err(loader_error)?;
+                    let allowed = store::projects::can_administer_project(
+                        application_store,
+                        person_id,
+                        role,
+                        &project,
+                    )
+                    .await
+                    .map_err(loader_error)?;
                     entry.insert(allowed);
                 }
                 administered[&firm_id]
             }
-            None => store::projects::can_administer_project(surreal, person_id, role, &project)
-                .await
-                .map_err(loader_error)?,
+            None => store::projects::can_administer_project(
+                application_store,
+                person_id,
+                role,
+                &project,
+            )
+            .await
+            .map_err(loader_error)?,
         };
         if allowed {
             matters.push(project);
@@ -417,23 +431,23 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
         ViewerRole::Client => store::persons::Role::Client,
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let matters = accessible_projects(&surreal, person_id, store_role).await?;
-    let mut brands = store::brands::system_wide(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let matters = accessible_projects(&application_store, person_id, store_role).await?;
+    let mut brands = store::brands::system_wide(&application_store)
         .await
         .map_err(loader_error)?;
     brands.extend(
-        store::brands::all_firm_scoped(&surreal)
+        store::brands::all_firm_scoped(&application_store)
             .await
             .map_err(loader_error)?,
     );
     // A failed lifecycle lookup propagates rather than badging every matter
     // as a pitch.
-    let (_, has_closing) = store::projects::matter_lifecycle_sets(&surreal, &matters)
+    let (_, has_closing) = store::projects::matter_lifecycle_sets(&application_store, &matters)
         .await
         .map_err(loader_error)?;
 
-    let has_engagement = store::projects::onboarding_official_sets(&surreal, &matters)
+    let has_engagement = store::projects::onboarding_official_sets(&application_store, &matters)
         .await
         .map_err(loader_error)?;
 

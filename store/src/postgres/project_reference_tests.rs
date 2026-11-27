@@ -1,7 +1,7 @@
+use crate::application_store::ApplicationStore;
+use crate::postgres::fixtures::{connect, fresh_schema};
 use crate::postgres_graph::with_test_authority;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::project_references::{reference, Party};
-use crate::surreal::SurrealDb;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -57,7 +57,7 @@ async fn an_existing_person_is_referenced_as_a_government_official() {
     };
     let pg = connect(&options, &database).await;
     let (project, person) = matter(&pg).await;
-    let idle = SurrealDb::uninitialized();
+    let idle = ApplicationStore::uninitialized();
 
     with_test_authority(Some(pg.clone()), async {
         let written = reference(&idle, project, Party::person(person), "government_official")

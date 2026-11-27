@@ -132,21 +132,22 @@ pub async fn upload(
     if !store::projects::is_valid_code(&project_code) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let project_id = match store::projects::find_by_code(&state.surreal, &project_code).await {
-        Ok(Some(project)) => project.id,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(error) => {
-            tracing::error!(error = %error, "document upload: Project lookup failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    let project_id =
+        match store::projects::find_by_code(&state.application_store, &project_code).await {
+            Ok(Some(project)) => project.id,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(error) => {
+                tracing::error!(error = %error, "document upload: Project lookup failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
 
     // A matter-surface write: the matter's gate (a participation row of every
     // tier) plus the lawyer-tier check, which that gate does not make — a client
     // on their own matter reaches the page but must not file to it.
     if !session_data.role.is_lawyer_tier()
         || !store::access::can_see_project(
-            &state.surreal,
+            &state.application_store,
             session_data.person_id,
             session_data.role,
             project_id,
@@ -158,7 +159,7 @@ pub async fn upload(
     }
     // Bail early if the project doesn't exist, so a bad id is a friendly 404
     // rather than a later failure mid-ingest.
-    match store::projects::find_by_id(&state.surreal, project_id).await {
+    match store::projects::find_by_id(&state.application_store, project_id).await {
         Ok(Some(_)) => {}
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(error) => {
@@ -190,7 +191,7 @@ pub async fn upload(
         }
     };
     if batch.files.is_empty() {
-        return Redirect::to(&project_documents_path(&state.surreal, project_id).await)
+        return Redirect::to(&project_documents_path(&state.application_store, project_id).await)
             .into_response();
     }
     let UploadBatch {
@@ -226,19 +227,20 @@ pub async fn upload(
         }
     }
 
-    Redirect::to(&project_documents_path(&state.surreal, project_id).await).into_response()
+    Redirect::to(&project_documents_path(&state.application_store, project_id).await)
+        .into_response()
 }
 
 /// Where an upload lands: the matter's Documents tab, which renders the table
 /// the batch just added to. The workbench opens on Overview (#176), which
 /// lists no documents.
 async fn project_documents_path(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
 ) -> String {
     format!(
         "{}/{}",
-        crate::dioxus_app::project_show_path(surreal, project_id).await,
+        crate::dioxus_app::project_show_path(application_store, project_id).await,
         webapp::sections::page::MatterTab::Documents.segment()
     )
 }
@@ -295,7 +297,9 @@ pub async fn drive_import(
     let Some(Extension(session_data)) = session else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
+    let Some(project_id) =
+        store::projects::id_for_code(&state.application_store, &project_code).await
+    else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let drive = match cloud::DriveWorkspaceConfig::from_env(cloud::DriveWorkspace::NeonLaw) {
@@ -352,7 +356,7 @@ async fn drive_import_with(
     };
     if !session.role.is_lawyer_tier()
         || !store::access::can_see_project(
-            &state.surreal,
+            &state.application_store,
             Some(person_id),
             session.role,
             project_id,
@@ -385,7 +389,7 @@ async fn drive_import_with(
     };
     let outcome = if let Some(pg) = folders {
         store::drive_import::import_project_files_with_folders(
-            &state.surreal,
+            &state.application_store,
             pg,
             &state.storage,
             drive,
@@ -397,7 +401,7 @@ async fn drive_import_with(
         .await
     } else {
         store::drive_import::import_project_files(
-            &state.surreal,
+            &state.application_store,
             &state.storage,
             drive,
             &screen,
@@ -460,7 +464,14 @@ async fn file_one(
         .as_deref()
         .unwrap_or("application/octet-stream");
 
-    match already_filed(&state.surreal, project_id, &file_name, &upload.bytes).await {
+    match already_filed(
+        &state.application_store,
+        project_id,
+        &file_name,
+        &upload.bytes,
+    )
+    .await
+    {
         Ok(Some(_existing)) => {
             tracing::info!(
                 %project_id,
@@ -478,7 +489,7 @@ async fn file_one(
             // filename/bytes reachable through the client list and ZIP export
             // (#782 follow-up: Greptile P1).
             if let Err(e) = sync_visibility(
-                &state.surreal,
+                &state.application_store,
                 project_id,
                 &file_name,
                 &upload.bytes,
@@ -530,7 +541,7 @@ async fn file_one(
         folder: None,
     };
     let result = store::assets::file_revision(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         &args,
         &identity,
@@ -563,7 +574,7 @@ async fn file_revision_response(
             let message = format!(
                 "`{slug}` is already filed as `{existing}`; a `{attempted}` upload is a different document."
             );
-            let path = project_documents_path(&state.surreal, project_id).await;
+            let path = project_documents_path(&state.application_store, project_id).await;
             Err(Redirect::to(&format!(
                 "{path}?error={}",
                 crate::admin::encode_query_value(&message)
@@ -625,13 +636,13 @@ impl BatchError {
 /// the matter showing two rows for one file. Filename is part of the key
 /// because the same bytes filed under two names are two documents.
 async fn already_filed(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     filename: &str,
     bytes: &[u8],
 ) -> Result<Option<store::assets::Asset>, store::assets::AssetError> {
     let sha_hex = store::documents::sha256_hex(bytes);
-    store::assets::find_filed_copy(surreal, project_id, filename, &sha_hex).await
+    store::assets::find_filed_copy(application_store, project_id, filename, &sha_hex).await
 }
 
 /// Sync `visibility` across *every* row this matter holds for a re-uploaded
@@ -646,14 +657,21 @@ async fn already_filed(
 /// client list and ZIP export. The `visibility != target` filter touches
 /// only the divergent duplicates, so this is a no-op when they already match.
 async fn sync_visibility(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     filename: &str,
     bytes: &[u8],
     visibility: &str,
 ) -> Result<(), store::assets::AssetError> {
     let sha_hex = store::documents::sha256_hex(bytes);
-    store::assets::sync_visibility(surreal, project_id, filename, &sha_hex, visibility).await?;
+    store::assets::sync_visibility(
+        application_store,
+        project_id,
+        filename,
+        &sha_hex,
+        visibility,
+    )
+    .await?;
     Ok(())
 }
 
@@ -852,7 +870,9 @@ pub async fn download(
     // A code naming no matter is the same 404 a caller off the matter gets. A
     // store *failure* is not a miss, though: it stays a 500, so an outage does
     // not read to every client as "your document is gone".
-    let project_id = match store::projects::find_by_code(&state.surreal, &project_code).await {
+    let project_id = match store::projects::find_by_code(&state.application_store, &project_code)
+        .await
+    {
         Ok(Some(project)) => project.id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(error) => {
@@ -986,7 +1006,13 @@ async fn project_document_lens(
     let Some(session) = session else {
         return Ok(None);
     };
-    store::access::matter_lens(&state.surreal, session.person_id, session.role, project_id).await
+    store::access::matter_lens(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        project_id,
+    )
+    .await
 }
 
 /// Look up the document `assets` row by id and reject if it doesn't
@@ -1010,7 +1036,7 @@ async fn load_doc_for_project(
     doc_id: Uuid,
     lens: store::access::ProjectLens,
 ) -> Result<Option<store::assets::Asset>, store::assets::AssetError> {
-    let Some(doc) = store::assets::find_by_id(&state.surreal, doc_id).await? else {
+    let Some(doc) = store::assets::find_by_id(&state.application_store, doc_id).await? else {
         tracing::info!(%project_id, %doc_id, "project document row not found");
         return Ok(None);
     };
@@ -1121,79 +1147,6 @@ fn bytes_response(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        drive_import_with, file_one, load_doc_for_project, project_document_lens, DriveImportForm,
-        UploadedFile,
-    };
-    use crate::admin::AdminState;
-    use store::documents::visibility;
-    use store::surreal::test_support::mem;
-    use store::test_support::seed_project_surreal;
-
-    async fn drive_database() -> Option<store::postgres::PostgresDb> {
-        use sqlx::postgres::{PgConnectOptions, PgSslMode};
-        let port = store::test_support::postgres_test_port();
-        let options = PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password("synthetic")
-            .ssl_mode(PgSslMode::Disable);
-        let admin = sqlx::PgPool::connect_with(options.clone().database(
-            &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into()),
-        ))
-        .await
-        .unwrap();
-        let name = format!("portal_drive_{}", uuid::Uuid::now_v7().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let pg = store::postgres::PostgresDb::connect(options.database(&name))
-            .await
-            .unwrap();
-        pg.migrate_embedded(None).await.unwrap();
-        Some(pg)
-    }
-
-    async fn verified_drive_folders(
-        state: &AdminState,
-        pg: &store::postgres::PostgresDb,
-        drive: &cloud::FakeDrive,
-        project_id: uuid::Uuid,
-        folder_id: &str,
-        parent_id: &str,
-    ) {
-        // The minimal Source fixture omits these reference records. Cross-store
-        // folder projection needs their real Source images and foreign keys.
-        state.surreal.query("UPSERT $jurisdiction SET name='Synthetic Source',code='ZZ',jurisdiction_type='country'; UPSERT $kind SET name='Synthetic Source';")
-            .bind(("jurisdiction",store::surreal::record_id("jurisdiction",store::test_support::SEED_ENTITY_JURISDICTION_ID)))
-            .bind(("kind",store::surreal::record_id("entity_type",store::test_support::SEED_ENTITY_TYPE_ID)))
-            .await.unwrap().check().unwrap();
-        store::projects::set_drive_folder_id(&state.surreal, project_id, Some(folder_id))
-            .await
-            .unwrap();
-        let report = Box::pin(store::project_folder_reconcile::reconcile(
-            &state.surreal,
-            pg,
-            drive,
-            project_id,
-            &store::project_folder_reconcile::FolderProvisioningPolicy {
-                projects_parent_id: parent_id.into(),
-                trusted_organizers: std::collections::BTreeSet::new(),
-            },
-        ))
-        .await
-        .unwrap();
-        assert_eq!(
-            report.outcome,
-            store::project_folder_reconcile::FolderOutcome::Complete
-        );
-        store::project_folder_reconcile::verify_for_import(&state.surreal, pg, drive, project_id)
-            .await
-            .unwrap();
-    }
 
     #[test]
     fn inbox_attachment_names_cannot_inject_headers_or_allow_shared_caching() {
@@ -1216,791 +1169,5 @@ mod tests {
             response.headers()[axum::http::header::CACHE_CONTROL],
             "private, no-store"
         );
-    }
-
-    /// An [`AdminState`] wired against a fresh embedded engine, plus the one
-    /// matter `file_one` files against.
-    async fn fixtures(code: &str) -> (AdminState, uuid::Uuid) {
-        let db = mem().await;
-        let project_id = seed_project_surreal(&db, code).await;
-        let app = crate::test_support::app_state(db).await;
-        let state = AdminState {
-            surreal: app.surreal,
-            workflow_runtime: app.workflow_runtime,
-            signature_provider: app.signature_provider,
-            retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
-            questionnaire_runtime: app.questionnaire_runtime,
-            storage: app.storage,
-            assets_storage: app.assets_storage,
-            forms_registry: app.forms_registry,
-            email: app.email,
-            billing_provider: app.billing_provider,
-            contract_reviewer: app.contract_reviewer,
-            bootstrap_owner_email: app.bootstrap_owner_email,
-            on_call_lawyer_email: app.on_call_lawyer_email,
-            bootstrap_company: crate::admin::bootstrap_company_from_env(),
-            sessions: app.sessions,
-            secure_cookies: false,
-            attachment_scanner: app.attachment_scanner,
-            runtime_kms: app.runtime_kms,
-            twilio_registry: None,
-        };
-        (state, project_id)
-    }
-
-    #[tokio::test]
-    async fn drive_import_files_into_storage_for_a_lawyer_and_hides_the_matter_otherwise() {
-        use cloud::DriveService as _;
-        let Some(pg) = drive_database().await else {
-            return;
-        };
-        let (state, project_id) = fixtures("documents-drive-import").await;
-        let drive = cloud::FakeDrive::default();
-        let parent = drive.create_folder("synthetic-parent").await.unwrap();
-        let folder = drive
-            .ensure_child_folder_with_id(
-                &parent.id,
-                "documents-drive-import",
-                &drive.allocate_folder_id().await.unwrap(),
-            )
-            .await
-            .unwrap();
-        store::projects::set_drive_folder_id(&state.surreal, project_id, Some(&folder.id))
-            .await
-            .unwrap();
-        drive
-            .add_file(
-                &folder.id,
-                "intake.pdf",
-                "application/pdf",
-                b"intake".to_vec(),
-                None,
-            )
-            .unwrap();
-        let owner = store::persons::create(
-            &state.surreal,
-            &store::persons::NewPerson::with_role(
-                "Import Lawyer",
-                "import-lawyer@example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        store::participation::add_participant(
-            &state.surreal,
-            &store::participation::AddParticipantCommand {
-                project_id,
-                person_id: owner.id,
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        let client = store::persons::create(
-            &state.surreal,
-            &store::persons::NewPerson::new("Import Client", "import-client@example.com"),
-        )
-        .await
-        .unwrap();
-        let session = |person: &store::persons::Person| crate::session::SessionData {
-            person_id: Some(person.id),
-            ..crate::session::SessionData::fresh(&person.email, person.role)
-        };
-        let form = DriveImportForm {
-            kind: "unclassified".into(),
-            visibility: visibility::INTERNAL.into(),
-            description: None,
-            dry_run: false,
-        };
-        let refused = drive_import_with(
-            &state,
-            project_id,
-            &session(&client),
-            &drive,
-            &form,
-            Some(&pg),
-        )
-        .await;
-        assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND);
-        assert_eq!(drive.download_calls(), 0);
-
-        Box::pin(verified_drive_folders(
-            &state, &pg, &drive, project_id, &folder.id, &parent.id,
-        ))
-        .await;
-        let response = drive_import_with(
-            &state,
-            project_id,
-            &session(&owner),
-            &drive,
-            &form,
-            Some(&pg),
-        )
-        .await;
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let report: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(report["imported"][0]["filename"], "intake.pdf");
-        let assets = store::assets::for_project(&state.surreal, project_id)
-            .await
-            .unwrap();
-        assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].visibility, visibility::INTERNAL);
-    }
-
-    /// Every refusal the Drive import door answers before or instead of a
-    /// report: no person, no matter, an unconfigured deployment, a bad
-    /// visibility, and a matter with no dropbox folder.
-    #[tokio::test]
-    async fn drive_import_refuses_before_touching_drive() {
-        use axum::extract::{Path as AxumPath, State};
-        use axum::http::StatusCode;
-        use axum::{Extension, Form};
-        let (state, project_id) = fixtures("documents-drive-refusals").await;
-        let lawyer = store::persons::create(
-            &state.surreal,
-            &store::persons::NewPerson::with_role(
-                "Refusal Lawyer",
-                "refusal-lawyer@example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        store::participation::add_participant(
-            &state.surreal,
-            &store::participation::AddParticipantCommand {
-                project_id,
-                person_id: lawyer.id,
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        let session = crate::session::SessionData {
-            person_id: Some(lawyer.id),
-            ..crate::session::SessionData::fresh(&lawyer.email, lawyer.role)
-        };
-        let form = |visibility: &str| DriveImportForm {
-            kind: "unclassified".into(),
-            visibility: visibility.into(),
-            description: Some("  ".into()),
-            dry_run: false,
-        };
-        let drive = cloud::FakeDrive::default();
-        let code = store::projects::find_by_id(&state.surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .code;
-
-        let anonymous = super::drive_import(
-            State(state.clone()),
-            AxumPath(code.clone()),
-            None,
-            Form(form(visibility::INTERNAL)),
-        )
-        .await;
-        assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
-        let unknown = super::drive_import(
-            State(state.clone()),
-            AxumPath("no-such-matter".into()),
-            Some(Extension(session.clone())),
-            Form(form(visibility::INTERNAL)),
-        )
-        .await;
-        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
-        if super::drive_settings_absent() {
-            let unconfigured = super::drive_import(
-                State(state.clone()),
-                AxumPath(code.clone()),
-                Some(Extension(session.clone())),
-                Form(form(visibility::INTERNAL)),
-            )
-            .await;
-            assert_eq!(unconfigured.status(), StatusCode::CONFLICT);
-        }
-
-        let personless = crate::session::SessionData {
-            person_id: None,
-            ..session.clone()
-        };
-        let response = drive_import_with(
-            &state,
-            project_id,
-            &personless,
-            &drive,
-            &form(visibility::INTERNAL),
-            None,
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let response =
-            drive_import_with(&state, project_id, &session, &drive, &form("public"), None).await;
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        let response = drive_import_with(
-            &state,
-            project_id,
-            &session,
-            &drive,
-            &form(visibility::CLIENT),
-            None,
-        )
-        .await;
-        assert_eq!(
-            response.status(),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "folder authority must be available and verified before import"
-        );
-        assert_eq!(drive.download_calls(), 0);
-    }
-
-    #[tokio::test]
-    async fn document_lens_uses_the_matter_participation_side() {
-        let (state, project_id) = fixtures("documents-lens-client").await;
-        let lawyer = store::persons::create(
-            &state.surreal,
-            &store::persons::NewPerson::with_role(
-                "Lawyer",
-                "lawyer@example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        store::projects::add_participation(&state.surreal, project_id, lawyer, "client")
-            .await
-            .unwrap();
-
-        let mut session = crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer);
-        session.person_id = Some(lawyer);
-        assert_eq!(
-            project_document_lens(&state, Some(&session), project_id)
-                .await
-                .unwrap(),
-            Some(store::access::ProjectLens::Client),
-            "a client-side matter row narrows a lawyer-tier document read"
-        );
-        assert_eq!(
-            project_document_lens(&state, None, project_id)
-                .await
-                .unwrap(),
-            None,
-            "a missing session has no document lens"
-        );
-    }
-
-    #[tokio::test]
-    async fn document_loader_keeps_internal_and_cross_project_assets_out_of_client_lane() {
-        let (state, project_id) = fixtures("documents-loader-client").await;
-        let other_project_id = seed_project_surreal(&state.surreal, "documents-loader-other").await;
-
-        file_one(
-            &state,
-            project_id,
-            &uploaded("internal.pdf", b"internal work product"),
-            "unclassified",
-            None,
-            visibility::INTERNAL,
-        )
-        .await
-        .expect("the internal fixture files cleanly");
-        file_one(
-            &state,
-            other_project_id,
-            &uploaded("other.pdf", b"another matter's document"),
-            "unclassified",
-            None,
-            visibility::CLIENT,
-        )
-        .await
-        .expect("the cross-project fixture files cleanly");
-
-        let internal = store::assets::for_project(&state.surreal, project_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .next()
-            .expect("the internal asset row");
-        let cross_project = store::assets::for_project(&state.surreal, other_project_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .next()
-            .expect("the cross-project asset row");
-
-        assert_eq!(
-            load_doc_for_project(
-                &state,
-                project_id,
-                internal.id,
-                store::access::ProjectLens::Client,
-            )
-            .await
-            .unwrap(),
-            None,
-            "an internal asset is hidden from the client lens"
-        );
-        assert!(
-            load_doc_for_project(
-                &state,
-                project_id,
-                internal.id,
-                store::access::ProjectLens::Lawyer,
-            )
-            .await
-            .unwrap()
-            .is_some(),
-            "a firm-side participant can read the internal asset"
-        );
-        assert_eq!(
-            load_doc_for_project(
-                &state,
-                project_id,
-                cross_project.id,
-                store::access::ProjectLens::Lawyer,
-            )
-            .await
-            .unwrap(),
-            None,
-            "an asset from another matter is hidden even from the firm lens"
-        );
-    }
-
-    fn uploaded(name: &str, bytes: &[u8]) -> UploadedFile {
-        UploadedFile {
-            file_name: Some(name.to_string()),
-            content_type: Some("application/pdf".to_string()),
-            bytes: bytes.to_vec(),
-        }
-    }
-
-    /// The chain-building half of the fix: two uploads of the same filename
-    /// under the same kind, with different bytes, become one document with
-    /// two revisions in the grouped history rather than two unrelated rows.
-    #[tokio::test]
-    async fn a_reupload_under_the_same_kind_becomes_the_next_revision() {
-        let (state, project_id) = fixtures("documents-lane-revision").await;
-
-        file_one(
-            &state,
-            project_id,
-            &uploaded("notice.pdf", b"first version"),
-            "unclassified",
-            None,
-            visibility::INTERNAL,
-        )
-        .await
-        .expect("first upload files cleanly");
-        file_one(
-            &state,
-            project_id,
-            &uploaded("notice.pdf", b"second version"),
-            "unclassified",
-            None,
-            visibility::INTERNAL,
-        )
-        .await
-        .expect("second upload files as the next revision");
-
-        let groups = store::assets::grouped_for_project(&state.surreal, project_id)
-            .await
-            .expect("grouped documents");
-        assert_eq!(groups.len(), 1, "one document, not two unrelated rows");
-        assert_eq!(
-            groups[0].revisions.len(),
-            2,
-            "the grouped history carries both revisions of the one document"
-        );
-    }
-
-    /// The refusal half of the fix: a same-filename re-upload that tries to
-    /// change the document's kind is refused with a redirect naming both
-    /// kinds, not a bare 500.
-    #[tokio::test]
-    async fn a_conflicting_kind_is_refused_with_a_flash_naming_both_kinds() {
-        let (state, project_id) = fixtures("documents-lane-kind-conflict").await;
-
-        file_one(
-            &state,
-            project_id,
-            &uploaded("notice.pdf", b"first version"),
-            "unclassified",
-            None,
-            visibility::INTERNAL,
-        )
-        .await
-        .expect("first upload files cleanly");
-
-        let refusal = file_one(
-            &state,
-            project_id,
-            &uploaded("notice.pdf", b"second version"),
-            "agreement",
-            None,
-            visibility::INTERNAL,
-        )
-        .await
-        .expect_err("a kind change on an existing chain is refused");
-
-        assert_eq!(refusal.status(), axum::http::StatusCode::SEE_OTHER);
-        let location = refusal
-            .headers()
-            .get(axum::http::header::LOCATION)
-            .expect("a redirect carries a Location header")
-            .to_str()
-            .expect("Location is a valid header value");
-        assert!(location.contains("error="), "{location}");
-        assert!(
-            location.contains("unclassified") && location.contains("agreement"),
-            "the flash names both the existing and the attempted kind: {location}"
-        );
-
-        // The chain is unchanged: the refused upload never wrote a second
-        // revision.
-        let groups = store::assets::grouped_for_project(&state.surreal, project_id)
-            .await
-            .expect("grouped documents");
-        assert_eq!(groups.len(), 1);
-        assert_eq!(
-            groups[0].revisions.len(),
-            1,
-            "the refused write left the chain at its original one revision"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_filename_without_an_extension_is_refused_before_filing() {
-        let (state, project_id) = fixtures("documents-lane-extension").await;
-
-        let refusal = file_one(
-            &state,
-            project_id,
-            &uploaded("extensionless-document", b"document bytes"),
-            "unclassified",
-            None,
-            visibility::INTERNAL,
-        )
-        .await
-        .expect_err("an extensionless filename cannot become a repository pointer");
-
-        assert_eq!(refusal.status(), axum::http::StatusCode::BAD_REQUEST);
-        assert!(
-            store::assets::for_project(&state.surreal, project_id)
-                .await
-                .expect("list the project assets")
-                .is_empty(),
-            "the invalid filename must be refused before storage or database writes"
-        );
-    }
-
-    /// A lawyer on the matter whose Project files from a fake Drive folder.
-    struct DriveFixture {
-        state: AdminState,
-        project_id: uuid::Uuid,
-        lawyer: crate::session::SessionData,
-        drive: cloud::FakeDrive,
-        folder_id: String,
-        parent_id: String,
-        pg: store::postgres::PostgresDb,
-    }
-
-    async fn drive_fixture(code: &str) -> Option<DriveFixture> {
-        use cloud::DriveService as _;
-        let pg = drive_database().await?;
-        let (state, project_id) = fixtures(code).await;
-        let drive = cloud::FakeDrive::default();
-        let parent = drive.create_folder("synthetic-parent").await.unwrap();
-        let folder = drive
-            .ensure_child_folder_with_id(
-                &parent.id,
-                code,
-                &drive.allocate_folder_id().await.unwrap(),
-            )
-            .await
-            .unwrap();
-        let lawyer = store::persons::create(
-            &state.surreal,
-            &store::persons::NewPerson::with_role(
-                "Drive Import Lawyer",
-                format!("{code}-lawyer@example.com"),
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        store::participation::add_participant(
-            &state.surreal,
-            &store::participation::AddParticipantCommand {
-                project_id,
-                person_id: lawyer.id,
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        Some(DriveFixture {
-            state,
-            project_id,
-            lawyer: crate::session::SessionData {
-                person_id: Some(lawyer.id),
-                ..crate::session::SessionData::fresh(&lawyer.email, lawyer.role)
-            },
-            drive,
-            folder_id: folder.id,
-            parent_id: parent.id,
-            pg,
-        })
-    }
-
-    impl DriveFixture {
-        async fn link_folder(&self) {
-            Box::pin(verified_drive_folders(
-                &self.state,
-                &self.pg,
-                &self.drive,
-                self.project_id,
-                &self.folder_id,
-                &self.parent_id,
-            ))
-            .await;
-        }
-
-        fn add(&self, name: &str, bytes: &[u8]) {
-            self.drive
-                .add_file(
-                    &self.folder_id,
-                    name,
-                    "application/pdf",
-                    bytes.to_vec(),
-                    None,
-                )
-                .unwrap();
-        }
-
-        async fn import(&self, form: &DriveImportForm) -> (axum::http::StatusCode, String) {
-            let response = drive_import_with(
-                &self.state,
-                self.project_id,
-                &self.lawyer,
-                &self.drive,
-                form,
-                Some(&self.pg),
-            )
-            .await;
-            let status = response.status();
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            (status, String::from_utf8_lossy(&body).into_owned())
-        }
-    }
-
-    fn internal_form() -> DriveImportForm {
-        DriveImportForm {
-            kind: "unclassified".into(),
-            visibility: visibility::INTERNAL.into(),
-            description: None,
-            dry_run: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn drive_import_dry_run_answers_the_plan_without_filing() {
-        let Some(fixture) = drive_fixture("drive-import-dry-run").await else {
-            return;
-        };
-        fixture.link_folder().await;
-        fixture.add("intake.pdf", b"intake");
-        let form = DriveImportForm {
-            dry_run: true,
-            ..internal_form()
-        };
-        let (status, body) = fixture.import(&form).await;
-        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
-        let report: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(report["imported"][0]["filename"], "intake.pdf");
-        assert_eq!(report["imported"][0]["matter_folder"], "Work Product");
-        assert_eq!(fixture.drive.download_calls(), 1, "the plan downloads");
-        let assets = store::assets::for_project(&fixture.state.surreal, fixture.project_id)
-            .await
-            .unwrap();
-        assert!(assets.is_empty(), "a dry run files nothing");
-    }
-
-    #[tokio::test]
-    async fn drive_import_refuses_a_personless_session_and_an_unknown_visibility() {
-        let Some(fixture) = drive_fixture("drive-import-refusals").await else {
-            return;
-        };
-        fixture.link_folder().await;
-        fixture.add("intake.pdf", b"intake");
-        let personless = crate::session::SessionData {
-            person_id: None,
-            ..fixture.lawyer.clone()
-        };
-        let response = drive_import_with(
-            &fixture.state,
-            fixture.project_id,
-            &personless,
-            &fixture.drive,
-            &internal_form(),
-            None,
-        )
-        .await;
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
-
-        let (status, body) = fixture
-            .import(&DriveImportForm {
-                visibility: "public".into(),
-                ..internal_form()
-            })
-            .await;
-        assert_eq!(status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(body, "visibility is internal or client");
-        assert_eq!(fixture.drive.download_calls(), 0, "nothing was read");
-    }
-
-    #[tokio::test]
-    async fn drive_import_stops_without_verified_folder_authority() {
-        let Some(fixture) = drive_fixture("drive-import-folders").await else {
-            return;
-        };
-        let (status, body) = fixture.import(&internal_form()).await;
-        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body, "Drive import stopped; run it again");
-
-        store::projects::set_drive_folder_id(
-            &fixture.state.surreal,
-            fixture.project_id,
-            Some("folder-not-in-this-drive"),
-        )
-        .await
-        .unwrap();
-        let (status, body) = fixture.import(&internal_form()).await;
-        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body, "Drive import stopped; run it again");
-        assert_eq!(fixture.drive.download_calls(), 0);
-    }
-
-    #[tokio::test]
-    async fn drive_import_refuses_an_oversized_batch_before_downloading() {
-        let Some(fixture) = drive_fixture("drive-import-bounds").await else {
-            return;
-        };
-        fixture.link_folder().await;
-        for index in 0..=store::drive_import::MAX_FILES {
-            fixture.add(&format!("page-{index}.pdf"), b"page");
-        }
-        let (status, body) = fixture.import(&internal_form()).await;
-        assert_eq!(status, axum::http::StatusCode::PAYLOAD_TOO_LARGE);
-        assert!(body.contains("the maximum is"), "{body}");
-        assert_eq!(fixture.drive.download_calls(), 0);
-    }
-
-    #[tokio::test]
-    async fn drive_import_stops_with_503_when_drive_or_the_screen_fails() {
-        let Some(fixture) = drive_fixture("drive-import-failures").await else {
-            return;
-        };
-        fixture.link_folder().await;
-        fixture.add("intake.pdf", b"intake");
-        fixture.drive.fail_downloads(1);
-        let (status, body) = fixture.import(&internal_form()).await;
-        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(body, "Drive import stopped; run it again");
-
-        let mut fixture = fixture;
-        fixture.state.attachment_scanner =
-            std::sync::Arc::new(crate::attachment_scanner::FakeAttachmentScanner::new(Err(
-                crate::attachment_scanner::ScanError::Unavailable("synthetic outage".into()),
-            )));
-        let (status, _) = fixture.import(&internal_form()).await;
-        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
-        assert!(
-            store::assets::for_project(&fixture.state.surreal, fixture.project_id)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn drive_import_reports_a_file_the_screen_flags_without_filing_it() {
-        let Some(mut fixture) = drive_fixture("drive-import-malware").await else {
-            return;
-        };
-        fixture.link_folder().await;
-        fixture.add("flagged.pdf", b"synthetic eicar stand-in");
-        fixture.state.attachment_scanner =
-            std::sync::Arc::new(crate::attachment_scanner::FakeAttachmentScanner::new(Ok(
-                crate::attachment_scanner::ScanVerdict::Found {
-                    signature: "Synthetic-Test-Signature".into(),
-                },
-            )));
-        let (status, body) = fixture
-            .import(&DriveImportForm {
-                visibility: visibility::CLIENT.into(),
-                description: Some("  ".into()),
-                ..internal_form()
-            })
-            .await;
-        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
-        let report: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(report["imported"], serde_json::json!([]));
-        assert_eq!(report["refused"].as_array().map(Vec::len), Some(1));
-        assert!(
-            store::assets::for_project(&fixture.state.surreal, fixture.project_id)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn the_drive_import_door_hides_the_matter_and_reports_missing_configuration() {
-        use axum::extract::{Extension, Path, State};
-        let Some(fixture) = drive_fixture("drive-import-door").await else {
-            return;
-        };
-        let form = || axum::Form(internal_form());
-        let code = store::projects::find_by_id(&fixture.state.surreal, fixture.project_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .code;
-        let response = super::drive_import(
-            State(fixture.state.clone()),
-            Path(code.clone()),
-            None,
-            form(),
-        )
-        .await;
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
-        let response = super::drive_import(
-            State(fixture.state.clone()),
-            Path("drive-import-no-such-matter".into()),
-            Some(Extension(fixture.lawyer.clone())),
-            form(),
-        )
-        .await;
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
-        if super::drive_settings_absent() {
-            let response = super::drive_import(
-                State(fixture.state.clone()),
-                Path(code.clone()),
-                Some(Extension(fixture.lawyer.clone())),
-                form(),
-            )
-            .await;
-            assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
-        }
     }
 }

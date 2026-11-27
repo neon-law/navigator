@@ -18,7 +18,10 @@ async fn state_with(auth: AuthConfig) -> AppState {
                 .await
                 .unwrap(),
         ),
-        ..portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await
+        ..portal::test_support::app_state(
+            store::application_store::ApplicationStore::uninitialized(),
+        )
+        .await
     }
 }
 
@@ -249,7 +252,7 @@ async fn signed_http_writes_record_the_person_and_decision() {
             (Role::Lawyer, "create_notation", false),
         ] {
             let email = format!("{}-{tool}@example.test", role.as_str());
-            let actor = store::persons::create(&state.surreal, &NewPerson::with_role(&email, &email, role))
+            let actor = store::persons::create(&state.application_store, &NewPerson::with_role(&email, &email, role))
                 .await.unwrap();
             let mut session = portal::SessionData::fresh(&email, role);
             session.email = Some(email.clone());

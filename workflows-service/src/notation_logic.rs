@@ -229,29 +229,29 @@ pub(crate) fn review_fallback_ids(rows: &[store::projects::PersonProjectRole]) -
 }
 
 pub(crate) async fn resolve_review_notification_plan(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: uuid::Uuid,
     hop: ReviewNotificationHop,
 ) -> Result<ReviewNotificationPlan, NotationLogicError> {
-    let notation = store::notations::find_by_id(surreal, notation_id)
+    let notation = store::notations::find_by_id(application_store, notation_id)
         .await
         .map_err(|e| NotationLogicError::Store(format!("review notification notation: {e}")))?
         .ok_or_else(|| {
             NotationLogicError::Terminal("review notification notation not found".into())
         })?;
-    let project = store::projects::find_by_id(surreal, notation.project_id)
+    let project = store::projects::find_by_id(application_store, notation.project_id)
         .await
         .map_err(|e| NotationLogicError::Store(format!("review notification project: {e}")))?
         .ok_or_else(|| {
             NotationLogicError::Terminal("review notification project not found".into())
         })?;
-    let rows = store::projects::participations_for_project(surreal, project.id)
+    let rows = store::projects::participations_for_project(application_store, project.id)
         .await
         .map_err(|e| NotationLogicError::Store(format!("review notification participants: {e}")))?;
     let candidate_ids = review_recipient_ids(&rows, hop);
     let mut candidates = Vec::new();
     for person_id in candidate_ids {
-        if let Some(person) = store::persons::find_by_id(surreal, person_id)
+        if let Some(person) = store::persons::find_by_id(application_store, person_id)
             .await
             .map_err(|e| NotationLogicError::Store(format!("review notification person: {e}")))?
         {
@@ -275,7 +275,7 @@ pub(crate) async fn resolve_review_notification_plan(
     {
         let mut fallback = Vec::new();
         for person_id in review_fallback_ids(&rows) {
-            if let Some(person) = store::persons::find_by_id(surreal, person_id)
+            if let Some(person) = store::persons::find_by_id(application_store, person_id)
                 .await
                 .map_err(|e| {
                     NotationLogicError::Store(format!("review notification fallback person: {e}"))
@@ -322,17 +322,17 @@ pub(crate) struct ReviewNotificationTarget {
 /// into [`ReviewNotificationPlan`]: this runs inside the send step, whose
 /// journaled value is `()`.
 pub(crate) async fn review_notification_target(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
     recipient_id: uuid::Uuid,
 ) -> Result<ReviewNotificationTarget, NotationLogicError> {
-    let person = store::persons::find_by_id(surreal, recipient_id)
+    let person = store::persons::find_by_id(application_store, recipient_id)
         .await
         .map_err(|e| NotationLogicError::Store(format!("review notification recipient: {e}")))?
         .ok_or_else(|| {
             NotationLogicError::Terminal("review notification recipient not found".into())
         })?;
-    let project = store::projects::find_by_id(surreal, project_id)
+    let project = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|e| NotationLogicError::Store(format!("review notification project: {e}")))?
         .ok_or_else(|| {
@@ -419,11 +419,11 @@ pub(crate) async fn send_review_notification(
 }
 
 pub(crate) async fn record_notation_funnel_step(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: uuid::Uuid,
     step: WorkflowFunnelStep,
 ) -> Result<(), NotationLogicError> {
-    let notation = store::notations::find_by_id(surreal, notation_id)
+    let notation = store::notations::find_by_id(application_store, notation_id)
         .await
         .map_err(|e| NotationLogicError::Store(format!("funnel notation: {e}")))?
         .ok_or_else(|| NotationLogicError::Terminal("funnel notation not found".into()))?;

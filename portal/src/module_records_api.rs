@@ -34,7 +34,7 @@ async fn reads_rows(
     module: Module,
 ) -> Result<bool, ApiError> {
     let viewer = store::access::matter_viewer(
-        &state.surreal,
+        &state.application_store,
         authed.0.person_id,
         authed.0.role,
         project_id,
@@ -44,7 +44,7 @@ async fn reads_rows(
     match viewer {
         Some(MatterViewer::Lawyer | MatterViewer::LawyerDri) => Ok(true),
         Some(MatterViewer::Client | MatterViewer::ClientDri) => {
-            store::project_modules::is_enabled(&state.surreal, project_id, module)
+            store::project_modules::is_enabled(&state.application_store, project_id, module)
                 .await
                 .map_err(|error| ApiError::Db(error.to_string()))
         }
@@ -65,7 +65,7 @@ pub(crate) async fn list_fiduciary_roles(
     if !reads_rows(&state, &authed, id, Module::Estate).await? {
         return Ok(rows(Vec::<store::fiduciary_roles::FiduciaryRole>::new()));
     }
-    store::fiduciary_roles::list(&state.surreal, id)
+    store::fiduciary_roles::list(&state.application_store, id)
         .await
         .map(rows)
         .map_err(|error| ApiError::Db(error.to_string()))
@@ -80,7 +80,7 @@ pub(crate) async fn list_estate_assets(
     if !reads_rows(&state, &authed, id, Module::Estate).await? {
         return Ok(rows(Vec::<store::estate_assets::EstateAsset>::new()));
     }
-    store::estate_assets::list(&state.surreal, id)
+    store::estate_assets::list(&state.application_store, id)
         .await
         .map(rows)
         .map_err(|error| ApiError::Db(error.to_string()))
@@ -97,7 +97,7 @@ pub(crate) async fn list_cap_table_holdings(
             Vec::<store::cap_table_holdings::CapTableHolding>::new(),
         ));
     }
-    store::cap_table_holdings::list(&state.surreal, id)
+    store::cap_table_holdings::list(&state.application_store, id)
         .await
         .map(rows)
         .map_err(|error| ApiError::Db(error.to_string()))

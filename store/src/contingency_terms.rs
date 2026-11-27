@@ -140,12 +140,9 @@ pub async fn record(
     if !crate::firm_side::is_firm_side(pg, author_person_id, project_id).await? {
         return Err(ContingencyTermError::NotFirmSide);
     }
-    crate::postgres_backfill::family::require_scope(
-        pg,
-        crate::postgres_backfill::family::Family::Notation,
-    )
-    .await
-    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
+    crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
+        .await
+        .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
     let mut tx = pg.0.begin().await?;
     let on_matter: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation WHERE id=$1 AND project_id=$2)")
@@ -383,8 +380,8 @@ pub(crate) mod tests {
             NewContingencyTerm,
         };
         use crate::firm_side::tests::{matter, Matter};
+        use crate::postgres::fixtures::{connect, fresh_schema};
         use crate::postgres::PostgresDb;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
         use chrono::NaiveDate;
         use uuid::Uuid;
 
@@ -392,7 +389,7 @@ pub(crate) mod tests {
         pub(crate) async fn fee_agreement(pg: &PostgresDb, m: &Matter) -> Uuid {
             crate::postgres::fixtures::activate_family(
                 pg,
-                crate::postgres_backfill::family::Family::Notation,
+                crate::postgres::history::Family::Notation,
             )
             .await;
             let template: Uuid = sqlx::query_scalar(

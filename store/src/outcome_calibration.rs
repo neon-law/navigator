@@ -30,11 +30,11 @@ use chrono::{Days, NaiveDate};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::matter_outcomes::{MatterOutcomeError, MatterResult};
 use crate::outcome_estimates::{Outcome, OutcomeEstimate, OutcomeEstimateError, OutcomeSet};
 use crate::postgres::PostgresDb;
 use crate::projects::Project;
-use crate::surreal::SurrealDb;
 
 /// How many days before resolution the scored odds were in force.
 pub const LOOKBACK_DAYS: u64 = 30;
@@ -392,14 +392,15 @@ async fn score(
 ///
 /// The failed Project, outcome, estimate, or stage read.
 pub async fn firm_calibration(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     viewer: Uuid,
     firm_id: Uuid,
 ) -> Result<OutcomeCalibration, CalibrationError> {
     let mut lead_lawyers =
-        crate::projects::dri_names_by_project(surreal, crate::projects::DriSide::Lawyer).await?;
-    let matters: Vec<(Uuid, Vec<String>)> = crate::projects::all(surreal)
+        crate::projects::dri_names_by_project(application_store, crate::projects::DriSide::Lawyer)
+            .await?;
+    let matters: Vec<(Uuid, Vec<String>)> = crate::projects::all(application_store)
         .await?
         .into_iter()
         .filter(|project: &Project| project.firm_id == Some(firm_id))
@@ -659,7 +660,7 @@ mod tests {
         use crate::matter_outcomes::{MatterResult, NewMatterOutcome};
         use crate::outcome_estimates::tests::worked_example;
         use crate::outcome_estimates::NewOutcomeEstimate;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
+        use crate::postgres::fixtures::{connect, fresh_schema};
 
         fn resolution(result: MatterResult, resolved_on: NaiveDate) -> NewMatterOutcome {
             NewMatterOutcome {

@@ -175,7 +175,7 @@ async fn put_row(
 /// [`MailSignatureError::NotFound`] for another actor or an unknown subject,
 /// [`MailSignatureError::Invalid`] for a refused field, and the store errors.
 pub async fn save_for_actor(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     pg: &PostgresDb,
     actor_person_id: Uuid,
     subject_person_id: Uuid,
@@ -185,7 +185,7 @@ pub async fn save_for_actor(
     if actor_person_id != subject_person_id {
         return Err(MailSignatureError::NotFound);
     }
-    if crate::persons::find_by_id(surreal, subject_person_id)
+    if crate::persons::find_by_id(application_store, subject_person_id)
         .await?
         .is_none()
     {
@@ -205,11 +205,11 @@ pub async fn save_for_actor(
 /// # Errors
 /// The Person lookup and the PostgreSQL read errors.
 pub async fn for_person(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     pg: &PostgresDb,
     person_id: Uuid,
 ) -> Result<Option<MailSignature>, MailSignatureError> {
-    if crate::persons::find_by_id(surreal, person_id)
+    if crate::persons::find_by_id(application_store, person_id)
         .await?
         .is_none()
     {

@@ -198,7 +198,7 @@ async fn list_admin_people_data() -> Result<PeopleView, ServerFnError> {
         .map(|axum::Extension(email)| email)
         .unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let mut scope = store::firms::DirectoryScope::Everyone;
     if role == ViewerRole::Admin {
         let crate::portal_project_list::PersonId(person_id) =
@@ -232,7 +232,7 @@ async fn list_admin_people_data() -> Result<PeopleView, ServerFnError> {
 
     // One keyset page per request — never the whole directory, and never a
     // membership lookup per row.
-    let page = store::firms::people_directory(&surreal, &params, scope)
+    let page = store::firms::people_directory(&application_store, &params, scope)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let link = |member: &str, cursor: &Option<String>| {

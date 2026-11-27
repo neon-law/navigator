@@ -181,14 +181,19 @@ async fn load() -> Result<NotationOutlineView, ServerFnError> {
         ViewerRole::Client => store::persons::Role::Client,
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let project_id = match store::projects::find_by_code(&surreal, &project_code).await {
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let project_id = match store::projects::find_by_code(&application_store, &project_code).await {
         Ok(Some(project)) => project.id,
         Ok(None) => return Ok(missing),
         Err(_) => return Ok(failed()),
     };
-    let viewer = match store::access::matter_viewer(&surreal, person_id, store_role, project_id)
-        .await
+    let viewer = match store::access::matter_viewer(
+        &application_store,
+        person_id,
+        store_role,
+        project_id,
+    )
+    .await
     {
         Ok(viewer) => viewer,
         Err(e) => {
@@ -202,7 +207,7 @@ async fn load() -> Result<NotationOutlineView, ServerFnError> {
         Some(_) => {}
     }
 
-    let notation = match store::notations::find_by_id(&surreal, notation_id).await {
+    let notation = match store::notations::find_by_id(&application_store, notation_id).await {
         Ok(row) => row,
         Err(e) => {
             tracing::error!(error = %e, %project_id, %notation_id, "db error loading notation outline");
@@ -213,7 +218,9 @@ async fn load() -> Result<NotationOutlineView, ServerFnError> {
         return Ok(missing);
     };
 
-    let template = match store::templates::find_by_id(&surreal, notation.template_id).await {
+    let template = match store::templates::find_by_id(&application_store, notation.template_id)
+        .await
+    {
         Ok(Some(template)) => template,
         Ok(None) => return Ok(missing),
         Err(error) => {
@@ -229,7 +236,7 @@ async fn load() -> Result<NotationOutlineView, ServerFnError> {
     // the digest it pinned; a mismatch fails closed rather than drawing
     // different words.
     let storage = consume_context::<std::sync::Arc<dyn cloud::StorageService>>();
-    let body = match store::notations::pinned_body(&surreal, &storage, &notation).await {
+    let body = match store::notations::pinned_body(&application_store, &storage, &notation).await {
         Ok(body) => body,
         Err(store::notations::PinnedBodyError::MissingTemplate { .. }) => return Ok(missing),
         Err(e) => {

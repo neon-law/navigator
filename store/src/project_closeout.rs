@@ -25,8 +25,8 @@ use serde::Serialize;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 
 /// One recorded acknowledgment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -134,13 +134,13 @@ impl Readiness {
 /// # Errors
 /// A store read failure.
 pub async fn readiness(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: Option<&PostgresDb>,
     project_id: Uuid,
     step: Closeout<'_>,
 ) -> Result<Readiness, String> {
     let mut blockers = Vec::new();
-    let project = crate::projects::find_by_id(surreal, project_id)
+    let project = crate::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "project not found".to_string())?;
@@ -152,7 +152,7 @@ pub async fn readiness(
     if !matches!(project.status.as_str(), "closed" | "archived") || closed_at.is_none() {
         blockers.push("the Project is not closed".into());
     }
-    let assets = crate::assets::for_project_including_deleted(surreal, project_id)
+    let assets = crate::assets::for_project_including_deleted(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?;
     if matches!(step, Closeout::DeleteRepository { .. })

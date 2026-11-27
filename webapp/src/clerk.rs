@@ -158,11 +158,11 @@ async fn get_clerk_projects_data() -> Result<ClerkProjectsView, ServerFnError> {
         });
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     // The lens resolves each matter's supervising lawyer as part of deciding
     // visibility, so there is no second lookup and no way to render a matter
     // whose supervisor could not be named.
-    let supervised = store::access::supervised_projects(&surreal, person_id)
+    let supervised = store::access::supervised_projects(&application_store, person_id)
         .await
         .map_err(server_error)?;
 
@@ -228,8 +228,8 @@ async fn get_clerk_project_data() -> Result<ClerkProjectDetailView, ServerFnErro
         return not_found(role);
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let supervised = store::access::supervised_projects(&surreal, person_id)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let supervised = store::access::supervised_projects(&application_store, person_id)
         .await
         .map_err(server_error)?;
     let Some((project, supervisor)) = supervised
@@ -260,7 +260,7 @@ async fn get_clerk_project_data() -> Result<ClerkProjectDetailView, ServerFnErro
         project_code: project.code.clone(),
     };
     let page_tabs = crate::sections::page::stored_page_tabs(
-        &surreal,
+        &application_store,
         project.id,
         &project.code,
         store::access::MatterViewer::Clerk,

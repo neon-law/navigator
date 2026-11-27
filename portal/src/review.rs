@@ -36,18 +36,18 @@ use crate::session::SessionData;
 /// project, and the draft has been advanced past `draft` so a client
 /// never sees an un-reviewed document.
 async fn visible_review_document(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     session: &SessionData,
     project_id: Uuid,
     doc_id: Uuid,
 ) -> Result<store::review_documents::ReviewDocument, Response> {
-    let doc = store::review_documents::by_id(surreal, doc_id)
+    let doc = store::review_documents::by_id(application_store, doc_id)
         .await
         .ok()
         .flatten()
         .ok_or_else(not_found)?;
 
-    let notation = store::notations::find_by_id(surreal, doc.notation_id)
+    let notation = store::notations::find_by_id(application_store, doc.notation_id)
         .await
         .ok()
         .flatten()
@@ -57,7 +57,12 @@ async fn visible_review_document(
     }
 
     let visible = crate::client_portal::access()
-        .can_see_project_as_client(surreal, session.person_id, session.role, project_id)
+        .can_see_project_as_client(
+            application_store,
+            session.person_id,
+            session.role,
+            project_id,
+        )
         .await
         .unwrap_or(false);
     if !visible {
@@ -85,15 +90,18 @@ pub struct CommentJson {
 
 /// Load a document's comments with author display names resolved in one
 /// batched query (no N+1).
-async fn load_comments(surreal: &store::surreal::SurrealDb, doc_id: Uuid) -> Vec<CommentJson> {
-    let rows = store::document_comments::for_review_document(surreal, doc_id)
+async fn load_comments(
+    application_store: &store::application_store::ApplicationStore,
+    doc_id: Uuid,
+) -> Vec<CommentJson> {
+    let rows = store::document_comments::for_review_document(application_store, doc_id)
         .await
         .unwrap_or_default();
     let author_ids: Vec<Uuid> = rows.iter().map(|c| c.person_id).collect();
     let names: HashMap<Uuid, String> = if author_ids.is_empty() {
         HashMap::new()
     } else {
-        store::persons::find_by_ids(surreal, &author_ids)
+        store::persons::find_by_ids(application_store, &author_ids)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -117,21 +125,23 @@ async fn load_comments(surreal: &store::surreal::SurrealDb, doc_id: Uuid) -> Vec
 /// `GET /app/projects/{project_code}/review/:doc_id/comments` — the thread as
 /// JSON.
 pub async fn list_comments(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path((project_code, doc_id)): Path<(String, Uuid)>,
     session: Option<Extension<SessionData>>,
 ) -> Response {
     let Some(Extension(session)) = session else {
         return not_found();
     };
-    let Some(project_id) = store::projects::id_for_code(&surreal, &project_code).await else {
+    let Some(project_id) = store::projects::id_for_code(&application_store, &project_code).await
+    else {
         return not_found();
     };
-    let doc = match visible_review_document(&surreal, &session, project_id, doc_id).await {
+    let doc = match visible_review_document(&application_store, &session, project_id, doc_id).await
+    {
         Ok(d) => d,
         Err(resp) => return resp,
     };
-    Json(load_comments(&surreal, doc.id).await).into_response()
+    Json(load_comments(&application_store, doc.id).await).into_response()
 }
 
 /// Posted by the viewer when a reader anchors a comment to a selection.
@@ -178,7 +188,7 @@ pub enum ReviewCommentError {
 /// keyed on the document alone, passes `None`.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_review_comment(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     role: Role,
     person_id: Option<Uuid>,
     doc_id: Uuid,
@@ -188,11 +198,11 @@ pub async fn create_review_comment(
     quoted_text: &str,
     body: &str,
 ) -> Result<store::document_comments::CreatedComment, ReviewCommentError> {
-    let doc = store::review_documents::by_id(surreal, doc_id)
+    let doc = store::review_documents::by_id(application_store, doc_id)
         .await
         .map_err(|e| ReviewCommentError::Db(e.to_string()))?
         .ok_or(ReviewCommentError::NotFound)?;
-    let notation = store::notations::find_by_id(surreal, doc.notation_id)
+    let notation = store::notations::find_by_id(application_store, doc.notation_id)
         .await
         .map_err(|e| ReviewCommentError::Db(e.to_string()))?
         .ok_or(ReviewCommentError::NotFound)?;
@@ -202,7 +212,7 @@ pub async fn create_review_comment(
         }
     }
     let visible = crate::client_portal::access()
-        .can_see_project_as_client(surreal, person_id, role, notation.project_id)
+        .can_see_project_as_client(application_store, person_id, role, notation.project_id)
         .await
         .unwrap_or(false);
     if !visible || doc.status == STATUS_DRAFT {
@@ -227,7 +237,7 @@ pub async fn create_review_comment(
         Role::Owner | Role::Admin | Role::Lawyer => store::communications::direction::OUTBOUND,
     };
     store::document_comments::create_with_communication(
-        surreal,
+        application_store,
         &store::document_comments::NewLinkedComment {
             project_id: notation.project_id,
             review_document_id: doc.id,
@@ -246,7 +256,7 @@ pub async fn create_review_comment(
 /// `POST /app/projects/{project_code}/review/:doc_id/comments` — create one
 /// anchored comment and return the refreshed thread as JSON.
 pub async fn create_comment(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path((project_code, doc_id)): Path<(String, Uuid)>,
     session: Option<Extension<SessionData>>,
     axum::Form(form): axum::Form<CommentForm>,
@@ -254,12 +264,13 @@ pub async fn create_comment(
     let Some(Extension(session)) = session else {
         return not_found();
     };
-    let Some(project_id) = store::projects::id_for_code(&surreal, &project_code).await else {
+    let Some(project_id) = store::projects::id_for_code(&application_store, &project_code).await
+    else {
         return not_found();
     };
 
     match create_review_comment(
-        &surreal,
+        &application_store,
         session.role,
         session.person_id,
         doc_id,
@@ -271,7 +282,7 @@ pub async fn create_comment(
     )
     .await
     {
-        Ok(_) => Json(load_comments(&surreal, doc_id).await).into_response(),
+        Ok(_) => Json(load_comments(&application_store, doc_id).await).into_response(),
         Err(ReviewCommentError::NotFound) => not_found(),
         Err(ReviewCommentError::Invalid(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
         Err(ReviewCommentError::Db(e)) => {

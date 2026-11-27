@@ -59,25 +59,25 @@ pub async fn list_expunge_queue() -> Result<ExpungeQueueView, ServerFnError> {
     .map(|axum::Extension(token)| token.0)
     .unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let pending = store::expunge_requests::list_pending(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let pending = store::expunge_requests::list_pending(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let mut rows = Vec::with_capacity(pending.len());
     for req in &pending {
-        let filename = store::assets::find_by_id(&surreal, req.asset_id)
+        let filename = store::assets::find_by_id(&application_store, req.asset_id)
             .await
             .ok()
             .flatten()
             .and_then(|a| a.filename)
             .unwrap_or_else(|| "(unknown document)".to_string());
-        let matter = store::projects::find_by_id(&surreal, req.project_id)
+        let matter = store::projects::find_by_id(&application_store, req.project_id)
             .await
             .ok()
             .flatten()
             .map_or_else(|| req.project_id.to_string(), |p| p.name);
-        let requester = store::persons::find_by_id(&surreal, req.requested_by_person_id)
+        let requester = store::persons::find_by_id(&application_store, req.requested_by_person_id)
             .await
             .ok()
             .flatten()

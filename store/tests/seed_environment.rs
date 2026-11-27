@@ -31,19 +31,19 @@ async fn storage() -> Arc<dyn cloud::StorageService> {
 #[tokio::test]
 async fn persistent_boot_registers_vesta_idempotently() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
         let mut brand_id = None;
         for _ in 0..2 {
             store::seed::seed_environment_with(
-                &surreal,
+                &application_store,
                 &storage,
                 DeploymentEnvironment::Production,
                 store::seed::BrandSeed::Neon,
             )
             .await
             .unwrap();
-            let vesta = store::brands::find_by_key(&surreal, "vesta")
+            let vesta = store::brands::find_by_key(&application_store, "vesta")
                 .await
                 .unwrap()
                 .unwrap();
@@ -54,16 +54,18 @@ async fn persistent_boot_registers_vesta_idempotently() {
                 assert_eq!(vesta.id, id);
             }
             brand_id = Some(vesta.id);
-            let firms = store::firms::all(&surreal).await.unwrap();
+            let firms = store::firms::all(&application_store).await.unwrap();
             let practice = firms
                 .iter()
                 .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
                 .expect("the practice firm is seeded");
-            assert!(store::firms::brand_keys_for_firm(&surreal, practice.id)
-                .await
-                .unwrap()
-                .contains(&"vesta".to_string()));
-            assert!(projects::all(&surreal).await.unwrap().is_empty());
+            assert!(
+                store::firms::brand_keys_for_firm(&application_store, practice.id)
+                    .await
+                    .unwrap()
+                    .contains(&"vesta".to_string())
+            );
+            assert!(projects::all(&application_store).await.unwrap().is_empty());
         }
     })
     .await;
@@ -72,22 +74,23 @@ async fn persistent_boot_registers_vesta_idempotently() {
 #[tokio::test]
 async fn sample_estate_reseeding_uses_vesta_and_preserves_the_project_id() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
         let mut project_id = None;
         for _ in 0..2 {
             store::seed::seed_environment_with(
-                &surreal,
+                &application_store,
                 &storage,
                 DeploymentEnvironment::Dev,
                 store::seed::BrandSeed::Neon,
             )
             .await
             .unwrap();
-            let estate = projects::find_by_code(&surreal, store::seed::SAMPLE_ESTATE_CODE)
-                .await
-                .unwrap()
-                .unwrap();
+            let estate =
+                projects::find_by_code(&application_store, store::seed::SAMPLE_ESTATE_CODE)
+                    .await
+                    .unwrap()
+                    .unwrap();
             assert_eq!(estate.brand, "vesta");
             if let Some(id) = project_id {
                 assert_eq!(estate.id, id);
@@ -105,11 +108,11 @@ async fn sample_estate_reseeding_uses_vesta_and_preserves_the_project_id() {
 #[tokio::test]
 async fn a_seed_without_sample_matters_has_no_disposable_projects_or_people() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         let report = store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Production,
             store::seed::BrandSeed::Neon,
@@ -117,10 +120,10 @@ async fn a_seed_without_sample_matters_has_no_disposable_projects_or_people() {
         .await
         .unwrap();
 
-        assert!(projects::all(&surreal).await.unwrap().is_empty());
+        assert!(projects::all(&application_store).await.unwrap().is_empty());
         for email in ["lawyer@neonlaw.com", "client@neonlaw.com"] {
             assert!(
-                persons::find_by_email_ci(&surreal, email)
+                persons::find_by_email_ci(&application_store, email)
                     .await
                     .unwrap()
                     .is_none(),
@@ -132,23 +135,26 @@ async fn a_seed_without_sample_matters_has_no_disposable_projects_or_people() {
         assert_eq!(report.answers_inserted, 0);
         assert_eq!(report.git_repositories_inserted, 0);
         assert_eq!(report.person_project_roles_inserted, 0);
-        assert!(store::letters::list_all(&surreal).await.unwrap().is_empty());
+        assert!(store::letters::list_all(&application_store)
+            .await
+            .unwrap()
+            .is_empty());
         assert!(
-            store::mailrooms::find_by_name(&surreal, "Sample Mail Center")
+            store::mailrooms::find_by_name(&application_store, "Sample Mail Center")
                 .await
                 .unwrap()
                 .is_none(),
             "the synthetic mail centre is dev-only"
         );
 
-        let firms = store::firms::all(&surreal).await.unwrap();
+        let firms = store::firms::all(&application_store).await.unwrap();
         assert_eq!(firms.len(), store::seed::FIRM_ENTITY_NAMES.len());
         let practice = firms
             .iter()
             .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
             .expect("the practice firm is seeded");
         assert!(practice.entity_id.is_some());
-        let brands = store::firms::brand_keys_for_firm(&surreal, practice.id)
+        let brands = store::firms::brand_keys_for_firm(&application_store, practice.id)
             .await
             .unwrap();
         assert_eq!(
@@ -196,11 +202,11 @@ async fn the_profile_decides_when_nothing_says_otherwise() {
 #[tokio::test]
 async fn the_fixture_opens_the_three_sample_matters_with_dris() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Dev,
             store::seed::BrandSeed::Neon,
@@ -208,11 +214,11 @@ async fn the_fixture_opens_the_three_sample_matters_with_dris() {
         .await
         .unwrap();
 
-        let client = persons::find_by_email_ci(&surreal, "client@neonlaw.com")
+        let client = persons::find_by_email_ci(&application_store, "client@neonlaw.com")
             .await
             .unwrap()
             .expect("the fixture client");
-        let lawyer = persons::find_by_email_ci(&surreal, "lawyer@neonlaw.com")
+        let lawyer = persons::find_by_email_ci(&application_store, "lawyer@neonlaw.com")
             .await
             .unwrap()
             .expect("lawyer fixture");
@@ -223,14 +229,16 @@ async fn the_fixture_opens_the_three_sample_matters_with_dris() {
             ["sample-litigation", "sample-transactional", "sample-estate"]
         );
 
-        let dri =
-            persons::find_by_email_ci(&surreal, store::seed::bootstrap_owner_email().as_str())
-                .await
-                .unwrap()
-                .expect("bootstrap owner");
+        let dri = persons::find_by_email_ci(
+            &application_store,
+            store::seed::bootstrap_owner_email().as_str(),
+        )
+        .await
+        .unwrap()
+        .expect("bootstrap owner");
 
         for code in &codes {
-            let matter = projects::find_by_code(&surreal, code)
+            let matter = projects::find_by_code(&application_store, code)
                 .await
                 .unwrap()
                 .into_iter()
@@ -243,9 +251,10 @@ async fn the_fixture_opens_the_three_sample_matters_with_dris() {
                 "{code} records the repository its portal bundle is built from"
             );
 
-            let participations = projects::participations_for_project(&surreal, matter.id)
-                .await
-                .unwrap();
+            let participations =
+                projects::participations_for_project(&application_store, matter.id)
+                    .await
+                    .unwrap();
             assert!(
                 participations.iter().any(|row| {
                     row.person_id == client.id && row.participation == "client" && row.is_client_dri
@@ -270,7 +279,7 @@ async fn the_fixture_opens_the_three_sample_matters_with_dris() {
         }
 
         assert_eq!(
-            projects::all(&surreal).await.unwrap().len(),
+            projects::all(&application_store).await.unwrap().len(),
             codes.len(),
             "the fixture opens exactly the matters it declares"
         );
@@ -288,11 +297,11 @@ async fn the_fixture_opens_the_three_sample_matters_with_dris() {
 #[tokio::test]
 async fn the_fixture_admin_participates_in_nothing() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Dev,
             store::seed::BrandSeed::Neon,
@@ -300,20 +309,20 @@ async fn the_fixture_admin_participates_in_nothing() {
         .await
         .unwrap();
 
-        let admin = persons::find_by_email_ci(&surreal, "admin@neonlaw.com")
+        let admin = persons::find_by_email_ci(&application_store, "admin@neonlaw.com")
             .await
             .unwrap()
             .expect("the fixture admin can sign in");
 
         for code in store::seed::sample_matter_codes() {
-            let matter = projects::find_by_code(&surreal, code)
+            let matter = projects::find_by_code(&application_store, code)
                 .await
                 .unwrap()
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| panic!("the `{code}` matter"));
             assert!(
-                projects::participations_for_project(&surreal, matter.id)
+                projects::participations_for_project(&application_store, matter.id)
                     .await
                     .unwrap()
                     .iter()
@@ -334,11 +343,11 @@ async fn the_fixture_admin_participates_in_nothing() {
 #[tokio::test]
 async fn each_sample_matter_has_its_own_client_entity() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Dev,
             store::seed::BrandSeed::Neon,
@@ -349,7 +358,7 @@ async fn each_sample_matter_has_its_own_client_entity() {
         let mut entities = Vec::new();
         for code in store::seed::sample_matter_codes() {
             entities.push(
-                projects::find_by_code(&surreal, code)
+                projects::find_by_code(&application_store, code)
                     .await
                     .unwrap()
                     .into_iter()
@@ -371,40 +380,40 @@ async fn each_sample_matter_has_its_own_client_entity() {
 #[tokio::test]
 async fn the_fixture_is_idempotent_and_repairs_participation_drift() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Dev,
             store::seed::BrandSeed::Neon,
         )
         .await
         .unwrap();
-        let litigation = projects::find_by_code(&surreal, "sample-litigation")
+        let litigation = projects::find_by_code(&application_store, "sample-litigation")
             .await
             .unwrap()
             .into_iter()
             .next()
             .expect("the litigation matter");
-        let client = persons::find_by_email_ci(&surreal, "client@neonlaw.com")
+        let client = persons::find_by_email_ci(&application_store, "client@neonlaw.com")
             .await
             .unwrap()
             .expect("litigation client");
-        let role = projects::participations_for_project(&surreal, litigation.id)
+        let role = projects::participations_for_project(&application_store, litigation.id)
             .await
             .unwrap()
             .into_iter()
             .find(|row| row.person_id == client.id)
             .expect("client participation");
-        projects::update_participation(&surreal, role.id, client.id, "lawyer")
+        projects::update_participation(&application_store, role.id, client.id, "lawyer")
             .await
             .unwrap();
-        let before = projects::all(&surreal).await.unwrap().len();
+        let before = projects::all(&application_store).await.unwrap().len();
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Dev,
             store::seed::BrandSeed::Neon,
@@ -412,8 +421,11 @@ async fn the_fixture_is_idempotent_and_repairs_participation_drift() {
         .await
         .unwrap();
 
-        assert_eq!(projects::all(&surreal).await.unwrap().len(), before);
-        let repaired = projects::participations_for_project(&surreal, litigation.id)
+        assert_eq!(
+            projects::all(&application_store).await.unwrap().len(),
+            before
+        );
+        let repaired = projects::participations_for_project(&application_store, litigation.id)
             .await
             .unwrap()
             .into_iter()
@@ -428,14 +440,14 @@ async fn the_fixture_is_idempotent_and_repairs_participation_drift() {
 #[tokio::test]
 async fn the_fixture_does_not_claim_a_same_named_project() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
-        store::seed::seed_canonical(&surreal, &storage)
+        store::seed::seed_canonical(&application_store, &storage)
             .await
             .unwrap();
         let owner = persons::create(
-            &surreal,
+            &application_store,
             &NewPerson::with_role(
                 "Unrelated Litigant",
                 "unrelated-litigation@example.com",
@@ -445,23 +457,23 @@ async fn the_fixture_does_not_claim_a_same_named_project() {
         .await
         .unwrap();
         let squatter = projects::create(
-            &surreal,
+            &application_store,
             &NewProject {
                 code: "unrelated-litigation".into(),
                 name: "Example Signal Labs v. Example Data Systems".into(),
                 status: "closed".into(),
-                entity_id: store::test_support::seed_entity(&surreal).await,
+                entity_id: store::test_support::seed_entity(&application_store).await,
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        projects::designate_dri_in_surreal(&surreal, squatter.id, owner.id, DriSide::Client)
+        projects::designate_dri(&application_store, squatter.id, owner.id, DriSide::Client)
             .await
             .unwrap();
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Dev,
             store::seed::BrandSeed::Neon,
@@ -470,7 +482,7 @@ async fn the_fixture_does_not_claim_a_same_named_project() {
         .unwrap();
 
         assert_eq!(
-            projects::find_by_id(&surreal, squatter.id)
+            projects::find_by_id(&application_store, squatter.id)
                 .await
                 .unwrap()
                 .expect("unrelated project survives")
@@ -478,7 +490,7 @@ async fn the_fixture_does_not_claim_a_same_named_project() {
             "closed"
         );
         assert_ne!(
-            projects::find_by_code(&surreal, "sample-litigation")
+            projects::find_by_code(&application_store, "sample-litigation")
                 .await
                 .unwrap()
                 .expect("the seeded litigation matter")
@@ -503,11 +515,11 @@ async fn the_fixture_does_not_claim_a_same_named_project() {
 #[tokio::test]
 async fn a_production_boot_carries_only_the_published_firm_box() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Production,
             store::seed::BrandSeed::Neon,
@@ -520,14 +532,14 @@ async fn a_production_boot_carries_only_the_published_firm_box() {
         // That placeholder is not a box anyone receives mail at, so it is filtered
         // out here rather than folded into the expected list.
         assert!(
-            store::mailrooms::find_by_name(&surreal, "Ridgeview Mail Center")
+            store::mailrooms::find_by_name(&application_store, "Ridgeview Mail Center")
                 .await
                 .unwrap()
                 .is_some(),
             "a production boot carries the mail centre its boxes live in"
         );
 
-        let mut boxes: Vec<String> = store::addresses::list_all(&surreal)
+        let mut boxes: Vec<String> = store::addresses::list_all(&application_store)
             .await
             .unwrap()
             .into_iter()
@@ -554,11 +566,11 @@ async fn a_production_boot_carries_only_the_published_firm_box() {
 #[tokio::test]
 async fn the_retired_partnerships_boxes_do_not_seed() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Production,
             store::seed::BrandSeed::Neon,
@@ -567,14 +579,14 @@ async fn the_retired_partnerships_boxes_do_not_seed() {
         .unwrap();
 
         assert!(
-            store::entities::find_by_name(&surreal, "Neon Law")
+            store::entities::find_by_name(&application_store, "Neon Law")
                 .await
                 .unwrap()
                 .is_none(),
             "the retired partnership is out of the canonical registry"
         );
 
-        let lines: Vec<String> = store::addresses::list_all(&surreal)
+        let lines: Vec<String> = store::addresses::list_all(&application_store)
             .await
             .unwrap()
             .into_iter()
@@ -602,11 +614,11 @@ async fn the_retired_partnerships_boxes_do_not_seed() {
 #[tokio::test]
 async fn the_firm_holds_its_published_box_and_no_private_identity_seeds() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Production,
             store::seed::BrandSeed::Neon,
@@ -614,11 +626,11 @@ async fn the_firm_holds_its_published_box_and_no_private_identity_seeds() {
         .await
         .unwrap();
 
-        let firm = store::entities::find_by_name(&surreal, store::seed::FIRM_ENTITY_NAME)
+        let firm = store::entities::find_by_name(&application_store, store::seed::FIRM_ENTITY_NAME)
             .await
             .unwrap()
             .expect("the firm entity seeds");
-        let boxes: Vec<String> = store::addresses::for_entity(&surreal, firm.id)
+        let boxes: Vec<String> = store::addresses::for_entity(&application_store, firm.id)
             .await
             .unwrap()
             .into_iter()
@@ -628,7 +640,7 @@ async fn the_firm_holds_its_published_box_and_no_private_identity_seeds() {
 
         for private in ["shook.family", "Nicholas Shook"] {
             assert!(
-                store::entities::find_by_name(&surreal, private)
+                store::entities::find_by_name(&application_store, private)
                     .await
                     .unwrap()
                     .is_none(),
@@ -645,11 +657,11 @@ async fn the_firm_holds_its_published_box_and_no_private_identity_seeds() {
 #[tokio::test]
 async fn a_tenant_boot_carries_none_of_our_addresses() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Production,
             store::seed::BrandSeed::Tenant,
@@ -657,7 +669,7 @@ async fn a_tenant_boot_carries_none_of_our_addresses() {
         .await
         .unwrap();
 
-        assert!(store::addresses::list_all(&surreal)
+        assert!(store::addresses::list_all(&application_store)
             .await
             .unwrap()
             .is_empty());
@@ -670,12 +682,12 @@ async fn a_tenant_boot_carries_none_of_our_addresses() {
 #[tokio::test]
 async fn the_brand_layer_is_idempotent_across_boots() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         for _ in 0..2 {
             store::seed::seed_environment_with(
-                &surreal,
+                &application_store,
                 &storage,
                 DeploymentEnvironment::Production,
                 store::seed::BrandSeed::Neon,
@@ -684,7 +696,7 @@ async fn the_brand_layer_is_idempotent_across_boots() {
             .unwrap();
         }
 
-        let second = store::seed::seed_brand(&surreal, store::seed::BrandSeed::Neon)
+        let second = store::seed::seed_brand(&application_store, store::seed::BrandSeed::Neon)
             .await
             .unwrap();
         assert_eq!(second.addresses_inserted, 0);
@@ -696,7 +708,13 @@ async fn the_brand_layer_is_idempotent_across_boots() {
         // seed is find-or-create on a UNIQUE name, so a second boot must not mint
         // a second facility — nor a second placeholder address behind it.
         assert_eq!(second.mailrooms_inserted, 0);
-        assert_eq!(store::addresses::list_all(&surreal).await.unwrap().len(), 2);
+        assert_eq!(
+            store::addresses::list_all(&application_store)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     })
     .await;
 }
@@ -713,11 +731,11 @@ async fn the_brand_layer_is_idempotent_across_boots() {
 #[tokio::test]
 async fn the_dev_portfolios_mail_survives_the_mailroom_moving_layers() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Dev,
             store::seed::BrandSeed::Neon,
@@ -725,7 +743,7 @@ async fn the_dev_portfolios_mail_survives_the_mailroom_moving_layers() {
         .await
         .unwrap();
 
-        let letters = store::letters::list_all(&surreal).await.unwrap();
+        let letters = store::letters::list_all(&application_store).await.unwrap();
         assert!(
             !letters.is_empty(),
             "a dev boot seeds the sample mail; an empty set means the mailroom \
@@ -735,7 +753,7 @@ async fn the_dev_portfolios_mail_survives_the_mailroom_moving_layers() {
             .iter()
             .any(|l| l.summary == "Notice of Intent to Lien"));
         assert!(
-            store::mailrooms::find_by_name(&surreal, "Sample Mail Center")
+            store::mailrooms::find_by_name(&application_store, "Sample Mail Center")
                 .await
                 .unwrap()
                 .is_some(),
@@ -758,11 +776,11 @@ async fn the_dev_portfolios_mail_survives_the_mailroom_moving_layers() {
 #[tokio::test]
 async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         store::seed::seed_environment_with(
-            &surreal,
+            &application_store,
             &storage,
             DeploymentEnvironment::Dev,
             store::seed::BrandSeed::Neon,
@@ -771,7 +789,7 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
         .expect("a first boot seeds a database whose brand table starts empty");
 
         for key in store::firms::CLOSED_BRAND_KEYS {
-            let brand = store::brands::find_by_key(&surreal, key)
+            let brand = store::brands::find_by_key(&application_store, key)
                 .await
                 .unwrap()
                 .unwrap_or_else(|| {
@@ -784,13 +802,13 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
             );
         }
 
-        let firms = store::firms::all(&surreal).await.unwrap();
+        let firms = store::firms::all(&application_store).await.unwrap();
         assert_eq!(firms.len(), store::seed::FIRM_ENTITY_NAMES.len());
         let practice = firms
             .iter()
             .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
             .expect("the practice firm is seeded");
-        let brands = store::firms::brand_keys_for_firm(&surreal, practice.id)
+        let brands = store::firms::brand_keys_for_firm(&application_store, practice.id)
             .await
             .unwrap();
         assert_eq!(
@@ -802,7 +820,7 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
             .iter()
             .find(|firm| firm.name == store::seed::LEX_FIRM_NAME)
             .expect("the Lex firm is seeded");
-        let lex_brands = store::firms::brand_keys_for_firm(&surreal, lex.id)
+        let lex_brands = store::firms::brand_keys_for_firm(&application_store, lex.id)
             .await
             .unwrap();
         assert_eq!(
@@ -816,12 +834,12 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
 #[tokio::test]
 async fn the_dev_boot_seeds_the_practice_once() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage = storage().await;
 
         for _ in 0..2 {
             store::seed::seed_environment_with(
-                &surreal,
+                &application_store,
                 &storage,
                 DeploymentEnvironment::Dev,
                 store::seed::BrandSeed::Neon,
@@ -830,7 +848,7 @@ async fn the_dev_boot_seeds_the_practice_once() {
             .unwrap();
         }
 
-        let firms = store::firms::all(&surreal).await.unwrap();
+        let firms = store::firms::all(&application_store).await.unwrap();
         let mut names: Vec<_> = firms.iter().map(|firm| firm.name.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, ["Guieb & Shook PC", "Lex Tecnica"]);
@@ -840,13 +858,13 @@ async fn the_dev_boot_seeds_the_practice_once() {
             .expect("the practice firm is seeded");
         assert_eq!(firm.name, store::seed::FIRM_ENTITY_NAME);
         let entity_id = firm.entity_id.expect("the seeded practice is an entity");
-        let entity = store::entities::find_by_id(&surreal, entity_id)
+        let entity = store::entities::find_by_id(&application_store, entity_id)
             .await
             .unwrap()
             .expect("firm.entity_id names a live entity");
         assert_eq!(entity.name, store::seed::FIRM_ENTITY_NAME);
 
-        let brands = store::firms::brand_keys_for_firm(&surreal, firm.id)
+        let brands = store::firms::brand_keys_for_firm(&application_store, firm.id)
             .await
             .unwrap();
         assert_eq!(
@@ -855,10 +873,10 @@ async fn the_dev_boot_seeds_the_practice_once() {
             "the practice firm wears every closed key the Lex firm does not"
         );
 
-        for project in projects::all(&surreal).await.unwrap() {
+        for project in projects::all(&application_store).await.unwrap() {
             assert_eq!(
                 project.firm_id,
-                store::firms::firm_id_for_brand_key(&surreal, &project.brand)
+                store::firms::firm_id_for_brand_key(&application_store, &project.brand)
                     .await
                     .unwrap(),
                 "every sample matter belongs to the Firm that wears its brand"
@@ -872,13 +890,14 @@ async fn the_dev_boot_seeds_the_practice_once() {
             ("owner@neonlaw.com", false),
             ("client@neonlaw.com", false),
         ] {
-            let person = persons::find_by_email_ci(&surreal, email)
+            let person = persons::find_by_email_ci(&application_store, email)
                 .await
                 .unwrap()
                 .unwrap_or_else(|| panic!("{email} is a fixture identity"));
-            let membership = store::firms::membership_for_person(&surreal, person.id, firm.id)
-                .await
-                .unwrap();
+            let membership =
+                store::firms::membership_for_person(&application_store, person.id, firm.id)
+                    .await
+                    .unwrap();
             assert_eq!(membership.is_some(), should_belong, "{email} membership");
         }
     })

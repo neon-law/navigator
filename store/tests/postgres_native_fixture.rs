@@ -1,6 +1,6 @@
 //! Native test fixtures must carry real creation authority.
 use futures::FutureExt as _;
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use store::{postgres::PostgresDb, test_support};
 
 /// A native actor fixture is admitted by its real creation origin, never by
@@ -76,7 +76,7 @@ async fn fresh_postgres_fixtures_keep_native_rows_isolated_and_cleanup_owned_dat
             .await
             .unwrap();
         let name = second.database().to_owned();
-        let source = SurrealDb::uninitialized();
+        let source = ApplicationStore::uninitialized();
         store::persons::create(
             &source,
             &store::persons::NewPerson::with_role(

@@ -24,7 +24,7 @@ pub enum AuthorityError {
 ///
 /// [`AuthorityError::Unavailable`] when PostgreSQL configuration or historical
 /// enrollment is unavailable.
-pub(crate) async fn authority() -> Result<Option<PostgresDb>, AuthorityError> {
+pub(crate) async fn authority() -> Result<PostgresDb, AuthorityError> {
     crate::persons::postgres_authority()
         .await
         .map_err(|error| AuthorityError::Unavailable(error.to_string()))

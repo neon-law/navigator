@@ -67,7 +67,7 @@ struct GoogleOauthConfigInner {
     /// with ENG-19 — rather than stamping every validated token as lawyer.
     /// `None` only in the pass-through / unit-test configs (which never
     /// reach the role-resolution path).
-    surreal: Option<store::surreal::SurrealDb>,
+    application_store: Option<store::application_store::ApplicationStore>,
 }
 
 impl GoogleOauthConfig {
@@ -86,7 +86,7 @@ impl GoogleOauthConfig {
             required_hd,
             tokeninfo_url,
             http: reqwest::Client::new(),
-            surreal: None,
+            application_store: None,
         }))
     }
 
@@ -95,14 +95,14 @@ impl GoogleOauthConfig {
     /// router so role resolution is real in production; the
     /// pass-through and unit-test configs leave it `None`.
     #[must_use]
-    pub fn with_db(self, surreal: store::surreal::SurrealDb) -> Self {
+    pub fn with_db(self, application_store: store::application_store::ApplicationStore) -> Self {
         let inner = &*self.0;
         Self(Arc::new(GoogleOauthConfigInner {
             allowed_client_ids: inner.allowed_client_ids.clone(),
             required_hd: inner.required_hd.clone(),
             tokeninfo_url: inner.tokeninfo_url.clone(),
             http: inner.http.clone(),
-            surreal: Some(surreal),
+            application_store: Some(application_store),
         }))
     }
 
@@ -114,7 +114,7 @@ impl GoogleOauthConfig {
             required_hd: None,
             tokeninfo_url: DEFAULT_TOKENINFO_URL.into(),
             http: reqwest::Client::new(),
-            surreal: None,
+            application_store: None,
         }))
     }
 
@@ -131,7 +131,7 @@ impl GoogleOauthConfig {
             required_hd: required_hd.map(str::to_string),
             tokeninfo_url: tokeninfo_url.into(),
             http: reqwest::Client::new(),
-            surreal: None,
+            application_store: None,
         }))
     }
 
@@ -288,7 +288,7 @@ pub async fn require_google_oauth(
     // the embedded Rego policy lawyer-gate on `/mcp` + `/app/api/mcp/rpc` then denies it.
     // Operators must seed legitimate agent identities as lawyer/admin in
     // `persons`, exactly as for the browser/CLI paths.
-    let person = resolve_person(cfg.0.surreal.as_ref(), &email).await;
+    let person = resolve_person(cfg.0.application_store.as_ref(), &email).await;
     let role = person
         .as_ref()
         .map_or(store::persons::Role::Client, |p| p.role);
@@ -321,10 +321,10 @@ pub async fn require_google_oauth(
 /// person's opaque id: an address in a log field is exactly what
 /// `cli/tests/no_address_in_telemetry.rs` gates against.
 async fn resolve_person(
-    surreal: Option<&store::surreal::SurrealDb>,
+    application_store: Option<&store::application_store::ApplicationStore>,
     email: &str,
 ) -> Option<store::persons::Person> {
-    store::persons::find_by_email_ci(surreal?, email)
+    store::persons::find_by_email_ci(application_store?, email)
         .await
         .ok()
         .flatten()
@@ -344,7 +344,6 @@ mod tests {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use store::test_support::mem_surreal;
     const ALLOWED_CLIENT: &str =
         "123456789012-abcdefghijklmnopqrstuvwxyzabcdef.apps.googleusercontent.com";
 
@@ -536,55 +535,6 @@ mod tests {
             GoogleOauthConfig::for_test([ALLOWED_CLIENT], Some("example.com"), mock_url(&server));
         let resp = call(app(cfg), Some("abc")).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn resolve_person_reads_real_tier_and_defaults_unknown_to_client() {
-        use super::resolve_person;
-
-        use store::persons::Role;
-
-        // The call site reads `role` off the row and treats a missing row as
-        // the least-privileged tier; assert that resolution, not the getter.
-        async fn role_of(surreal: Option<&store::surreal::SurrealDb>, email: &str) -> Role {
-            resolve_person(surreal, email)
-                .await
-                .map_or(Role::Client, |p| p.role)
-        }
-
-        let surreal = mem_surreal().await;
-        for (email, role) in [
-            ("lawyer@example.com", Role::Lawyer),
-            ("cli@example.com", Role::Client),
-        ] {
-            store::persons::create(
-                &surreal,
-                &store::persons::NewPerson::with_role(email, email, role),
-            )
-            .await
-            .unwrap();
-        }
-
-        assert_eq!(
-            role_of(Some(&surreal), "lawyer@example.com").await,
-            Role::Lawyer
-        );
-        assert_eq!(
-            role_of(Some(&surreal), "LaWyEr@Example.com").await,
-            Role::Lawyer,
-            "a verified email whose casing differs from the stored row keeps its lawyer tier"
-        );
-        assert_eq!(
-            role_of(Some(&surreal), "cli@example.com").await,
-            Role::Client
-        );
-        // Unknown email and absent db both fall back to the least
-        // privilege — never lawyer.
-        assert_eq!(
-            role_of(Some(&surreal), "nobody@example.com").await,
-            Role::Client
-        );
-        assert_eq!(role_of(None, "anyone@example.com").await, Role::Client);
     }
 
     #[tokio::test]

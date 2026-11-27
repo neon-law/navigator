@@ -77,7 +77,7 @@ The reviewed manifest lives in `k8s/postgres/archive/coverage.json`, which `ops 
 `navigator-archive-coverage` ConfigMap. `tests/coverage_manifest.rs` holds its `navigator` half to a freshly migrated
 database with DBOS launched. `cargo run -p archives --example coverage_inventory -- <url>` prints a review draft of any
 database, which is how the `forgejo` half is captured. See [Iceberg
-archive](../docs/iceberg-archive.md#the-coverage-manifest).
+archive](../docs/iceberg-archive.md#exporting-a-generation).
 
 The deployed export runs on the DBOS executor in `web` with `NAVIGATOR_DBOS_ARCHIVES_ENABLED`. It signs in to both
 databases as the read-only `navigator_archive` login, set by `NAVIGATOR_ARCHIVE_POSTGRES_USER` and

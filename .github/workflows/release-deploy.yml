@@ -365,11 +365,9 @@ jobs:
           step: "ops ship --deployment staging"
           tag: ${{ env.TAG }}
 
-      - name: ops ship (full — manifests, secrets, Restate)
+      - name: ops ship (full — manifests and secrets)
         env:
           IMAGE_DIGESTS: ${{ inputs['image-digests'] }}
-          RESTATE_ADMIN_URL: ${{ vars.STAGING_RESTATE_ADMIN_URL }}
-          RESTATE_ADMIN_TOKEN: ${{ secrets.STAGING_RESTATE_ADMIN_TOKEN }}
           SHIP_LOG_SINK: ${{ secrets.STAGING_SHIP_LOG_SINK }}
         run: |
           set -euo pipefail
@@ -573,11 +571,9 @@ jobs:
           step: "ops ship --deployment production"
           tag: ${{ env.TAG }}
 
-      - name: ops ship (full — manifests, secrets, Restate)
+      - name: ops ship (full — manifests and secrets)
         env:
           IMAGE_DIGESTS: ${{ inputs['image-digests'] }}
-          RESTATE_ADMIN_URL: ${{ vars.PRODUCTION_RESTATE_ADMIN_URL }}
-          RESTATE_ADMIN_TOKEN: ${{ secrets.PRODUCTION_RESTATE_ADMIN_TOKEN }}
           SHIP_LOG_SINK: ${{ secrets.PRODUCTION_SHIP_LOG_SINK }}
         run: |
           set -euo pipefail

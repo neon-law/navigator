@@ -7,11 +7,11 @@ use assert_cmd::cargo::cargo_bin;
 #[test]
 fn the_glossary_names_the_physical_schema() {
     let glossary = glossary_text();
-    let schema = include_str!("../../store/src/schema/navigator.surql");
+    let schema = include_str!("../../store/postgres/schema.sql");
 
     for table in ["person", "person_project_role", "project"] {
         assert!(
-            schema.contains(&format!("DEFINE TABLE IF NOT EXISTS {table} ")),
+            schema.contains(&format!("CREATE TABLE {table} (")),
             "schema must define `{table}`"
         );
     }

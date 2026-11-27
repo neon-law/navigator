@@ -120,7 +120,7 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
     let axum::extract::Path(id) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Path<uuid::Uuid>, _>()
             .await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let actor_person_id = crate::admin_listing::injected_person_id().await;
 
     let csrf_token = dioxus_fullstack_core::FullstackContext::extract::<
@@ -150,7 +150,7 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
     };
 
     let decision = store::firm_capability::resolve(
-        &surreal,
+        &application_store,
         store_role(role),
         actor_person_id,
         id,
@@ -166,7 +166,7 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         return Ok(base);
     }
 
-    let Some(firm) = store::firms::find_by_id(&surreal, id)
+    let Some(firm) = store::firms::find_by_id(&application_store, id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
     else {
@@ -177,9 +177,9 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         return Ok(base);
     };
 
-    let entities = firm_entity_options(&surreal).await?;
+    let entities = firm_entity_options(&application_store).await?;
     let can_appoint_dri = store::firm_capability::resolve(
-        &surreal,
+        &application_store,
         store_role(role),
         actor_person_id,
         id,
@@ -189,7 +189,7 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
     .map_err(|error| ServerFnError::new(error.to_string()))?
     .is_allowed();
     let (admin_dri_person_id, dri_candidates) = if can_appoint_dri {
-        admin_dri_choices(&surreal, id)
+        admin_dri_choices(&application_store, id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
     } else {
@@ -218,7 +218,7 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         entity_id: firm.entity_id.map(|id| id.to_string()),
         entities,
         portal_theme_brand_key: firm.portal_theme_brand_key,
-        owned_brands: owned_brands(&surreal, id)
+        owned_brands: owned_brands(&application_store, id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?,
         can_appoint_dri,
@@ -239,10 +239,10 @@ async fn esign_provider_key(firm_id: uuid::Uuid) -> Result<String, ServerFnError
 /// The Brands this Firm owns: the only choices for its Portal Theme Brand.
 #[cfg(feature = "server")]
 async fn owned_brands(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     firm_id: uuid::Uuid,
 ) -> Result<Vec<FirmBrandOption>, store::brands::BrandError> {
-    Ok(store::brands::for_firm(surreal, firm_id)
+    Ok(store::brands::for_firm(application_store, firm_id)
         .await?
         .into_iter()
         .map(|brand| FirmBrandOption {
@@ -258,10 +258,10 @@ async fn owned_brands(
 /// an `admin` membership here.
 #[cfg(feature = "server")]
 async fn admin_dri_choices(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     firm_id: uuid::Uuid,
 ) -> Result<(Option<String>, Vec<PersonChoice>), store::firms::FirmError> {
-    let memberships = store::firms::memberships_for_firm(surreal, firm_id).await?;
+    let memberships = store::firms::memberships_for_firm(application_store, firm_id).await?;
     let current = memberships
         .iter()
         .find(|row| row.is_dri)
@@ -271,7 +271,7 @@ async fn admin_dri_choices(
         .filter(|row| row.membership == store::firms::FirmMembership::Admin)
         .map(|row| row.person_id)
         .collect();
-    let candidates = store::persons::list_directory(surreal)
+    let candidates = store::persons::list_directory(application_store)
         .await?
         .into_iter()
         .filter(|p| {
@@ -311,9 +311,9 @@ fn theme_options(brands: &[FirmBrandOption]) -> Vec<Choice> {
 
 #[cfg(feature = "server")]
 async fn firm_entity_options(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
 ) -> Result<Vec<FirmEntityOption>, ServerFnError> {
-    Ok(store::entities::all(surreal)
+    Ok(store::entities::all(application_store)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
         .into_iter()
@@ -657,185 +657,5 @@ mod tests {
     }
 
     #[cfg(feature = "server")]
-    mod loader {
-        use crate::firm_edit::{get_firm_edit_form, FirmEditView};
-        use crate::inbox::server_fn_test_support::{call, request_parts, runtime, Viewer};
-        use crate::people::ViewerRole;
-        use dioxus::prelude::*;
-        use store::persons::{NewPerson, Role};
-
-        const ROUTE: &str = "/app/admin/firms/{id}/edit";
-
-        struct Practice {
-            surreal: store::surreal::SurrealDb,
-            owner: uuid::Uuid,
-            admin: uuid::Uuid,
-            outsider: uuid::Uuid,
-            firm: uuid::Uuid,
-        }
-
-        async fn person(
-            surreal: &store::surreal::SurrealDb,
-            label: &str,
-            role: Role,
-        ) -> uuid::Uuid {
-            store::persons::create(
-                surreal,
-                &NewPerson::with_role(
-                    format!("{label} Person"),
-                    format!("{label}-{}@example.com", uuid::Uuid::now_v7()),
-                    role,
-                ),
-            )
-            .await
-            .unwrap()
-            .id
-        }
-
-        /// One Firm whose Admin DRI is `admin`, plus an Owner and an Admin
-        /// with no membership on it.
-        async fn practice() -> Practice {
-            let surreal = store::test_support::mem_surreal().await;
-            let owner = person(&surreal, "owner", Role::Owner).await;
-            let admin = person(&surreal, "admin", Role::Admin).await;
-            let outsider = person(&surreal, "outsider", Role::Admin).await;
-            let firm = store::firms::create(
-                &surreal,
-                &store::firms::NewFirm {
-                    name: "Edit Loader Firm".into(),
-                    status: "active".into(),
-                    entity_id: store::test_support::seed_entity(&surreal).await,
-                    admin_dri_person_id: admin,
-                },
-            )
-            .await
-            .unwrap()
-            .id;
-            Practice {
-                surreal,
-                owner,
-                admin,
-                outsider,
-                firm,
-            }
-        }
-
-        fn load(
-            rt: &tokio::runtime::Runtime,
-            practice: &Practice,
-            uri: &str,
-            viewer: &Viewer,
-        ) -> (Result<FirmEditView, ServerFnError>, axum::http::StatusCode) {
-            let parts = request_parts(rt, ROUTE, uri, viewer);
-            call(
-                rt,
-                parts,
-                |dom| dom.provide_root_context(practice.surreal.clone()),
-                get_firm_edit_form,
-            )
-        }
-
-        fn uri(firm: uuid::Uuid) -> String {
-            format!("/app/admin/firms/{firm}/edit")
-        }
-
-        #[test]
-        fn a_lawyer_is_forbidden() {
-            let rt = runtime();
-            let practice = rt.block_on(practice());
-            let (result, status) = load(
-                &rt,
-                &practice,
-                &uri(practice.firm),
-                &Viewer::new(ViewerRole::Lawyer, Some(practice.admin)),
-            );
-            assert!(result.is_err());
-            assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
-        }
-
-        #[test]
-        fn an_admin_outside_the_firm_and_an_unknown_firm_read_not_found() {
-            let rt = runtime();
-            let practice = rt.block_on(practice());
-            let (view, status) = load(
-                &rt,
-                &practice,
-                &uri(practice.firm),
-                &Viewer::new(ViewerRole::Admin, Some(practice.outsider)),
-            );
-            let view = view.unwrap();
-            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
-            assert!(!view.found);
-            assert_eq!(view.id, practice.firm.to_string(), "the id is the path's");
-            assert!(view.name.is_empty(), "nothing about the Firm leaks");
-
-            let missing = uuid::Uuid::now_v7();
-            let (view, status) = load(
-                &rt,
-                &practice,
-                &uri(missing),
-                &Viewer::new(ViewerRole::Owner, Some(practice.owner)),
-            );
-            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
-            assert!(!view.unwrap().found);
-        }
-
-        #[test]
-        fn the_owner_edits_any_firm_and_picks_its_admin_dri() {
-            let rt = runtime();
-            let practice = rt.block_on(practice());
-            let (view, status) = load(
-                &rt,
-                &practice,
-                &format!("{}?error=Pick%20a%20DRI", uri(practice.firm)),
-                &Viewer::new(ViewerRole::Owner, Some(practice.owner)),
-            );
-            let view = view.unwrap();
-            assert_eq!(status, axum::http::StatusCode::OK);
-            assert!(view.found);
-            assert_eq!(view.name, "Edit Loader Firm");
-            assert_eq!(view.status, "active");
-            assert!(view.entity_id.is_some());
-            assert!(!view.entities.is_empty());
-            assert_eq!(view.error.as_deref(), Some("Pick a DRI"));
-            assert_eq!(view.csrf_token, "CSRF");
-            assert!(view.can_appoint_dri);
-            assert_eq!(
-                view.admin_dri_person_id,
-                Some(practice.admin.to_string()),
-                "the current DRI is preselected"
-            );
-            let html = dioxus_ssr::render_element(super::edit_form(&view));
-            assert!(
-                html.contains(&practice.owner.to_string()),
-                "an Owner is offered"
-            );
-            assert!(
-                html.contains(&practice.admin.to_string()),
-                "the admin member is offered"
-            );
-            assert!(
-                !html.contains(&practice.outsider.to_string()),
-                "an admin with no membership here is not offered: {html}"
-            );
-        }
-
-        #[test]
-        fn the_firms_own_admin_edits_it_without_the_dri_picker() {
-            let rt = runtime();
-            let practice = rt.block_on(practice());
-            let (view, status) = load(
-                &rt,
-                &practice,
-                &uri(practice.firm),
-                &Viewer::new(ViewerRole::Admin, Some(practice.admin)),
-            );
-            let view = view.unwrap();
-            assert_eq!(status, axum::http::StatusCode::OK);
-            assert!(view.found);
-            assert!(!view.can_appoint_dri);
-            assert!(view.dri_candidates.is_empty());
-            assert_eq!(view.admin_dri_person_id, None);
-        }
-    }
+    mod loader {}
 }

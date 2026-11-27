@@ -1,11 +1,11 @@
 //! Structured phone identity and adoption of historical Person phone values on PostgreSQL.
 
+use store::application_store::ApplicationStore;
 use store::person_phones::{self, PhoneError, PhoneLabel};
 use store::persons::{self, NewPerson};
-use store::surreal::SurrealDb;
 use store::test_support::with_required_postgres;
 
-async fn a_person(db: &SurrealDb, email: &str, phone: Option<&str>) -> uuid::Uuid {
+async fn a_person(db: &ApplicationStore, email: &str, phone: Option<&str>) -> uuid::Uuid {
     let created = persons::create(
         db,
         &NewPerson {
@@ -21,7 +21,7 @@ async fn a_person(db: &SurrealDb, email: &str, phone: Option<&str>) -> uuid::Uui
 #[tokio::test]
 async fn the_first_number_a_person_gets_is_primary_whether_or_not_the_caller_said_so() {
     with_required_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let person = a_person(&db, "first.primary@example.com", None).await;
 
         let phone =
@@ -40,7 +40,7 @@ async fn the_first_number_a_person_gets_is_primary_whether_or_not_the_caller_sai
 #[tokio::test]
 async fn differently_formatted_spellings_of_one_number_converge_on_one_row() {
     with_required_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let person = a_person(&db, "converge@example.com", None).await;
         let first =
             person_phones::set_phone(&db, person, "(702) 555-0142", PhoneLabel::Mobile, true)
@@ -64,7 +64,7 @@ async fn differently_formatted_spellings_of_one_number_converge_on_one_row() {
 #[tokio::test]
 async fn setting_a_number_primary_demotes_the_previous_primary() {
     with_required_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let person = a_person(&db, "one.primary@example.com", None).await;
         person_phones::set_phone(&db, person, "7025550142", PhoneLabel::Mobile, true)
             .await
@@ -94,7 +94,7 @@ async fn setting_a_number_primary_demotes_the_previous_primary() {
 #[tokio::test]
 async fn setting_a_phone_on_a_missing_person_is_refused_by_name() {
     with_required_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let missing = uuid::Uuid::now_v7();
         let error = person_phones::set_phone(&db, missing, "7025550142", PhoneLabel::Mobile, true)
             .await
@@ -107,7 +107,7 @@ async fn setting_a_phone_on_a_missing_person_is_refused_by_name() {
 #[tokio::test]
 async fn removing_a_number_its_row_gone_and_an_absent_number_a_no_op() {
     with_required_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let person = a_person(&db, "remove@example.com", None).await;
         person_phones::set_phone(&db, person, "7025550142", PhoneLabel::Mobile, true)
             .await
@@ -131,7 +131,7 @@ async fn removing_a_number_its_row_gone_and_an_absent_number_a_no_op() {
 #[tokio::test]
 async fn the_legacy_phone_column_seeds_one_primary_row_and_then_leaves_alone() {
     with_required_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let person = a_person(&db, "legacy.seed@example.com", Some("702 555 0142")).await;
 
         let seeded = person_phones::seed_from_legacy_phone(&db, person)
@@ -160,7 +160,7 @@ async fn the_legacy_phone_column_seeds_one_primary_row_and_then_leaves_alone() {
 #[tokio::test]
 async fn an_unnormalizable_legacy_value_is_left_where_it_is() {
     with_required_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let person = a_person(&db, "legacy.junk@example.com", Some("call the front desk")).await;
 
         assert!(person_phones::seed_from_legacy_phone(&db, person)
@@ -181,7 +181,7 @@ async fn an_unnormalizable_legacy_value_is_left_where_it_is() {
 #[tokio::test]
 async fn a_historical_person_row_without_phone_data_reads_and_seeds_cleanly() {
     with_required_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         // A row written before `person_phone` existed has no phones and no
         // legacy value to lift: both reads must be empty, not errors — the
         // same tolerance the historical-row test above the person table

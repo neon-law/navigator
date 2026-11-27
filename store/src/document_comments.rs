@@ -27,14 +27,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::review as authority;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
-
-/// The table these rows live in.
-const TABLE: &str = "document_comment";
 
 /// One anchored comment.
 ///
@@ -57,42 +53,6 @@ pub struct DocumentComment {
     pub communication_id: Option<Uuid>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct DocumentCommentRow {
-    id: surrealdb::types::RecordId,
-    review_document_id: surrealdb::types::RecordId,
-    person_id: surrealdb::types::RecordId,
-    anchor_start: i32,
-    anchor_end: i32,
-    quoted_text: String,
-    body: String,
-    resolved: bool,
-    communication_id: Option<Uuid>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl DocumentCommentRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_comment(self) -> Option<DocumentComment> {
-        Some(DocumentComment {
-            id: record_uuid(&self.id)?,
-            review_document_id: record_uuid(&self.review_document_id)?,
-            person_id: record_uuid(&self.person_id)?,
-            anchor_start: self.anchor_start,
-            anchor_end: self.anchor_end,
-            quoted_text: self.quoted_text,
-            body: self.body,
-            resolved: self.resolved,
-            communication_id: self.communication_id,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
 }
 
 /// The row as PostgreSQL's `to_jsonb` serves it, under the `postgres::review`
@@ -133,12 +93,6 @@ impl PgDocumentCommentRow {
         })
     }
 }
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`DocumentCommentRow`] from only one
-/// query.
-const SELECT: &str = "id, review_document_id, person_id, anchor_start, anchor_end, quoted_text, \
-     body, resolved, communication_id, inserted_at, updated_at";
 
 /// One new anchored comment. The anchor is a ProseMirror position range
 /// plus the text it covered, captured client-side from the read-only
@@ -184,8 +138,6 @@ pub struct CreatedComment {
 /// Errors reading or writing a document comment.
 #[derive(Debug, thiserror::Error)]
 pub enum DocumentCommentError {
-    #[error("surreal: {0}")]
-    Surreal(#[from] surrealdb::Error),
     #[error("communications: {0}")]
     Communication(#[from] crate::communications::CommunicationError),
     /// PostgreSQL, under the review authority, failed.
@@ -197,39 +149,14 @@ pub enum DocumentCommentError {
     WriteReturnedNothing,
 }
 
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<DocumentComment>, surrealdb::Error> {
-    let rows: Vec<DocumentCommentRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DocumentCommentRow::into_comment)
-        .collect())
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, surrealdb::Error>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await
-}
-
 /// Comment creation and resolution require PostgreSQL review authority.
 async fn write_authority() -> Result<crate::postgres::PostgresDb, DocumentCommentError> {
-    authority::authority()
-        .await?
-        .ok_or_else(|| authority::ReviewAuthorityError::Unavailable.into())
+    Ok(authority::authority().await?)
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn create_row(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     review_document_id: Uuid,
     person_id: Uuid,
     anchor_start: i32,
@@ -264,7 +191,10 @@ async fn create_row(
 /// # Errors
 ///
 /// [`DocumentCommentError::Postgres`] if the insert fails.
-pub async fn create(db: &SurrealDb, new: &NewComment<'_>) -> Result<Uuid, DocumentCommentError> {
+pub async fn create(
+    db: &ApplicationStore,
+    new: &NewComment<'_>,
+) -> Result<Uuid, DocumentCommentError> {
     create_row(
         db,
         new.review_document_id,
@@ -290,14 +220,14 @@ pub async fn create(db: &SurrealDb, new: &NewComment<'_>) -> Result<Uuid, Docume
 /// satellite is never attempted), or [`DocumentCommentError::Postgres`] if
 /// the satellite insert fails after the spine row is already committed.
 pub async fn create_with_communication(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     new: &NewLinkedComment<'_>,
 ) -> Result<CreatedComment, DocumentCommentError> {
     // Refuse a Source-only request before writing the communication spine.
     let _pg = write_authority().await?;
     let now = Utc::now().to_rfc3339();
     let ingested = crate::communications::ingest(
-        surreal,
+        application_store,
         &crate::communications::IngestArgs {
             project_id: new.project_id,
             channel: crate::communications::channel::DOCUMENT_COMMENT,
@@ -314,7 +244,7 @@ pub async fn create_with_communication(
     .await?;
 
     let comment_id = create_row(
-        surreal,
+        application_store,
         new.review_document_id,
         new.person_id,
         new.anchor_start,
@@ -337,25 +267,16 @@ pub async fn create_with_communication(
 ///
 /// [`DocumentCommentError::Surreal`] if the lookup fails.
 pub async fn find_by_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<DocumentComment>, DocumentCommentError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(document_comment) AS row FROM document_comment WHERE id = $1",
-        )
-        .bind(id);
-        return Ok(authority::maybe::<PgDocumentCommentRow>(&pg, query)
-            .await?
-            .and_then(PgDocumentCommentRow::into_comment));
-    }
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DocumentCommentRow> = response.take(0)?;
-    Ok(row.and_then(DocumentCommentRow::into_comment))
+    let pg = authority::authority().await?;
+    let query =
+        sqlx::query("SELECT to_jsonb(document_comment) AS row FROM document_comment WHERE id = $1")
+            .bind(id);
+    Ok(authority::maybe::<PgDocumentCommentRow>(&pg, query)
+        .await?
+        .and_then(PgDocumentCommentRow::into_comment))
 }
 
 /// All comments on a review document, oldest first.
@@ -364,33 +285,20 @@ pub async fn find_by_id(
 ///
 /// [`DocumentCommentError::Surreal`] if the lookup fails.
 pub async fn for_review_document(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     review_document_id: Uuid,
 ) -> Result<Vec<DocumentComment>, DocumentCommentError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(document_comment) AS row FROM document_comment \
-             WHERE review_document_id = $1 ORDER BY id ASC",
-        )
-        .bind(review_document_id);
-        return Ok(authority::rows::<PgDocumentCommentRow>(&pg, query)
-            .await?
-            .into_iter()
-            .filter_map(PgDocumentCommentRow::into_comment)
-            .collect());
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE review_document_id = $review_document \
-             ORDER BY id ASC"
-        ))
-        .bind((
-            "review_document",
-            record_id(crate::review_documents::TABLE, review_document_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(many(response)?)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(document_comment) AS row FROM document_comment \
+         WHERE review_document_id = $1 ORDER BY id ASC",
+    )
+    .bind(review_document_id);
+    Ok(authority::rows::<PgDocumentCommentRow>(&pg, query)
+        .await?
+        .into_iter()
+        .filter_map(PgDocumentCommentRow::into_comment)
+        .collect())
 }
 
 /// Flip the `resolved` flag on one comment. Returns the updated row, or
@@ -400,7 +308,7 @@ pub async fn for_review_document(
 ///
 /// [`DocumentCommentError::Postgres`] if the write fails.
 pub async fn set_resolved(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     resolved: bool,
 ) -> Result<Option<DocumentComment>, DocumentCommentError> {
@@ -426,33 +334,22 @@ pub async fn set_resolved(
 ///
 /// [`DocumentCommentError::Surreal`] if the write fails.
 pub async fn clear_communication_links(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     communication_ids: &[Uuid],
 ) -> Result<(), DocumentCommentError> {
     if communication_ids.is_empty() {
         return Ok(());
     }
-    if let Some(pg) = authority::authority().await? {
-        let ids: Vec<String> = communication_ids.iter().map(Uuid::to_string).collect();
-        sqlx::query(
-            "UPDATE document_comment SET communication_id = NULL, updated_at = now() \
-             WHERE communication_id = ANY($1)",
-        )
-        .bind(ids)
-        .execute(pg.pool())
-        .await
-        .map_err(authority::ReviewAuthorityError::from)?;
-        return Ok(());
-    }
-    let ids: Vec<Uuid> = communication_ids.to_vec();
-    writing(|| {
-        db.query(format!(
-            "UPDATE {TABLE} SET communication_id = NONE, updated_at = time::now() \
-             WHERE communication_id IN $ids"
-        ))
-        .bind(("ids", ids.clone()))
-    })
-    .await?;
+    let pg = authority::authority().await?;
+    let ids: Vec<String> = communication_ids.iter().map(Uuid::to_string).collect();
+    sqlx::query(
+        "UPDATE document_comment SET communication_id = NULL, updated_at = now() \
+         WHERE communication_id = ANY($1)",
+    )
+    .bind(ids)
+    .execute(pg.pool())
+    .await
+    .map_err(authority::ReviewAuthorityError::from)?;
     Ok(())
 }
 
@@ -462,10 +359,12 @@ mod tests {
     use crate::review_documents::{self, NewReviewDocument};
     use crate::test_support::seed_notation;
 
-    async fn seed_review_document(surreal: &crate::surreal::SurrealDb) -> uuid::Uuid {
-        let notation_id = seed_notation(surreal).await;
+    async fn seed_review_document(
+        application_store: &crate::application_store::ApplicationStore,
+    ) -> uuid::Uuid {
+        let notation_id = seed_notation(application_store).await;
         review_documents::create(
-            surreal,
+            application_store,
             &NewReviewDocument {
                 notation_id,
                 kind: "will",
@@ -477,9 +376,11 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_commenter(surreal: &crate::surreal::SurrealDb) -> uuid::Uuid {
+    async fn seed_commenter(
+        application_store: &crate::application_store::ApplicationStore,
+    ) -> uuid::Uuid {
         crate::persons::create(
-            surreal,
+            application_store,
             &crate::persons::NewPerson::new("Taurus", "taurus@example.com"),
         )
         .await
@@ -488,59 +389,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_context_refuses_comment_writes() {
-        let db = crate::surreal::SurrealDb::uninitialized();
-        let id = uuid::Uuid::now_v7();
-        crate::postgres_mirror::from_source(async {
-            assert!(matches!(
-                create(
-                    &db,
-                    &NewComment {
-                        review_document_id: id,
-                        person_id: id,
-                        anchor_start: 0,
-                        anchor_end: 1,
-                        quoted_text: "synthetic",
-                        body: "synthetic"
-                    }
-                )
-                .await,
-                Err(super::DocumentCommentError::Postgres(_))
-            ));
-            assert!(matches!(
-                set_resolved(&db, id, true).await,
-                Err(super::DocumentCommentError::Postgres(_))
-            ));
-            assert!(matches!(
-                create_with_communication(
-                    &db,
-                    &super::NewLinkedComment {
-                        project_id: id,
-                        review_document_id: id,
-                        person_id: id,
-                        direction: "inbound",
-                        anchor_start: 0,
-                        anchor_end: 1,
-                        quoted_text: "synthetic",
-                        body: "synthetic"
-                    }
-                )
-                .await,
-                Err(super::DocumentCommentError::Postgres(_))
-            ));
-        })
-        .await;
-    }
-
-    #[tokio::test]
     async fn create_inserts_an_unresolved_comment_readable_by_document() {
         crate::test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let review_document_id = seed_review_document(&surreal).await;
-            let person_id = seed_commenter(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let review_document_id = seed_review_document(&application_store).await;
+            let person_id = seed_commenter(&application_store).await;
 
             let id = create(
-                &surreal,
+                &application_store,
                 &NewComment {
                     review_document_id,
                     person_id,
@@ -553,7 +409,7 @@ mod tests {
             .await
             .unwrap();
 
-            let rows = for_review_document(&surreal, review_document_id)
+            let rows = for_review_document(&application_store, review_document_id)
                 .await
                 .unwrap();
             assert_eq!(rows.len(), 1);
@@ -570,22 +426,22 @@ mod tests {
         use crate::communications::{channel, direction};
 
         crate::test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let review_document_id = seed_review_document(&surreal).await;
-            let notation_id = review_documents::by_id(&surreal, review_document_id)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let review_document_id = seed_review_document(&application_store).await;
+            let notation_id = review_documents::by_id(&application_store, review_document_id)
                 .await
                 .unwrap()
                 .unwrap()
                 .notation_id;
-            let project_id = crate::notations::find_by_id(&surreal, notation_id)
+            let project_id = crate::notations::find_by_id(&application_store, notation_id)
                 .await
                 .unwrap()
                 .unwrap()
                 .project_id;
-            let person_id = seed_commenter(&surreal).await;
+            let person_id = seed_commenter(&application_store).await;
 
             let created = create_with_communication(
-                &surreal,
+                &application_store,
                 &super::NewLinkedComment {
                     project_id,
                     review_document_id,
@@ -601,7 +457,7 @@ mod tests {
             .unwrap();
 
             // The satellite carries the anchor and points at the spine.
-            let comment = super::find_by_id(&surreal, created.comment_id)
+            let comment = super::find_by_id(&application_store, created.comment_id)
                 .await
                 .unwrap()
                 .unwrap();
@@ -609,7 +465,7 @@ mod tests {
             assert_eq!(comment.quoted_text, "Libra");
 
             // The spine row is in the matter's conversation log.
-            let thread = crate::communications::for_project(&surreal, project_id)
+            let thread = crate::communications::for_project(&application_store, project_id)
                 .await
                 .unwrap();
             assert_eq!(thread.len(), 1);
@@ -625,11 +481,11 @@ mod tests {
     #[tokio::test]
     async fn set_resolved_flips_the_flag() {
         crate::test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let review_document_id = seed_review_document(&surreal).await;
-            let person_id = seed_commenter(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let review_document_id = seed_review_document(&application_store).await;
+            let person_id = seed_commenter(&application_store).await;
             let id = create(
-                &surreal,
+                &application_store,
                 &NewComment {
                     review_document_id,
                     person_id,
@@ -642,7 +498,10 @@ mod tests {
             .await
             .unwrap();
 
-            let updated = set_resolved(&surreal, id, true).await.unwrap().unwrap();
+            let updated = set_resolved(&application_store, id, true)
+                .await
+                .unwrap()
+                .unwrap();
             assert!(updated.resolved);
         })
         .await;

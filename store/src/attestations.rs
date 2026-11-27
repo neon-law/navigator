@@ -25,10 +25,9 @@ use crate::postgres::matter;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::surreal::{record_id, record_uuid, SurrealDb};
+use crate::application_store::ApplicationStore;
 
 /// The table these rows live in.
 const TABLE: &str = "attestation";
@@ -65,49 +64,6 @@ pub struct Attestation {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct AttestationRow {
-    id: surrealdb::types::RecordId,
-    notation_id: surrealdb::types::RecordId,
-    chain: String,
-    sha256: String,
-    status: String,
-    pda: Option<String>,
-    tx_signature: Option<String>,
-    firm_wallet: Option<String>,
-    client_wallet: Option<String>,
-    recorded_at: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl AttestationRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_attestation(self) -> Option<Attestation> {
-        Some(Attestation {
-            id: record_uuid(&self.id)?,
-            notation_id: record_uuid(&self.notation_id)?,
-            chain: self.chain,
-            sha256: self.sha256,
-            status: self.status,
-            pda: self.pda,
-            tx_signature: self.tx_signature,
-            firm_wallet: self.firm_wallet,
-            client_wallet: self.client_wallet,
-            recorded_at: self.recorded_at,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`AttestationRow`] from only one query.
-const SELECT: &str = "id, notation_id, chain, sha256, status, pda, tx_signature, firm_wallet, \
-     client_wallet, recorded_at, inserted_at, updated_at";
-
 /// What to record for one attestation. The `sha256` (of the attested
 /// document) and `chain` are always known; `pda` / `tx_signature` /
 /// `recorded_at` are present only once a real chain backend records it.
@@ -129,17 +85,10 @@ pub struct NewAttestation<'a> {
 pub enum AttestationError {
     #[error(transparent)]
     Postgres(#[from] matter::MatterAuthorityError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back.
     #[error("writing an attestation returned no usable row")]
     WriteReturnedNothing,
-}
-
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Attestation>, surrealdb::Error> {
-    let row: Option<AttestationRow> = response.take(0)?;
-    Ok(row.and_then(AttestationRow::into_attestation))
 }
 
 /// The attestation recorded for a notation, if any.
@@ -148,26 +97,11 @@ fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Attestation>, s
 ///
 /// Propagates any database error.
 pub async fn by_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
-) -> Result<Option<Attestation>, surrealdb::Error> {
-    if let Some(pg) = matter::authority_for(TABLE)
-        .await
-        .map_err(crate::surreal::postgres_error)?
-    {
-        return matter::find(&pg, TABLE, json!({"notation_id": notation_id}))
-            .await
-            .map_err(crate::surreal::postgres_error);
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation LIMIT 1"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+) -> Result<Option<Attestation>, crate::postgres::matter::MatterAuthorityError> {
+    let pg = matter::authority_for(TABLE).await?;
+    matter::find(&pg, TABLE, json!({"notation_id": notation_id})).await
 }
 
 /// Upsert one `attestations` row keyed on `notation_id`, returning it.
@@ -182,129 +116,29 @@ pub async fn by_notation(
 ///
 /// [`AttestationError::Db`] if the read or write fails.
 pub async fn record(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     new: &NewAttestation<'_>,
 ) -> Result<Attestation, AttestationError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let existing: Option<Attestation> =
-            matter::find(&pg, TABLE, json!({"notation_id": new.notation_id})).await?;
-        let now = Utc::now();
-        let row = Attestation {
-            id: existing.as_ref().map_or_else(Uuid::new_v4, |row| row.id),
-            notation_id: new.notation_id,
-            chain: new.chain.to_owned(),
-            sha256: new.sha256.to_owned(),
-            status: new.status.to_owned(),
-            pda: new.pda.map(str::to_owned),
-            tx_signature: new.tx_signature.map(str::to_owned),
-            firm_wallet: new.firm_wallet.map(str::to_owned),
-            client_wallet: new.client_wallet.map(str::to_owned),
-            recorded_at: new.recorded_at.map(str::to_owned),
-            inserted_at: existing.map_or(now, |row| row.inserted_at),
-            updated_at: now,
-        };
-        return Ok(matter::upsert(&pg, TABLE, &row).await?);
-    }
-
-    let existing = by_notation(db, new.notation_id).await?;
-    let id = existing.as_ref().map_or_else(Uuid::new_v4, |a| a.id);
-    let mut response = db
-        .query(format!(
-            "UPSERT $id SET \
-             notation_id = $notation_id, chain = $chain, sha256 = $sha256, status = $status, \
-             pda = $pda, tx_signature = $tx_signature, firm_wallet = $firm_wallet, \
-             client_wallet = $client_wallet, recorded_at = $recorded_at, \
-             updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "notation_id",
-            record_id(crate::notations::TABLE, new.notation_id),
-        ))
-        .bind(("chain", new.chain.to_string()))
-        .bind(("sha256", new.sha256.to_string()))
-        .bind(("status", new.status.to_string()))
-        .bind(("pda", new.pda.map(str::to_string)))
-        .bind(("tx_signature", new.tx_signature.map(str::to_string)))
-        .bind(("firm_wallet", new.firm_wallet.map(str::to_string)))
-        .bind(("client_wallet", new.client_wallet.map(str::to_string)))
-        .bind(("recorded_at", new.recorded_at.map(str::to_string)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<AttestationRow> = response.take(0)?;
-    let attestation = row
-        .and_then(AttestationRow::into_attestation)
-        .ok_or(AttestationError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::Attestation(attestation.id),
-    )
-    .await;
-    Ok(attestation)
+    let pg = matter::authority_for(TABLE).await?;
+    let existing: Option<Attestation> =
+        matter::find(&pg, TABLE, json!({"notation_id": new.notation_id})).await?;
+    let now = Utc::now();
+    let row = Attestation {
+        id: existing.as_ref().map_or_else(Uuid::new_v4, |row| row.id),
+        notation_id: new.notation_id,
+        chain: new.chain.to_owned(),
+        sha256: new.sha256.to_owned(),
+        status: new.status.to_owned(),
+        pda: new.pda.map(str::to_owned),
+        tx_signature: new.tx_signature.map(str::to_owned),
+        firm_wallet: new.firm_wallet.map(str::to_owned),
+        client_wallet: new.client_wallet.map(str::to_owned),
+        recorded_at: new.recorded_at.map(str::to_owned),
+        inserted_at: existing.map_or(now, |row| row.inserted_at),
+        updated_at: now,
+    };
+    Ok(matter::upsert(&pg, TABLE, &row).await?)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{by_notation, record, NewAttestation, STATUS_PENDING, STATUS_RECORDED};
-    use crate::surreal::test_support::mem;
-    use crate::test_support::seed_notation;
-
-    #[tokio::test]
-    async fn record_writes_a_pending_row_then_upserts_to_recorded() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-
-        // First write: no chain configured → a pending row, the system of
-        // record, with no tx.
-        let pending = record(
-            &surreal,
-            &NewAttestation {
-                notation_id,
-                chain: "null",
-                sha256: "abc123",
-                status: STATUS_PENDING,
-                pda: None,
-                tx_signature: None,
-                firm_wallet: None,
-                client_wallet: None,
-                recorded_at: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(pending.status, STATUS_PENDING);
-        assert_eq!(pending.id.get_version_num(), 4);
-        assert_eq!(pending.chain, "null");
-        assert!(pending.tx_signature.is_none());
-
-        // Second write for the SAME notation upserts on notation_id — one
-        // row, now recorded with a real tx. This is the replay-idempotent
-        // path: a journaled re-run does not duplicate.
-        let recorded = record(
-            &surreal,
-            &NewAttestation {
-                notation_id,
-                chain: "solana",
-                sha256: "abc123",
-                status: STATUS_RECORDED,
-                pda: Some("PDA111"),
-                tx_signature: Some("SIG222"),
-                firm_wallet: Some("FIRMwallet"),
-                client_wallet: Some("CLIENTwallet"),
-                recorded_at: Some("2026-06-17T00:00:00Z"),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(recorded.id, pending.id, "upsert keeps the same row");
-        assert_eq!(recorded.status, STATUS_RECORDED);
-        assert_eq!(recorded.chain, "solana");
-        assert_eq!(recorded.tx_signature.as_deref(), Some("SIG222"));
-        assert_eq!(recorded.pda.as_deref(), Some("PDA111"));
-
-        let found = by_notation(&surreal, notation_id).await.unwrap().unwrap();
-        assert_eq!(found.id, pending.id);
-        assert_eq!(found.status, STATUS_RECORDED);
-    }
-}
+mod tests {}

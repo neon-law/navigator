@@ -66,7 +66,7 @@ struct Args {
 
 /// Run the fuzzy search and return the MCP `result` payload.
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     scope: &ReadScope,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
@@ -97,7 +97,7 @@ pub async fn call(
     // The `LIKE` predicate, ordering, and cap live in the shared People
     // command boundary; this tool owns only the arg validation above and
     // the model-facing summary below.
-    let rows = search_people(surreal, name, email, MAX_RESULTS).await?;
+    let rows = search_people(application_store, name, email, MAX_RESULTS).await?;
 
     let persons: Vec<Value> = rows
         .iter()
@@ -153,13 +153,16 @@ mod tests {
     use serde_json::json;
 
     async fn seed(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         name: &str,
         email: &str,
     ) -> store::persons::Person {
-        store::persons::create(surreal, &store::persons::NewPerson::new(name, email))
-            .await
-            .unwrap()
+        store::persons::create(
+            application_store,
+            &store::persons::NewPerson::new(name, email),
+        )
+        .await
+        .unwrap()
     }
 
     #[test]
@@ -177,12 +180,16 @@ mod tests {
     #[tokio::test]
     async fn fuzzy_name_match_is_case_insensitive_and_substring() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Libra", "libra@example.com").await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Libra", "libra@example.com").await;
             // Lowercased fragment of the *middle* of the name.
-            let result = call(&surreal, &ReadScope::Deployment, &json!({ "name": "ibr" }))
-                .await
-                .unwrap();
+            let result = call(
+                &application_store,
+                &ReadScope::Deployment,
+                &json!({ "name": "ibr" }),
+            )
+            .await
+            .unwrap();
             assert_eq!(result["structuredContent"]["count"], 1);
             assert_eq!(result["structuredContent"]["persons"][0]["name"], "Libra");
         })
@@ -192,11 +199,11 @@ mod tests {
     #[tokio::test]
     async fn fuzzy_email_match_works_on_domain_fragment() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Libra", "libra@neonlaw.com").await;
-            seed(&surreal, "Taurus", "taurus@example.com").await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Libra", "libra@neonlaw.com").await;
+            seed(&application_store, "Taurus", "taurus@example.com").await;
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Deployment,
                 &json!({ "email": "neonlaw" }),
             )
@@ -214,15 +221,19 @@ mod tests {
     #[tokio::test]
     async fn name_match_returns_multiple_rows_sorted_by_name() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             // Insert out of alphabetical order so we can prove the sort.
             // All three signs share the substring "ari".
-            seed(&surreal, "Sagittarius", "sagittarius@example.com").await;
-            seed(&surreal, "Aquarius", "aquarius@example.com").await;
-            seed(&surreal, "Aries", "aries@example.com").await;
-            let result = call(&surreal, &ReadScope::Deployment, &json!({ "name": "ari" }))
-                .await
-                .unwrap();
+            seed(&application_store, "Sagittarius", "sagittarius@example.com").await;
+            seed(&application_store, "Aquarius", "aquarius@example.com").await;
+            seed(&application_store, "Aries", "aries@example.com").await;
+            let result = call(
+                &application_store,
+                &ReadScope::Deployment,
+                &json!({ "name": "ari" }),
+            )
+            .await
+            .unwrap();
             assert_eq!(result["structuredContent"]["count"], 3);
             let names: Vec<&str> = result["structuredContent"]["persons"]
                 .as_array()
@@ -238,12 +249,12 @@ mod tests {
     #[tokio::test]
     async fn both_name_and_email_are_anded() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Aquarius", "aquarius@neonlaw.com").await;
-            seed(&surreal, "Aries", "aries@example.com").await;
-            seed(&surreal, "Sagittarius", "sagittarius@neonlaw.com").await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Aquarius", "aquarius@neonlaw.com").await;
+            seed(&application_store, "Aries", "aries@example.com").await;
+            seed(&application_store, "Sagittarius", "sagittarius@neonlaw.com").await;
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Deployment,
                 &json!({ "name": "ari", "email": "neonlaw" }),
             )
@@ -264,8 +275,8 @@ mod tests {
     #[tokio::test]
     async fn missing_both_keys_is_invalid_arguments() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let err = call(&surreal, &ReadScope::Deployment, &json!({}))
+            let application_store = crate::test_fixtures::handle();
+            let err = call(&application_store, &ReadScope::Deployment, &json!({}))
                 .await
                 .unwrap_err();
             match err {
@@ -281,9 +292,9 @@ mod tests {
     #[tokio::test]
     async fn whitespace_only_keys_are_treated_as_missing() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             let err = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Deployment,
                 &json!({ "name": "   ", "email": "" }),
             )
@@ -297,10 +308,10 @@ mod tests {
     #[tokio::test]
     async fn whitespace_around_needle_is_trimmed_before_matching() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Libra", "libra@example.com").await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Libra", "libra@example.com").await;
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Deployment,
                 &json!({ "name": "  libra\n" }),
             )
@@ -314,10 +325,10 @@ mod tests {
     #[tokio::test]
     async fn no_match_returns_empty_result_not_an_error() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Libra", "libra@example.com").await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Libra", "libra@example.com").await;
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Deployment,
                 &json!({ "name": "ghost" }),
             )
@@ -341,9 +352,9 @@ mod tests {
     #[tokio::test]
     async fn no_match_with_both_keys_describes_both_in_summary() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Deployment,
                 &json!({ "name": "ghost", "email": "void" }),
             )
@@ -360,13 +371,18 @@ mod tests {
     #[tokio::test]
     async fn results_are_capped_at_max_results() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             let total = MAX_RESULTS + 5;
             for i in 0..total {
-                seed(&surreal, "Aries", &format!("user{i:03}@example.com")).await;
+                seed(
+                    &application_store,
+                    "Aries",
+                    &format!("user{i:03}@example.com"),
+                )
+                .await;
             }
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Deployment,
                 &json!({ "name": "aries" }),
             )
@@ -387,14 +403,14 @@ mod tests {
     #[tokio::test]
     async fn the_client_and_clerk_tiers_are_refused_the_firm_directory() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Libra", "libra@neonlaw.com").await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Libra", "libra@neonlaw.com").await;
             for role in [store::persons::Role::Client, store::persons::Role::Clerk] {
                 let scope = ReadScope::Membership {
                     person_id: uuid::Uuid::now_v7(),
                     role,
                 };
-                let err = call(&surreal, &scope, &json!({ "email": "neonlaw" }))
+                let err = call(&application_store, &scope, &json!({ "email": "neonlaw" }))
                     .await
                     .unwrap_err();
                 match err {
@@ -410,10 +426,10 @@ mod tests {
     #[tokio::test]
     async fn an_unlinked_caller_is_refused_the_firm_directory() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Libra", "libra@neonlaw.com").await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Libra", "libra@neonlaw.com").await;
             let err = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Unlinked,
                 &json!({ "email": "neonlaw" }),
             )
@@ -430,8 +446,8 @@ mod tests {
     #[tokio::test]
     async fn the_firm_tiers_read_the_directory() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Libra", "libra@neonlaw.com").await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Libra", "libra@neonlaw.com").await;
             let scopes = [
                 ReadScope::Membership {
                     person_id: uuid::Uuid::now_v7(),
@@ -445,7 +461,7 @@ mod tests {
                 },
             ];
             for scope in &scopes {
-                let r = call(&surreal, scope, &json!({ "email": "neonlaw" }))
+                let r = call(&application_store, scope, &json!({ "email": "neonlaw" }))
                     .await
                     .unwrap();
                 assert_eq!(r["structuredContent"]["count"], 1, "{scope:?}");
@@ -457,10 +473,10 @@ mod tests {
     #[tokio::test]
     async fn summary_text_uses_singular_for_one_match() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Libra", "libra@example.com").await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Libra", "libra@example.com").await;
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Deployment,
                 &json!({ "name": "libra" }),
             )
@@ -476,12 +492,16 @@ mod tests {
     #[tokio::test]
     async fn summary_text_uses_plural_for_multiple_matches() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Aquarius", "aquarius@example.com").await;
-            seed(&surreal, "Aries", "aries@example.com").await;
-            let result = call(&surreal, &ReadScope::Deployment, &json!({ "name": "ari" }))
-                .await
-                .unwrap();
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Aquarius", "aquarius@example.com").await;
+            seed(&application_store, "Aries", "aries@example.com").await;
+            let result = call(
+                &application_store,
+                &ReadScope::Deployment,
+                &json!({ "name": "ari" }),
+            )
+            .await
+            .unwrap();
             let text = result["content"][0]["text"].as_str().unwrap();
             assert!(text.starts_with("Found 2 people:"), "got: {text}");
         })

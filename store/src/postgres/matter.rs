@@ -78,7 +78,7 @@ pub enum MatterAuthorityError {
     Unavailable,
     /// The family historical import has not been activated.
     #[error(transparent)]
-    Family(#[from] crate::postgres_backfill::family::FamilyError),
+    Family(#[from] crate::postgres::history::FamilyError),
     /// The write collided with the named unique index.
     #[error("the matter record collides with {0}")]
     Conflict(String),
@@ -112,32 +112,27 @@ pub(crate) type Op<'a, T> = std::pin::Pin<
 >;
 
 /// The pool to dispatch to, or `None` in a process without PostgreSQL.
-pub(crate) fn authority() -> Op<'static, Option<PostgresDb>> {
+pub(crate) fn authority() -> Op<'static, PostgresDb> {
     Box::pin(authority_now())
 }
 
 /// Select a table's PostgreSQL authority only after its exact import receipt.
-pub(crate) fn authority_for(table: &'static str) -> Op<'static, Option<PostgresDb>> {
+pub(crate) fn authority_for(table: &'static str) -> Op<'static, PostgresDb> {
     Box::pin(async move {
-        if crate::postgres_mirror::reading_source() {
-            return Ok(None);
-        }
         let pg = authority_now().await?;
-        if let Some(pg) = &pg {
-            let family = crate::postgres_backfill::family::Family::for_table(table)
-                .ok_or(crate::postgres_backfill::family::FamilyError::Receipt)?;
-            crate::postgres_backfill::family::require_scope(pg, family).await?;
-        }
+        let family = crate::postgres::history::Family::for_table(table)
+            .ok_or(crate::postgres::history::FamilyError::Receipt)?;
+        crate::postgres::history::require_scope(&pg, family).await?;
         Ok(pg)
     })
 }
 
-async fn authority_now() -> Result<Option<PostgresDb>, MatterAuthorityError> {
+async fn authority_now() -> Result<PostgresDb, MatterAuthorityError> {
     #[cfg(test)]
     if let Ok(pg) = TEST_MATTER_DB.try_with(Clone::clone) {
-        return Ok(Some(pg));
+        return Ok(pg);
     }
-    PostgresDb::configured()
+    PostgresDb::application()
         .await
         .map_err(|_| MatterAuthorityError::Unavailable)
 }
@@ -292,7 +287,7 @@ fn registered(
     TABLES
         .iter()
         .find(|name| **name == table)
-        .and_then(|name| crate::postgres_mirror::records::columns(name).map(|cols| (*name, cols)))
+        .and_then(|name| crate::postgres::record_metadata::columns(name).map(|cols| (*name, cols)))
         .ok_or(MatterAuthorityError::Unregistered {
             table: "matter",
             column: table.to_owned(),

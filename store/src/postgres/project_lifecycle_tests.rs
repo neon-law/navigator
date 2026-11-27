@@ -1,10 +1,117 @@
+use crate::postgres::PostgresDb;
+
+/// The three fields owned together by the lifecycle ledger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LifecycleProjection {
+    pub status: String,
+    pub closed_at: Option<String>,
+    pub closure_reason: Option<String>,
+}
+
+struct ProjectionEvent {
+    from_status: Option<String>,
+    state: LifecycleProjection,
+    effective_at: Option<DateTime<Utc>>,
+    recorded_at: Option<DateTime<Utc>>,
+    reason: Option<String>,
+    attesting_person_id: Option<Uuid>,
+}
+
+impl ProjectionEvent {
+    fn read(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+        Ok(Self {
+            from_status: row.try_get("from_status")?,
+            state: LifecycleProjection {
+                status: row.try_get("to_status")?,
+                closed_at: row.try_get("closed_at")?,
+                closure_reason: row.try_get("closure_reason")?,
+            },
+            effective_at: row.try_get("effective_at")?,
+            recorded_at: row.try_get("recorded_at")?,
+            reason: row.try_get("reason")?,
+            attesting_person_id: row.try_get("attesting_person_id")?,
+        })
+    }
+}
+
+fn coherent_states(events: &[ProjectionEvent]) -> Option<Vec<LifecycleProjection>> {
+    let mut states: Vec<LifecycleProjection> = Vec::with_capacity(events.len());
+    for event in events {
+        let state = &event.state;
+        if !matches!(state.status.as_str(), "open" | "closed" | "archived")
+            || (state.status == "open"
+                && (state.closed_at.is_some() || state.closure_reason.is_some()))
+        {
+            return None;
+        }
+        if let Some(previous) = states.last() {
+            if event.from_status.as_deref() != Some(previous.status.as_str())
+                || event.effective_at.is_none()
+                || event.recorded_at.is_none()
+                || (previous.status == "archived" && state.status != "archived")
+            {
+                return None;
+            }
+            match state.status.as_str() {
+                "open"
+                    if previous.status == "open"
+                        || event.reason.as_deref() != Some("new_matter_event")
+                        || event.attesting_person_id.is_none() =>
+                {
+                    return None
+                }
+                "closed" | "archived"
+                    if state
+                        .closed_at
+                        .as_deref()
+                        .is_none_or(|value| DateTime::parse_from_rfc3339(value).is_err()) =>
+                {
+                    return None
+                }
+                "closed"
+                    if event.reason != state.closure_reason
+                        || (previous.status == "open" && state.closure_reason.is_none()) =>
+                {
+                    return None
+                }
+                "archived"
+                    if event.reason.is_some()
+                        || state.closure_reason != previous.closure_reason =>
+                {
+                    return None
+                }
+                _ => {}
+            }
+        } else if event.from_status.is_some() {
+            return None;
+        }
+        states.push(state.clone());
+    }
+    Some(states)
+}
+
+/// Check the entire ordered ledger and its committed projection, without
+/// inferring dates or changing historical baseline evidence.
+pub(crate) async fn verified_projection_history(
+    pg: &PostgresDb,
+    project: Uuid,
+    projection: &LifecycleProjection,
+) -> Result<Option<Vec<LifecycleProjection>>, sqlx::Error> {
+    let events = sqlx::query("SELECT from_status,to_status,closed_at,closure_reason,effective_at,recorded_at,reason,attesting_person_id FROM project_status_transition WHERE project_id=$1 ORDER BY sequence")
+        .bind(project).fetch_all(pg.pool()).await?
+        .iter().map(ProjectionEvent::read).collect::<Result<Vec<_>, _>>()?;
+    Ok(coherent_states(&events)
+        .filter(|states| states.last().is_none_or(|last| last == projection)))
+}
+
 use super::*;
 
 async fn fixture() -> (PostgresDb, Uuid, Uuid) {
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+    let (options, database) = crate::postgres::fixtures::fresh_schema()
         .await
         .expect("required PostgreSQL");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     crate::postgres::fixtures::activate_application(&pg).await;
     let (person, notation, _) = crate::postgres::fixtures::workflow_fixture(&pg).await;
     let project = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")

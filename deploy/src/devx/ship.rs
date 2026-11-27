@@ -141,7 +141,6 @@ pub(super) const INLINE_ENV_WEB_KEYS: &[&str] = &[
     "NAVIGATOR_EMAIL_BACKEND",             // inline env
     "NAVIGATOR_SIGNATURE_PROVIDER",        // inline env → docusign
     "GOOGLE_OAUTH_CLIENT_IDS",             // inline env allowlist
-    "RESTATE_IDENTITY_KEY",                // public Restate Cloud request key
     "NAVIGATOR_SOCIAL_OAUTH_REDIRECT_URI", // inline env → the social OAuth callback
     store::deployment::GITHUB_AUTOMATION_HOME_FLAG,
     store::deployment::SMS_TEST_RECIPIENTS_FLAG,
@@ -377,8 +376,6 @@ const PLAINTEXT_SUBSTITUTIONS: &[(&str, &str)] = &[
     // where the images live.
     ("NAVIGATOR_WEB_IMAGE", "NAVIGATOR_WEB_IMAGE"),
     ("NAVIGATOR_PUBLIC_HOST", "NAVIGATOR_PUBLIC_HOST"),
-    ("NAVIGATOR_WORKFLOWS_HOST", "NAVIGATOR_WORKFLOWS_HOST"),
-    ("YOUR_RESTATE_IDENTITY_KEY", "RESTATE_IDENTITY_KEY"),
     ("YOUR_DOCUMENTS_BUCKET", "NAVIGATOR_DOCUMENTS_BUCKET"),
     ("YOUR_APPLICATIONS_BUCKET", "NAVIGATOR_APPLICATIONS_BUCKET"),
     ("YOUR_ASSETS_BUCKET", "NAVIGATOR_ASSETS_BUCKET"),
@@ -440,17 +437,7 @@ where
     substitutions.extend(
         PLAINTEXT_SUBSTITUTIONS
             .iter()
-            .map(|&(token, env)| {
-                if matches!(env, "RESTATE_IDENTITY_KEY" | "NAVIGATOR_WORKFLOWS_HOST") {
-                    Ok(Substitution {
-                        token,
-                        env,
-                        value: String::new(),
-                    })
-                } else {
-                    required_substitution(deployment, token, env, &get)
-                }
-            })
+            .map(|&(token, env)| required_substitution(deployment, token, env, &get))
             .collect::<Result<Vec<_>>>()?,
     );
     substitutions.extend(slack_channel_substitutions(deployment, &get)?);
@@ -468,7 +455,6 @@ where
         value: web_patch_entry("postgres/web/web-dbos.yaml"),
     });
     substitutions.extend(dbos_schedule_substitutions(deployment, &get)?);
-    substitutions.push(timer_env_substitution(&get)?);
     substitutions.extend(replica_substitutions(deployment, &get)?);
     substitutions.push(cohost_port_substitution(&get)?);
     // Not in PLAINTEXT_SUBSTITUTIONS and not read from `get` at all: the additional brand
@@ -708,33 +694,6 @@ where
         }
     }
     Ok(env)
-}
-
-const DBOS_TIMER_ENV_TOKEN: &str = "            # NAVIGATOR_DBOS_TIMER_ENV\n";
-
-fn timer_env_substitution<F>(get: &F) -> Result<Substitution>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    use std::fmt::Write as _;
-    let mut value = String::new();
-    for key in [
-        workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
-        workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
-    ] {
-        {
-            let enabled = workflows::flags::schedule_enabled(key, get)?;
-            let _ = write!(
-                value,
-                "            - name: {key}\n              value: \"{enabled}\"\n"
-            );
-        }
-    }
-    Ok(Substitution {
-        token: DBOS_TIMER_ENV_TOKEN,
-        env: store::workflow_engine::COHOST_ENV,
-        value,
-    })
 }
 
 /// The secret each switched-on schedule needs before `web` can boot with it.
@@ -1764,11 +1723,6 @@ fn service_images_with(
         &rendered.path().join("k8s/postgres/migrate"),
         "image: navigator-migrate",
         &format!("image: {}", cfg.web_image(tag)),
-    )?;
-    replace_in_tree(
-        &rendered.path().join("k8s/postgres/mirror"),
-        "image: navigator-ops ",
-        &format!("image: {}/navigator-ops:{tag} ", cfg.registry()),
     )?;
     replace_in_tree(
         &rendered.path().join("k8s/postgres/admission"),
@@ -3965,7 +3919,6 @@ fn reconcile_ordered_services(
 }
 
 /// Completion of the preceding release admission makes automatic Source repair obsolete.
-/// Explicit import and recovery manifests remain available to operators.
 fn retire_automatic_mirror_recovery(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
     for resource in ["cronjob", "rules.monitoring.googleapis.com"] {
         exec(
@@ -7085,24 +7038,6 @@ mod tests {
     }
 
     #[test]
-    fn mirror_recurring_recovery_uses_the_same_projection_and_least_privilege_as_one_shot() {
-        let one_shot: serde_json::Value = serde_yaml::from_str(include_str!(
-            "../../../k8s/postgres/mirror/mirror-reconcile-job.yaml"
-        ))
-        .unwrap();
-        let recurring: serde_json::Value = serde_yaml::from_str(include_str!(
-            "../../../k8s/postgres/mirror/recovery/cronjob.yaml"
-        ))
-        .unwrap();
-        let mut source = one_shot["spec"]["template"].clone();
-        let target = &recurring["spec"]["jobTemplate"]["spec"]["template"];
-        source["spec"]["containers"][0]["image"] = target["spec"]["containers"][0]["image"].clone();
-        assert_eq!(&source, target);
-        assert_eq!(recurring["spec"]["concurrencyPolicy"], "Forbid");
-        assert_eq!(recurring["spec"]["jobTemplate"]["spec"]["backoffLimit"], 1);
-    }
-
-    #[test]
     fn neutral_operator_digest_refuses_a_retained_source_alias() {
         let legacy = format!("sha256:{}", "a".repeat(64));
         let neutral = format!("sha256:{}", "b".repeat(64));
@@ -7120,12 +7055,7 @@ mod tests {
 
     #[test]
     fn admission_and_operator_jobs_use_the_selected_release_digest() {
-        for service in [
-            "postgres/mirror/production",
-            "postgres/admission/production",
-        ] {
-            service_job_digest_is_pinned(service);
-        }
+        service_job_digest_is_pinned("postgres/admission/production");
     }
 
     fn service_job_digest_is_pinned(service_name: &str) {
@@ -7383,21 +7313,11 @@ mod tests {
     }
 
     fn native_ship_env(key: &str) -> Option<String> {
-        use store::workflow_engine as engine;
         match key {
-            engine::COHOST_ENV | engine::DBOS_ENABLED_ENV => Some("true".into()),
-            engine::ENGINE_ENV => Some("dbos".into()),
             "NAVIGATOR_ENVIRONMENT" => Some("dev".into()),
             "NAVIGATOR_GKE_CLUSTER_NAME" => Some("synthetic-cluster".into()),
-            "RESTATE_IDENTITY_KEY" | "NAVIGATOR_WORKFLOWS_HOST" => None,
             "BILLING_EXPORT_TABLE" => Some("example.billing.exports".into()),
             "BIGQUERY_PROJECT" => Some("example-project".into()),
-            _ if engine::WORKFLOWS
-                .iter()
-                .any(|workflow| workflow.flag == key) =>
-            {
-                Some("true".into())
-            }
             _ => env_getter(FULL_ENV)(key),
         }
     }
@@ -7507,7 +7427,7 @@ mod tests {
     fn disabled_billing_needs_no_provider_configuration_and_retires_triggers() {
         for value in [None, Some("false"), Some("true"), Some("stale")] {
             let lookup = |key: &str| {
-                if store::workflow_engine::disabled_billing_flag(key) {
+                if store::disabled_billing::disabled_billing_flag(key) {
                     value.map(str::to_owned)
                 } else {
                     env_getter(FULL_ENV)(key)

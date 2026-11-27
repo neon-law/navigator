@@ -145,18 +145,18 @@ struct Scoped {
 /// distinguishable error.
 #[cfg(feature = "server")]
 async fn load_scoped(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     review_id: uuid::Uuid,
     person_id: Option<uuid::Uuid>,
     store_role: store::persons::Role,
 ) -> Result<Option<Scoped>, String> {
-    let Some(review) = store::contract_reviews::by_id(surreal, review_id)
+    let Some(review) = store::contract_reviews::by_id(application_store, review_id)
         .await
         .map_err(|e| e.to_string())?
     else {
         return Ok(None);
     };
-    let Some(notation) = store::notations::find_by_id(surreal, review.notation_id)
+    let Some(notation) = store::notations::find_by_id(application_store, review.notation_id)
         .await
         .map_err(|e| e.to_string())?
     else {
@@ -164,7 +164,7 @@ async fn load_scoped(
     };
     // A lawyer not disclosed to the matter gets a 404, not a peek.
     if !store::access::can_see_project_as_lawyer(
-        surreal,
+        application_store,
         person_id,
         store_role,
         notation.project_id,
@@ -173,7 +173,7 @@ async fn load_scoped(
     {
         return Ok(None);
     }
-    let Some(playbook) = store::playbooks::by_id(surreal, review.playbook_id)
+    let Some(playbook) = store::playbooks::by_id(application_store, review.playbook_id)
         .await
         .map_err(|e| e.to_string())?
     else {
@@ -231,14 +231,14 @@ pub async fn get_contract_review() -> Result<ContractReviewView, ServerFnError> 
     };
     let id = review_id.to_string();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let map_err = |e: String| ServerFnError::new(e.clone());
 
     let Some(Scoped {
         review,
         notation,
         playbook,
-    }) = load_scoped(&surreal, review_id, person_id, store_role)
+    }) = load_scoped(&application_store, review_id, person_id, store_role)
         .await
         .map_err(map_err)?
     else {
@@ -246,7 +246,7 @@ pub async fn get_contract_review() -> Result<ContractReviewView, ServerFnError> 
     };
 
     let findings = store::contract_reviews::findings_of(&review).unwrap_or_default();
-    let acted = store::contract_reviews::acted_finding_indices(&surreal, notation.id)
+    let acted = store::contract_reviews::acted_finding_indices(&application_store, notation.id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let all_acted = (0..findings.len()).all(|i| acted.contains(&i));

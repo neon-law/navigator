@@ -24,29 +24,19 @@
 //! construction — firm-scale rows, not ledger-scale — and each source table
 //! is read in full, ordered, before it is batched into the loaders.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::conflicts::{self, NodeRef, ParityEdge};
+use crate::conflicts::NodeRef;
 use crate::postgres::PostgresDb;
-use crate::postgres_backfill::BackfillError;
-use crate::surreal::SurrealDb;
-
-/// The graph arm's checkpoint name in `mirror_backfill_checkpoint`.
-pub(crate) const GRAPH_MIRROR: &str = "graph_projection";
 
 /// Source rows per loader payload. The loader's `UNWIND` is one Cypher
 /// statement per batch; this bounds a statement's size without making
 /// thousands of round trips.
 const LOAD_BATCH: usize = 500;
-
-/// Anchors per parity pass, after sorting for determinism. A walk's cost is
-/// its frontier, not its anchor list, and two hundred anchors cover every
-/// entity in a firm's graph and most persons that hold a relationship.
-const MAX_PARITY_ANCHORS: usize = 200;
 
 /// Age labels hold one vertex per canonical table; the label is the table's
 /// capitalized name, and the vertex key is the row's Surreal record UUID.
@@ -100,56 +90,15 @@ pub enum GraphError {
     SurrealTraversal,
 }
 
-/// The PostgreSQL pool the graph runs on: `Some` whenever the deployment
-/// has configured PostgreSQL, which then holds every table in
-/// [`AUTHORITATIVE_TABLES`] — rows in PostgreSQL, edges in the
-/// `navigator_graph` projection, the conflict walk in Apache AGE — and
-/// SurrealDB receives nothing.
-///
-/// `None` is the one remaining Surreal graph path: a deployment that has
-/// not configured PostgreSQL at all, the shape every Surreal-only fixture
-/// boot has, keeps the graph tables in SurrealDB and walks them with the
-/// SurrealQL traversal. When PostgreSQL is configured but unreachable the
-/// call fails: a graph write may not silently vanish, and a read may not
-/// silently answer from a stale copy.
-///
-/// # Errors
-///
-/// PostgreSQL is configured and the connection fails.
-pub(crate) async fn graph_authority() -> Result<Option<PostgresDb>, String> {
+/// The PostgreSQL application pool for graph operations.
+pub(crate) async fn graph_authority() -> Result<PostgresDb, String> {
     #[cfg(test)]
     if let Ok(selected) = TEST_GRAPH_AUTHORITY.try_with(Clone::clone) {
-        return Ok(selected);
+        return selected.ok_or_else(|| "PostgreSQL graph authority is required".to_owned());
     }
-    PostgresDb::configured()
+    PostgresDb::application()
         .await
-        .map_err(|error| format!("the AGE graph needs PostgreSQL and it is unusable: {error}"))
-}
-
-/// The tables PostgreSQL holds wherever it is configured: the two edge tables
-/// the conflict walk traverses, and the graph's party and evidence rows.
-pub(crate) const AUTHORITATIVE_TABLES: &[&str] = &[
-    "entity_role",
-    "relationship",
-    "project_reference",
-    "disclosure",
-    "relationship_log",
-];
-
-/// Whether a SurrealDB row of `table` is no evidence for PostgreSQL: the
-/// table is in [`AUTHORITATIVE_TABLES`] and PostgreSQL holds it, or
-/// PostgreSQL is configured but unreachable. The mirror neither writes nor
-/// deletes such a row, so a missing Surreal row cannot delete an
-/// authoritative one.
-pub(crate) fn holds(table: &str) -> bool {
-    if !AUTHORITATIVE_TABLES.contains(&table) {
-        return false;
-    }
-    #[cfg(test)]
-    if let Ok(selected) = TEST_GRAPH_AUTHORITY.try_with(Clone::clone) {
-        return selected.is_some();
-    }
-    true
+        .map_err(|error| format!("the AGE graph needs PostgreSQL: {error}"))
 }
 
 #[cfg(test)]
@@ -274,32 +223,6 @@ impl GraphValidation {
     }
 }
 
-/// The bounded walk both engines are asked, and how far apart their
-/// answers are.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TraversalParity {
-    /// Anchors both walks started from.
-    pub anchors: usize,
-    /// Distinct normalized edges the AGE walk returned.
-    pub age_edges: usize,
-    /// Distinct normalized edges the Surreal walk returned.
-    pub surreal_edges: usize,
-    /// Edges only the AGE walk reached.
-    pub age_only: usize,
-    /// Edges only the Surreal walk reached.
-    pub surreal_only: usize,
-}
-
-impl TraversalParity {
-    /// Whether both engines returned the same edge set. A graph with no
-    /// anchors — no relationships or entity roles at all — is trivially
-    /// clean on both sides.
-    #[must_use]
-    pub fn is_clean(&self) -> bool {
-        self.age_only == 0 && self.surreal_only == 0
-    }
-}
-
 /// Rebuild the graph from the PostgreSQL mirrors: vertices, then edges,
 /// then indexes, in one transaction so a failed run leaves the previous
 /// graph standing. Indexes are idempotent and run after the commit — the
@@ -310,8 +233,6 @@ impl TraversalParity {
 /// A mirror read or graph write that fails rolls the transaction back and
 /// surfaces as [`GraphError::Store`].
 pub async fn project_graph(pg: &PostgresDb) -> Result<Projection, GraphError> {
-    // The relationship source rows are read before the transaction: their
-    // endpoint links feed both the loader payloads and the anchor list.
     let relationship = relationship_source_rows(pg).await?;
     let mut tx = pg.0.begin().await?;
     sqlx::query("SELECT * FROM graph_clear_navigator() AS t(v)")
@@ -329,7 +250,7 @@ pub async fn project_graph(pg: &PostgresDb) -> Result<Projection, GraphError> {
     );
     projection.edges.insert(
         "RELATIONSHIP".to_string(),
-        load_edges(&mut tx, "relationship", &relationship.payloads).await?,
+        load_edges(&mut tx, "relationship", &relationship).await?,
     );
     projection.edges.insert(
         "WORKS_ON".to_string(),
@@ -396,260 +317,6 @@ pub async fn validate_graph(pg: &PostgresDb) -> Result<GraphValidation, GraphErr
     Ok(validation)
 }
 
-/// Run the bounded conflict walk on both engines over the same anchors and
-/// report the difference between their edge sets. The anchors are the
-/// endpoints of the graph's own conflict edges, read from the PostgreSQL
-/// mirrors, sorted and capped, so both engines walk from the same frontier.
-///
-/// # Errors
-///
-/// A store read or traversal that fails.
-pub async fn compare_traversal(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-) -> Result<TraversalParity, GraphError> {
-    let anchors = parity_anchors(pg).await?;
-    let age = age_parity_edges(pg, &anchors).await?;
-    let surreal_edges = conflicts::parity_edges(surreal, &anchors)
-        .await
-        .map_err(|_| GraphError::SurrealTraversal)?;
-    let age_only = age.difference(&surreal_edges).count();
-    let surreal_only = surreal_edges.difference(&age).count();
-    Ok(TraversalParity {
-        anchors: anchors.len(),
-        age_edges: age.len(),
-        surreal_edges: surreal_edges.len(),
-        age_only,
-        surreal_only,
-    })
-}
-
-/// The backfill's graph arm: one checkpointed group that projects, validates,
-/// and parity-checks the graph, recording what fails by table and UUID only.
-/// Called from [`crate::postgres_backfill::advance`] after the relational
-/// groups, so a run's report carries the graph checkpoint and failures like
-/// any other group's.
-///
-/// # Errors
-///
-/// The error's Display plus its source chain: a recorded failure reason must
-/// say why, not merely that something failed.
-fn error_chain(error: &dyn std::error::Error) -> String {
-    let mut chain = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        chain.push_str(": ");
-        chain.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    chain
-}
-
-/// A store read or write that fails propagates; graph-specific failures
-/// (validation mismatches, traversal differences) are recorded as failure
-/// rows and complete the group, so a run reports them instead of failing.
-pub async fn advance(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-    run_id: Uuid,
-) -> Result<usize, BackfillError> {
-    if crate::postgres_backfill::open_checkpoint(pg, run_id, GRAPH_MIRROR).await? {
-        return Ok(0);
-    }
-
-    // A projection that still matches its sources is left standing: the
-    // same drift contract the mirror groups follow, so a rerun with no
-    // Surreal changes applies nothing and does not rewrite the graph.
-    let compare_surreal = crate::postgres_mirror::compares_authoritative(pg).await?;
-    let mut failures: Vec<(&'static str, Option<String>, String)> = Vec::new();
-    if graph_is_current(surreal, pg, compare_surreal, &mut failures).await {
-        crate::postgres_backfill::complete_checkpoint(pg, run_id, GRAPH_MIRROR, 0, 0, failures)
-            .await?;
-        return Ok(0);
-    }
-    // The pre-check's staleness findings are superseded by the rebuild's own
-    // validation: discard them so a healthy rebuild does not inherit the
-    // pre-rebuild state as failures.
-    failures.clear();
-
-    let mut applied = 0_usize;
-    let mut batches = 0_usize;
-
-    match project_graph(pg).await {
-        Ok(projection) => {
-            applied += projection.total_rows();
-            batches += 1;
-        }
-        Err(error) => failures.push((
-            "graph_projection",
-            None,
-            format!("the AGE graph projection failed: {}", error_chain(&error)),
-        )),
-    }
-
-    match validate_graph(pg).await {
-        Ok(validation) if validation.is_clean() => batches += 1,
-        Ok(validation) => {
-            batches += 1;
-            failures.extend(validation_failures(&validation));
-        }
-        Err(error) => failures.push((
-            "graph_validation",
-            None,
-            format!(
-                "the AGE graph could not be validated: {}",
-                error_chain(&error)
-            ),
-        )),
-    }
-
-    if compare_surreal {
-        match compare_traversal(surreal, pg).await {
-            Ok(parity) if parity.is_clean() => batches += 1,
-            Ok(parity) => {
-                batches += 1;
-                failures.push((
-                    "graph_parity",
-                    None,
-                    format!(
-                        "the AGE and Surreal conflict traversals disagree on {} anchors: \
-                     {} AGE edges, {} Surreal edges, {} only in AGE, {} only in Surreal",
-                        parity.anchors,
-                        parity.age_edges,
-                        parity.surreal_edges,
-                        parity.age_only,
-                        parity.surreal_only
-                    ),
-                ));
-            }
-            Err(error) => failures.push((
-                "graph_parity",
-                None,
-                format!("the AGE graph traversal could not be compared: {error}"),
-            )),
-        }
-    }
-
-    crate::postgres_backfill::complete_checkpoint(
-        pg,
-        run_id,
-        GRAPH_MIRROR,
-        batches,
-        applied,
-        failures,
-    )
-    .await?;
-    Ok(batches)
-}
-
-/// Validation mismatches as failure rows: counts only, no identifiers.
-fn validation_failures(
-    validation: &GraphValidation,
-) -> Vec<(&'static str, Option<String>, String)> {
-    let mut failures = Vec::new();
-    for (label, count) in &validation.vertices {
-        let source = validation
-            .source_vertices
-            .get(label)
-            .copied()
-            .unwrap_or_default();
-        if source != *count {
-            failures.push((
-                "graph_validation",
-                None,
-                format!("{label} vertices: {count} in the graph, {source} in the source table"),
-            ));
-        }
-    }
-    for (kind, table) in SOURCE_EDGE_KINDS {
-        let source = validation
-            .source_edges
-            .get(*table)
-            .copied()
-            .unwrap_or_default();
-        let count = validation.edges.get(*kind).copied().unwrap_or_default();
-        if source != count {
-            failures.push((
-                "graph_validation",
-                None,
-                format!("{kind} edges: {count} in the graph, {source} in {table}"),
-            ));
-        }
-    }
-    if validation.broken_endpoints > 0 {
-        failures.push((
-            "graph_validation",
-            None,
-            format!(
-                "{} graph edges have an endpoint that is not a vertex",
-                validation.broken_endpoints
-            ),
-        ));
-    }
-    failures
-}
-
-/// Whether the standing projection still matches its sources: the count
-/// and endpoint checks plus the Surreal traversal comparison, both clean.
-/// Collected failures are appended for the checkpoint record.
-async fn graph_is_current(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-    compare_surreal: bool,
-    failures: &mut Vec<(&'static str, Option<String>, String)>,
-) -> bool {
-    let mut current = true;
-    match validate_graph(pg).await {
-        Ok(validation) if validation.is_clean() => {}
-        Ok(validation) => {
-            current = false;
-            failures.extend(validation_failures(&validation));
-        }
-        Err(error) => {
-            current = false;
-            failures.push((
-                "graph_validation",
-                None,
-                format!(
-                    "the standing AGE graph could not be validated: {}",
-                    error_chain(&error)
-                ),
-            ));
-        }
-    }
-    if !compare_surreal {
-        return current;
-    }
-    match compare_traversal(surreal, pg).await {
-        Ok(parity) if parity.is_clean() => {}
-        Ok(parity) => {
-            current = false;
-            failures.push((
-                "graph_parity",
-                None,
-                format!(
-                    "the standing AGE graph disagrees with the Surreal conflict traversal on \
-                     {} anchors: {} AGE edges, {} Surreal edges, {} only in AGE, {} only in Surreal",
-                    parity.anchors,
-                    parity.age_edges,
-                    parity.surreal_edges,
-                    parity.age_only,
-                    parity.surreal_only
-                ),
-            ));
-        }
-        Err(error) => {
-            current = false;
-            failures.push((
-                "graph_parity",
-                None,
-                format!("the standing AGE graph traversal could not be compared: {error}"),
-            ));
-        }
-    }
-    current
-}
-
 /// The loader wrappers, called by literal name. sqlx's `SqlSafeStr` gate
 /// audits dynamically built SQL; these two statements are compile-time
 /// constants, so they pass the gate by construction.
@@ -659,9 +326,6 @@ const LOAD_EDGES_SQL: &str = "SELECT * FROM graph_load_edges($1, $2) AS t(v)";
 /// The runtime write path's vertex ensure: the graph gains at most the
 /// endpoints of the edge being written, read back from the graph itself.
 const ENSURE_VERTICES_SQL: &str = "SELECT graph_ensure_vertices($1, $2) AS created";
-
-/// The one graph reader the parity pass calls, by literal name.
-const CONFLICT_EDGES_SQL: &str = "SELECT t.v::text FROM graph_conflict_edges($1) AS t(v)";
 
 /// Call one two-argument graph loader: the family kind and the payload
 /// text, both bound. The helpers own their Cypher.
@@ -924,9 +588,8 @@ async fn entity_role_rows(pg: &PostgresDb) -> Result<Vec<Value>, GraphError> {
 /// normalized (`{"tb": "person", "id": {"Uuid": ...}}`); a link the mirror's
 /// writer cannot produce is a read-side backstop: the row is reported with
 /// a `__error` marker instead of becoming a graph edge.
-async fn relationship_source_rows(pg: &PostgresDb) -> Result<RelationshipRows, GraphError> {
+async fn relationship_source_rows(pg: &PostgresDb) -> Result<Vec<Value>, GraphError> {
     let mut payloads = Vec::new();
-    let mut endpoints = Vec::new();
     for row in sqlx::query(
         "SELECT id, \"in\"::text AS link_in, \"out\"::text AS link_out, kind, confidence_pct, \
          source_kind, source_id::text AS source_id, detail \
@@ -959,8 +622,6 @@ async fn relationship_source_rows(pg: &PostgresDb) -> Result<RelationshipRows, G
                         Value::String(text) => Some(text.clone()),
                         _ => None,
                     });
-                endpoints.push((from_table.clone(), from_id.clone()));
-                endpoints.push((to_table.clone(), to_id.clone()));
                 payloads.push(json!({
                     "from_id": from_id,
                     "to_id": to_id,
@@ -980,16 +641,7 @@ async fn relationship_source_rows(pg: &PostgresDb) -> Result<RelationshipRows, G
             }
         }
     }
-    Ok(RelationshipRows {
-        payloads,
-        endpoints,
-    })
-}
-
-/// The typed relationships' loader payloads and their endpoint links.
-struct RelationshipRows {
-    payloads: Vec<Value>,
-    endpoints: Vec<(String, String)>,
+    Ok(payloads)
 }
 
 /// A mirror record link (`{"tb": "person", "id": {"Uuid": ...}}`) as text,
@@ -1150,77 +802,6 @@ async fn broken_endpoints(pg: &PostgresDb) -> Result<usize, GraphError> {
         broken += usize::try_from(count).unwrap_or(0);
     }
     Ok(broken)
-}
-
-/// The anchors a parity pass walks from: every person or entity that holds
-/// a conflict edge, read from the PostgreSQL mirrors, sorted and capped.
-/// A `relationship` row whose links cannot be read is skipped — the
-/// projection reports it; parity walks the graph that was built.
-async fn parity_anchors(pg: &PostgresDb) -> Result<Vec<NodeRef>, GraphError> {
-    let relationship = relationship_source_rows(pg).await?;
-    let mut anchors: BTreeSet<(String, String)> = relationship.endpoints.into_iter().collect();
-    for row in sqlx::query("SELECT person_id, entity_id FROM entity_role")
-        .fetch_all(&pg.0)
-        .await?
-    {
-        let person_id: Uuid = row.try_get("person_id")?;
-        let entity_id: Uuid = row.try_get("entity_id")?;
-        anchors.insert((String::from("person"), person_id.to_string()));
-        anchors.insert((String::from("entity"), entity_id.to_string()));
-    }
-    let node_refs = anchors
-        .into_iter()
-        .filter_map(|(table, id)| {
-            let id = Uuid::parse_str(&id).ok()?;
-            match table.as_str() {
-                "person" => Some(NodeRef::person(id)),
-                "entity" => Some(NodeRef::entity(id)),
-                _ => None,
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut node_refs = node_refs;
-    node_refs.truncate(MAX_PARITY_ANCHORS);
-    Ok(node_refs)
-}
-
-/// The AGE side of the parity comparison: the bounded conflict walk over the
-/// anchors, read back as text and normalized to the shared edge shape.
-async fn age_parity_edges(
-    pg: &PostgresDb,
-    anchors: &[NodeRef],
-) -> Result<BTreeSet<ParityEdge>, GraphError> {
-    let anchor_list: Vec<Value> = anchors
-        .iter()
-        .map(|anchor| json!(anchor.id.to_string()))
-        .collect();
-    let rows = read_graph(pg, CONFLICT_EDGES_SQL, &json!(anchor_list).to_string()).await?;
-    let mut edges = BTreeSet::new();
-    for row in rows {
-        let value: Value = serde_json::from_str(&row).map_err(|_| GraphError::Traversal)?;
-        edges.insert(normalize_age_edge(&value)?);
-    }
-    Ok(edges)
-}
-
-/// One AGE walk row (`agtype` JSON text) as the shared edge shape.
-fn normalize_age_edge(value: &Value) -> Result<ParityEdge, GraphError> {
-    let edge_type = value
-        .get("edge_type")
-        .and_then(Value::as_str)
-        .ok_or(GraphError::Traversal)?;
-    let (edge_table, kind, confidence_pct) = normalized_kind(edge_type, value)?;
-    let (from_table, from_id) = parity_endpoint(value.get("from_id"), value.get("from_label"))?;
-    let (to_table, to_id) = parity_endpoint(value.get("to_id"), value.get("to_label"))?;
-    Ok(ParityEdge {
-        edge_table,
-        from_table,
-        from_id,
-        to_table,
-        to_id,
-        kind,
-        confidence_pct,
-    })
 }
 
 /// One walk endpoint as the shared shape: the AGE label (`Person`) mapped

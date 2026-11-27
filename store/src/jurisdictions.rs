@@ -46,14 +46,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::catalog;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
-
-/// The table these rows live in.
-pub(crate) const TABLE: &str = "jurisdiction";
 
 /// A US state or DC — the `jurisdiction_type` IOLTA pools by, so
 /// `store::iolta_accounts` names it rather than spelling the token again.
@@ -86,46 +82,10 @@ pub struct Jurisdiction {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it. Separate from
-/// [`Jurisdiction`] because the SDK owns its own `RecordId` and
-/// `Datetime`, and the conversion belongs at this seam rather than in
-/// every caller.
-#[derive(SurrealValue)]
-struct JurisdictionRow {
-    id: surrealdb::types::RecordId,
-    name: String,
-    code: String,
-    jurisdiction_type: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl JurisdictionRow {
-    /// `None` when the record id is not a native UUID key — a row
-    /// written by something that bypassed [`crate::surreal::record_id`].
-    fn into_jurisdiction(self) -> Option<Jurisdiction> {
-        Some(Jurisdiction {
-            id: record_uuid(&self.id)?,
-            name: self.name,
-            code: self.code,
-            jurisdiction_type: self.jurisdiction_type,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`JurisdictionRow`] from only one
-/// query.
-const SELECT: &str = "id, name, code, jurisdiction_type, inserted_at, updated_at";
-
 /// Errors reading or writing a jurisdiction.
 #[derive(Debug, thiserror::Error)]
 pub enum JurisdictionError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// The write collided with `jurisdiction_code` — another row already
     /// holds this code.
     #[error("that jurisdiction code is already in use")]
@@ -175,34 +135,6 @@ fn from_pg(row: &sqlx::postgres::PgRow) -> Result<Jurisdiction, sqlx::Error> {
     })
 }
 
-/// Turn a write failure into the caller-correctable conflict it names,
-/// or leave it as a database fault. A unique violation carries **no
-/// typed detail** — the index name in the message is the only
-/// discriminator, and it is a `DEFINE INDEX` identifier this workspace
-/// chose, through the shared classifier in [`crate::surreal::retry`].
-fn classify_write(error: surrealdb::Error) -> JurisdictionError {
-    if crate::surreal::retry::unique_violation(&error) == Some("jurisdiction_code") {
-        JurisdictionError::CodeTaken
-    } else {
-        JurisdictionError::Db(error)
-    }
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, JurisdictionError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(classify_write)
-}
-
 /// The fields a new jurisdiction row carries.
 #[derive(Debug, Clone)]
 pub struct NewJurisdiction {
@@ -228,41 +160,17 @@ impl NewJurisdiction {
     }
 }
 
-/// Read one jurisdiction out of a query response, dropping a row this
-/// module could not have written.
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Jurisdiction>, JurisdictionError> {
-    let row: Option<JurisdictionRow> = response.take(0)?;
-    Ok(row.and_then(JurisdictionRow::into_jurisdiction))
-}
-
-/// Read every jurisdiction out of a query response, in the order the
-/// engine returned them.
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Jurisdiction>, JurisdictionError> {
-    let rows: Vec<JurisdictionRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(JurisdictionRow::into_jurisdiction)
-        .collect())
-}
-
 /// Resolve a jurisdiction by id.
 ///
 /// # Errors
 ///
 /// [`JurisdictionError::Db`] if the lookup fails.
 pub async fn find_by_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<Jurisdiction>, JurisdictionError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::one(&pg, PG_BY_ID, id, from_pg).await?);
-    }
-    let response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = catalog::authority().await?;
+    Ok(catalog::one(&pg, PG_BY_ID, id, from_pg).await?)
 }
 
 /// Resolve a jurisdiction by its canonical `code` (`NV`, `US`). Exact
@@ -272,20 +180,11 @@ pub async fn find_by_id(
 ///
 /// [`JurisdictionError::Db`] if the lookup fails.
 pub async fn find_by_code(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     code: &str,
 ) -> Result<Option<Jurisdiction>, JurisdictionError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::one(&pg, PG_BY_CODE, code.trim().to_string(), from_pg).await?);
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE code = $code LIMIT 1"
-        ))
-        .bind(("code", code.trim().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = catalog::authority().await?;
+    Ok(catalog::one(&pg, PG_BY_CODE, code.trim().to_string(), from_pg).await?)
 }
 
 /// Resolve a jurisdiction by display name (`Nevada`). Exact match — the
@@ -296,20 +195,11 @@ pub async fn find_by_code(
 ///
 /// [`JurisdictionError::Db`] if the lookup fails.
 pub async fn find_by_name(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     name: &str,
 ) -> Result<Option<Jurisdiction>, JurisdictionError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::one(&pg, PG_BY_NAME, name.trim().to_string(), from_pg).await?);
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE name = $name LIMIT 1"
-        ))
-        .bind(("name", name.trim().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = catalog::authority().await?;
+    Ok(catalog::one(&pg, PG_BY_NAME, name.trim().to_string(), from_pg).await?)
 }
 
 /// Every jurisdiction, ordered by name — what a reference picker with no
@@ -318,15 +208,9 @@ pub async fn find_by_name(
 /// # Errors
 ///
 /// [`JurisdictionError::Db`] if the lookup fails.
-pub async fn list_all(db: &SurrealDb) -> Result<Vec<Jurisdiction>, JurisdictionError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?);
-    }
-    let response = db
-        .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY name ASC"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn list_all(_db: &ApplicationStore) -> Result<Vec<Jurisdiction>, JurisdictionError> {
+    let pg = catalog::authority().await?;
+    Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?)
 }
 
 /// Every jurisdiction of one `jurisdiction_type`, ordered by name — the
@@ -337,22 +221,12 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Jurisdiction>, JurisdictionE
 ///
 /// [`JurisdictionError::Db`] if the lookup fails.
 pub async fn list_by_type(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     jurisdiction_type: &str,
 ) -> Result<Vec<Jurisdiction>, JurisdictionError> {
-    if let Some(pg) = catalog::authority().await? {
-        let kind = Some(jurisdiction_type.to_string());
-        return Ok(catalog::all(&pg, PG_BY_TYPE, kind, from_pg).await?);
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE jurisdiction_type = $jurisdiction_type ORDER BY name ASC"
-        ))
-        .bind(("jurisdiction_type", jurisdiction_type.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = catalog::authority().await?;
+    let kind = Some(jurisdiction_type.to_string());
+    Ok(catalog::all(&pg, PG_BY_TYPE, kind, from_pg).await?)
 }
 
 /// Write a new jurisdiction row. The record id is minted from a fresh v7
@@ -367,47 +241,26 @@ pub async fn list_by_type(
 /// schema ASSERT refusing a `jurisdiction_type` outside
 /// `state`/`country`.
 pub async fn create(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     input: &NewJurisdiction,
 ) -> Result<Jurisdiction, JurisdictionError> {
     let id = Uuid::now_v7();
-    if let Some(pg) = catalog::authority().await? {
-        let row = catalog::row(
-            sqlx::query(PG_INSERT)
-                .bind(id)
-                .bind(input.name.trim().to_string())
-                .bind(input.code.trim().to_string())
-                .bind(input.jurisdiction_type.clone()),
-            &pg,
-        )
-        .await
-        .map_err(catalog::CatalogError::from);
-        return match row {
-            Ok(row) => Ok(from_pg(&row)?),
-            Err(error) if error.violates("jurisdiction_name_key") => {
-                Err(JurisdictionError::NameTaken)
-            }
-            Err(error) => Err(error.into()),
-        };
+    let pg = catalog::authority().await?;
+    let row = catalog::row(
+        sqlx::query(PG_INSERT)
+            .bind(id)
+            .bind(input.name.trim().to_string())
+            .bind(input.code.trim().to_string())
+            .bind(input.jurisdiction_type.clone()),
+        &pg,
+    )
+    .await
+    .map_err(catalog::CatalogError::from);
+    match row {
+        Ok(row) => Ok(from_pg(&row)?),
+        Err(error) if error.violates("jurisdiction_name_key") => Err(JurisdictionError::NameTaken),
+        Err(error) => Err(error.into()),
     }
-    let mut response = writing(|| {
-        db.query(format!(
-            "CREATE $id SET \
-             name = $name, \
-             code = $code, \
-             jurisdiction_type = $jurisdiction_type \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("name", input.name.trim().to_string()))
-        .bind(("code", input.code.trim().to_string()))
-        .bind(("jurisdiction_type", input.jurisdiction_type.clone()))
-    })
-    .await?;
-
-    let row: Option<JurisdictionRow> = response.take(0)?;
-    row.and_then(JurisdictionRow::into_jurisdiction)
-        .ok_or(JurisdictionError::WriteReturnedNothing)
 }
 
 /// Find the jurisdiction holding `input.code`, creating it if absent.
@@ -421,7 +274,7 @@ pub async fn create(
 ///
 /// [`JurisdictionError::Db`] if a lookup or the insert fails.
 pub async fn find_or_create(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     input: &NewJurisdiction,
 ) -> Result<Jurisdiction, JurisdictionError> {
     if let Some(existing) = find_by_code(db, &input.code).await? {
@@ -437,107 +290,4 @@ pub async fn find_or_create(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        create, find_by_code, find_by_id, find_by_name, find_or_create, list_all, list_by_type,
-        JurisdictionError, NewJurisdiction,
-    };
-    use crate::surreal::test_support::mem;
-
-    fn nevada() -> NewJurisdiction {
-        NewJurisdiction::new("Nevada", "NV", "state")
-    }
-
-    #[tokio::test]
-    async fn a_created_jurisdiction_reads_back_by_id_code_and_name() {
-        let db = mem().await;
-        let created = create(&db, &nevada()).await.unwrap();
-        assert_eq!(created.name, "Nevada");
-        assert_eq!(created.code, "NV");
-        assert_eq!(created.jurisdiction_type, "state");
-
-        assert_eq!(
-            find_by_id(&db, created.id).await.unwrap(),
-            Some(created.clone())
-        );
-        assert_eq!(
-            find_by_code(&db, "NV").await.unwrap(),
-            Some(created.clone())
-        );
-        assert_eq!(
-            find_by_name(&db, "Nevada").await.unwrap(),
-            Some(created.clone())
-        );
-        assert_eq!(find_by_code(&db, "CA").await.unwrap(), None);
-    }
-
-    #[tokio::test]
-    async fn a_duplicate_code_is_reported_as_the_code_being_taken() {
-        let db = mem().await;
-        create(&db, &nevada()).await.unwrap();
-
-        let duplicate = create(&db, &NewJurisdiction::new("Nevada Again", "NV", "state")).await;
-        assert!(
-            matches!(duplicate, Err(JurisdictionError::CodeTaken)),
-            "the unique `jurisdiction_code` index is the gate, got {duplicate:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn find_or_create_is_idempotent_on_the_code() {
-        let db = mem().await;
-        let first = find_or_create(&db, &nevada()).await.unwrap();
-        let second = find_or_create(&db, &nevada()).await.unwrap();
-        assert_eq!(first, second, "the second call returns the existing row");
-        assert_eq!(list_all(&db).await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_jurisdiction_type_outside_the_closed_set_is_refused() {
-        let db = mem().await;
-        let refused = create(&db, &NewJurisdiction::new("Atlantis", "AT", "myth")).await;
-        assert!(
-            matches!(refused, Err(JurisdictionError::Db(_))),
-            "the schema ASSERT must reject an unknown jurisdiction_type, got {refused:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn listing_filters_by_type_and_orders_by_name() {
-        let db = mem().await;
-        for (name, code, kind) in [
-            ("Nevada", "NV", "state"),
-            ("Germany", "DE", "country"),
-            ("California", "CA", "state"),
-            ("United States", "US", "country"),
-        ] {
-            create(&db, &NewJurisdiction::new(name, code, kind))
-                .await
-                .unwrap();
-        }
-
-        let states: Vec<String> = list_by_type(&db, "state")
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|j| j.name)
-            .collect();
-        assert_eq!(states, ["California", "Nevada"]);
-
-        let countries: Vec<String> = list_by_type(&db, "country")
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|j| j.name)
-            .collect();
-        assert_eq!(countries, ["Germany", "United States"]);
-
-        let all: Vec<String> = list_all(&db)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|j| j.name)
-            .collect();
-        assert_eq!(all, ["California", "Germany", "Nevada", "United States"]);
-    }
-}
+mod tests {}

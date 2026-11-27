@@ -1,5 +1,5 @@
 //! Firm-scoped Brand call and SMS reporting through the Inbox authority seam.
-use crate::{inbox::InboxError, postgres::PostgresDb, surreal::SurrealDb};
+use crate::{application_store::ApplicationStore, inbox::InboxError, postgres::PostgresDb};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
@@ -19,7 +19,7 @@ pub struct BrandCommunications {
 /// Rego; the capability check binds the actual actor to this Firm's rows.
 pub async fn for_brand(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor: Uuid,
     brand_key: &str,
 ) -> Result<BrandCommunications, InboxError> {
@@ -110,7 +110,10 @@ pub async fn for_brand(
 
 /// Brands worn by Firms whose communications this admin may inspect. This
 /// includes a system-wide presentation Brand attached through firm_brand.
-pub async fn brand_keys_for_actor(db: &SurrealDb, actor: Uuid) -> Result<Vec<String>, InboxError> {
+pub async fn brand_keys_for_actor(
+    db: &ApplicationStore,
+    actor: Uuid,
+) -> Result<Vec<String>, InboxError> {
     let person = crate::persons::find_by_id(db, actor)
         .await?
         .ok_or(InboxError::Denied)?;

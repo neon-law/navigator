@@ -1,8 +1,8 @@
 //! Native Entity anchor contention; every loser must have the typed refusal.
 use std::sync::Arc;
 use store::{
+    application_store::ApplicationStore,
     entities::{self, EntityError, NewEntity},
-    surreal::SurrealDb,
 };
 use uuid::Uuid;
 const RACERS: usize = 8;
@@ -17,7 +17,7 @@ fn anchor_input(key: &str, entity_type_id: Uuid, jurisdiction_id: Uuid) -> NewEn
         firm_anchor_key: Some(key.into()),
     }
 }
-async fn anchor_rows(db: &SurrealDb) -> usize {
+async fn anchor_rows(db: &ApplicationStore) -> usize {
     entities::all(db)
         .await
         .unwrap()
@@ -25,7 +25,7 @@ async fn anchor_rows(db: &SurrealDb) -> usize {
         .filter(entities::Entity::is_firm_anchor)
         .count()
 }
-async fn prerequisites(db: &SurrealDb) -> (Uuid, Uuid) {
+async fn prerequisites(db: &ApplicationStore) -> (Uuid, Uuid) {
     let suffix = Uuid::now_v7();
     let kind = store::entity_types::create(db, &format!("Synthetic kind {suffix}"))
         .await
@@ -50,7 +50,7 @@ async fn concurrent_creates_land_exactly_one_anchor() {
     {
         store::test_support::with_postgres(async {
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = Arc::new(SurrealDb::uninitialized());
+            let db = Arc::new(ApplicationStore::uninitialized());
             let (kind, jurisdiction) = prerequisites(&db).await;
             let claim_ids: Vec<Uuid> =
                 sqlx::query_scalar("SELECT id FROM entity WHERE firm_anchor_key IS NOT NULL")
@@ -114,7 +114,7 @@ async fn concurrent_creates_land_exactly_one_anchor() {
 #[tokio::test]
 async fn a_second_entity_is_refused_the_held_anchor() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (kind, jurisdiction) = prerequisites(&db).await;
         let key = "example law pllc";
         let first = entities::create(&db, &anchor_input(key, kind, jurisdiction))
@@ -139,7 +139,7 @@ async fn a_second_entity_is_refused_the_held_anchor() {
 #[tokio::test]
 async fn the_holder_may_rewrite_its_own_anchor() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (kind, jurisdiction) = prerequisites(&db).await;
         let key = "example law pllc";
         let anchor = entities::create(&db, &anchor_input(key, kind, jurisdiction))
@@ -167,7 +167,7 @@ async fn the_holder_may_rewrite_its_own_anchor() {
 #[tokio::test]
 async fn releasing_the_key_frees_the_claim_for_the_next_holder() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (kind, jurisdiction) = prerequisites(&db).await;
         let key = "example law pllc";
         let outgoing = entities::create(&db, &anchor_input(key, kind, jurisdiction))
@@ -201,7 +201,7 @@ async fn concurrent_creates_through_the_command_door_land_exactly_one_anchor() {
     let round = 0;
     store::test_support::with_postgres(async {
         let pg = store::postgres::PostgresDb::application().await.unwrap();
-        let db = Arc::new(SurrealDb::uninitialized());
+        let db = Arc::new(ApplicationStore::uninitialized());
         let (entity_type_id, jurisdiction_id) = prerequisites(&db).await;
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..RACERS {

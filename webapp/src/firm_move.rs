@@ -83,10 +83,10 @@ pub async fn get_move_brand_form() -> Result<MoveBrandView, ServerFnError> {
         .map(|axum::extract::Query(q)| q)
         .unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     // Owner sees every firm-scoped brand; a brand with no firm has no seat to
     // move and nothing here to reassign.
-    let brands = store::brands::all_firm_scoped(&surreal)
+    let brands = store::brands::all_firm_scoped(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -99,7 +99,7 @@ pub async fn get_move_brand_form() -> Result<MoveBrandView, ServerFnError> {
             id: b.key,
         })
         .collect();
-    let firms = store::firms::all(&surreal)
+    let firms = store::firms::all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()

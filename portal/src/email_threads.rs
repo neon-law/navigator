@@ -206,7 +206,7 @@ struct ThreadCtx<'a> {
     /// The store. Resolving an inbound sender to a `persons` row — the
     /// conflict gate on first contact and the lawyer-tier check on a reply
     /// — reads it.
-    surreal: &'a store::surreal::SurrealDb,
+    application_store: &'a store::application_store::ApplicationStore,
     storage: &'a Arc<dyn StorageService>,
     email: &'a dyn EmailService,
     runtime: &'a dyn StateMachineRuntime,
@@ -221,7 +221,7 @@ struct ThreadCtx<'a> {
 /// Propagates database and send errors for the caller to log.
 #[allow(clippy::too_many_arguments)] // + the Surreal handle (#1093; ENG-19)
 pub async fn thread_inbound(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     email: &dyn EmailService,
     runtime: &dyn StateMachineRuntime,
@@ -230,7 +230,7 @@ pub async fn thread_inbound(
     raw_key: &str,
 ) -> Result<(), ThreadError> {
     let ctx = ThreadCtx {
-        surreal,
+        application_store,
         storage,
         email,
         runtime,
@@ -249,11 +249,13 @@ async fn open_first_contact(
     raw_key: &str,
     body: &str,
 ) -> Result<(), ThreadError> {
-    let surreal = ctx.surreal;
+    let application_store = ctx.application_store;
     let external_email = extract_addr(&inbound.from);
     let external_name = extract_name(&inbound.from);
     let token = mint_token();
-    let person_id = person_lookup(surreal, &external_email).await?.map(|p| p.id);
+    let person_id = person_lookup(application_store, &external_email)
+        .await?
+        .map(|p| p.id);
 
     // Auto-route: a known client who has exactly one open matter threads
     // straight onto it — no manual `@link` needed for the common case. An
@@ -263,12 +265,12 @@ async fn open_first_contact(
     // that auto-linking requires an *open matter*, which the intake only
     // reaches after its conflict check returned without blocking.
     let notation_id = match person_id {
-        Some(pid) => store::projects::sole_open_matter_for_person(surreal, pid).await?,
+        Some(pid) => store::projects::sole_open_matter_for_person(application_store, pid).await?,
         None => None,
     };
 
     let conversation_id = conv::open(
-        surreal,
+        application_store,
         &conv::NewConversation {
             token: &token,
             external_email: &external_email,
@@ -281,7 +283,7 @@ async fn open_first_contact(
     .await?;
 
     let message_id = conv::append(
-        surreal,
+        application_store,
         &conv::NewMessage {
             conversation_id,
             direction: DIRECTION_FROM_EXTERNAL,
@@ -305,13 +307,13 @@ async fn open_first_contact(
     // "Screened" is `store::conflicts::is_screened_client`, never "a
     // `persons` row resolved". A row is an identity; the question here is
     // whether a decision was taken about that identity.
-    if !is_screened(surreal, person_id).await? {
+    if !is_screened(application_store, person_id).await? {
         notes.push(format!(
             "⚠ Prospective client — {} is not yet in the system. {CONFLICT_CHECK_INSTRUCTION}",
             external_name.as_deref().unwrap_or(&external_email)
         ));
     }
-    if let Some(conversation) = conv::by_id(surreal, conversation_id).await? {
+    if let Some(conversation) = conv::by_id(application_store, conversation_id).await? {
         if let Some(note) =
             process_attachments(ctx, &conversation, message_id, &inbound.attachments).await?
         {
@@ -355,19 +357,20 @@ async fn sync_conversation_to_spine(
     ctx: &ThreadCtx<'_>,
     conversation_id: uuid::Uuid,
 ) -> Result<(), ThreadError> {
-    let surreal = ctx.surreal;
-    let Some(conversation) = conv::by_id(surreal, conversation_id).await? else {
+    let application_store = ctx.application_store;
+    let Some(conversation) = conv::by_id(application_store, conversation_id).await? else {
         return Ok(());
     };
     let Some(notation_id) = conversation.notation_id else {
         return Ok(());
     };
-    let Some(notation) = store::notations::find_by_id(ctx.surreal, notation_id).await? else {
+    let Some(notation) = store::notations::find_by_id(ctx.application_store, notation_id).await?
+    else {
         return Ok(());
     };
     let project_id = notation.project_id;
 
-    for m in conv::messages(surreal, conversation_id).await? {
+    for m in conv::messages(application_store, conversation_id).await? {
         let (channel, direction, author) = match m.direction.as_str() {
             DIRECTION_FROM_EXTERNAL => (
                 store::communications::channel::EMAIL_INBOUND,
@@ -385,7 +388,7 @@ async fn sync_conversation_to_spine(
         // re-sync of an already-mirrored hop returns the existing spine row.
         let source_ref = m.id.to_string();
         store::communications::ingest(
-            surreal,
+            application_store,
             &store::communications::IngestArgs {
                 project_id,
                 channel,
@@ -445,7 +448,7 @@ async fn send_and_journal_with_attachments(
     attachments: &[InboundAttachment],
 ) -> Result<SendReceipt, ThreadError> {
     let reply_to = reply_address(token, &ctx.cfg.parse_host);
-    let thread_refs = thread_message_ids(ctx.surreal, conversation_id).await?;
+    let thread_refs = thread_message_ids(ctx.application_store, conversation_id).await?;
     let html = workflows::email::render_email_html(body, &workflows::email::base_url_from_env());
     let outbound = attachments.iter().fold(
         OutboundEmail::new(to_addr, subject, body)
@@ -462,7 +465,7 @@ async fn send_and_journal_with_attachments(
     );
     let receipt = ctx.email.send(outbound).await?;
     conv::append(
-        ctx.surreal,
+        ctx.application_store,
         &conv::NewMessage {
             conversation_id,
             direction,
@@ -514,7 +517,12 @@ async fn notify_lawyer(
         attachments,
     )
     .await?;
-    conv::set_status(ctx.surreal, conversation_id, STATUS_AWAITING_LAWYER).await?;
+    conv::set_status(
+        ctx.application_store,
+        conversation_id,
+        STATUS_AWAITING_LAWYER,
+    )
+    .await?;
     Ok(())
 }
 
@@ -540,8 +548,8 @@ async fn continue_thread(
     body: &str,
     token: &str,
 ) -> Result<(), ThreadError> {
-    let surreal = ctx.surreal;
-    let Some(conversation) = conv::by_token(surreal, token).await? else {
+    let application_store = ctx.application_store;
+    let Some(conversation) = conv::by_token(application_store, token).await? else {
         tracing::warn!(
             token,
             "inbound reply for an unknown conversation token; ignoring"
@@ -549,7 +557,7 @@ async fn continue_thread(
         return Ok(());
     };
     let sender = extract_addr(&inbound.from);
-    let acting_person = person_lookup(surreal, &sender)
+    let acting_person = person_lookup(application_store, &sender)
         .await?
         .filter(|person| person.role.is_lawyer_tier() || person.role.is_clerk());
 
@@ -567,7 +575,7 @@ async fn continue_thread(
     } else {
         // Client follow-up on an open thread — re-notify lawyer.
         let message_id = conv::append(
-            surreal,
+            application_store,
             &conv::NewMessage {
                 conversation_id: conversation.id,
                 direction: DIRECTION_FROM_EXTERNAL,
@@ -652,7 +660,7 @@ async fn process_attachments(
 ) -> Result<Option<String>, ThreadError> {
     use store::mail_attachments;
 
-    let surreal = ctx.surreal;
+    let application_store = ctx.application_store;
     if attachments.is_empty() {
         return Ok(None);
     }
@@ -668,7 +676,7 @@ async fn process_attachments(
             attachments.len()
         )));
     };
-    let Some(notation) = store::notations::find_by_id(surreal, notation_id).await? else {
+    let Some(notation) = store::notations::find_by_id(application_store, notation_id).await? else {
         tracing::warn!(%notation_id, "conversation references a missing notation; attachments not filed");
         return Ok(None);
     };
@@ -688,7 +696,7 @@ async fn process_attachments(
         }
         let sha256 = documents::sha256_hex(&att.bytes);
         if let Some(existing) =
-            store::assets::find_live_by_sha256(surreal, notation.project_id, &sha256)
+            store::assets::find_live_by_sha256(application_store, notation.project_id, &sha256)
                 .await
                 .map_err(|error| ThreadError::Db(error.to_string()))?
         {
@@ -738,7 +746,7 @@ async fn process_attachments(
     let summary = sections.join("\n\n");
 
     conv::append(
-        surreal,
+        application_store,
         &conv::NewMessage {
             conversation_id: conversation.id,
             direction: DIRECTION_SYSTEM,
@@ -766,7 +774,7 @@ async fn file_attachment(
     provenance: &documents::MailProvenance<'_>,
 ) -> Result<uuid::Uuid, ThreadError> {
     let outcome = store::assets::file_revision_with_provenance(
-        ctx.surreal,
+        ctx.application_store,
         ctx.storage,
         &documents::IngestArgs {
             project_id,
@@ -819,7 +827,7 @@ async fn handle_lawyer_reply(
     conversation: &conv::EmailConversation,
     acting_person: &store::persons::Person,
 ) -> Result<(), ThreadError> {
-    let (surreal, cfg) = (ctx.surreal, ctx.cfg);
+    let (application_store, cfg) = (ctx.application_store, ctx.cfg);
     let sender = acting_person.email.as_str();
     // Command-channel authentication (Scorpio's non-negotiable): a lawyer
     // reply may relay or fire a workflow signal only when its DKIM verdict
@@ -837,7 +845,7 @@ async fn handle_lawyer_reply(
                 "lawyer reply failed DKIM for {domain}; not relaying or executing commands"
             );
             conv::append(
-                surreal,
+                application_store,
                 &conv::NewMessage {
                     conversation_id: conversation.id,
                     direction: DIRECTION_FROM_LAWYER,
@@ -901,7 +909,7 @@ async fn handle_lawyer_reply(
     // The full cleaned reply (commands included) is journaled; the relay
     // carries only the prose with command lines stripped.
     conv::append(
-        surreal,
+        application_store,
         &conv::NewMessage {
             conversation_id: conversation.id,
             direction: DIRECTION_FROM_LAWYER,
@@ -955,7 +963,7 @@ async fn apply_lawyer_commands(
     for command in commands {
         match command {
             Command::Close => {
-                conv::set_status(ctx.surreal, conversation.id, STATUS_CLOSED).await?;
+                conv::set_status(ctx.application_store, conversation.id, STATUS_CLOSED).await?;
             }
             // Clearance is journaled via this message's `command_payload`;
             // a later Clerk relay reads it back. An internal marker is already
@@ -1004,10 +1012,13 @@ async fn relay_clerk_prose(
     clerk_id: uuid::Uuid,
     relay_body: &str,
 ) -> Result<(), ThreadError> {
-    let may_relay =
-        store::inbox::clerk_may_relay_email_thread(ctx.surreal, clerk_id, conversation.id)
-            .await
-            .map_err(|error| ThreadError::Db(error.to_string()))?;
+    let may_relay = store::inbox::clerk_may_relay_email_thread(
+        ctx.application_store,
+        clerk_id,
+        conversation.id,
+    )
+    .await
+    .map_err(|error| ThreadError::Db(error.to_string()))?;
     if !may_relay {
         return Ok(());
     }
@@ -1018,9 +1029,9 @@ async fn relay_clerk_prose(
     // (`store::conflicts::is_screened_client`) nor threaded onto a matter
     // (`notation_id`). The check is a gate in the loop, never a courtesy
     // after the fact.
-    let is_prospect = !is_screened(ctx.surreal, conversation.person_id).await?
+    let is_prospect = !is_screened(ctx.application_store, conversation.person_id).await?
         && conversation.notation_id.is_none();
-    if is_prospect && !is_conflict_cleared(ctx.surreal, conversation.id).await? {
+    if is_prospect && !is_conflict_cleared(ctx.application_store, conversation.id).await? {
         hold_relay_for_conflict_check(ctx, conversation, token).await?;
     } else {
         relay_to_external(ctx, conversation, token, relay_body).await?;
@@ -1055,7 +1066,7 @@ async fn hold_unauthenticated_reply(
     // transcript. Recording them would let a forged `@cleared` release the
     // RPC 1.10 hold from inside the very record of its refusal.
     conv::append(
-        ctx.surreal,
+        ctx.application_store,
         &conv::NewMessage {
             conversation_id: conversation.id,
             direction: DIRECTION_FROM_LAWYER,
@@ -1085,7 +1096,12 @@ async fn hold_unauthenticated_reply(
         ),
     )
     .await?;
-    conv::set_status(ctx.surreal, conversation.id, STATUS_AWAITING_LAWYER).await?;
+    conv::set_status(
+        ctx.application_store,
+        conversation.id,
+        STATUS_AWAITING_LAWYER,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1093,10 +1109,10 @@ async fn hold_unauthenticated_reply(
 /// (the current reply's directives are already journaled by the time the
 /// relay gate consults this).
 async fn is_conflict_cleared(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     conversation_id: uuid::Uuid,
 ) -> Result<bool, store::email_conversations::EmailConversationError> {
-    for m in conv::messages(surreal, conversation_id).await? {
+    for m in conv::messages(application_store, conversation_id).await? {
         let Some(payload) = m.command_payload.as_deref() else {
             continue;
         };
@@ -1148,7 +1164,12 @@ async fn hold_relay_for_conflict_check(
         &note,
     )
     .await?;
-    conv::set_status(ctx.surreal, conversation.id, STATUS_AWAITING_LAWYER).await?;
+    conv::set_status(
+        ctx.application_store,
+        conversation.id,
+        STATUS_AWAITING_LAWYER,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1169,7 +1190,12 @@ async fn relay_to_external(
         cleaned,
     )
     .await?;
-    conv::set_status(ctx.surreal, conversation.id, STATUS_AWAITING_CLIENT).await?;
+    conv::set_status(
+        ctx.application_store,
+        conversation.id,
+        STATUS_AWAITING_CLIENT,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1180,10 +1206,10 @@ async fn relay_to_external(
 /// outbound hops carry SendGrid's `X-Message-Id` (a different namespace),
 /// so they're excluded.
 async fn thread_message_ids(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     conversation_id: uuid::Uuid,
 ) -> Result<Vec<String>, store::email_conversations::EmailConversationError> {
-    Ok(conv::messages(surreal, conversation_id)
+    Ok(conv::messages(application_store, conversation_id)
         .await?
         .into_iter()
         .filter(|m| m.direction == DIRECTION_FROM_EXTERNAL || m.direction == DIRECTION_FROM_LAWYER)
@@ -1192,10 +1218,10 @@ async fn thread_message_ids(
 }
 
 async fn person_lookup(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     email: &str,
 ) -> Result<Option<store::persons::Person>, store::persons::PersonError> {
-    store::persons::find_by_email_ci(surreal, email).await
+    store::persons::find_by_email_ci(application_store, email).await
 }
 
 /// Has the firm run a conflict check on this external party?
@@ -1206,12 +1232,12 @@ async fn person_lookup(
 /// comes from `store::conflicts`, which owns the definition of a party the
 /// firm serves. This lane must not invent a second one.
 async fn is_screened(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Option<uuid::Uuid>,
 ) -> Result<bool, String> {
     match person_id {
         None => Ok(false),
-        Some(id) => store::conflicts::is_screened_client(surreal, id).await,
+        Some(id) => store::conflicts::is_screened_client(application_store, id).await,
     }
 }
 
@@ -1236,7 +1262,7 @@ async fn link_notation(
             ))
         }
         Ok(notation_id)
-            if store::notations::find_by_id(ctx.surreal, notation_id)
+            if store::notations::find_by_id(ctx.application_store, notation_id)
                 .await?
                 .is_none() =>
         {
@@ -1246,7 +1272,7 @@ async fn link_notation(
             ))
         }
         Ok(notation_id) => {
-            conv::set_notation(ctx.surreal, conversation.id, notation_id).await?;
+            conv::set_notation(ctx.application_store, conversation.id, notation_id).await?;
             tracing::info!(conversation_id = %conversation.id, %notation_id, "conversation linked to matter via @link");
             Ok(notation_id)
         }
@@ -1305,11 +1331,11 @@ async fn fire_signal(
         )
         .await
         .map_err(|e| ThreadError::Runtime(e.to_string()))?;
-    if store::notations::find_by_id(ctx.surreal, notation_id)
+    if store::notations::find_by_id(ctx.application_store, notation_id)
         .await?
         .is_some()
     {
-        store::notations::update_state(ctx.surreal, notation_id, next.as_str()).await?;
+        store::notations::update_state(ctx.application_store, notation_id, next.as_str()).await?;
     }
     tracing::info!(%notation_id, condition, next_state = %next.as_str(), "lawyer command advanced workflow");
     Ok(())
@@ -1541,7 +1567,7 @@ mod tests {
                     .await
                     .expect("required PostgreSQL application fixture");
                 store::postgres::PostgresDb::with_application_db(pg, async move {
-                    let $db = store::surreal::SurrealDb::uninitialized();
+                    let $db = store::application_store::ApplicationStore::uninitialized();
                     store::test_support::seed_compiled_brands_postgres(&$db).await;
                     $body
                 })
@@ -1757,9 +1783,12 @@ mod tests {
         }
     }
 
-    async fn seed_lawyer(surreal: &store::surreal::SurrealDb, email: &str) -> uuid::Uuid {
+    async fn seed_lawyer(
+        application_store: &store::application_store::ApplicationStore,
+        email: &str,
+    ) -> uuid::Uuid {
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role("Nick", email, store::persons::Role::Admin),
         )
         .await
@@ -1773,11 +1802,14 @@ mod tests {
     /// check has returned without blocking. A bare `person` row is not
     /// enough and must not be — see
     /// [`tests::a_bare_person_row_does_not_clear_the_relay_gate`].
-    async fn seed_client(surreal: &store::surreal::SurrealDb, email: &str) {
-        let person_id = seed_orphan_person(surreal, email).await;
-        let project_id = seed_open_matter(surreal).await;
-        store::projects::designate_dri_in_surreal(
-            surreal,
+    async fn seed_client(
+        application_store: &store::application_store::ApplicationStore,
+        email: &str,
+    ) {
+        let person_id = seed_orphan_person(application_store, email).await;
+        let project_id = seed_open_matter(application_store).await;
+        store::projects::designate_dri(
+            application_store,
             project_id,
             person_id,
             store::projects::DriSide::Client,
@@ -1790,9 +1822,12 @@ mod tests {
     /// and nothing that references it. `discard_pending_intake_project`
     /// removes the participations, the notation and the project; the person
     /// and the entity stay.
-    async fn seed_orphan_person(surreal: &store::surreal::SurrealDb, email: &str) -> uuid::Uuid {
+    async fn seed_orphan_person(
+        application_store: &store::application_store::ApplicationStore,
+        email: &str,
+    ) -> uuid::Uuid {
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role("Pisces", email, store::persons::Role::Client),
         )
         .await
@@ -1803,29 +1838,34 @@ mod tests {
     /// A person on an open matter whose client-DRI marker was never written
     /// — the state `start_post` leaves when the conflict traversal itself
     /// errors, after `add_participation` and before the designation.
-    async fn seed_unscreened_participant(surreal: &store::surreal::SurrealDb, email: &str) {
-        let person_id = seed_orphan_person(surreal, email).await;
-        let project_id = seed_open_matter(surreal).await;
-        store::projects::add_participation(surreal, project_id, person_id, "client")
+    async fn seed_unscreened_participant(
+        application_store: &store::application_store::ApplicationStore,
+        email: &str,
+    ) {
+        let person_id = seed_orphan_person(application_store, email).await;
+        let project_id = seed_open_matter(application_store).await;
+        store::projects::add_participation(application_store, project_id, person_id, "client")
             .await
             .expect("seed participation");
     }
 
     /// An open Project hung off a throwaway `Human` entity.
-    async fn seed_open_matter(surreal: &store::surreal::SurrealDb) -> uuid::Uuid {
-        let entity_type_id = store::entity_types::find_or_create(surreal, "Human")
+    async fn seed_open_matter(
+        application_store: &store::application_store::ApplicationStore,
+    ) -> uuid::Uuid {
+        let entity_type_id = store::entity_types::find_or_create(application_store, "Human")
             .await
             .expect("entity type")
             .id;
         let jurisdiction_id = store::jurisdictions::find_or_create(
-            surreal,
+            application_store,
             &store::jurisdictions::NewJurisdiction::new("United States", "US", "country"),
         )
         .await
         .expect("jurisdiction")
         .id;
         let entity_id = store::entities::create(
-            surreal,
+            application_store,
             &store::entities::NewEntity {
                 name: "Sample Client".into(),
                 entity_type_id,
@@ -1840,7 +1880,7 @@ mod tests {
         .expect("seed entity")
         .id;
         store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: format!("sample-matter-{}", uuid::Uuid::now_v7().simple()),
                 name: "Sample matter".into(),
@@ -1859,11 +1899,11 @@ mod tests {
     #[tokio::test]
     async fn first_contact_opens_conversation_and_notifies_lawyer() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let cap = CapturingEmail::new();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &RecordingRuntime::default(),
@@ -1895,17 +1935,17 @@ mod tests {
     #[tokio::test]
     async fn lawyer_reply_does_not_relay_to_the_external_party() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
         // A known client — past the prospective-client conflict gate.
-        seed_client(&surreal, "pisces@example.com").await;
+        seed_client(&application_store, "pisces@example.com").await;
 
         // 1. external first contact
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -1924,7 +1964,7 @@ mod tests {
 
         // 2. lawyer replies to the token address (with quoted history)
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2025,16 +2065,16 @@ mod tests {
     #[tokio::test]
     async fn lawyer_approve_fires_workflow_signal_and_relays_prose() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let lawyer_id = seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        let lawyer_id = seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         // A conversation already linked to a matter (the lawyer-review gate).
         let token = "0000000000000000000000000000000a";
         store::email_conversations::open(
-            &surreal,
+            &application_store,
             &store::email_conversations::NewConversation {
                 token,
                 external_email: "pisces@example.com",
@@ -2048,7 +2088,7 @@ mod tests {
         .unwrap();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2082,14 +2122,14 @@ mod tests {
     #[tokio::test]
     async fn lawyer_close_suppresses_relay_and_closes_conversation() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "0000000000000000000000000000000b";
         store::email_conversations::open(
-            &surreal,
+            &application_store,
             &store::email_conversations::NewConversation {
                 token,
                 external_email: "pisces@example.com",
@@ -2103,7 +2143,7 @@ mod tests {
         .unwrap();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2122,7 +2162,7 @@ mod tests {
         // @close suppresses the relay entirely
         assert!(cap.captured().is_empty(), "no relay on @close");
         // and the conversation is closed
-        let conv = store::email_conversations::by_token(&surreal, token)
+        let conv = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap();
@@ -2132,10 +2172,10 @@ mod tests {
 
     /// Resolve a notation's matter (project) id for spine assertions.
     async fn project_of(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         notation_id: uuid::Uuid,
     ) -> uuid::Uuid {
-        store::notations::find_by_id(surreal, notation_id)
+        store::notations::find_by_id(application_store, notation_id)
             .await
             .unwrap()
             .unwrap()
@@ -2147,19 +2187,19 @@ mod tests {
         use store::communications::{channel, direction, for_project};
 
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let project_id = project_of(&surreal, notation_id).await;
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        let project_id = project_of(&application_store, notation_id).await;
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "00000000000000000000000000000abc";
-        seed_linked_conversation(&surreal, token, notation_id).await;
+        seed_linked_conversation(&application_store, token, notation_id).await;
 
         // 1. The client writes in (reply to the token address).
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2177,7 +2217,7 @@ mod tests {
 
         // 2. Lawyer relays a reply back to the client.
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2193,7 +2233,7 @@ mod tests {
         .await
         .unwrap();
 
-        let thread = for_project(&surreal, project_id).await.unwrap();
+        let thread = for_project(&application_store, project_id).await.unwrap();
         let inbound_rows: Vec<_> = thread
             .iter()
             .filter(|c| c.channel == channel::EMAIL_INBOUND)
@@ -2214,13 +2254,13 @@ mod tests {
         assert_eq!(inbound_rows[0].direction, direction::INBOUND);
 
         // Idempotent: re-mirroring the same conversation adds nothing.
-        let conv = store::email_conversations::by_token(&surreal, token)
+        let conv = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap();
         super::sync_conversation_to_spine(
             &super::ThreadCtx {
-                surreal: &surreal,
+                application_store: &application_store,
                 storage: &storage().await,
                 email: &cap,
                 runtime: &rt,
@@ -2231,7 +2271,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            for_project(&surreal, project_id).await.unwrap().len(),
+            for_project(&application_store, project_id).await.unwrap().len(),
             thread.len(),
             "re-sync must not duplicate spine rows"
         );
@@ -2243,15 +2283,15 @@ mod tests {
         use store::communications::channel;
 
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         // seed_notation makes libra@example.com the client on one open matter.
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let project_id = project_of(&surreal, notation_id).await;
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        let project_id = project_of(&application_store, notation_id).await;
         let cap = CapturingEmail::new();
 
         // First contact (no token) from that known client.
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &RecordingRuntime::default(),
@@ -2269,7 +2309,7 @@ mod tests {
 
         // The conversation auto-linked to the sole open matter, so the first
         // inbound hop already lands in that matter's conversation log.
-        let thread = for_project_helper(&surreal, project_id).await;
+        let thread = for_project_helper(&application_store, project_id).await;
         assert_eq!(thread.len(), 1);
         assert_eq!(thread[0].channel, channel::EMAIL_INBOUND);
         assert_eq!(thread[0].body, "Hello, one more thing.");
@@ -2277,10 +2317,10 @@ mod tests {
     }
 
     async fn for_project_helper(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         project_id: uuid::Uuid,
     ) -> Vec<store::communications::Communication> {
-        store::communications::for_project(surreal, project_id)
+        store::communications::for_project(application_store, project_id)
             .await
             .unwrap()
     }
@@ -2295,12 +2335,12 @@ mod tests {
 
     /// Open a conversation linked to `notation_id` under a fixed token.
     async fn seed_linked_conversation(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         token: &str,
         notation_id: uuid::Uuid,
     ) {
         store::email_conversations::open(
-            surreal,
+            application_store,
             &store::email_conversations::NewConversation {
                 token,
                 external_email: "pisces@example.com",
@@ -2317,14 +2357,14 @@ mod tests {
     #[tokio::test]
     async fn dkim_failure_blocks_lawyer_command_and_relay_when_enforced() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "0000000000000000000000000000000c";
-        seed_linked_conversation(&surreal, token, notation_id).await;
+        seed_linked_conversation(&application_store, token, notation_id).await;
 
         // A reply that claims to be from a lawyer but whose DKIM verdict is a
         // fail for the firm domain — the forged-From / leaked-token case.
@@ -2337,7 +2377,7 @@ mod tests {
         msg.dkim = "{@neonlaw.com : fail}".into();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2363,14 +2403,14 @@ mod tests {
     #[tokio::test]
     async fn dkim_pass_allows_lawyer_command_when_enforced() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "0000000000000000000000000000000d";
-        seed_linked_conversation(&surreal, token, notation_id).await;
+        seed_linked_conversation(&application_store, token, notation_id).await;
 
         let mut msg = inbound(
             "Nick <nick@neonlaw.com>",
@@ -2381,7 +2421,7 @@ mod tests {
         msg.dkim = "{@neonlaw.com : pass}".into();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2423,14 +2463,14 @@ mod tests {
     #[tokio::test]
     async fn approval_gate_refuses_a_signature_it_cannot_authenticate() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "0000000000000000000000000000000e";
-        seed_linked_conversation(&surreal, token, notation_id).await;
+        seed_linked_conversation(&application_store, token, notation_id).await;
 
         // An outsider with a leaked token, forging the firm's own address.
         // The DKIM verdict is an explicit *fail* for the firm domain: the
@@ -2447,7 +2487,7 @@ mod tests {
 
         // `cfg()` - not `cfg_dkim()`. This is the shipped configuration.
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2485,9 +2525,12 @@ mod tests {
 
     /// Open a support conversation with no linked matter — the prod state
     /// before any `@link`, where `@approve` would no-op.
-    async fn seed_unlinked_conversation(surreal: &store::surreal::SurrealDb, token: &str) {
+    async fn seed_unlinked_conversation(
+        application_store: &store::application_store::ApplicationStore,
+        token: &str,
+    ) {
         store::email_conversations::open(
-            surreal,
+            application_store,
             &store::email_conversations::NewConversation {
                 token,
                 external_email: "pisces@example.com",
@@ -2504,18 +2547,18 @@ mod tests {
     #[tokio::test]
     async fn link_binds_conversation_and_same_reply_approve_fires() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "0000000000000000000000000000000e";
-        seed_unlinked_conversation(&surreal, token).await;
+        seed_unlinked_conversation(&application_store, token).await;
 
         // One lawyer reply links the thread to the matter, then approves on it.
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2532,7 +2575,7 @@ mod tests {
         .unwrap();
 
         // The conversation is bound to the matter...
-        let conv = store::email_conversations::by_token(&surreal, token)
+        let conv = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap();
@@ -2554,17 +2597,17 @@ mod tests {
     #[tokio::test]
     async fn link_to_unknown_matter_leaves_conversation_unlinked() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "0000000000000000000000000000000f";
-        seed_unlinked_conversation(&surreal, token).await;
+        seed_unlinked_conversation(&application_store, token).await;
 
         let bogus = "11111111-2222-3333-4444-555555555555";
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2581,7 +2624,7 @@ mod tests {
         .unwrap();
 
         // An id with no matter behind it links nothing and fires nothing.
-        let conv = store::email_conversations::by_token(&surreal, token)
+        let conv = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap();
@@ -2603,13 +2646,13 @@ mod tests {
     #[tokio::test]
     async fn forged_close_does_not_close_and_tells_the_cockpit() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "00000000000000000000000000000010";
-        seed_unlinked_conversation(&surreal, token).await;
+        seed_unlinked_conversation(&application_store, token).await;
 
         let mut msg = inbound(
             "Nick <nick@neonlaw.com>",
@@ -2620,7 +2663,7 @@ mod tests {
         msg.dkim = "{@neonlaw.com : fail}".into();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2631,7 +2674,7 @@ mod tests {
         .await
         .unwrap();
 
-        let conv = store::email_conversations::by_token(&surreal, token)
+        let conv = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap();
@@ -2688,13 +2731,13 @@ mod tests {
     #[tokio::test]
     async fn forged_cleared_does_not_release_the_conflict_hold() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "00000000000000000000000000000011";
-        seed_unlinked_conversation(&surreal, token).await;
+        seed_unlinked_conversation(&application_store, token).await;
         let store_svc = storage().await;
 
         let mut forged = inbound(
@@ -2705,7 +2748,7 @@ mod tests {
         );
         forged.dkim = "{@neonlaw.com : fail}".into();
         thread_inbound(
-            &surreal,
+            &application_store,
             &store_svc,
             &cap,
             &rt,
@@ -2716,13 +2759,13 @@ mod tests {
         .await
         .unwrap();
 
-        let conv_id = store::email_conversations::by_token(&surreal, token)
+        let conv_id = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap()
             .id;
         assert!(
-            !super::is_conflict_cleared(&surreal, conv_id).await.unwrap(),
+            !super::is_conflict_cleared(&application_store, conv_id).await.unwrap(),
             "a forged @cleared released the firm-wide conflicts hold"
         );
 
@@ -2730,7 +2773,7 @@ mod tests {
         // conversation is an unscreened, unlinked prospective client, so the
         // hold must still be in force.
         thread_inbound(
-            &surreal,
+            &application_store,
             &store_svc,
             &cap,
             &rt,
@@ -2751,7 +2794,7 @@ mod tests {
             "relay reached a prospective client whose conflict check was never cleared"
         );
         assert!(
-            !super::is_conflict_cleared(&surreal, conv_id).await.unwrap(),
+            !super::is_conflict_cleared(&application_store, conv_id).await.unwrap(),
             "a later lawyer reply must not treat the forged clearance as registered"
         );
         });
@@ -2766,21 +2809,21 @@ mod tests {
     #[tokio::test]
     async fn forged_prose_does_not_relay_or_enter_the_matter_spine() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let project_id = store::notations::find_by_id(&surreal, notation_id)
+        with_native_email_thread_test!(application_store, {
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        let project_id = store::notations::find_by_id(&application_store, notation_id)
             .await
             .unwrap()
             .unwrap()
             .project_id;
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         // Linked, so the conflict gate is already satisfied and the ONLY
         // thing that can stop this relay is the authentication gate.
         let token = "00000000000000000000000000000012";
-        seed_linked_conversation(&surreal, token, notation_id).await;
+        seed_linked_conversation(&application_store, token, notation_id).await;
 
         let mut msg = inbound(
             "Nick <nick@neonlaw.com>",
@@ -2791,7 +2834,7 @@ mod tests {
         msg.dkim = "{@neonlaw.com : fail}".into();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2807,12 +2850,12 @@ mod tests {
             "attacker prose was relayed to the client as the firm"
         );
 
-        let conv_id = store::email_conversations::by_token(&surreal, token)
+        let conv_id = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap()
             .id;
-        let hops = store::email_conversations::messages(&surreal, conv_id)
+        let hops = store::email_conversations::messages(&application_store, conv_id)
             .await
             .unwrap();
         assert!(
@@ -2820,7 +2863,7 @@ mod tests {
             "a to_external hop was journaled for a message that never relayed"
         );
 
-        let spine = store::communications::for_project(&surreal, project_id)
+        let spine = store::communications::for_project(&application_store, project_id)
             .await
             .unwrap();
         assert!(
@@ -2841,14 +2884,14 @@ mod tests {
     #[tokio::test]
     async fn forged_link_leaves_the_conversation_unbound() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
 
         let token = "00000000000000000000000000000013";
-        seed_unlinked_conversation(&surreal, token).await;
+        seed_unlinked_conversation(&application_store, token).await;
 
         // A real, resolvable notation id - the id is not the secret.
         let mut msg = inbound(
@@ -2860,7 +2903,7 @@ mod tests {
         msg.dkim = "{@neonlaw.com : fail}".into();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -2871,7 +2914,7 @@ mod tests {
         .await
         .unwrap();
 
-        let conv = store::email_conversations::by_token(&surreal, token)
+        let conv = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap();
@@ -2892,21 +2935,21 @@ mod tests {
     #[tokio::test]
     async fn a_genuine_reply_still_links_clears_relays_and_closes() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let store_svc = storage().await;
 
         let token = "00000000000000000000000000000014";
-        seed_unlinked_conversation(&surreal, token).await;
+        seed_unlinked_conversation(&application_store, token).await;
 
         // One genuine reply: link the matter, clear the conflict hold, and
         // relay the prose that follows the command lines.
         let body = format!("@link {notation_id}\n@cleared\n\nWe have your estate plan in hand.");
         thread_inbound(
-            &surreal,
+            &application_store,
             &store_svc,
             &cap,
             &rt,
@@ -2922,13 +2965,13 @@ mod tests {
         .await
         .unwrap();
 
-        let conv = store::email_conversations::by_token(&surreal, token)
+        let conv = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(conv.notation_id, Some(notation_id), "@link did not bind");
         assert!(
-            super::is_conflict_cleared(&surreal, conv.id).await.unwrap(),
+            super::is_conflict_cleared(&application_store, conv.id).await.unwrap(),
             "@cleared did not register"
         );
         assert!(
@@ -2940,7 +2983,7 @@ mod tests {
 
         // ...and a second genuine reply still closes the thread.
         thread_inbound(
-            &surreal,
+            &application_store,
             &store_svc,
             &cap,
             &rt,
@@ -2956,7 +2999,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            store::email_conversations::by_token(&surreal, token)
+            store::email_conversations::by_token(&application_store, token)
                 .await
                 .unwrap()
                 .unwrap()
@@ -2970,7 +3013,7 @@ mod tests {
     #[tokio::test]
     async fn first_contact_threads_notification_to_client_message_id() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let cap = CapturingEmail::new();
 
         let mut msg = inbound(
@@ -2982,7 +3025,7 @@ mod tests {
         msg.message_id = Some("client-1@mail.example.com".into());
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &RecordingRuntime::default(),
@@ -3013,14 +3056,17 @@ mod tests {
     }
 
     /// Owner-assigns the email thread onto a Project a Clerk participates on.
-    async fn seat_clerk_on_thread(surreal: &store::surreal::SurrealDb, token: &str) -> SeatedClerk {
-        let conversation = store::email_conversations::by_token(surreal, token)
+    async fn seat_clerk_on_thread(
+        application_store: &store::application_store::ApplicationStore,
+        token: &str,
+    ) -> SeatedClerk {
+        let conversation = store::email_conversations::by_token(application_store, token)
             .await
             .unwrap()
             .unwrap();
-        let seat = open_clerk_project(surreal).await;
+        let seat = open_clerk_project(application_store).await;
         let ingested = store::inbox::ingest_inbound(
-            surreal,
+            application_store,
             &store::inbox::IngestInbound {
                 project_id: None,
                 firm_id: seat.firm,
@@ -3049,9 +3095,14 @@ mod tests {
         )
         .await
         .unwrap();
-        store::inbox::assign(surreal, seat.owner, ingested.conversation_id, seat.project)
-            .await
-            .unwrap();
+        store::inbox::assign(
+            application_store,
+            seat.owner,
+            ingested.conversation_id,
+            seat.project,
+        )
+        .await
+        .unwrap();
         SeatedClerk {
             participation_id: seat.participation,
         }
@@ -3064,9 +3115,11 @@ mod tests {
         participation: uuid::Uuid,
     }
 
-    async fn open_clerk_project(surreal: &store::surreal::SurrealDb) -> OpenClerkProject {
+    async fn open_clerk_project(
+        application_store: &store::application_store::ApplicationStore,
+    ) -> OpenClerkProject {
         let owner = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Owner",
                 "owner@example.com",
@@ -3076,7 +3129,7 @@ mod tests {
         .await
         .unwrap();
         let admin = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Admin",
                 "admin-inbox@example.com",
@@ -3086,7 +3139,7 @@ mod tests {
         .await
         .unwrap();
         let lawyer = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Lawyer",
                 "lawyer-inbox@example.com",
@@ -3095,13 +3148,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let clerk = match store::persons::find_by_email_ci(surreal, "clerk@example.com")
+        let clerk = match store::persons::find_by_email_ci(application_store, "clerk@example.com")
             .await
             .unwrap()
         {
             Some(existing) => existing,
             None => store::persons::create(
-                surreal,
+                application_store,
                 &store::persons::NewPerson::with_role(
                     "Clerk",
                     "clerk@example.com",
@@ -3112,31 +3165,31 @@ mod tests {
             .unwrap(),
         };
         let firm = store::firms::create(
-            surreal,
+            application_store,
             &store::firms::NewFirm {
                 name: "Practice".into(),
                 status: "active".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: store::test_support::seed_entity(application_store).await,
                 admin_dri_person_id: admin.id,
             },
         )
         .await
         .unwrap();
         let project = store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: "inbox-matter".into(),
                 name: "Inbox Matter".into(),
                 status: "open".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: store::test_support::seed_entity(application_store).await,
                 firm_id: Some(firm.id),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        store::projects::designate_dri_in_surreal(
-            surreal,
+        store::projects::designate_dri(
+            application_store,
             project.id,
             lawyer.id,
             store::projects::DriSide::Lawyer,
@@ -3144,7 +3197,7 @@ mod tests {
         .await
         .unwrap();
         let participation = store::projects::add_participation(
-            surreal,
+            application_store,
             project.id,
             clerk.id,
             store::projects::participation_for_role(store::persons::Role::Clerk),
@@ -3162,12 +3215,12 @@ mod tests {
     #[tokio::test]
     async fn clerk_relay_threads_with_the_full_message_id_chain() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
         // A known client — past the prospective-client conflict gate.
-        seed_client(&surreal, "pisces@example.com").await;
+        seed_client(&application_store, "pisces@example.com").await;
 
         // 1. Client first contact carries a message-id.
         let mut first = inbound(
@@ -3178,7 +3231,7 @@ mod tests {
         );
         first.message_id = Some("client-1@mail".into());
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3190,7 +3243,7 @@ mod tests {
         .unwrap();
         let token_addr = cap.captured()[0].reply_to.clone().unwrap();
         let token = super::token_from_to(&token_addr, "parse.neonlaw.com").unwrap();
-        seat_clerk_on_thread(&surreal, &token).await;
+        seat_clerk_on_thread(&application_store, &token).await;
 
         // 2. The participating Clerk relays. A lawyer reply would not.
         let mut reply = inbound(
@@ -3201,7 +3254,7 @@ mod tests {
         );
         reply.message_id = Some("clerk-1@mail".into());
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3228,13 +3281,13 @@ mod tests {
     #[tokio::test]
     async fn clerk_without_assignment_and_revoked_clerk_do_not_relay() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_client(&surreal, "pisces@example.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_client(&application_store, "pisces@example.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3252,7 +3305,7 @@ mod tests {
         let token_addr = cap.captured()[0].reply_to.clone().unwrap();
         let token = super::token_from_to(&token_addr, "parse.neonlaw.com").unwrap();
         store::persons::create(
-            &surreal,
+            &application_store,
             &store::persons::NewPerson::with_role(
                 "Clerk",
                 "clerk@example.com",
@@ -3262,7 +3315,7 @@ mod tests {
         .await
         .unwrap();
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3282,12 +3335,12 @@ mod tests {
             .iter()
             .all(|message| message.to != "pisces@example.com"));
 
-        let seated = seat_clerk_on_thread(&surreal, &token).await;
-        store::projects::remove_participation(&surreal, seated.participation_id)
+        let seated = seat_clerk_on_thread(&application_store, &token).await;
+        store::projects::remove_participation(&application_store, seated.participation_id)
             .await
             .unwrap();
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3312,12 +3365,12 @@ mod tests {
     #[tokio::test]
     async fn clerk_relay_to_an_uncleared_prospect_is_held() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3334,9 +3387,9 @@ mod tests {
         .unwrap();
         let token_addr = cap.captured()[0].reply_to.clone().unwrap();
         let token = super::token_from_to(&token_addr, "parse.neonlaw.com").unwrap();
-        seat_clerk_on_thread(&surreal, &token).await;
+        seat_clerk_on_thread(&application_store, &token).await;
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3367,11 +3420,11 @@ mod tests {
     #[tokio::test]
     async fn first_contact_from_unknown_prompts_conflict_check() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let cap = CapturingEmail::new();
         // pisces is NOT seeded → a prospective client.
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &RecordingRuntime::default(),
@@ -3399,15 +3452,15 @@ mod tests {
     #[tokio::test]
     async fn relay_to_uncleared_prospect_is_held() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
 
         // Prospect first contact (pisces unseeded, no linked matter).
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3426,7 +3479,7 @@ mod tests {
 
         // Lawyer replies with prose but NO @cleared → the relay is held.
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3465,16 +3518,16 @@ mod tests {
     #[tokio::test]
     async fn a_bare_person_row_does_not_clear_the_relay_gate() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         // Exactly what a refused intake leaves: a person, and nothing else.
-        seed_orphan_person(&surreal, "pisces@example.com").await;
+        seed_orphan_person(&application_store, "pisces@example.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3492,7 +3545,7 @@ mod tests {
         let token_addr = cap.captured()[0].reply_to.clone().unwrap();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3524,15 +3577,15 @@ mod tests {
     #[tokio::test]
     async fn a_participation_without_the_client_dri_marker_does_not_clear_the_gate() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
-        seed_unscreened_participant(&surreal, "pisces@example.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
+        seed_unscreened_participant(&application_store, "pisces@example.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3550,7 +3603,7 @@ mod tests {
         let token_addr = cap.captured()[0].reply_to.clone().unwrap();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3576,14 +3629,14 @@ mod tests {
     #[tokio::test]
     async fn cleared_releases_the_relay_to_a_prospect() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
-        seed_lawyer(&surreal, "nick@neonlaw.com").await;
+        with_native_email_thread_test!(application_store, {
+        seed_lawyer(&application_store, "nick@neonlaw.com").await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let cfg = cfg();
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3603,7 +3656,7 @@ mod tests {
 
         // Lawyer clears the check and answers in one reply.
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage().await,
             &cap,
             &rt,
@@ -3622,8 +3675,8 @@ mod tests {
         let token = super::token_from_to(&token_addr, "parse.neonlaw.com").unwrap();
         assert!(
             super::is_conflict_cleared(
-                &surreal,
-                store::email_conversations::by_token(&surreal, &token)
+                &application_store,
+                store::email_conversations::by_token(&application_store, &token)
                     .await
                     .unwrap()
                     .unwrap()
@@ -3645,7 +3698,7 @@ mod tests {
     #[tokio::test]
     async fn clean_first_contact_forwards_attachment_to_lawyer() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let storage = storage().await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -3662,7 +3715,7 @@ mod tests {
         }];
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage,
             &cap,
             &rt,
@@ -3686,7 +3739,7 @@ mod tests {
         use crate::inbound_email::QuarantinedAttachment;
 
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let storage = storage().await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -3702,7 +3755,7 @@ mod tests {
         }];
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage,
             &cap,
             &rt,
@@ -3724,10 +3777,10 @@ mod tests {
     #[tokio::test]
     async fn attachment_on_linked_thread_files_a_document_and_notifies() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let storage = storage().await;
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let project_id = store::notations::find_by_id(&surreal, notation_id)
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        let project_id = store::notations::find_by_id(&application_store, notation_id)
             .await
             .unwrap()
             .unwrap()
@@ -3736,7 +3789,7 @@ mod tests {
         let rt = RecordingRuntime::default();
 
         let token = "0000000000000000000000000000000e";
-        seed_linked_conversation(&surreal, token, notation_id).await;
+        seed_linked_conversation(&application_store, token, notation_id).await;
 
         // The client replies on the matter thread with a PDF attached.
         let mut msg = inbound(
@@ -3752,7 +3805,7 @@ mod tests {
         }];
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage,
             &cap,
             &rt,
@@ -3764,7 +3817,7 @@ mod tests {
         .unwrap();
 
         // The attachment is filed as a document asset on the matter's project.
-        let docs = store::assets::for_project(&surreal, project_id)
+        let docs = store::assets::for_project(&application_store, project_id)
             .await
             .unwrap();
         assert_eq!(docs.len(), 1, "one document filed");
@@ -3784,11 +3837,11 @@ mod tests {
         );
 
         // The transcript records the ingest as a `system` hop.
-        let convo = store::email_conversations::by_token(&surreal, token)
+        let convo = store::email_conversations::by_token(&application_store, token)
             .await
             .unwrap()
             .unwrap();
-        let msgs = store::email_conversations::messages(&surreal, convo.id)
+        let msgs = store::email_conversations::messages(&application_store, convo.id)
             .await
             .unwrap();
         assert!(
@@ -3811,10 +3864,10 @@ mod tests {
     #[tokio::test]
     async fn signature_images_and_already_filed_bytes_are_not_filed_again() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let storage = storage().await;
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let project_id = store::notations::find_by_id(&surreal, notation_id)
+        let notation_id = store::test_support::seed_notation(&application_store).await;
+        let project_id = store::notations::find_by_id(&application_store, notation_id)
             .await
             .unwrap()
             .unwrap()
@@ -3822,7 +3875,7 @@ mod tests {
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
         let token = "0000000000000000000000000000000d";
-        seed_linked_conversation(&surreal, token, notation_id).await;
+        seed_linked_conversation(&application_store, token, notation_id).await;
 
         let part = |filename: &str, content_type: &str, bytes: &[u8]| InboundAttachment {
             filename: filename.into(),
@@ -3852,12 +3905,12 @@ mod tests {
                 msg.attachments
                     .push(part("notice.pdf", "application/pdf", b"%PDF notice"));
             }
-            thread_inbound(&surreal, &storage, &cap, &rt, &cfg(), &msg, eml)
+            thread_inbound(&application_store, &storage, &cap, &rt, &cfg(), &msg, eml)
                 .await
                 .unwrap();
         }
 
-        let docs = store::assets::for_project(&surreal, project_id)
+        let docs = store::assets::for_project(&application_store, project_id)
             .await
             .unwrap();
         let mut filenames: Vec<_> = docs
@@ -3889,7 +3942,7 @@ mod tests {
     #[tokio::test]
     async fn attachment_on_unlinked_thread_is_archived_not_filed() {
         #[rustfmt::skip]
-        with_native_email_thread_test!(surreal, {
+        with_native_email_thread_test!(application_store, {
         let storage = storage().await;
         let cap = CapturingEmail::new();
         let rt = RecordingRuntime::default();
@@ -3897,7 +3950,7 @@ mod tests {
         // A conversation with NO linked matter — nothing to file documents under.
         let token = "0000000000000000000000000000000f";
         store::email_conversations::open(
-            &surreal,
+            &application_store,
             &store::email_conversations::NewConversation {
                 token,
                 external_email: "pisces@example.com",
@@ -3923,7 +3976,7 @@ mod tests {
         }];
 
         thread_inbound(
-            &surreal,
+            &application_store,
             &storage,
             &cap,
             &rt,
@@ -3935,7 +3988,7 @@ mod tests {
         .unwrap();
 
         // No document is filed...
-        let docs = store::assets::list_all(&surreal).await.unwrap();
+        let docs = store::assets::list_all(&application_store).await.unwrap();
         assert!(
             docs.iter().all(|d| d.project_id.is_none()),
             "no document filed on a matter without a linked one"

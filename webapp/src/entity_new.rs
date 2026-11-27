@@ -76,8 +76,8 @@ pub async fn get_entity_new_form() -> Result<EntityNewView, ServerFnError> {
 
     // Both reference tables live in SurrealDB (ENG-20); ordered by name
     // so the pickers read alphabetically.
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let types = store::entity_types::list(&surreal, &[])
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let types = store::entity_types::list(&application_store, &[])
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -86,7 +86,7 @@ pub async fn get_entity_new_form() -> Result<EntityNewView, ServerFnError> {
             label: t.name,
         })
         .collect();
-    let jurisdictions = store::jurisdictions::list_all(&surreal)
+    let jurisdictions = store::jurisdictions::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()

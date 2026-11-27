@@ -392,14 +392,14 @@ pub fn filed_letters(
 /// A store read failed.
 #[cfg(feature = "server")]
 pub async fn onboarding_runs(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
 ) -> Result<Vec<OnboardingRun>, String> {
-    let notations = store::notations::list_by_project(surreal, project_id)
+    let notations = store::notations::list_by_project(application_store, project_id)
         .await
         .map_err(|e| e.to_string())?;
     let template_ids: Vec<uuid::Uuid> = notations.iter().map(|n| n.template_id).collect();
-    let templates = store::templates::find_by_ids(surreal, &template_ids)
+    let templates = store::templates::find_by_ids(application_store, &template_ids)
         .await
         .map_err(|e| e.to_string())?;
     Ok(notations
@@ -426,7 +426,7 @@ pub async fn onboarding_runs(
 /// The Template lookup failed.
 #[cfg(feature = "server")]
 pub async fn load_page_draft(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     project_id: uuid::Uuid,
     draft: Option<&str>,
@@ -434,14 +434,15 @@ pub async fn load_page_draft(
     let Some(code) = draft.and_then(super::notations::draft_code) else {
         return Ok(PageDraft::Missing);
     };
-    let Some(template) = store::templates::resolve_exact(surreal, Some(project_id), &code)
-        .await
-        .map_err(|e| e.to_string())?
+    let Some(template) =
+        store::templates::resolve_exact(application_store, Some(project_id), &code)
+            .await
+            .map_err(|e| e.to_string())?
     else {
         return Ok(PageDraft::Missing);
     };
     Ok(
-        match store::templates::body(surreal, storage, &template).await {
+        match store::templates::body(application_store, storage, &template).await {
             Ok(body) => page_draft(&body),
             Err(error) => {
                 tracing::error!(%error, template_id = %template.id, "page draft body refused");

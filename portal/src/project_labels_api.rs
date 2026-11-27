@@ -22,14 +22,18 @@ async fn firm_for_project(
     if session.viewing_as_dri.is_some() {
         return Err(ApiError::NotFound);
     }
-    let viewer =
-        store::access::matter_viewer(&state.surreal, session.person_id, session.role, project_id)
-            .await
-            .map_err(ApiError::Db)?;
+    let viewer = store::access::matter_viewer(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        project_id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
         return Err(ApiError::NotFound);
     }
-    store::projects::find_by_id(&state.surreal, project_id)
+    store::projects::find_by_id(&state.application_store, project_id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .and_then(|project| project.firm_id)
@@ -104,7 +108,7 @@ pub(crate) async fn command(
         &command,
         LabelCommand::Create { .. } | LabelCommand::Retire { .. } | LabelCommand::Restore { .. }
     ) {
-        require_firm_administration(&state.surreal, &session, firm_id)
+        require_firm_administration(&state.application_store, &session, firm_id)
             .await
             .map_err(IntoResponse::into_response)?;
     }

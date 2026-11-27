@@ -91,7 +91,7 @@ async fn admitted_merge(database: &str, options: PgConnectOptions) -> Result<()>
                 .fetch_one(pg.pool())
                 .await?;
             anyhow::ensure!(current == "navigator_app", "merge used wrong login");
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let parent =
                 native_project::create(&format!("synthetic-app-merge-{}", uuid::Uuid::new_v4()))
                     .await;

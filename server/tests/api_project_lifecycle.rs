@@ -25,8 +25,8 @@ struct Fixture {
 async fn enroll_fixture_history(pg: &PostgresDb, with_notation: bool) {
     sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,scope,completed_at) VALUES($1,1,'completed','global',now())")
         .bind(Uuid::now_v7()).execute(pg.pool()).await.unwrap();
-    for family in store::postgres_backfill::family::Family::all() {
-        if with_notation || *family != store::postgres_backfill::family::Family::Notation {
+    for family in store::postgres::history::Family::all() {
+        if with_notation || *family != store::postgres::history::Family::Notation {
             store::test_support::seed_postgres_family(pg, *family).await;
         }
     }
@@ -103,7 +103,10 @@ impl Fixture {
             signature_provider: provider.unwrap_or_else(|| {
                 std::sync::Arc::new(portal::signature::FakeSignatureProvider::new())
             }),
-            ..portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await
+            ..portal::test_support::app_state(
+                store::application_store::ApplicationStore::uninitialized(),
+            )
+            .await
         };
         Some(Self {
             app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
@@ -431,7 +434,7 @@ async fn postgres_status_reports_repository_remotes_and_requested_envelopes() {
     PostgresDb::with_test_db(
         fx.pg.clone(),
         store::signatures::record_request(
-            &store::surreal::SurrealDb::uninitialized(),
+            &store::application_store::ApplicationStore::uninitialized(),
             notation,
             store::signatures::SignatureProvider::DocuSign,
             &envelope,
@@ -465,7 +468,7 @@ async fn agreements_list_existing_runs_and_filings_only_on_participating_project
     PostgresDb::with_test_db(
         fx.pg.clone(),
         store::signatures::record_request(
-            &store::surreal::SurrealDb::uninitialized(),
+            &store::application_store::ApplicationStore::uninitialized(),
             run,
             store::signatures::SignatureProvider::DocuSign,
             &envelope,

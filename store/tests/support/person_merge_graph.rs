@@ -1,9 +1,9 @@
 //! Real canonical rows shared by merge rollback and fixed-role acceptance.
 use serde_json::{json, Value};
+use store::application_store::ApplicationStore;
 use store::postgres::PostgresDb;
 use store::project_references::Party;
 use store::relationships::{Endpoint, NewRelationship};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 pub struct Scenario {
@@ -18,7 +18,10 @@ pub struct Scenario {
     emails: Vec<String>,
 }
 
-async fn project(db: &SurrealDb, parent: &store::projects::Project) -> store::projects::Project {
+async fn project(
+    db: &ApplicationStore,
+    parent: &store::projects::Project,
+) -> store::projects::Project {
     store::projects::create(
         db,
         &store::projects::NewProject {
@@ -35,7 +38,7 @@ async fn project(db: &SurrealDb, parent: &store::projects::Project) -> store::pr
 }
 
 async fn typed_edges(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     target: &store::projects::Project,
     kept: Uuid,
     dropped: Uuid,
@@ -94,7 +97,7 @@ async fn relationship_rows(pg: &PostgresDb) -> Vec<Value> {
 }
 
 async fn link_identity(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     target: &store::projects::Project,
     other: &store::projects::Project,
     kept: Uuid,
@@ -117,18 +120,17 @@ async fn link_identity(
     store::projects::add_participation(db, target.id, dropped, "client")
         .await
         .unwrap();
-    store::projects::designate_dri_in_surreal(
-        db,
-        target.id,
-        dropped,
-        store::projects::DriSide::Client,
-    )
-    .await
-    .unwrap();
+    store::projects::designate_dri(db, target.id, dropped, store::projects::DriSide::Client)
+        .await
+        .unwrap();
 }
 
 impl Scenario {
-    pub async fn seed(db: &SurrealDb, pg: &PostgresDb, parent: &store::projects::Project) -> Self {
+    pub async fn seed(
+        db: &ApplicationStore,
+        pg: &PostgresDb,
+        parent: &store::projects::Project,
+    ) -> Self {
         let target = project(db, parent).await;
         let other = project(db, parent).await;
         let kept_email = format!("kept-{}@example.test", Uuid::new_v4());
@@ -219,7 +221,7 @@ impl Scenario {
         }
     }
 
-    pub async fn assert_merged(&self, db: &SurrealDb, pg: &PostgresDb) {
+    pub async fn assert_merged(&self, db: &ApplicationStore, pg: &PostgresDb) {
         let expected = store::cap_table_holdings::CapTableHolding {
             holder: Party::person(self.kept),
             ..self.holding.clone()
