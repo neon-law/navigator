@@ -915,6 +915,45 @@ mod tests {
             .is_empty());
     }
 
+    async fn assert_booking_for_promoted_lawyer(
+        db: &crate::application_store::ApplicationStore,
+        pg: &crate::postgres::PostgresDb,
+        firm_id: uuid::Uuid,
+        assignment: &projects::PersonProjectRole,
+        calendar_id: &str,
+    ) {
+        sqlx::query("UPDATE person_project_role SET participation = 'lawyer' WHERE id = $1")
+            .bind(assignment.id)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        let person_id = assignment.person_id;
+        assert_no_shared_calendars(pg, &[firm_id], person_id).await;
+        let booking = super::booking_calendars(pg, &[firm_id], person_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            booking[&firm_id][0].calendar_id.as_deref(),
+            Some(calendar_id)
+        );
+        assert!(super::booking_calendars(pg, &[], person_id)
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("UPDATE project SET calendar_id = NULL WHERE id = $1")
+            .bind(assignment.project_id)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        assert!(super::booking_calendars(pg, &[firm_id], person_id)
+            .await
+            .unwrap()
+            .is_empty());
+        projects::set_calendar_id(db, assignment.project_id, calendar_id)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn assignments_share_calendar_access_and_freebusy_for_the_same_roster() {
         use crate::firms::{self, FirmMembership, NewPersonFirmRole};
@@ -989,37 +1028,7 @@ mod tests {
                         && shared.people.contains(&person.id)));
                 assert_no_shared_calendars(&pg, &[], person.id).await;
                 if role == Role::Owner {
-                    sqlx::query(
-                        "UPDATE person_project_role SET participation = 'lawyer' WHERE id = $1",
-                    )
-                    .bind(row.id)
-                    .execute(pg.pool())
-                    .await
-                    .unwrap();
-                    assert_no_shared_calendars(&pg, &[firm_id], person.id).await;
-                    let booking = super::booking_calendars(&pg, &[firm_id], person.id)
-                        .await
-                        .unwrap();
-                    assert_eq!(
-                        booking[&firm_id][0].calendar_id.as_ref(),
-                        Some(&calendar_id)
-                    );
-                    assert!(super::booking_calendars(&pg, &[], person.id)
-                        .await
-                        .unwrap()
-                        .is_empty());
-                    sqlx::query("UPDATE project SET calendar_id = NULL WHERE id = $1")
-                        .bind(project_id)
-                        .execute(pg.pool())
-                        .await
-                        .unwrap();
-                    assert!(super::booking_calendars(&pg, &[firm_id], person.id)
-                        .await
-                        .unwrap()
-                        .is_empty());
-                    projects::set_calendar_id(&db, project_id, &calendar_id)
-                        .await
-                        .unwrap();
+                    assert_booking_for_promoted_lawyer(&db, &pg, firm_id, &row, &calendar_id).await;
                 }
                 if row.is_lawyer_dri {
                     continue;
