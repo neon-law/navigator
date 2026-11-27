@@ -558,7 +558,7 @@ mod tests {
         let text = render(&calendar(), &[utc]).unwrap();
         assert!(text.contains("DTSTART:20261103T010000Z\r\n"));
         assert!(!text.contains("VTIMEZONE"));
-        assert!(!text.contains("VALARM"));
+        assert!(text.contains("TRIGGER;VALUE=DATE-TIME:20261103T004500Z"));
     }
 
     #[test]
