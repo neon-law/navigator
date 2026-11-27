@@ -273,13 +273,13 @@ pub type ScheduleStarter =
 
 /// Register the billing canary and Notation reset before launch and start
 /// their schedule loops after launch.
-struct RegisteredSchedules {
+struct TimedJobs {
     billing_canary: Option<billing_canary::BillingCanaryWorkflow>,
     schedule_billing_canary: bool,
     notation_reset: Option<notation_reset::NotationResetWorkflow>,
 }
 
-impl RegisteredSchedules {
+impl TimedJobs {
     fn register(
         dbos: &dbos::DBOS,
         billing_canary: Option<billing_canary::Context>,
@@ -525,14 +525,11 @@ impl Executor {
             schedules.purchase_activation,
             purchase_activation::register,
         )?;
-        let registered_schedules = RegisteredSchedules::register(
-            &dbos,
-            schedules.billing_canary,
-            schedules.notation_reset,
-        )?;
+        let timed_jobs =
+            TimedJobs::register(&dbos, schedules.billing_canary, schedules.notation_reset)?;
         let billing_digest =
             register_optional(&dbos, schedules.billing_digest, billing_digest::register)?;
-        let manual = registered_schedules.manual_starts(billing_digest.clone());
+        let manual = timed_jobs.manual_starts(billing_digest.clone());
         let profit_digest =
             register_optional(&dbos, schedules.profit_digest, profit_digest::register)?;
         let ceo_digest = register_optional(&dbos, schedules.ceo_digest, ceo_digest::register)?;
@@ -592,7 +589,7 @@ impl Executor {
                 imports,
             },
         ));
-        registered_schedules.spawn(&stop, &mut loops);
+        timed_jobs.spawn(&stop, &mut loops);
         loops.extend(starters.map(|start| start(stop.clone())));
         Ok(Self {
             dbos,
@@ -901,7 +898,7 @@ mod tests {
             } else {
                 context
             };
-            let ports = super::RegisteredSchedules::register(&dbos, Some(context), None).unwrap();
+            let ports = super::TimedJobs::register(&dbos, Some(context), None).unwrap();
             assert!(
                 ports.manual_starts(None).billing_canary.is_some(),
                 "registration is independent of automatic starts"

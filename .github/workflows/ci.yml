@@ -869,14 +869,16 @@ jobs:
           # Tee the suite so a red run still has the panic after the log
           # stream is gone; the step after this one uploads the JUnit on every
           # outcome and the tee file on failure.
+          # Finish the independent checks and report coverage even when a test fails.
+          test_status=0
           cargo nextest run --workspace --no-fail-fast --profile ci \
-              2>&1 | tee /tmp/navigator-workspace-tests.log
+              2>&1 | tee /tmp/navigator-workspace-tests.log || test_status=$?
           # The workspace run excludes the custom Cucumber harnesses.
           # Keep the active fixture and workflow-document checks alongside the browser gate.
           cargo test -p features --lib --test=acroform_fill \
               --test=compliance_filings_workflow_shapes --test=legal_workflow_shapes \
-              --test=nonprofit_workflow_shapes --test=template_validate
-          cargo test --workspace --doc
+              --test=nonprofit_workflow_shapes --test=template_validate || test_status=$?
+          cargo test --workspace --doc || test_status=$?
           # THE COVERAGE GATE. `--fail-under-lines` exits non-zero when total
           # workspace line coverage is under the floor, which fails this job and
           # therefore the `ci` merge gate. There is no upload, no separate
@@ -953,7 +955,8 @@ jobs:
           # The floor is 92.0% (ENG-1375 raises it to 95.0%). The per-file
           # table this prints is the diagnostic when it trips.
           cargo llvm-cov report --fail-under-lines 92.0 \
-              --ignore-filename-regex "(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\\.rs\$"
+              --ignore-filename-regex "(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\\.rs\$" || test_status=$?
+          exit "$test_status"
       - name: stop covered PostgreSQL fixture
         if: always()
         run: docker rm -f test-postgres
