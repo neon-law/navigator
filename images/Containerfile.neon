@@ -222,7 +222,7 @@ RUN NO_DOWNLOADS=1 dx build --package webapp --platform web --release --debug-sy
 # Git-backed Draft reads and governed expunge use the packaged Git executable,
 # exec-path scripts and POSIX shell utilities. Keep Debian's package dependency
 # closure intact rather than copying an ELF binary without its helpers.
-FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS runtime-base
+FROM debian:bookworm-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e AS runtime-base
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
