@@ -527,7 +527,7 @@ pub async fn set_deadline_scheduling_policy(
     )
     .bind(firm_id)
     .bind(buffer)
-    .bind(end)
+    .bind(end.format("%H:%M:%S").to_string())
     .bind(serde_json::Value::Object(effort))
     .execute(db.pool())
     .await?;

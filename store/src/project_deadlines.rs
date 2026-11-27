@@ -365,7 +365,7 @@ pub async fn scheduling_policy(
         return Ok(SchedulingPolicy::default());
     };
     let pg = crate::postgres::matter::authority_for("project_deadlines").await?;
-    let settings = sqlx::query_as::<_, (i32, chrono::NaiveTime)>(
+    let settings = sqlx::query_as::<_, (i32, String)>(
         "SELECT deadline_buffer_minutes, deadline_end_of_business FROM firm_calendar_settings WHERE firm_id = $1",
     )
     .bind(firm_id)
@@ -375,6 +375,9 @@ pub async fn scheduling_policy(
     settings.map_or_else(
         || Ok(SchedulingPolicy::default()),
         |(buffer, end)| {
+            let end = end.parse().map_err(|_| {
+                DeadlineError::Invalid("invalid stored end-of-business time".into())
+            })?;
             SchedulingPolicy::new(i64::from(buffer), end)
                 .map_err(|error| DeadlineError::Invalid(error.into()))
         },

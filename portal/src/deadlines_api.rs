@@ -174,6 +174,23 @@ async fn apply_calendar_schedule(
     })
 }
 
+async fn saved_deadline(
+    state: &ApiState,
+    row: &store::project_deadlines::Deadline,
+    policy: model::project_deadlines::SchedulingPolicy,
+    actor: Option<Uuid>,
+) -> serde_json::Value {
+    mirror_after_write(state, row.project_id).await;
+    let schedule = apply_calendar_schedule(state, row, actor).await;
+    let mut result = scheduled_row(row, policy);
+    if row.status == store::project_deadlines::STATUS_OPEN {
+        if let Some(schedule) = schedule {
+            result["work_schedule"] = schedule;
+        }
+    }
+    result
+}
+
 /// `GET /app/api/projects/{id}/deadlines`
 pub(crate) async fn list_deadlines(
     State(state): State<ApiState>,
@@ -260,11 +277,7 @@ pub(crate) async fn create_deadline(
     )
     .await
     .map_err(map_deadline)?;
-    mirror_after_write(&state, id).await;
-    let mut result = scheduled_row(&row, policy);
-    if let Some(schedule) = apply_calendar_schedule(&state, &row, session.person_id).await {
-        result["work_schedule"] = schedule;
-    }
+    let result = saved_deadline(&state, &row, policy, session.person_id).await;
     Ok((StatusCode::CREATED, Json(result)).into_response())
 }
 
@@ -317,11 +330,7 @@ pub(crate) async fn update_deadline(
     )
     .await
     .map_err(map_deadline)?;
-    mirror_after_write(&state, id).await;
-    let mut result = scheduled_row(&row, policy);
-    if let Some(schedule) = apply_calendar_schedule(&state, &row, session.person_id).await {
-        result["work_schedule"] = schedule;
-    }
+    let result = saved_deadline(&state, &row, policy, session.person_id).await;
     Ok(Json(result).into_response())
 }
 
@@ -332,12 +341,12 @@ pub(crate) async fn complete_deadline(
     Path((id, deadline_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
+    let policy = policy(&state, id).await?;
     let row = store::project_deadlines::complete(&state.application_store, id, deadline_id)
         .await
         .map_err(map_deadline)?;
-    mirror_after_write(&state, id).await;
-    let _ = apply_calendar_schedule(&state, &row, session.person_id).await;
-    Ok(Json(row).into_response())
+    let result = saved_deadline(&state, &row, policy, session.person_id).await;
+    Ok(Json(result).into_response())
 }
 
 /// `POST /app/api/projects/{id}/deadlines/{deadline_id}/cancel`
@@ -347,12 +356,12 @@ pub(crate) async fn cancel_deadline(
     Path((id, deadline_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
+    let policy = policy(&state, id).await?;
     let row = store::project_deadlines::cancel(&state.application_store, id, deadline_id)
         .await
         .map_err(map_deadline)?;
-    mirror_after_write(&state, id).await;
-    let _ = apply_calendar_schedule(&state, &row, session.person_id).await;
-    Ok(Json(row).into_response())
+    let result = saved_deadline(&state, &row, policy, session.person_id).await;
+    Ok(Json(result).into_response())
 }
 
 /// `POST /app/api/projects/{id}/deadlines/{deadline_id}/reopen`
@@ -362,10 +371,10 @@ pub(crate) async fn reopen_deadline(
     Path((id, deadline_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
+    let policy = policy(&state, id).await?;
     let row = store::project_deadlines::reopen(&state.application_store, id, deadline_id)
         .await
         .map_err(map_deadline)?;
-    mirror_after_write(&state, id).await;
-    let _ = apply_calendar_schedule(&state, &row, session.person_id).await;
-    Ok(Json(row).into_response())
+    let result = saved_deadline(&state, &row, policy, session.person_id).await;
+    Ok(Json(result).into_response())
 }
