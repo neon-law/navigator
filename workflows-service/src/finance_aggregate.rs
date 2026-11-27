@@ -31,18 +31,13 @@
 //! never enter a span (see the observability skill). Dash0 receives the spans
 //! through the deployment's collector; there is no Dash0 code here.
 
-#[cfg(feature = "restate-compatibility")]
-use std::sync::Arc;
-
 use chrono::Utc;
 use cloud::{StorageError, StorageService};
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use serde::{Deserialize, Serialize};
 use store::finance_aggregate::{self, FinanceInput, Parameters};
 use store::surreal::SurrealDb;
-#[cfg(feature = "restate-compatibility")]
-use tracing::Instrument;
+
 use uuid::Uuid;
 
 use crate::workflow_step_error::WorkflowStepError;
@@ -65,23 +60,6 @@ pub struct FinanceAggregateReport {
     pub matters: i64,
     pub attorneys: usize,
     pub report_key: String,
-}
-
-/// Service registered with the Restate endpoint: the worker's store facade
-/// handle and object storage, both opened once at boot.
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct FinanceAggregateService {
-    surreal: SurrealDb,
-    storage: Arc<dyn StorageService>,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl FinanceAggregateService {
-    #[must_use]
-    pub fn new(surreal: SurrealDb, storage: Arc<dyn StorageService>) -> Self {
-        Self { surreal, storage }
-    }
 }
 
 fn terminal(message: impl Into<String>) -> WorkflowStepError {
@@ -151,7 +129,7 @@ pub async fn persist(
 }
 
 /// The root span of a `FinanceAggregate::run` invocation. Identifiers only.
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn run_span(
     run_id: &str,
     req: &RunRequest,
@@ -166,109 +144,6 @@ fn run_span(
         navigator.keep = true,
         matters = tracing::field::Empty,
     )
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "FinanceAggregate")]
-impl FinanceAggregateService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        req: Json<RunRequest>,
-    ) -> Result<Json<FinanceAggregateReport>, HandlerError> {
-        let req = req.into_inner();
-        let run_id = ctx.key().to_string();
-        let span = run_span(&run_id, &req, ctx.invocation_id());
-        {
-            let headers = ctx.headers();
-            telemetry::set_span_parent(
-                &span,
-                headers.get("traceparent").map(String::as_str),
-                headers.get("tracestate").map(String::as_str),
-            );
-        }
-        let parameters = req.parameters.unwrap_or_default();
-
-        async {
-            let storage = Arc::clone(&self.storage);
-            let code = req.project_code.clone();
-            let input: FinanceInput = ctx
-                .run(move || {
-                    let span = tracing::info_span!(
-                        "finance_aggregate.ingest",
-                        matters = tracing::field::Empty
-                    );
-                    let recorded = span.clone();
-                    async move {
-                        let input = read_input(storage.as_ref(), &code)
-                            .await
-                            .map_err(WorkflowStepError::into_handler_error)?;
-                        recorded.record("matters", input.matters.len());
-                        Ok(Json(input))
-                    }
-                    .instrument(span)
-                })
-                .name("ingest")
-                .await?
-                .into_inner();
-            tracing::Span::current().record("matters", input.matters.len());
-
-            let aggregate_run_id = run_id.clone();
-            let report = ctx
-                .run(move || {
-                    let span = tracing::info_span!(
-                        "finance_aggregate.aggregate",
-                        groups = input.attorneys.len()
-                            + input.states.len()
-                            + input.verticals.len()
-                            + input.months.len()
-                    );
-                    async move {
-                        compute(&input, parameters, &aggregate_run_id)
-                            .map(Json)
-                            .map_err(WorkflowStepError::into_handler_error)
-                    }
-                    .instrument(span)
-                })
-                .name("aggregate")
-                .await?
-                .into_inner();
-
-            let surreal = self.surreal.clone();
-            let storage = Arc::clone(&self.storage);
-            let project_id = req.project_id;
-            let key = finance_aggregate::report_key(&req.project_code, &run_id);
-            let stored_report = report.clone();
-            let stored_key = key.clone();
-            ctx.run(move || {
-                let span = tracing::info_span!("finance_aggregate.store", report_key = %stored_key);
-                async move {
-                    persist(
-                        storage.as_ref(),
-                        &surreal,
-                        project_id,
-                        &stored_key,
-                        &stored_report,
-                    )
-                    .await
-                    .map_err(WorkflowStepError::into_handler_error)
-                }
-                .instrument(span)
-            })
-            .name("store")
-            .await?;
-
-            Ok(Json(FinanceAggregateReport {
-                run_id,
-                matters: report.totals.matters,
-                attorneys: report.by_attorney.len(),
-                report_key: key,
-            }))
-        }
-        .instrument(span)
-        .await
-    }
 }
 
 #[cfg(test)]

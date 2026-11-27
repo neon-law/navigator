@@ -1,46 +1,16 @@
 # Durable workflows
 
-How Navigator runs durable work — retainer intake, Drive sync, and scheduled operations work — on Restate and DBOS, and
-how an operator tells *why one didn't run*.
+Navigator runs retainer intake, Drive sync, and scheduled operations on DBOS. PostgreSQL records workflow state,
+checkpoints, and recoverable work.
 
-> **The one rule that costs two hours when forgotten:** a registered Restate deployment is a **snapshot, not a
-  subscription**. Rolling a new worker image does **not** re-register it. A service you just added (or its new handlers)
-  stays invisible at the ingress — `404 "service not found"` — until you **re-register the deployment**. See [The
-  registration gotcha](#the-registration-gotcha).
+## Submission and execution
 
-> **The mental model:** **Kubernetes owns the clock; Restate owns the journal.** A trigger fires an invocation once;
-  Restate makes its execution durable — journals every step, retries failures, runs it to completion on the worker.
+`workflows` defines submission and the state-machine interface. `workflows-service` registers and runs the DBOS
+handlers. Deployed `web` hosts the executor. The loopback ingress authenticates callers that submit over HTTP. Notation
+and Project Slack startup require a verified PostgreSQL ownership epoch.
 
-## Two sides: submit vs. run
-
-Durable execution is split across two crates so the rest of the workspace never binds to `restate-sdk`.
-
-| | `workflows` (lib) | `workflows-service` (bin) |
-| --- | --- | --- |
-| Role | **Outbound** — *submit* a job | **Inbound** — *run* the handlers |
-| Who calls it | `web` and the `archives` trigger | Restate dials *into* it |
-| Runtime | `InMemoryRuntime` (dev/CI) or `RestateRuntime` | the worker itself |
-| `restate-sdk` | no | **yes — the only crate with it** |
-| Tested via | `wiremock` (exact HTTP shape) | `cargo test -p workflows-service` |
-
-One worker pod hosts every Restate service. New workflows bind onto the worker endpoint, never a new pod. Today it
-serves two virtual objects — `notation` (questionnaire + workflow timelines on one journal) and `project-slack`
-(per-Project private-channel notices: the client-view notice, and the push-to-`main` notice a Project repository's CI
-reports through `POST /app/api/projects/{id}/events/main-push`, posted once per `(sha, run attempt)`) — and the durable
-workflows `Archives`, `BillingCanary`, `BillingDigest`, `ReconcileInvoices`, `DriDigest`, `FinanceAggregate` ([finance
-aggregate](finance-aggregate.md)), `GeneralNag`, `NotationReset`, and `NightlyProjectUpdate` with its tagged children.
-The exact set is the single source of truth in `workflows_service::registry`, whose tests assert every workflow name is
-PascalCase (template filenames follow the separate snake_case convention `N103` enforces) and that the registry never
-drifts from the worker's actual `.bind(...)` calls — one worker, every service. In the reference deploy the worker runs
-behind `workflows.your-domain.example`.
-
-`Heartbeat` runs on DBOS. `GeneralNag` and `DriDigest` also have default-off DBOS schedules for staged migration; their
-Restate services and CronJobs remain available until deployment configuration switches engines together. See
-[`dbos-durability.md`](dbos-durability.md) for flags, schedule ids, recovery behavior, and the Slack delivery boundary.
-
-The runtime is chosen by `RESTATE_BROKER_URL`: unset means in-process / in-memory, so KIND works with zero config; set
-means the `RestateRuntime` adapter posts to the broker over HTTP. The same selection is used in `portal::main` and the
-`archives` trigger.
+The workflow registry in `workflows_service::registry` names the service and trigger contracts. [DBOS
+durability](dbos-durability.md) describes scheduling, recovery, and delivery receipts.
 
 ## How workflows start
 

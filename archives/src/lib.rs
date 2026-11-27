@@ -52,8 +52,7 @@ pub use snapshot::{
     snapshot_key, SnapshotConfig, SnapshotOutcome, APPLICATION_LANE, TELEMETRY_LANE,
 };
 pub use tables::{fetch_batch, ALL_TABLES};
-#[cfg(feature = "restate-compatibility")]
-pub use workflow::ArchivesService;
+
 pub use workflow::{RunReport, RunRequest};
 
 mod write;

@@ -20,15 +20,3 @@ impl WorkflowStepError {
         Self::Terminal(message.into())
     }
 }
-
-#[cfg(feature = "restate-compatibility")]
-impl WorkflowStepError {
-    /// Keep terminal shared failures fatal at the compatibility handler boundary.
-    #[must_use]
-    pub fn into_handler_error(self) -> restate_sdk::prelude::HandlerError {
-        match self {
-            Self::Retryable(error) => restate_sdk::prelude::HandlerError::from(error),
-            Self::Terminal(message) => restate_sdk::prelude::TerminalError::new(message).into(),
-        }
-    }
-}

@@ -17,8 +17,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use serde::{Deserialize, Serialize};
 use store::config::SocialEgressGate;
 use store::social_accounts::SocialProvider;
@@ -604,64 +603,6 @@ fn occurred_at(published_at: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(published_at)
         .ok()
         .map(DateTime::from)
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "YoutubeCommentsPoller")]
-impl YoutubeCommentsPollerService {
-    /// One polling tick: resolve targets once, then journal one step per
-    /// video. A video whose poll fails counts as failed instead of failing
-    /// the tick, so one deleted video can never wedge the schedule; the
-    /// next tick re-reads it.
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        Json(_request): Json<PollRequest>,
-    ) -> Result<Json<PollReport>, HandlerError> {
-        let service = self.clone();
-        let targets = ctx
-            .run(move || async move {
-                service
-                    .poll_targets()
-                    .await
-                    .map(Json)
-                    .map_err(|error| HandlerError::from(error.to_string()))
-            })
-            .name("load-youtube-poll-targets")
-            .await?
-            .into_inner();
-        let mut report = PollReport {
-            videos: targets.len(),
-            ..PollReport::default()
-        };
-        for (index, target) in targets.into_iter().enumerate() {
-            let service = self.clone();
-            match ctx
-                .run(move || async move {
-                    service
-                        .poll_video(&target)
-                        .await
-                        .map(Json)
-                        .map_err(|error| HandlerError::from(error.to_string()))
-                })
-                .name(format!("poll-youtube-comments-{index}"))
-                .await
-            {
-                Ok(outcome) => {
-                    let outcome: VideoOutcome = outcome.into_inner();
-                    report.ingested += outcome.ingested;
-                    report.deduped += outcome.deduped;
-                    report.skipped += outcome.skipped;
-                }
-                Err(error) => {
-                    tracing::warn!(video_index = index, %error, "YouTube comment poll failed");
-                    report.failed += 1;
-                }
-            }
-        }
-        Ok(Json(report))
-    }
 }
 
 #[cfg(test)]

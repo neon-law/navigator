@@ -1,24 +1,12 @@
-//! DBOS port of the `notation` Restate virtual object.
+//! DBOS execution for Notation state machines.
 //!
-//! The Restate object (`notation_service.rs`) provides one serialized lane per
-//! `notation_id`, four K/V values for the two machines' spec and state, and
-//! journaled side effects. DBOS has no virtual-object primitive, so the port
-//! reproduces the three guarantees with its own pieces:
-//!
-//! - **The lane** combines durable pending-operation admission with a live
-//!   PostgreSQL advisory lock (`store::notation_machine_state::acquire_lane`) —
-//!   questionnaire and workflow transitions on one notation still serialize,
-//!   including failure and repair. A checkpointed logical UUID survives
-//!   repair forks; completion releases ownership atomically with its result.
-//!   The Restate object has its own lane;
-//!   operators must drain it before moving a notation to DBOS.
-//! - **The K/V state** is the `notation_machine_state` row; every state move
-//!   is a compare-and-set step (`apply_transition`), so a recovery replay
-//!   re-derives the same outcome instead of overwriting a newer one.
-//! - **The side effects** run as DBOS steps through the same shared logic the
-//!   Restate handlers call (`crate::notation_logic`). Completed checkpoints
-//!   are reused. Effects remain at least once when a process dies after a
-//!   send or journal append but before its checkpoint commits.
+//! - Durable pending-operation admission and a PostgreSQL advisory lock serialize questionnaire
+//!   and workflow transitions for a Notation. A checkpointed UUID preserves ownership through
+//!   repair, and completion releases ownership atomically with its result.
+//! - Compare-and-set updates to `notation_machine_state` make recovery replay yield the same
+//!   outcome without overwriting newer state.
+//! - DBOS reuses completed checkpoints for side effects. Effects can repeat if a process dies
+//!   after a send or journal append and before the checkpoint commits.
 //!
 //! One DBOS workflow carries exactly one transition. Start, signal, and back
 //! run synchronously through the worker ingress. Approval uses a stable

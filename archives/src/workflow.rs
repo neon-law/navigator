@@ -54,21 +54,15 @@ use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use dbos::{CancellationToken, StepOptions, WorkflowRef, DBOS};
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
-use serde::{Deserialize, Serialize};
-#[cfg(feature = "restate-compatibility")]
-use tracing::Instrument;
-use workflows::SlackBot;
 
-#[cfg(feature = "restate-compatibility")]
-use billing::gcp_cost::CostReport;
+use serde::{Deserialize, Serialize};
+
+use workflows::SlackBot;
 
 use crate::digest::{render_archives_slack_with_failure, DiagnosticReport};
 use crate::postgres::{PostgresExport, POSTGRES_LANE};
 use crate::runner::{cost_phase, open_storage, SnapshotSummary};
-#[cfg(feature = "restate-compatibility")]
-use crate::runner::{open_resources, snapshot_selected};
+
 use crate::snapshot::{APPLICATION_LANE, TELEMETRY_LANE};
 use crate::tables::ALL_TABLES;
 use cloud::{StorageError, StorageService};
@@ -540,178 +534,6 @@ pub async fn schedule_dbos(workflow: ArchivesDbosWorkflow, stop: CancellationTok
     }
 }
 
-/// Service struct registered with the Restate endpoint. Holds only the
-/// worker-side Slack bot and messages channel (for the digest); the database and
-/// object-storage handles are opened inside the snapshot step so no
-/// connection is held idle between scheduled runs. Posts to the Slack bot
-/// directly rather than through the `SlackOpsDelivery` code-fence adapter,
-/// because the digest is mrkdwn with clickable links a code fence would
-/// break — the same reason `Heartbeat` talks to the notifier directly.
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct ArchivesService {
-    slack: Arc<dyn SlackBot>,
-    channel_id: String,
-    slack_enabled: bool,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl ArchivesService {
-    #[must_use]
-    pub fn new(slack: Arc<dyn SlackBot>, channel_id: String, slack_enabled: bool) -> Self {
-        // Zero-start the run series where Archives is bound, so a host
-        // restart cannot hide a missed slot from the Dash0 `increase()`.
-        telemetry::register_archives();
-        Self {
-            slack,
-            channel_id,
-            slack_enabled,
-        }
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "Archives")]
-impl ArchivesService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        req: Json<RunRequest>,
-    ) -> Result<Json<RunReport>, HandlerError> {
-        let request = req.into_inner();
-        if request.write_only.is_some() {
-            return Err(TerminalError::new("write-only archives require DBOS").into());
-        }
-        let scheduled_for = request.scheduled_for;
-        let invocation_id = ctx.invocation_id().to_string();
-
-        // Join the caller's trace: extract the W3C `traceparent` the trigger
-        // injected (telemetry) from the invocation headers and parent this
-        // run's span on it, so a `web`-initiated "run nightly export now" and
-        // its durable steps appear as one trace. A no-op when none is present.
-        let span = tracing::info_span!("archives.run", invocation_id = %invocation_id);
-        {
-            let headers = ctx.headers();
-            telemetry::set_span_parent(
-                &span,
-                headers.get("traceparent").map(String::as_str),
-                headers.get("tracestate").map(String::as_str),
-            );
-        }
-
-        // `.instrument(span)` rather than `span.enter()`: the worker runs on a
-        // multi-thread runtime, where a guard held across `.await` is the
-        // documented footgun (it can leak to another task). Instrumenting the
-        // future keeps the span attached only while this future is polled.
-        async {
-            // Phase 1 — snapshot. The whole loop is one journaled step:
-            // open the handles fresh, snapshot every table, return the
-            // serializable summary. `?` on `open_resources` yields a
-            // retryable HandlerError so a database/GCS outage replays the
-            // step.
-            let summary: SnapshotSummary = ctx
-                .run(|| async {
-                    let (db, storage) = open_resources().await?;
-                    let mut summary =
-                        snapshot_selected(db.as_ref(), storage.as_ref(), scheduled_for).await;
-                    // Retain completed source outcomes for the digest.
-                    // PostgreSQL failures terminate the run after notification.
-                    summary.postgres = crate::postgres::export_configured(
-                        |k| std::env::var(k).ok(),
-                        storage.as_ref(),
-                        scheduled_for,
-                    )
-                    .await;
-                    Ok(Json(summary))
-                })
-                .name("snapshot")
-                .await?
-                .into_inner();
-
-            // Phase 2: GCP cost summary (no-op unless BILLING_EXPORT_TABLE
-            // is set). Journaled like the snapshot. It runs for its side
-            // effect, the trailing-window spend snapshotted to the export lake
-            // as `gcp_cost`; the returned report does not feed the digest,
-            // which is just the table list.
-            let _cost: Option<CostReport> = ctx
-                .run(|| async { Ok(Json(cost_phase(|k| std::env::var(k).ok()).await?)) })
-                .name("cost")
-                .await?
-                .into_inner();
-
-            // Phase 3: promote the day's telemetry Parquet (otel_*) AND
-            // every store table's scheduled snapshot Parquet (phase 1) to
-            // Iceberg tables, reusing the entity-table writer. Journaled and
-            // infallible per table: Parquet remains available after a metadata
-            // failure, which the digest reports as a warning.
-            //
-            // The step is named `iceberg_telemetry` although it covers the
-            // application lane too: the name is the journal key Restate
-            // matches on replay, and renaming it raises JOURNAL_MISMATCH for
-            // any invocation replayed across a deploy.
-            let iceberg_promotion: Vec<String> = ctx
-                .run(|| async {
-                    Ok::<_, HandlerError>(Json(
-                        promote_iceberg_metadata(&summary, |k| std::env::var(k).ok()).await,
-                    ))
-                })
-                .name("iceberg_telemetry")
-                .await?
-                .into_inner();
-
-            // Phase 4 — Slack digest, rendered from the journaled snapshot so a
-            // retry re-posts without re-running the prior steps. Posts straight
-            // to the Slack bot (mrkdwn with links a code fence would break); a
-            // Slack failure surfaces as a `HandlerError` so Restate retries the
-            // step rather than dropping the only copy of the signal.
-            //
-            // The durable step keeps its original name `email`: the name is the
-            // journal key Restate matches on replay (`RunCommand` header
-            // equality covers it), so renaming it would raise JOURNAL_MISMATCH
-            // for any invocation replayed across the deploy that flipped this
-            // step from email to Slack. The step now posts Slack, not email.
-            let summary_for_digest = summary.clone();
-            let slack = Arc::clone(&self.slack);
-            let channel_id = self.channel_id.clone();
-            let slack_enabled = self.slack_enabled;
-            ctx.run(move || {
-                let summary = summary_for_digest.clone();
-                let slack = Arc::clone(&slack);
-                let channel_id = channel_id.clone();
-                let iceberg_promotion = iceberg_promotion.clone();
-                async move {
-                    // Composed inside the step, not above it: an unresolvable
-                    // bucket is then a step failure Restate retries, rather
-                    // than an error escaping the handler before the journal
-                    // records anything.
-                    let mut message = digest_message(&summary, |k| std::env::var(k).ok())
-                        .map_err(|error| HandlerError::from(anyhow::Error::from(error)))?;
-                    for line in iceberg_promotion
-                        .iter()
-                        .filter(|line| line.contains("FAILED") || line.contains("skipped"))
-                    {
-                        let _ = write!(message, "\n⚠️ {line}");
-                    }
-                    post_digest(slack.as_ref(), &channel_id, slack_enabled, &message).await?;
-                    // Inside the journaled step, after the post, so a replay
-                    // of a finished run does not count it twice.
-                    record_run_metrics(&summary);
-                    Ok(())
-                }
-            })
-            .name("email")
-            .await?;
-
-            let report = run_report(&summary, &invocation_id)
-                .map_err(|failure| TerminalError::new(failure.to_string()))?;
-            Ok(Json(report))
-        }
-        .instrument(span)
-        .await
-    }
-}
-
 /// Validate the journaled source outcomes after delivering their digest.
 /// Any table that failed to write, or a failed coverage attempt, is
 /// terminal: replaying the recorded snapshot cannot re-extract data, so
@@ -773,7 +595,7 @@ fn record_run_metrics(summary: &SnapshotSummary) {
     telemetry::record_archives_run(written as u64, run_failure(summary).is_some());
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 async fn post_digest(
     slack: &dyn SlackBot,
     channel_id: &str,

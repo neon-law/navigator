@@ -14,18 +14,17 @@
 
 use std::fmt::Write as _;
 use std::future::Future;
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 use std::sync::Arc;
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 use chrono::NaiveDate;
 use chrono::{DateTime, Utc};
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 use workflows::SlackBot;
 use workflows::SlackBotError;
 
@@ -104,7 +103,7 @@ pub fn child_key(ran_on: &str, project_id: Uuid) -> String {
     format!("{ran_on}:{project_id}")
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn parse_run_key(key: &str) -> Result<NaiveDate, WorkflowStepError> {
     NaiveDate::parse_from_str(key, "%Y-%m-%d").map_err(|_| {
         WorkflowStepError::terminal("Nightly Project Update is keyed on its UTC date, YYYY-MM-DD")
@@ -117,17 +116,6 @@ pub struct ProjectTagRequest {
     /// The parent's UTC date key.
     pub ran_on: String,
     pub project_id: Uuid,
-}
-
-/// Retries a child's side-effecting step gets before the failure is counted
-/// against its (Project, tag) and the sweep moves on.
-#[cfg(feature = "restate-compatibility")]
-pub(crate) fn tag_retry_policy() -> RunRetryPolicy {
-    RunRetryPolicy::new()
-        .initial_delay(std::time::Duration::from_secs(1))
-        .exponentiation_factor(2.0)
-        .max_delay(std::time::Duration::from_secs(30))
-        .max_attempts(4)
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
@@ -411,176 +399,6 @@ where
     report
 }
 
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct NightlyProjectUpdateService {
-    surreal: SurrealDb,
-    slack: Arc<dyn SlackBot>,
-    messages_channel_id: String,
-    staging_messages_channel_id: String,
-    simulated: bool,
-    slack_enabled: bool,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl NightlyProjectUpdateService {
-    #[must_use]
-    pub fn new(
-        surreal: SurrealDb,
-        slack: Arc<dyn SlackBot>,
-        messages_channel_id: String,
-        staging_messages_channel_id: String,
-        simulated: bool,
-        slack_enabled: bool,
-    ) -> Self {
-        Self {
-            surreal,
-            slack,
-            messages_channel_id,
-            staging_messages_channel_id,
-            simulated,
-            slack_enabled,
-        }
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "NightlyProjectUpdate")]
-impl NightlyProjectUpdateService {
-    #[restate_sdk::handler]
-    // Keep discovery, folder convergence, and Slack admission in journal order.
-    #[allow(clippy::too_many_lines)]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        _request: Json<RunRequest>,
-    ) -> Result<Json<NightlyProjectUpdateReport>, HandlerError> {
-        let ran_on = ctx.key().to_string();
-        parse_run_key(&ran_on).map_err(WorkflowStepError::into_handler_error)?;
-        let outcome_channel = outcome_channel_id(
-            self.simulated,
-            &self.messages_channel_id,
-            &self.staging_messages_channel_id,
-        );
-        let surreal = self.surreal.clone();
-        let roster = ctx
-            .run(move || async move {
-                discover_roster(&surreal)
-                    .await
-                    .map(Json)
-                    .map_err(WorkflowStepError::into_handler_error)
-            })
-            .name("discover-projects")
-            .await?
-            .into_inner();
-
-        // Run independently of Slack admission and of per-tag eligibility.
-        store::project_folder_reconcile::visit_nightly_roster(
-            roster
-                .iter()
-                .filter(|project| project.open)
-                .map(|project| project.project_id)
-                .collect::<Vec<_>>(),
-            |project_id| {
-                let surreal = self.surreal.clone();
-                let context = &ctx;
-                async move {
-                    context
-                        .run(move || async move {
-                            Ok(Json(
-                                store::project_folder_reconcile::nightly_from_env(
-                                    &surreal, project_id,
-                                )
-                                .await,
-                            ))
-                        })
-                        .name(format!("converge-project-folders-{project_id}"))
-                        .await
-                        .map(Json::into_inner)
-                }
-            },
-        )
-        .await?;
-
-        validate_configuration(outcome_channel, self.slack_enabled)
-            .map_err(WorkflowStepError::into_handler_error)?;
-
-        let started_at = ctx
-            .run(|| async { Ok(Json(Utc::now().to_rfc3339())) })
-            .name("read-clock")
-            .await?
-            .into_inner();
-        tracing::info!(%ran_on, %started_at, "Nightly Project Update started");
-
-        let slack = Arc::clone(&self.slack);
-        let channel_id = outcome_channel.to_string();
-        ctx.run(move || async move {
-            post_start(slack.as_ref(), &channel_id)
-                .await
-                .map_err(WorkflowStepError::into_handler_error)
-        })
-        .name("post-start")
-        .await?;
-
-        let context = &ctx;
-        let ran_on = &ran_on;
-        let report = sweep(&roster, |tag, project_id| async move {
-            let key = child_key(ran_on, project_id);
-            let request = Json(ProjectTagRequest {
-                ran_on: ran_on.clone(),
-                project_id,
-            });
-            match tag {
-                Tag::Calendar => return Err("Calendar requires DBOS".to_owned()),
-                Tag::Membership => context
-                    .workflow_client::<membership::MembershipTagServiceClient>(key)
-                    .run(request)
-                    .call()
-                    .await
-                    .map(|Json(outcome)| TagOutcome::Membership(outcome)),
-                Tag::Slack => context
-                    .workflow_client::<slack::SlackTagServiceClient>(key)
-                    .run(request)
-                    .call()
-                    .await
-                    .map(|Json(outcome)| TagOutcome::Slack(outcome)),
-                Tag::Repository => context
-                    .workflow_client::<repository::RepositoryTagServiceClient>(key)
-                    .run(request)
-                    .call()
-                    .await
-                    .map(|Json(outcome)| TagOutcome::Repository(outcome)),
-            }
-            .map_err(|error| error.message().to_owned())
-        })
-        .await;
-
-        // In its own step so a journal replay does not count the run twice.
-        let recorded = report.clone();
-        ctx.run(move || {
-            record_outcome(&recorded);
-            async { Ok::<(), HandlerError>(()) }
-        })
-        .name("record-outcome")
-        .await?;
-
-        let message = render_report(&report);
-        let slack = Arc::clone(&self.slack);
-        let channel_id = outcome_channel.to_string();
-        ctx.run(move || async move {
-            slack
-                .post_message(&channel_id, &message)
-                .await
-                .map_err(slack_error)
-                .map_err(WorkflowStepError::into_handler_error)
-        })
-        .name("post-outcome")
-        .await?;
-
-        Ok(Json(report))
-    }
-}
-
 pub(crate) async fn discover_roster(
     surreal: &SurrealDb,
 ) -> Result<Vec<RosterEntry>, WorkflowStepError> {
@@ -623,30 +441,15 @@ pub(crate) fn slack_error(error: SlackBotError) -> WorkflowStepError {
     }
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 const START_MESSAGE: &str = "*Nightly Project Update beginning*\nRepairing Slack channels, reconciling internal membership, and checking repositories.";
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 async fn post_start(slack: &dyn SlackBot, channel_id: &str) -> Result<(), WorkflowStepError> {
     slack
         .post_message(channel_id, START_MESSAGE)
         .await
         .map_err(slack_error)
-}
-
-/// Export the run's outcome metric and, when degraded, one error-level
-/// summary so a log alert sees the run and not only its children.
-#[cfg(feature = "restate-compatibility")]
-fn record_outcome(report: &NightlyProjectUpdateReport) {
-    if report.failures() > 0 {
-        tracing::error!(
-            failures = report.failures(),
-            failed_projects = report.failed_projects,
-            projects = report.projects,
-            "Nightly Project Update degraded"
-        );
-    }
-    telemetry::record_nightly_project_update(&report.failure_counts());
 }
 
 /// The most causes the Slack update lists before summarizing the rest.
@@ -711,7 +514,7 @@ pub(crate) fn render_report(report: &NightlyProjectUpdateReport) -> String {
     )
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn outcome_channel_id<'a>(
     simulated: bool,
     messages: &'a str,
@@ -724,7 +527,7 @@ fn outcome_channel_id<'a>(
     }
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), WorkflowStepError> {
     if channel_id.is_empty() {
         return Err(WorkflowStepError::terminal(

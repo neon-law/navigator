@@ -27,17 +27,12 @@ path = "src/bin/billing_digest_trigger.rs"
 name = "sandbox-credit-reset-trigger"
 path = "src/bin/sandbox_reset_trigger.rs"
 
-[features]
-default = []
-restate-compatibility = ["dep:restate-sdk"]
-
 [dependencies]
 async-trait.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 billing.workspace = true
 chrono.workspace = true
-restate-sdk = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 store.workspace = true

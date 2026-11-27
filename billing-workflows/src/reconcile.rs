@@ -17,14 +17,9 @@
 //! [`billing::StubBillingProvider`] + a test database without a worker.
 
 use std::fmt::Write as _;
-#[cfg(feature = "restate-compatibility")]
-use std::sync::Arc;
 
 use billing::BillingProvider;
-#[cfg(feature = "restate-compatibility")]
-use billing::XeroBillingProvider;
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
 use workflows::SlackBot;
@@ -89,89 +84,6 @@ pub struct TrustLine {
     /// `deposit`, `refund`, or `draw`.
     pub kind: String,
     pub cents: i64,
-}
-
-/// Service registered with the Restate endpoint. Holds a `SurrealDB` clone (the
-/// same connection the worker opened at boot); the Xero provider is built from
-/// env inside the step so no token sits idle between nightly runs.
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct ReconcileInvoicesService {
-    surreal: SurrealDb,
-    /// The same Slack Web API bot used for `#general`. Both notices use the
-    /// deployment's configured Slack App, not a second credential or webhook.
-    slack: Arc<dyn SlackBot>,
-    /// `#finance`'s channel id. Empty in KIND and local loops, where the
-    /// `CronJob` is installed but has no live destination; an empty value
-    /// fails the run as a terminal error rather than reconciling silently
-    /// and posting nowhere.
-    finance_channel: String,
-    /// Whether this deployment's matters are simulated, folded into the
-    /// post so a reader of `#finance` can tell staging from production.
-    simulated: bool,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl ReconcileInvoicesService {
-    #[must_use]
-    pub fn new(
-        surreal: SurrealDb,
-        slack: Arc<dyn SlackBot>,
-        finance_channel: String,
-        simulated: bool,
-    ) -> Self {
-        Self {
-            surreal,
-            slack,
-            finance_channel,
-            simulated,
-        }
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "ReconcileInvoices")]
-impl ReconcileInvoicesService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        _req: Json<ReconcileRequest>,
-    ) -> Result<Json<ReconcileReport>, HandlerError> {
-        if self.finance_channel.is_empty() {
-            return Err(HandlerError::from(TerminalError::new(
-                "SLACK_FINANCE_CHANNEL_ID must be set (the #finance channel ID)",
-            )));
-        }
-
-        let surreal = self.surreal.clone();
-        let report = ctx
-            .run(move || async move {
-                let provider = XeroBillingProvider::from_env().ok_or_else(|| {
-                    TerminalError::new("Xero is not configured (XERO_* env unset)")
-                })?;
-                Ok(Json(reconcile_once(&provider, &surreal).await?))
-            })
-            .name("reconcile")
-            .await?
-            .into_inner();
-
-        // A second journaled step, so a retry of the post never re-runs the
-        // reconcile — the same split `GeneralNag` uses for its two posts.
-        let channel_id = self.finance_channel.clone();
-        let report_for_post = report.clone();
-        let simulated = self.simulated;
-        let slack = Arc::clone(&self.slack);
-        ctx.run(move || async move {
-            post_finance_notice(slack.as_ref(), &channel_id, &report_for_post, simulated)
-                .await
-                .map_err(HandlerError::from)
-        })
-        .name("notify_finance")
-        .await?;
-
-        Ok(Json(report))
-    }
 }
 
 /// List provider invoices onto the mirror, then re-check every open mirror

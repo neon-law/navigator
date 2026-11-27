@@ -15,22 +15,13 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::{SlackBot, SlackBotError};
 
 use super::slack_error;
-#[cfg(feature = "restate-compatibility")]
-use super::tag_retry_policy;
-#[cfg(feature = "restate-compatibility")]
-use super::ProjectTagRequest;
-#[cfg(feature = "restate-compatibility")]
-use crate::firm_slack::ProjectSlackBots;
-#[cfg(feature = "restate-compatibility")]
-use crate::project_slack::LaneError;
+
 use crate::project_slack::{ensure_channel, ChannelOutcome};
 use crate::workflow_step_error::WorkflowStepError;
 
@@ -61,59 +52,6 @@ pub struct ChannelResolution {
     pub open: bool,
     pub channel_id: Option<String>,
     pub outcome: MembershipOutcome,
-}
-
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct MembershipTagService {
-    surreal: SurrealDb,
-    bots: Arc<dyn ProjectSlackBots>,
-    simulated: bool,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl MembershipTagService {
-    #[must_use]
-    pub fn new(surreal: SurrealDb, bots: Arc<dyn ProjectSlackBots>, simulated: bool) -> Self {
-        Self {
-            surreal,
-            bots,
-            simulated,
-        }
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "NightlyProjectUpdateMembership")]
-impl MembershipTagService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        request: Json<ProjectTagRequest>,
-    ) -> Result<Json<MembershipOutcome>, HandlerError> {
-        let project_id = request.into_inner().project_id;
-        let surreal = self.surreal.clone();
-        let bots = Arc::clone(&self.bots);
-        let simulated = self.simulated;
-        // The directory addresses stay inside this journaled operation. Only
-        // counts enter the Restate journal.
-        let outcome = ctx
-            .run(move || async move {
-                let slack = bots
-                    .for_project(&surreal, project_id)
-                    .await
-                    .map_err(LaneError::into_handler_error)?;
-                reconcile_project(&surreal, &slack, simulated, project_id)
-                    .await
-                    .map(Json)
-                    .map_err(WorkflowStepError::into_handler_error)
-            })
-            .name("reconcile-membership")
-            .retry_policy(tag_retry_policy())
-            .await?;
-        Ok(outcome)
-    }
 }
 
 /// Reconcile one Project's internal channel and its firm-side members.

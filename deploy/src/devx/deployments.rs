@@ -1014,7 +1014,11 @@ fn plan(
     let mut plan = BTreeMap::new();
     let mut skipped = BTreeMap::new();
     let mut missing = Vec::new();
-    for object in projected_objects() {
+    let mut objects = projected_objects();
+    if store::workflow_engine::dbos_only(&|key| deployment.coordinates.get(key).cloned())? {
+        objects.insert(workflows::trigger::DBOS_INGRESS_TOKEN_ENV.to_owned());
+    }
+    for object in objects {
         if deployment.encrypted_keys.contains(&object) {
             plan.insert(object, Source::Encrypted);
         } else if deployment.coordinates.contains_key(&object) {
@@ -2339,6 +2343,32 @@ mod tests {
             .join("tests")
             .join("fixtures")
             .join("deployment-tree")
+    }
+
+    #[test]
+    fn secrets_apply_plans_the_native_ingress_token() {
+        use store::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
+
+        let mut deployment = Deployment::load(&fixture_tree(), "example-deployment")
+            .expect("the synthetic deployment loads");
+        for (key, value) in [
+            (COHOST_ENV, "true"),
+            (DBOS_ENABLED_ENV, "true"),
+            (ENGINE_ENV, "dbos"),
+        ] {
+            deployment.coordinates.insert(key.into(), value.into());
+        }
+        for workflow in WORKFLOWS {
+            deployment
+                .coordinates
+                .insert(workflow.flag.into(), "true".into());
+        }
+        let token = workflows::trigger::DBOS_INGRESS_TOKEN_ENV;
+        let error = plan(&deployment).expect_err("native web needs its ingress token");
+        assert!(error.to_string().contains(token));
+        deployment.encrypted_keys.insert(token.into());
+        let (plan, _) = plan(&deployment).expect("the native web Secret plan is complete");
+        assert_eq!(plan.get(token), Some(&Source::Encrypted));
     }
 
     #[test]

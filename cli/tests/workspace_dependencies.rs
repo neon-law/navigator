@@ -111,8 +111,6 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "regorus",
     "repos",
     "reqwest",
-    "restate-jwt",
-    "restate-sdk",
     "rgb",
     "roxmltree",
     "model",

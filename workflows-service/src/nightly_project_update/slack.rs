@@ -12,12 +12,11 @@
 //! emails stay inside the journaled step that renders the canvas.
 
 use std::fmt::Write;
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 use std::sync::Arc;
 
 use cloud::forge::ForgeService;
-#[cfg(feature = "restate-compatibility")]
-use restate_sdk::prelude::*;
+
 use serde::{Deserialize, Serialize};
 use store::projects::ProjectCanvas;
 use store::surreal::SurrealDb;
@@ -26,14 +25,7 @@ use workflows::{upsert_channel_canvas, CanvasWrite, SlackBot};
 
 use super::repository::{matches_recorded_repository, RepositoryForge};
 use super::slack_error;
-#[cfg(feature = "restate-compatibility")]
-use super::tag_retry_policy;
-#[cfg(feature = "restate-compatibility")]
-use super::ProjectTagRequest;
-#[cfg(feature = "restate-compatibility")]
-use crate::firm_slack::ProjectSlackBots;
-#[cfg(feature = "restate-compatibility")]
-use crate::project_slack::LaneError;
+
 use crate::workflow_step_error::WorkflowStepError;
 
 /// What one Project's `slack` child did. Counts only.
@@ -55,97 +47,7 @@ pub enum CanvasStep {
     Edited,
 }
 
-#[derive(Clone)]
-#[cfg(feature = "restate-compatibility")]
-pub struct SlackTagService {
-    surreal: SurrealDb,
-    bots: Arc<dyn ProjectSlackBots>,
-    portal_origin: Option<String>,
-    forge: RepositoryForge,
-}
-
-#[cfg(feature = "restate-compatibility")]
-impl SlackTagService {
-    /// `portal_origin` is the deployment's public origin, such as
-    /// `https://www.example.com`; without it the canvas links the portal by
-    /// its path. `bots` resolves the owning Firm's bot per Project (ENG-392).
-    #[must_use]
-    pub fn new(
-        surreal: SurrealDb,
-        bots: Arc<dyn ProjectSlackBots>,
-        portal_origin: Option<String>,
-        forge: RepositoryForge,
-    ) -> Self {
-        Self {
-            surreal,
-            bots,
-            portal_origin,
-            forge,
-        }
-    }
-}
-
-#[cfg(feature = "restate-compatibility")]
-#[restate_sdk::workflow(name = "NightlyProjectUpdateSlack")]
-impl SlackTagService {
-    #[restate_sdk::handler]
-    async fn run(
-        &self,
-        ctx: WorkflowContext<'_>,
-        request: Json<ProjectTagRequest>,
-    ) -> Result<Json<SlackOutcome>, HandlerError> {
-        let ProjectTagRequest { ran_on, project_id } = request.into_inner();
-
-        let (surreal, bots) = (self.surreal.clone(), Arc::clone(&self.bots));
-        let origin = self.portal_origin.clone();
-        let day = ran_on.clone();
-        // The directory emails stay inside this journaled operation.
-        let canvas = ctx
-            .run(move || async move {
-                let slack = bots
-                    .for_project(&surreal, project_id)
-                    .await
-                    .map_err(LaneError::into_handler_error)?;
-                upsert_canvas(
-                    &surreal,
-                    slack.as_ref(),
-                    origin.as_deref(),
-                    &day,
-                    project_id,
-                )
-                .await
-                .map(Json)
-                .map_err(WorkflowStepError::into_handler_error)
-            })
-            .name("upsert-canvas")
-            .retry_policy(tag_retry_policy())
-            .await;
-
-        let (surreal, bots) = (self.surreal.clone(), Arc::clone(&self.bots));
-        let forge = self.forge.clone();
-        let posted = ctx
-            .run(move || async move {
-                let slack = bots
-                    .for_project(&surreal, project_id)
-                    .await
-                    .map_err(LaneError::into_handler_error)?;
-                post_notice(&surreal, slack.as_ref(), &forge, &ran_on, project_id)
-                    .await
-                    .map(Json)
-                    .map_err(WorkflowStepError::into_handler_error)
-            })
-            .name("post-notice")
-            .retry_policy(tag_retry_policy())
-            .await?
-            .into_inner();
-        Ok(Json(canvas_outcome(
-            &canvas.map(Json::into_inner).map_err(HandlerError::from),
-            posted,
-        )))
-    }
-}
-
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn outcome(canvas: CanvasStep, notice_posted: bool) -> SlackOutcome {
     SlackOutcome {
         canvases_created: usize::from(canvas == CanvasStep::Created),
@@ -155,7 +57,7 @@ fn outcome(canvas: CanvasStep, notice_posted: bool) -> SlackOutcome {
     }
 }
 
-#[cfg(any(test, feature = "restate-compatibility"))]
+#[cfg(test)]
 fn canvas_outcome<E>(canvas: &Result<CanvasStep, E>, posted: bool) -> SlackOutcome {
     match canvas {
         Ok(canvas) => outcome(*canvas, posted),

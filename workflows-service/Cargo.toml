@@ -6,9 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# The native DBOS worker uses PostgreSQL and requires complete native ownership.
-# The explicit `restate-compatibility` feature adds the retained HTTP endpoint
-# and its journaled handlers; the compatibility image enables that feature.
 [[bin]]
 name = "workflows-service"
 path = "src/main.rs"
@@ -17,18 +14,8 @@ path = "src/main.rs"
 name = "social-publish-reconciler-trigger"
 path = "src/bin/social-publish-reconciler-trigger.rs"
 
-[[test]]
-name = "request_identity_signature"
-required-features = ["restate-compatibility"]
-
 [lib]
 path = "src/lib.rs"
-
-[features]
-default = []
-restate-compatibility = ["dep:restate-sdk", "archives/restate-compatibility", "billing-workflows/restate-compatibility"]
-# Reproduce JWT provider ambiguity without enabling an embedded database.
-jwt-provider-regression = ["restate-jwt/aws_lc_rs"]
 
 [dependencies]
 billing.workspace = true
@@ -41,10 +28,6 @@ dbos.workspace = true
 chrono.workspace = true
 cloud.workspace = true
 dotenvy.workspace = true
-restate-sdk = { workspace = true, optional = true }
-# Match the Restate SDK's JWT instance so startup can pin its provider even
-# when optional compatibility features enable another backend (ENG-550).
-restate-jwt.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -67,10 +50,8 @@ workflows = { workspace = true, features = ["dbos"] }
 views.workspace = true
 
 [dev-dependencies]
-bs58.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
-ed25519-dalek.workspace = true
 store = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tower = { workspace = true }

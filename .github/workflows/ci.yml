@@ -308,7 +308,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       # Link with LLVM lld instead of GNU ld. The workspace produces ~40 test
       # binaries, several of which (notably `features`) statically link most of
-      # the tree — portal, webapp, restate-sdk, wiremock, fantoccini and their
+      # the tree — portal, webapp, wiremock, fantoccini and their
       # transitive graph in one image. Four of those link
       # steps run concurrently on a small runner, and GNU ld died
       # partway through with
