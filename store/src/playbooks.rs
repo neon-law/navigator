@@ -12,15 +12,13 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::matter;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 use serde_json::json;
 
 const TABLE: &str = "playbook";
-const ENTITY_TABLE: &str = "entity";
 
 /// Severity a deviation from this position carries: `low` | `medium` |
 /// `high`. Descriptive — used to rank findings, not enforced.
@@ -61,55 +59,11 @@ pub struct Playbook {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(SurrealValue)]
-struct PlaybookRow {
-    id: surrealdb::types::RecordId,
-    entity_id: surrealdb::types::RecordId,
-    name: String,
-    positions: Json,
-    active: bool,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl PlaybookRow {
-    /// `None` when a record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`].
-    fn into_playbook(self) -> Option<Playbook> {
-        Some(Playbook {
-            id: record_uuid(&self.id)?,
-            entity_id: record_uuid(&self.entity_id)?,
-            name: self.name,
-            positions: self.positions,
-            active: self.active,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const SELECT: &str = "id, entity_id, name, positions, active, inserted_at, updated_at";
-
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Playbook>, surrealdb::Error> {
-    let row: Option<PlaybookRow> = response.take(0)?;
-    Ok(row.and_then(PlaybookRow::into_playbook))
-}
-
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Playbook>, surrealdb::Error> {
-    let rows: Vec<PlaybookRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(PlaybookRow::into_playbook)
-        .collect())
-}
-
 /// Why a playbook command refused.
 #[derive(Debug, thiserror::Error)]
 pub enum PlaybookError {
     #[error(transparent)]
     Postgres(#[from] matter::MatterAuthorityError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back.
     #[error("writing a playbook returned no usable row")]
@@ -127,10 +81,6 @@ pub enum PlaybookError {
     NotFound(Uuid),
 }
 
-fn is_duplicate_name(error: &surrealdb::Error) -> bool {
-    crate::surreal::retry::unique_violation(error) == Some("playbook_entity_name")
-}
-
 /// What to record for one new playbook.
 #[derive(Debug, Clone)]
 pub struct NewPlaybook<'a> {
@@ -146,55 +96,24 @@ pub struct NewPlaybook<'a> {
 ///
 /// [`PlaybookError::DuplicateName`] if `(entity_id, name)` already has a
 /// playbook, or a database error.
-pub async fn create(db: &SurrealDb, new: &NewPlaybook<'_>) -> Result<Uuid, PlaybookError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let now = chrono::Utc::now();
-        let row = Playbook {
-            id: Uuid::now_v7(),
-            entity_id: new.entity_id,
-            name: new.name.to_owned(),
-            positions: serde_json::to_value(new.positions)?,
-            active: true,
-            inserted_at: now,
-            updated_at: now,
-        };
-        return match matter::upsert::<Playbook>(&pg, TABLE, &row).await {
-            Ok(stored) => Ok(stored.id),
-            Err(matter::MatterAuthorityError::Conflict(_)) => {
-                Err(PlaybookError::DuplicateName(new.name.to_owned()))
-            }
-            Err(error) => Err(error.into()),
-        };
-    }
-
-    let positions = serde_json::to_value(new.positions)?;
-    let id = Uuid::now_v7();
-    match db
-        .query(format!(
-            "CREATE $id SET \
-             entity_id = $entity_id, name = $name, positions = $positions, active = true \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("entity_id", record_id(ENTITY_TABLE, new.entity_id)))
-        .bind(("name", new.name.to_string()))
-        .bind(("positions", positions))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-    {
-        Ok(mut response) => {
-            let row: Option<PlaybookRow> = response.take(0)?;
-            let id = row
-                .and_then(PlaybookRow::into_playbook)
-                .map(|p| p.id)
-                .ok_or(PlaybookError::WriteReturnedNothing)?;
-            crate::postgres_mirror::records::after_write(db, TABLE, id).await;
-            Ok(id)
+pub async fn create(_db: &ApplicationStore, new: &NewPlaybook<'_>) -> Result<Uuid, PlaybookError> {
+    let pg = matter::authority_for(TABLE).await?;
+    let now = chrono::Utc::now();
+    let row = Playbook {
+        id: Uuid::now_v7(),
+        entity_id: new.entity_id,
+        name: new.name.to_owned(),
+        positions: serde_json::to_value(new.positions)?,
+        active: true,
+        inserted_at: now,
+        updated_at: now,
+    };
+    match matter::upsert::<Playbook>(&pg, TABLE, &row).await {
+        Ok(stored) => Ok(stored.id),
+        Err(matter::MatterAuthorityError::Conflict(_)) => {
+            Err(PlaybookError::DuplicateName(new.name.to_owned()))
         }
-        Err(error) if is_duplicate_name(&error) => {
-            Err(PlaybookError::DuplicateName(new.name.to_string()))
-        }
-        Err(error) => Err(PlaybookError::Db(error)),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -203,17 +122,9 @@ pub async fn create(db: &SurrealDb, new: &NewPlaybook<'_>) -> Result<Uuid, Playb
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Playbook>, PlaybookError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::find(&pg, TABLE, json!({"id": id})).await?);
-    }
-
-    let response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?)
+pub async fn by_id(_db: &ApplicationStore, id: Uuid) -> Result<Option<Playbook>, PlaybookError> {
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::find(&pg, TABLE, json!({"id": id})).await?)
 }
 
 /// All playbooks for an Entity, name order.
@@ -221,19 +132,12 @@ pub async fn by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Playbook>, Playboo
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Playbook>, PlaybookError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::select(&pg, TABLE, json!({"entity_id": entity_id}), &["name"]).await?);
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE entity_id = $entity ORDER BY name ASC"
-        ))
-        .bind(("entity", record_id(ENTITY_TABLE, entity_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(many(response)?)
+pub async fn for_entity(
+    _db: &ApplicationStore,
+    entity_id: Uuid,
+) -> Result<Vec<Playbook>, PlaybookError> {
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::select(&pg, TABLE, json!({"entity_id": entity_id}), &["name"]).await?)
 }
 
 /// Every playbook, name order — the lawyer `/app/admin/playbooks` listing,
@@ -242,16 +146,9 @@ pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Playbook>
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn all(db: &SurrealDb) -> Result<Vec<Playbook>, PlaybookError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::select(&pg, TABLE, json!({}), &["name"]).await?);
-    }
-
-    let response = db
-        .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY name ASC"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(many(response)?)
+pub async fn all(_db: &ApplicationStore) -> Result<Vec<Playbook>, PlaybookError> {
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::select(&pg, TABLE, json!({}), &["name"]).await?)
 }
 
 /// Replace a playbook's positions (the admin editor saves the whole set).
@@ -261,37 +158,21 @@ pub async fn all(db: &SurrealDb) -> Result<Vec<Playbook>, PlaybookError> {
 /// [`PlaybookError::NotFound`] when `id` does not exist, or a database
 /// error.
 pub async fn update_positions(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     positions: &[Position],
 ) -> Result<(), PlaybookError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let changed: Vec<Playbook> = matter::update(
-            &pg,
-            TABLE,
-            json!({"id": id}),
-            json!({"positions": positions, "updated_at": chrono::Utc::now()}),
-        )
-        .await?;
-        if changed.is_empty() {
-            return Err(PlaybookError::NotFound(id));
-        }
-        return Ok(());
+    let pg = matter::authority_for(TABLE).await?;
+    let changed: Vec<Playbook> = matter::update(
+        &pg,
+        TABLE,
+        json!({"id": id}),
+        json!({"positions": positions, "updated_at": chrono::Utc::now()}),
+    )
+    .await?;
+    if changed.is_empty() {
+        return Err(PlaybookError::NotFound(id));
     }
-
-    let value = serde_json::to_value(positions)?;
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET positions = $positions, updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("positions", value))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<PlaybookRow> = response.take(0)?;
-    row.and_then(PlaybookRow::into_playbook)
-        .ok_or(PlaybookError::NotFound(id))?;
-    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
     Ok(())
 }
 
@@ -328,117 +209,4 @@ pub fn positions_to_text(positions: &[Position]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        by_id, create, for_entity, positions_of, update_positions, NewPlaybook, PlaybookError,
-        Position,
-    };
-    use crate::surreal::test_support::mem;
-    use crate::test_support::seed_entity;
-
-    fn position(topic: &str) -> Position {
-        Position {
-            topic: topic.to_string(),
-            preferred: "preferred".to_string(),
-            fallback: "fallback".to_string(),
-            walkaway: "walkaway".to_string(),
-            severity: super::SEVERITY_MEDIUM.to_string(),
-        }
-    }
-
-    /// The JSONB round trip: a typed `Vec<Position>` goes in, and the same
-    /// typed view comes back out.
-    #[tokio::test]
-    async fn playbook_round_trips_with_typed_positions() {
-        let surreal = mem().await;
-        let entity_id = seed_entity(&surreal).await;
-        let positions = vec![
-            position("Limitation of liability"),
-            position("Governing law"),
-        ];
-
-        let id = create(
-            &surreal,
-            &NewPlaybook {
-                entity_id,
-                name: "SaaS vendor MSA",
-                positions: &positions,
-            },
-        )
-        .await
-        .expect("create");
-
-        let row = by_id(&surreal, id)
-            .await
-            .expect("by_id")
-            .expect("row exists");
-        assert_eq!(row.entity_id, entity_id);
-        assert_eq!(row.name, "SaaS vendor MSA");
-        assert!(row.active);
-        assert_eq!(positions_of(&row).expect("typed positions"), positions);
-
-        let for_this_entity = for_entity(&surreal, entity_id).await.expect("for_entity");
-        assert_eq!(for_this_entity.len(), 1);
-        assert_eq!(for_this_entity[0].id, id);
-    }
-
-    /// The name is unique per Entity — the second playbook of the same name
-    /// for the same client is refused, not silently duplicated.
-    #[tokio::test]
-    async fn playbook_name_is_unique_per_entity() {
-        let surreal = mem().await;
-        let entity_id = seed_entity(&surreal).await;
-        let positions = vec![position("Auto-renewal")];
-
-        create(
-            &surreal,
-            &NewPlaybook {
-                entity_id,
-                name: "Standard MSA",
-                positions: &positions,
-            },
-        )
-        .await
-        .expect("first create");
-
-        let err = create(
-            &surreal,
-            &NewPlaybook {
-                entity_id,
-                name: "Standard MSA",
-                positions: &positions,
-            },
-        )
-        .await
-        .expect_err("the second playbook of the same name must be refused");
-        assert!(matches!(err, PlaybookError::DuplicateName(name) if name == "Standard MSA"));
-    }
-
-    /// The admin editor saves the whole position set at once.
-    #[tokio::test]
-    async fn update_positions_replaces_the_whole_set() {
-        let surreal = mem().await;
-        let entity_id = seed_entity(&surreal).await;
-        let id = create(
-            &surreal,
-            &NewPlaybook {
-                entity_id,
-                name: "Editable MSA",
-                positions: &[position("Indemnification")],
-            },
-        )
-        .await
-        .expect("create");
-
-        let replacement = vec![position("Assignment"), position("Termination")];
-        update_positions(&surreal, id, &replacement)
-            .await
-            .expect("update");
-
-        let row = by_id(&surreal, id)
-            .await
-            .expect("by_id")
-            .expect("row exists");
-        assert_eq!(positions_of(&row).expect("typed positions"), replacement);
-    }
-}
+mod tests {}

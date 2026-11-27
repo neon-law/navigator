@@ -12,8 +12,8 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::notation_reset::{NotationResetError, ResetOutcome};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 /// The run's key for the UTC day containing `now`.
@@ -74,10 +74,12 @@ impl NotationResetReport {
 /// # Errors
 ///
 /// Fails when either list cannot be read.
-pub async fn discover_drafts(surreal: &SurrealDb) -> Result<DraftRoster, NotationResetError> {
+pub async fn discover_drafts(
+    application_store: &ApplicationStore,
+) -> Result<DraftRoster, NotationResetError> {
     Ok(DraftRoster {
-        notations: store::notation_reset::list_drafts(surreal).await?,
-        previews: store::notation_reset::list_preview_drafts(surreal).await?,
+        notations: store::notation_reset::list_drafts(application_store).await?,
+        previews: store::notation_reset::list_preview_drafts(application_store).await?,
     })
 }
 

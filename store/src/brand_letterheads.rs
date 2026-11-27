@@ -325,24 +325,29 @@ async fn put_row(
 /// [`LetterheadError::NotFound`] for an unknown or unreachable Brand,
 /// [`LetterheadError::Invalid`] for a refused field, and the store errors.
 pub async fn save_for_actor(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     pg: &PostgresDb,
     actor_role: crate::persons::Role,
     actor_person_id: Option<Uuid>,
     key: &str,
     input: &LetterheadFields,
 ) -> Result<BrandLetterhead, LetterheadError> {
-    let brand =
-        match crate::brands::find_by_key_for_actor(surreal, actor_role, actor_person_id, key).await
-        {
-            Ok(brand) => brand,
-            Err(
-                crate::brands::BrandError::NotAuthorized
-                | crate::brands::BrandError::NoSuchBrand(_)
-                | crate::brands::BrandError::NoSuchFirm(_),
-            ) => return Err(LetterheadError::NotFound),
-            Err(error) => return Err(error.into()),
-        };
+    let brand = match crate::brands::find_by_key_for_actor(
+        application_store,
+        actor_role,
+        actor_person_id,
+        key,
+    )
+    .await
+    {
+        Ok(brand) => brand,
+        Err(
+            crate::brands::BrandError::NotAuthorized
+            | crate::brands::BrandError::NoSuchBrand(_)
+            | crate::brands::BrandError::NoSuchFirm(_),
+        ) => return Err(LetterheadError::NotFound),
+        Err(error) => return Err(error.into()),
+    };
     let fields = validate(&brand, input)?;
     let stored = put_row(pg, brand.id, &fields).await?;
     let mut resolved = resolve(&brand, Some(&stored.fields));
@@ -356,11 +361,11 @@ pub async fn save_for_actor(
 /// # Errors
 /// The Brand lookup and the PostgreSQL read errors.
 pub async fn for_brand_key(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     pg: &PostgresDb,
     key: &str,
 ) -> Result<Option<BrandLetterhead>, LetterheadError> {
-    let Some(brand) = crate::brands::find_by_key(surreal, key).await? else {
+    let Some(brand) = crate::brands::find_by_key(application_store, key).await? else {
         return Ok(None);
     };
     let stored = find_row(pg, brand.id).await?;

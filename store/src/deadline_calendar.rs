@@ -24,10 +24,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::project_calendar::{self, CalendarOutcome, ProjectCalendarError};
 use crate::project_deadlines::{self, Deadline};
 use crate::projects::{self, Project};
-use crate::surreal::SurrealDb;
 
 /// The private extended property naming the mirror, so one filtered read
 /// finds every mirrored event and nothing else on the calendar.
@@ -124,13 +124,13 @@ pub async fn open_projects() -> Result<Vec<(Uuid, String)>, MirrorError> {
 /// A store failure, a calendar failure outside a single row, or a Project
 /// that does not exist.
 pub async fn reconcile(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     calendar: &dyn CalendarService,
     project_id: Uuid,
     base_url: Option<&str>,
     dry_run: bool,
 ) -> Result<MirrorReport, MirrorError> {
-    let project = find_project(surreal, project_id).await?;
+    let project = find_project(application_store, project_id).await?;
     if project.status != "open" {
         return Ok(MirrorReport {
             outcome: MirrorOutcome::SkippedClosed,
@@ -149,18 +149,26 @@ pub async fn reconcile(
                     ..MirrorReport::empty(MirrorOutcome::RecordedResourceMissing, dry_run)
                 })
             } else {
-                reconcile_rows(surreal, calendar, &calendar_id, &project, base_url, dry_run).await
+                reconcile_rows(
+                    application_store,
+                    calendar,
+                    &calendar_id,
+                    &project,
+                    base_url,
+                    dry_run,
+                )
+                .await
             }
         } else {
             // No calendar yet: a first pass would create one and insert
             // every row. That plan needs no calendar to read.
             let mut report = MirrorReport::empty(MirrorOutcome::Mirrored, dry_run);
             report.creates_calendar = true;
-            plan_rows(surreal, &project, base_url, &mut report).await?;
+            plan_rows(application_store, &project, base_url, &mut report).await?;
             Ok(report)
         };
     }
-    let ensured = ensure_calendar(surreal, project_id, calendar).await?;
+    let ensured = ensure_calendar(application_store, project_id, calendar).await?;
     if ensured.outcome == CalendarOutcome::RecordedResourceMissing {
         return Ok(MirrorReport::empty(
             MirrorOutcome::RecordedResourceMissing,
@@ -168,19 +176,27 @@ pub async fn reconcile(
         ));
     }
     // The calendar pass recorded the id before sharing; read it back.
-    let project = find_project(surreal, project_id).await?;
+    let project = find_project(application_store, project_id).await?;
     let Some(calendar_id) = recorded_calendar_id(&project) else {
         return Err(MirrorError::Db(format!(
             "matter {project_id} has no calendar id after the calendar pass"
         )));
     };
-    reconcile_rows(surreal, calendar, &calendar_id, &project, base_url, dry_run).await
+    reconcile_rows(
+        application_store,
+        calendar,
+        &calendar_id,
+        &project,
+        base_url,
+        dry_run,
+    )
+    .await
 }
 
 /// The diff half of a pass, shared by the applied and dry-run paths: read
 /// the rows and the mirrored events, then write (or plan) the difference.
 async fn reconcile_rows(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     calendar: &dyn CalendarService,
     calendar_id: &str,
     project: &Project,
@@ -188,7 +204,7 @@ async fn reconcile_rows(
     dry_run: bool,
 ) -> Result<MirrorReport, MirrorError> {
     let mut report = MirrorReport::empty(MirrorOutcome::Mirrored, dry_run);
-    let rows = project_deadlines::list(surreal, project.id)
+    let rows = project_deadlines::list(application_store, project.id)
         .await
         .map_err(|error| MirrorError::Db(error.to_string()))?;
     let stored = calendar
@@ -284,12 +300,12 @@ async fn reconcile_rows(
 
 /// The plan a first pass would make, before the Project has a calendar.
 async fn plan_rows(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project: &Project,
     base_url: Option<&str>,
     report: &mut MirrorReport,
 ) -> Result<(), MirrorError> {
-    let rows = project_deadlines::list(surreal, project.id)
+    let rows = project_deadlines::list(application_store, project.id)
         .await
         .map_err(|error| MirrorError::Db(error.to_string()))?;
     for deadline in rows.iter().filter(|row| {
@@ -305,11 +321,11 @@ async fn plan_rows(
 
 /// Ensure the Project's calendar exists before mirroring events.
 async fn ensure_calendar(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     calendar: &dyn CalendarService,
 ) -> Result<project_calendar::CalendarReport, MirrorError> {
-    project_calendar::ensure(surreal, project_id, calendar)
+    project_calendar::ensure(application_store, project_id, calendar)
         .await
         .map_err(|error| match error {
             ProjectCalendarError::Calendar(calendar_error)
@@ -323,8 +339,11 @@ async fn ensure_calendar(
         })
 }
 
-async fn find_project(surreal: &SurrealDb, project_id: Uuid) -> Result<Project, MirrorError> {
-    projects::find_by_id(surreal, project_id)
+async fn find_project(
+    application_store: &ApplicationStore,
+    project_id: Uuid,
+) -> Result<Project, MirrorError> {
+    projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| MirrorError::Db(error.to_string()))?
         .ok_or(MirrorError::NotFound)
@@ -592,8 +611,8 @@ mod tests {
         body_sha, category_color, deadline_event, event_sequence, event_summary, reconcile,
         report_line, BODY_SHA_KEY, DEADLINE_ID_KEY, MARKER_KEY, MARKER_VALUE,
     };
+    use crate::application_store::ApplicationStore;
     use crate::project_deadlines::{self, NewDeadline};
-    use crate::surreal::SurrealDb;
     use chrono::TimeZone;
     use cloud::calendar::{CalendarService, FakeCalendar};
     use uuid::Uuid;
@@ -631,7 +650,7 @@ mod tests {
 
     /// A court date published before the review gate was introduced.
     async fn previously_published(
-        db: &SurrealDb,
+        db: &ApplicationStore,
         input: &NewDeadline,
     ) -> project_deadlines::Deadline {
         let row = project_deadlines::create(db, input).await.unwrap();
@@ -647,9 +666,9 @@ mod tests {
             .unwrap()
     }
 
-    async fn with_project(test: impl AsyncFnOnce(&SurrealDb, Uuid)) {
+    async fn with_project(test: impl AsyncFnOnce(&ApplicationStore, Uuid)) {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let (project_id, _) = crate::test_support::seed_calendar_project().await;
             test(&db, project_id).await;
         })

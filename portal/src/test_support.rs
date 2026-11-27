@@ -70,41 +70,6 @@ pub fn bearer_header_with_person(role: store::persons::Role, person_id: uuid::Uu
     format!("Bearer {}", sessions.encode(&session))
 }
 
-/// Build an [`AppState`] wired with dev/test defaults: in-memory runtimes,
-/// passthrough policy + google-oauth, stub signature + billing providers,
-/// a capturing email backend, filesystem storage in a temp dir, and empty
-/// content indices. The caller supplies the `db` (one schema per test via
-/// `store::test_support::pg`) and overrides any field through struct
-/// update syntax — see the module docs.
-/// A private in-memory SurrealDB with the schema applied.
-///
-/// This public fixture uses the generic compatibility client. Starting it
-/// requires the explicit `store/surreal-compatibility` Cargo feature; native
-/// PostgreSQL fixtures do not enable the embedded engine.
-pub async fn embedded_surreal() -> store::surreal::SurrealDb {
-    // Keep the same Source-forbidden fence as the store's fixture helpers.
-    assert!(
-        std::env::var("NAVIGATOR_FORBID_SURREAL").as_deref() != Ok("1"),
-        "this test starts SurrealDB, which CI no longer tests; \
-         `hudson ops surreal-free-tests` should have left it out"
-    );
-    let db = store::surreal::connect(&store::surreal::SurrealConfig {
-        // Named, never defaulted — `store::surreal` refuses to guess an
-        // endpoint, and a test is just another caller that says which
-        // engine it means.
-        endpoint: "mem://".into(),
-        namespace: "navigator".into(),
-        database: "navigator".into(),
-        auth: store::surreal::SurrealAuth::Anonymous,
-    })
-    .await
-    .expect("start an embedded SurrealDB engine");
-    store::schema::apply(&db)
-        .await
-        .expect("apply the Surreal schema to a fresh embedded engine");
-    db
-}
-
 /// A throwaway filesystem storage rooted in a temp directory, for tests that
 /// call ingest helpers directly instead of through an [`AppState`]. The
 /// directory leaks to the OS on purpose: dropping it would race the async
@@ -136,7 +101,7 @@ pub async fn fs_storage() -> std::sync::Arc<dyn cloud::StorageService> {
 /// the test seeds and the store the router reads the same one by
 /// construction. `store::test_support::engines()` hands out the pair.
 #[doc(hidden)]
-pub async fn app_state(surreal: store::surreal::SurrealDb) -> AppState {
+pub async fn app_state(application_store: store::application_store::ApplicationStore) -> AppState {
     let storage: Arc<dyn cloud::StorageService> = Arc::new(
         cloud::FsStorage::new(std::env::temp_dir().join("navigator-web-test-storage"))
             .await
@@ -144,7 +109,7 @@ pub async fn app_state(surreal: store::surreal::SurrealDb) -> AppState {
     );
     AppState {
         brand_bundle: None,
-        surreal,
+        application_store,
         workshops: WorkshopIndex::empty(),
         auth: AuthConfig::new(true, None),
         google_oauth: crate::google_oauth::GoogleOauthConfig::passthrough(),
@@ -588,7 +553,7 @@ pub fn sign_rs256_claims<T: serde::Serialize>(kid: &str, claims: &T) -> String {
 ///
 /// When the store refuses the Post.
 pub async fn publish_post(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     brand: &str,
     slug: &str,
     title: &str,
@@ -598,7 +563,7 @@ pub async fn publish_post(
         .expect("fixed date")
         .with_timezone(&chrono::Utc);
     store::posts::seed_post(
-        surreal,
+        application_store,
         &store::posts::SourcePost {
             brand_key: brand,
             slug,

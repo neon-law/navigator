@@ -1,6 +1,6 @@
 use super::*;
 use crate::persons::Role;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 use crate::projects::{self, NewProject};
 
 struct Fixture {

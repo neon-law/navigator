@@ -126,8 +126,8 @@ pub async fn get_admin_unassigned_project_detail() -> Result<AdminUnassignedView
         return Ok(not_found(role, logo, firm_name));
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .map_err(server_error)?
     else {
@@ -140,21 +140,22 @@ pub async fn get_admin_unassigned_project_detail() -> Result<AdminUnassignedView
     } else {
         store::persons::Role::Admin
     };
-    if !store::projects::can_administer_project(&surreal, person_id, admin_role, &project)
+    if !store::projects::can_administer_project(&application_store, person_id, admin_role, &project)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
     {
         return Ok(not_found(role, logo, firm_name));
     }
 
-    let entity = store::entities::find_by_id(&surreal, project.entity_id)
+    let entity = store::entities::find_by_id(&application_store, project.entity_id)
         .await
         .map_err(server_error)?;
     let entity_id = entity.as_ref().map(|entity| entity.id.to_string());
     let entity_name = entity.map(|entity| entity.name);
 
     let participations =
-        crate::lawyer_project_participation::participation_rows_for(&surreal, project.id).await?;
+        crate::lawyer_project_participation::participation_rows_for(&application_store, project.id)
+            .await?;
 
     Ok(AdminUnassignedView {
         found: true,

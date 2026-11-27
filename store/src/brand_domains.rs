@@ -201,10 +201,10 @@ impl DomainPolicy {
 ///
 /// The Brand rows could not be read; a caller must then admit no one.
 pub async fn current(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
 ) -> Result<DomainPolicy, crate::brands::BrandError> {
-    let mut brands = crate::brands::system_wide(surreal).await?;
-    brands.extend(crate::brands::all_firm_scoped(surreal).await?);
+    let mut brands = crate::brands::system_wide(application_store).await?;
+    brands.extend(crate::brands::all_firm_scoped(application_store).await?);
     Ok(DomainPolicy::from_brands(&brands))
 }
 
@@ -322,70 +322,6 @@ mod tests {
         assert!(empty.is_empty());
         assert!(!empty.admits("person@example.com"));
         assert_eq!(DomainPolicy::from_brands(&[]), empty);
-    }
-
-    async fn website_url(db: &crate::surreal::SurrealDb, key: &str) -> Option<String> {
-        crate::brands::find_by_key(db, key)
-            .await
-            .unwrap()
-            .unwrap_or_else(|| panic!("brand {key} exists"))
-            .website_url
-    }
-
-    /// Compiled brand rows written before `website_url` existed take their
-    /// registry URL once, on the upgrading apply. A runtime Brand gets none,
-    /// a value already present is kept, and a URL the Owner clears stays
-    /// cleared on every later boot.
-    #[tokio::test]
-    async fn the_upgrade_backfill_runs_once_from_the_compiled_registry() {
-        let db = crate::test_support::mem_surreal().await;
-        assert_eq!(website_url(&db, "vesta").await, None);
-        db.query(
-            "CREATE $brand SET name = 'Synthetic Runtime Brand', brand_key = 'synthetic-runtime', \
-             firm_id = $firm, is_law_firm = true, inserted_at = $now, updated_at = $now; \
-             UPDATE brand SET website_url = 'https://example.com' WHERE brand_key = 'neon'; \
-             UPSERT schema_version:current SET version = 87;",
-        )
-        .bind(("now", chrono::Utc::now().to_rfc3339()))
-        .bind((
-            "firm",
-            crate::surreal::record_id("firm", uuid::Uuid::now_v7()),
-        ))
-        .bind((
-            "brand",
-            crate::surreal::record_id("brand", uuid::Uuid::now_v7()),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .unwrap();
-
-        crate::schema::apply(&db).await.unwrap();
-        for key in crate::firms::CLOSED_BRAND_KEYS {
-            let expected = if *key == "neon" {
-                Some("https://example.com".to_string())
-            } else {
-                crate::seed::compiled_brand_website_url(key).map(str::to_string)
-            };
-            assert_eq!(website_url(&db, key).await, expected, "{key}");
-        }
-        assert_eq!(website_url(&db, "synthetic-runtime").await, None);
-        let policy = current(&db).await.unwrap();
-        assert_eq!(
-            policy.domains().count(),
-            crate::firms::CLOSED_BRAND_KEYS.len(),
-            "every compiled brand approves one distinct domain"
-        );
-        assert!(policy.admits("person@example.com"));
-
-        let vesta = crate::brands::find_by_key(&db, "vesta")
-            .await
-            .unwrap()
-            .unwrap();
-        crate::brands::set_website_url(&db, crate::persons::Role::Owner, vesta.id, None)
-            .await
-            .unwrap();
-        crate::schema::apply(&db).await.unwrap();
-        assert_eq!(website_url(&db, "vesta").await, None);
     }
 
     #[test]

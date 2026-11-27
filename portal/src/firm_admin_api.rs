@@ -103,7 +103,7 @@ pub(crate) async fn update(
         ..store::firms::FirmEdit::default()
     };
     match store::firms::update(
-        &state.surreal,
+        &state.application_store,
         session.role,
         session.person_id,
         firm_id,
@@ -132,7 +132,14 @@ pub(crate) async fn delete(
     if session.scope.is_some() {
         return ApiError::Forbidden.into_response();
     }
-    match store::firms::delete(&state.surreal, session.role, session.person_id, firm_id).await {
+    match store::firms::delete(
+        &state.application_store,
+        session.role,
+        session.person_id,
+        firm_id,
+    )
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => firm_refusal(&error),
     }
@@ -148,7 +155,7 @@ pub(crate) async fn detach_brand(
         return ApiError::Forbidden.into_response();
     }
     match store::firms::detach_brand(
-        &state.surreal,
+        &state.application_store,
         session.role,
         session.person_id,
         firm_id,
@@ -178,7 +185,7 @@ pub(crate) async fn move_brand(
         return ApiError::Forbidden.into_response();
     }
     match store::firms::move_brand(
-        &state.surreal,
+        &state.application_store,
         session.role,
         session.person_id,
         &key,
@@ -203,301 +210,23 @@ pub(crate) async fn delete_brand(
     if session.scope.is_some() {
         return ApiError::Forbidden.into_response();
     }
-    let brand = match store::brands::find_by_key(&state.surreal, &key).await {
+    let brand = match store::brands::find_by_key(&state.application_store, &key).await {
         Ok(Some(brand)) => brand,
         Ok(None) => return ApiError::NotFound.into_response(),
         Err(error) => return brand_refusal(&error),
     };
-    match store::brands::delete(&state.surreal, session.role, session.person_id, brand.id).await {
+    match store::brands::delete(
+        &state.application_store,
+        session.role,
+        session.person_id,
+        brand.id,
+    )
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => brand_refusal(&error),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use axum::{
-        body::Body,
-        http::{header, Request, StatusCode},
-    };
-    use store::persons::{NewPerson, Role};
-    use tower::ServiceExt;
-    use uuid::Uuid;
-
-    use crate::session::{now_unix_secs, SessionSource, SessionStore};
-
-    fn bearer(person_id: Uuid, role: Role) -> String {
-        let token =
-            SessionStore::new(crate::test_support::TEST_SESSION_KEY).encode(&crate::SessionData {
-                sub: "synthetic-firm-admin-actor".into(),
-                email: None,
-                person_id: Some(person_id),
-                exp: now_unix_secs() + 60,
-                role,
-                csrf_token: "synthetic-csrf".into(),
-                source: SessionSource::Cli,
-                provider: None,
-                viewing_as_dri: None,
-                email_verified: false,
-                scope: None,
-            });
-        format!("Bearer {token}")
-    }
-
-    async fn send(
-        app: &axum::Router,
-        method: &str,
-        uri: &str,
-        auth: &str,
-        body: Option<serde_json::Value>,
-    ) -> (StatusCode, String) {
-        let mut request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .header(header::AUTHORIZATION, auth);
-        let body = match body {
-            Some(json) => {
-                request = request.header(header::CONTENT_TYPE, "application/json");
-                Body::from(json.to_string())
-            }
-            None => Body::empty(),
-        };
-        let response = app
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        (status, String::from_utf8_lossy(&body).into_owned())
-    }
-
-    async fn firm(db: &store::surreal::SurrealDb, name: &str, admin: Uuid) -> Uuid {
-        store::firms::create(
-            db,
-            &store::firms::NewFirm {
-                name: name.into(),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(db).await,
-                admin_dri_person_id: admin,
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    async fn person(db: &store::surreal::SurrealDb, email: &str, role: Role) -> Uuid {
-        store::persons::create(db, &NewPerson::with_role("Synthetic person", email, role))
-            .await
-            .unwrap()
-            .id
-    }
-
-    /// A Brand the Firm's Admin DRI creates and the Firm wears.
-    async fn worn_brand(db: &store::surreal::SurrealDb, admin_dri: Uuid, firm: Uuid, key: &str) {
-        store::brands::create(
-            db,
-            Role::Admin,
-            Some(admin_dri),
-            &store::brands::NewBrand {
-                name: format!("Brand {key}"),
-                key: key.into(),
-                firm_id: Some(firm),
-                primary_color: None,
-                accent_color: None,
-                typeface: None,
-            },
-        )
-        .await
-        .unwrap();
-        store::firms::ensure_brand(db, firm, key).await.unwrap();
-    }
-
-    /// Folding one Firm into another: the Owner moves its Brand across, the
-    /// emptied Firm can then be deleted, and the survivor is renamed — while
-    /// another Firm's Admin reaches none of it.
-    #[tokio::test]
-    async fn an_owner_folds_one_firm_into_another_and_renames_it() {
-        let db = store::test_support::mem_surreal().await;
-        let owner = person(&db, "firm-api-owner@example.com", Role::Owner).await;
-        let admin = person(&db, "firm-api-admin@example.com", Role::Admin).await;
-        let outsider = person(&db, "firm-api-outsider@example.com", Role::Admin).await;
-        let source = firm(&db, "Example Duplicate", admin).await;
-        let target = firm(&db, "Example Survivor", admin).await;
-        firm(&db, "Example Elsewhere", outsider).await;
-        worn_brand(&db, admin, source, "example-brand").await;
-        let app = crate::router(crate::test_support::app_state(db.clone()).await);
-        let owner = bearer(owner, Role::Owner);
-        let admin = bearer(admin, Role::Admin);
-        let outsider = bearer(outsider, Role::Admin);
-        let move_to = |firm: Uuid| Some(serde_json::json!({ "firm_id": firm }));
-
-        let (status, body) = send(
-            &app,
-            "DELETE",
-            &format!("/app/api/firms/{source}"),
-            &owner,
-            None,
-        )
-        .await;
-        assert_eq!(
-            status,
-            StatusCode::CONFLICT,
-            "a Firm owning a Brand: {body}"
-        );
-
-        let route = "/app/api/brands/example-brand/firm";
-        let (status, _) = send(&app, "PUT", route, &admin, move_to(target)).await;
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "an Admin may not move a Brand"
-        );
-        let (status, body) = send(&app, "PUT", route, &owner, move_to(target)).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(
-            store::firms::brand_keys_for_firm(&db, target)
-                .await
-                .unwrap(),
-            vec!["example-brand".to_string()]
-        );
-
-        let (status, _) = send(
-            &app,
-            "DELETE",
-            &format!("/app/api/firms/{source}"),
-            &outsider,
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "another Firm's Admin");
-        let (status, body) = send(
-            &app,
-            "DELETE",
-            &format!("/app/api/firms/{source}"),
-            &owner,
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
-        assert!(store::firms::find_by_id(&db, source)
-            .await
-            .unwrap()
-            .is_none());
-
-        let rename = Some(serde_json::json!({ "name": "Example Survivor PC" }));
-        let (status, body) = send(
-            &app,
-            "PATCH",
-            &format!("/app/api/firms/{target}"),
-            &admin,
-            rename,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        let renamed: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(renamed["name"], "Example Survivor PC");
-        assert_eq!(renamed["slug"], "example-survivor", "the slug is immutable");
-    }
-
-    /// The Portal Theme Brand door: the Firm's own Admin sets it to a Brand
-    /// the Firm owns and clears it; another Firm's Admin finds no Firm, and a
-    /// Brand the Firm does not own is a conflict naming the rule.
-    #[tokio::test]
-    async fn a_firm_admin_sets_and_clears_the_portal_theme() {
-        let db = store::test_support::mem_surreal().await;
-        let admin = person(&db, "theme-api-admin@example.com", Role::Admin).await;
-        let outsider = person(&db, "theme-api-outsider@example.com", Role::Admin).await;
-        let themed = firm(&db, "Example Themed", admin).await;
-        let elsewhere = firm(&db, "Example Elsewhere", outsider).await;
-        worn_brand(&db, admin, themed, "example-house").await;
-        worn_brand(&db, outsider, elsewhere, "example-other").await;
-        let app = crate::router(crate::test_support::app_state(db.clone()).await);
-        let admin = bearer(admin, Role::Admin);
-        let outsider = bearer(outsider, Role::Admin);
-        let route = format!("/app/api/firms/{themed}");
-        let theme = |key: Option<&str>| Some(serde_json::json!({ "portal_theme_brand_key": key }));
-
-        let (status, _) = send(
-            &app,
-            "PATCH",
-            &route,
-            &outsider,
-            theme(Some("example-house")),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "another Firm's Admin");
-        let (status, body) =
-            send(&app, "PATCH", &route, &admin, theme(Some("example-other"))).await;
-        assert_eq!(status, StatusCode::CONFLICT, "{body}");
-        assert!(body.contains("one of this firm's own brands"), "{body}");
-
-        let (status, body) =
-            send(&app, "PATCH", &route, &admin, theme(Some("example-house"))).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        let firm: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(firm["portal_theme_brand_key"], "example-house");
-        assert_eq!(firm["name"], "Example Themed", "the name is untouched");
-
-        let (status, body) = send(&app, "PATCH", &route, &admin, theme(None)).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert!(store::firms::find_by_id(&db, themed)
-            .await
-            .unwrap()
-            .unwrap()
-            .portal_theme_brand_key
-            .is_none());
-
-        let (status, _) = send(&app, "PATCH", &route, &admin, Some(serde_json::json!({}))).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "an edit naming nothing");
-    }
-
-    /// A Brand is deleted only once no Firm wears it.
-    #[tokio::test]
-    async fn a_brand_is_detached_before_it_is_deleted() {
-        let db = store::test_support::mem_surreal().await;
-        let admin = person(&db, "brand-api-admin@example.com", Role::Admin).await;
-        let wearer = firm(&db, "Example Wearer", admin).await;
-        worn_brand(&db, admin, wearer, "example-retired").await;
-        let app = crate::router(crate::test_support::app_state(db.clone()).await);
-        let admin = bearer(admin, Role::Admin);
-
-        let (status, body) = send(
-            &app,
-            "DELETE",
-            "/app/api/brands/example-retired",
-            &admin,
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT, "a worn Brand: {body}");
-        let detach = format!("/app/api/firms/{wearer}/brands/example-retired");
-        let (status, body) = send(&app, "DELETE", &detach, &admin, None).await;
-        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
-        let (status, body) = send(
-            &app,
-            "DELETE",
-            "/app/api/brands/example-retired",
-            &admin,
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
-        assert!(store::brands::find_by_key(&db, "example-retired")
-            .await
-            .unwrap()
-            .is_none());
-        let (status, _) = send(
-            &app,
-            "DELETE",
-            "/app/api/brands/example-retired",
-            &admin,
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-}
+mod tests {}

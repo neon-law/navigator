@@ -138,13 +138,13 @@ async fn hidden(role: ViewerRole) -> ProjectEditView {
 
 #[cfg(feature = "server")]
 async fn project_brand_options(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     store_role: store::persons::Role,
     person_id: Option<uuid::Uuid>,
     firm_id: uuid::Uuid,
 ) -> Result<Vec<(String, String)>, ServerFnError> {
     let decision = store::firm_capability::resolve(
-        surreal,
+        application_store,
         store_role,
         person_id,
         firm_id,
@@ -156,14 +156,14 @@ async fn project_brand_options(
         return Ok(Vec::new());
     }
     if store_role == store::persons::Role::Owner {
-        return owner_brand_options(surreal).await;
+        return owner_brand_options(application_store).await;
     }
-    let keys = store::firms::brand_keys_for_firm(surreal, firm_id)
+    let keys = store::firms::brand_keys_for_firm(application_store, firm_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     Ok(futures::future::try_join_all(
         keys.iter()
-            .map(|key| store::brands::find_by_key(surreal, key)),
+            .map(|key| store::brands::find_by_key(application_store, key)),
     )
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?
@@ -177,20 +177,23 @@ async fn project_brand_options(
 /// may move a Project to any Firm by choosing one of that Firm's Brands.
 #[cfg(feature = "server")]
 async fn owner_brand_options(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
 ) -> Result<Vec<(String, String)>, ServerFnError> {
     let error = |e: &dyn std::fmt::Display| ServerFnError::new(e.to_string());
-    let mut brands = store::brands::system_wide(surreal)
+    let mut brands = store::brands::system_wide(application_store)
         .await
         .map_err(|e| error(&e))?;
     brands.extend(
-        store::brands::all_firm_scoped(surreal)
+        store::brands::all_firm_scoped(application_store)
             .await
             .map_err(|e| error(&e))?,
     );
     let mut options = Vec::new();
-    for firm in store::firms::all(surreal).await.map_err(|e| error(&e))? {
-        for key in store::firms::brand_keys_for_firm(surreal, firm.id)
+    for firm in store::firms::all(application_store)
+        .await
+        .map_err(|e| error(&e))?
+    {
+        for key in store::firms::brand_keys_for_firm(application_store, firm.id)
             .await
             .map_err(|e| error(&e))?
         {
@@ -234,11 +237,12 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         return Ok(hidden(role).await);
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     // The matter arrives as its code; the gate and the form below key on the
     // row id. A code naming no matter is hidden, exactly as a matter the caller
     // is not on is hidden.
-    let Some(project_id) = store::projects::id_for_code(&surreal, &project_code).await else {
+    let Some(project_id) = store::projects::id_for_code(&application_store, &project_code).await
+    else {
         return Ok(hidden(role).await);
     };
 
@@ -261,7 +265,7 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    if !store::access::matter_viewer(&surreal, person_id, store_role, project_id)
+    if !store::access::matter_viewer(&application_store, person_id, store_role, project_id)
         .await
         .map_err(ServerFnError::new)?
         .is_some_and(store::access::MatterViewer::is_firm_side)
@@ -269,13 +273,13 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         return Ok(hidden(role).await);
     }
 
-    let Some(project) = store::projects::find_by_id(&surreal, project_id)
+    let Some(project) = store::projects::find_by_id(&application_store, project_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
     else {
         return Ok(hidden(role).await);
     };
-    let entities = store::entities::all(&surreal)
+    let entities = store::entities::all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -286,7 +290,7 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         .collect();
 
     let brands = if let Some(firm_id) = project.firm_id.filter(|_| role.is_admin_tier()) {
-        project_brand_options(&surreal, store_role, person_id, firm_id).await?
+        project_brand_options(&application_store, store_role, person_id, firm_id).await?
     } else {
         Vec::new()
     };

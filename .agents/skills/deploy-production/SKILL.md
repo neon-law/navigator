@@ -19,8 +19,7 @@ is in flight (`gh run list --workflow release-deploy.yml --limit 5`); never roll
 `NAVIGATOR_PRODUCTION_DEPLOYMENT` and `NAVIGATOR_STAGING_DEPLOYMENT` are the rows' directory names under `deployments/`.
 Export both before starting; if either is unset, ask.
 
-Follow [`docs/manual-roll.md`](../../../docs/manual-roll.md) with `ROW=$NAVIGATOR_PRODUCTION_DEPLOYMENT` and
-`ROW_RESTATE_ENV=production`. What follows is specific to this row.
+Follow [`docs/manual-roll.md`](../../../docs/manual-roll.md) with `ROW=$NAVIGATOR_PRODUCTION_DEPLOYMENT`.
 
 ## Staging goes first
 
@@ -43,14 +42,14 @@ cluster or prove image, Secret, IAM, asset, or endpoint readiness; complete the 
 ## Confirm before the first mutation
 
 The offline dry-run, validators, image check, and verification script perform no writes; run them freely. Before the
-first production change, state its tag, the two Deployments, the CronJobs, and the outgoing tag; then get a clear yes.
+first production change, state its tag, the web Deployment, the CronJobs, and the outgoing tag; then get a clear yes.
 Staging authorization does not cover production, and approval for one roll does not cover a later roll.
 
 ## This row holds real files
 
 `NAVIGATOR_SIMULATED_MATTERS = "false"` here, and a missing value reads as `false` under the `production` profile. Never
 set it `true`: that would seed invented clients among real ones. The archive bucket, telemetry bucket, KMS key, GitHub
-App, and Restate environment are all this row's own; never copy a coordinate between rows.
+App, and DBOS login belong to this row; never copy a coordinate between rows.
 
 ## Verify
 
@@ -62,6 +61,5 @@ Capture the outgoing tag before starting; rolling back is `ops ship --tag <outgo
 
 ## Finishing
 
-Report both rows and their tags together, along with anything outstanding. If Restate re-registration was judged
-current, say it was compared and found current. Remove the `$NAVIGATOR_PRODUCTION_DEPLOYMENT` kubectl context as
-`docs/manual-roll.md` step 10 describes.
+Report both rows, their tags, and anything outstanding. Remove the production kubectl context as `docs/manual-roll.md`
+step 9 describes.

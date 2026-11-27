@@ -62,7 +62,7 @@ pub enum EmailSummaryError {
 
 #[derive(Clone)]
 pub struct Context {
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     storage: Arc<dyn StorageService>,
     slack: Arc<dyn SlackBot>,
     providers: Option<SummaryProviders>,
@@ -71,13 +71,13 @@ pub struct Context {
 impl Context {
     #[must_use]
     pub fn new(
-        surreal: store::surreal::SurrealDb,
+        application_store: store::application_store::ApplicationStore,
         storage: Arc<dyn StorageService>,
         slack: Arc<dyn SlackBot>,
         providers: Option<SummaryProviders>,
     ) -> Self {
         Self {
-            surreal,
+            application_store,
             storage,
             slack,
             providers,
@@ -100,11 +100,11 @@ async fn run_summary(
 ) -> dbos::Result<EmailSummaryReport, EmailSummaryError> {
     let receipt_id = request.receipt_id;
     let receipt = {
-        let surreal = context.surreal.clone();
+        let application_store = context.application_store.clone();
         dbos::step("load-receipt", move || {
-            let surreal = surreal.clone();
+            let application_store = application_store.clone();
             async move {
-                match store::email_receipts::find_by_id(&surreal, receipt_id).await {
+                match store::email_receipts::find_by_id(&application_store, receipt_id).await {
                     Ok(Some(receipt)) => Ok(receipt),
                     Ok(None) | Err(_) => Err(dbos::Error::Application(EmailSummaryError::Receipt)),
                 }
@@ -119,14 +119,17 @@ async fn run_summary(
 
     let gate = {
         let storage = Arc::clone(&context.storage);
-        let surreal = context.surreal.clone();
+        let application_store = context.application_store.clone();
         let receipt = receipt.clone();
         let matter_project_id = request.matter_project_id;
         dbos::step("check-sender", move || {
-            let (storage, surreal, receipt) =
-                (Arc::clone(&storage), surreal.clone(), receipt.clone());
+            let (storage, application_store, receipt) = (
+                Arc::clone(&storage),
+                application_store.clone(),
+                receipt.clone(),
+            );
             async move {
-                check_sender_step(storage, &surreal, &receipt, matter_project_id)
+                check_sender_step(storage, &application_store, &receipt, matter_project_id)
                     .await
                     .map_err(|error| {
                         // Retain the shared step failure for recovery diagnostics.
@@ -148,7 +151,7 @@ async fn run_summary(
 
     let delivery_state = {
         let target = DeliveryTarget {
-            surreal: context.surreal.clone(),
+            application_store: context.application_store.clone(),
             slack: Arc::clone(&context.slack),
             storage: Arc::clone(&context.storage),
             receipt,
@@ -183,14 +186,14 @@ async fn summarize_step(
 ) -> dbos::Result<ProviderDelivery, EmailSummaryError> {
     let storage = Arc::clone(&context.storage);
     let providers = context.providers.clone();
-    let surreal = context.surreal.clone();
+    let application_store = context.application_store.clone();
     let config = request.gemini.clone();
     let project_id = request.project_id.clone();
     let matter_project_id = request.matter_project_id;
     dbos::step("summarize-gemini", move || {
-        let (storage, surreal, receipt, config) = (
+        let (storage, application_store, receipt, config) = (
             Arc::clone(&storage),
-            surreal.clone(),
+            application_store.clone(),
             receipt.clone(),
             config.clone(),
         );
@@ -200,7 +203,7 @@ async fn summarize_step(
             let started = std::time::Instant::now();
             let result = summarize_provider_authorized(
                 storage,
-                surreal,
+                application_store,
                 providers,
                 SummaryProvider::Gemini,
                 receipt.clone(),

@@ -19,7 +19,7 @@ use axum::{
 };
 use chrono::NaiveDate;
 use serde::Deserialize;
-use store::{attorney_rates, postgres_mirror, time_entries, timers};
+use store::{attorney_rates, time_entries, timers};
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
@@ -150,9 +150,10 @@ async fn ensure_firm_side(
     role: store::persons::Role,
     project_id: Uuid,
 ) -> Result<(), ApiError> {
-    let viewer = store::access::matter_viewer(&state.surreal, person_id, role, project_id)
-        .await
-        .map_err(ApiError::Db)?;
+    let viewer =
+        store::access::matter_viewer(&state.application_store, person_id, role, project_id)
+            .await
+            .map_err(ApiError::Db)?;
     match viewer {
         Some(viewer) if viewer.is_firm_side() => Ok(()),
         _ => Err(ApiError::NotFound),
@@ -163,12 +164,14 @@ async fn ensure_firm_rate_admin(state: &ApiState, session: &SessionData) -> Resu
     if !session.role.is_admin_tier() || session.viewing_as_dri.is_some() {
         return Err(ApiError::Forbidden);
     }
-    let firm_id =
-        store::firms::firm_id_for_brand_key(&state.surreal, views::brand::brand_key().as_str())
-            .await
-            .map_err(|error| ApiError::Db(error.to_string()))?
-            .ok_or(ApiError::NotFound)?;
-    crate::api::require_firm_administration(&state.surreal, session, firm_id).await
+    let firm_id = store::firms::firm_id_for_brand_key(
+        &state.application_store,
+        views::brand::brand_key().as_str(),
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?
+    .ok_or(ApiError::NotFound)?;
+    crate::api::require_firm_administration(&state.application_store, session, firm_id).await
 }
 
 pub(crate) async fn postgres(
@@ -186,51 +189,13 @@ pub(crate) async fn postgres(
     })
 }
 
-/// Open the time-tracking tables with their dependency rows mirrored: the
-/// entry, timer, and flat-fee commands all check the parent Project row and
-/// the attorney's participation in PostgreSQL, so a Project or participant
-/// added before the mirror was enabled would otherwise be wrongly refused
-/// there.
-/// Shared with the form doors in `crate::project_billing_forms`, so the JSON
-/// and browser entry points prepare the same mirror state before any write.
+/// Open PostgreSQL for the authorized operation.
 pub(crate) async fn prepared_store(
-    surreal: &store::surreal::SurrealDb,
+    _application_store: &store::application_store::ApplicationStore,
     operation: &'static str,
     project_id: Uuid,
 ) -> Result<store::postgres::PostgresDb, Response> {
-    let pg = postgres(operation, Some(project_id)).await?;
-    let mirrored = async {
-        postgres_mirror::mirror(
-            surreal,
-            &pg,
-            &postgres_mirror::MirrorKey::Project(project_id),
-        )
-        .await?;
-        let participations = store::projects::participations_for_project(surreal, project_id)
-            .await
-            .map_err(|_| postgres_mirror::MirrorError::Source)?;
-        for role in participations {
-            postgres_mirror::mirror(
-                surreal,
-                &pg,
-                &postgres_mirror::MirrorKey::ProjectParticipation(role.id),
-            )
-            .await?;
-        }
-        Ok::<_, postgres_mirror::MirrorError>(())
-    }
-    .await;
-    if let Err(store_error) = mirrored {
-        tracing::warn!(
-            event = "time_tracking_mirror_failed",
-            operation,
-            outcome = "store_error",
-            project_id = %project_id,
-            store_error = %store_error
-        );
-        return Err(refused(StatusCode::SERVICE_UNAVAILABLE));
-    }
-    Ok(pg)
+    postgres(operation, Some(project_id)).await
 }
 
 #[derive(Deserialize)]
@@ -303,7 +268,7 @@ pub(crate) async fn stage_annotation(
     }
     let actor = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, Some(actor), session.role, project_id).await?;
-    let pg = match prepared_store(&state.surreal, "stage_annotation", project_id).await {
+    let pg = match prepared_store(&state.application_store, "stage_annotation", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
@@ -326,7 +291,7 @@ pub(crate) async fn create_entry(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state.surreal, "create_entry", project_id).await {
+    let pg = match prepared_store(&state.application_store, "create_entry", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
@@ -479,7 +444,7 @@ pub(crate) async fn start_timer(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state.surreal, "start_timer", project_id).await {
+    let pg = match prepared_store(&state.application_store, "start_timer", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
@@ -509,7 +474,7 @@ pub(crate) async fn stop_timer(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state.surreal, "stop_timer", project_id).await {
+    let pg = match prepared_store(&state.application_store, "stop_timer", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
@@ -644,7 +609,7 @@ pub(crate) async fn create_rate(
     // project tables; mirror what the row names first, and refuse an
     // unknown attorney or matter with the non-disclosing 404 rather than a
     // constraint fault.
-    let person_exists = store::persons::find_by_id(&state.surreal, input.person_id)
+    let person_exists = store::persons::find_by_id(&state.application_store, input.person_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .is_some();
@@ -652,7 +617,7 @@ pub(crate) async fn create_rate(
         return Err(ApiError::NotFound);
     }
     if let Some(project_id) = input.project_id {
-        let project_exists = store::projects::find_by_id(&state.surreal, project_id)
+        let project_exists = store::projects::find_by_id(&state.application_store, project_id)
             .await
             .map_err(|e| ApiError::Db(e.to_string()))?
             .is_some();
@@ -670,38 +635,6 @@ pub(crate) async fn create_rate(
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
-    if let Some(project_id) = input.project_id {
-        if let Err(store_error) = postgres_mirror::mirror(
-            &state.surreal,
-            &pg,
-            &postgres_mirror::MirrorKey::Project(project_id),
-        )
-        .await
-        {
-            tracing::warn!(
-                event = "fee_structure_mirror_failed",
-                operation = "create_rate",
-                outcome = "store_error",
-                store_error = %store_error
-            );
-            return Ok(refused(StatusCode::SERVICE_UNAVAILABLE));
-        }
-    }
-    if let Err(store_error) = postgres_mirror::mirror(
-        &state.surreal,
-        &pg,
-        &postgres_mirror::MirrorKey::Person(input.person_id),
-    )
-    .await
-    {
-        tracing::warn!(
-            event = "fee_structure_mirror_failed",
-            operation = "create_rate",
-            outcome = "store_error",
-            store_error = %store_error
-        );
-        return Ok(refused(StatusCode::SERVICE_UNAVAILABLE));
-    }
     let rate = attorney_rates::NewAttorneyRate {
         person_id: input.person_id,
         project_id: input.project_id,
@@ -747,7 +680,7 @@ pub(crate) async fn set_flat_fee(
     Json(input): Json<FlatFeeInput>,
 ) -> Result<Response, ApiError> {
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state.surreal, "set_flat_fee", project_id).await {
+    let pg = match prepared_store(&state.application_store, "set_flat_fee", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };

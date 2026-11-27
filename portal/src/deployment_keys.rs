@@ -47,7 +47,7 @@ async fn save(
         }
     }
     match store::deployment_secret_changes::save(
-        &state.surreal,
+        &state.application_store,
         state.runtime_kms.as_ref(),
         store::persons::Role::Owner,
         store::DeploymentEnvironment::Production,
@@ -76,7 +76,7 @@ async fn export(
         return StatusCode::NOT_FOUND.into_response();
     }
     match store::deployment_secret_changes::latest(
-        &state.surreal,
+        &state.application_store,
         store::persons::Role::Owner,
         store::DeploymentEnvironment::Production,
     )

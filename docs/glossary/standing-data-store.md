@@ -7,9 +7,7 @@ Where Navigator's persistent rows live. PostgreSQL is the relational model for n
 connection pool and timestamped migrations; Apache AGE supplies relationship graph traversal. Use the supported
 PostgreSQL write path for a domain whose authority is configured there.
 
-The active backend is selected per domain. A PostgreSQL mirror alone does not make that database authoritative. Read
-[Storage models and writes](../storage-models.md) before choosing an accessor or enabling a deployment. Remaining
-engine-specific paths are documented in [SurrealDB compatibility](../surreal-compatibility.md).
+PostgreSQL owns the stored state. See [Storage models and writes](../storage-models.md).
 
 - Model: [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 - Migrations: [`store/postgres/migrations`](../../store/postgres/migrations/)

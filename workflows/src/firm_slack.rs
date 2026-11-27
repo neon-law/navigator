@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use store::application_store::ApplicationStore;
 use store::firm_secrets::{IntegrationProvider, IntegrationSecretKind, SecretStoreError};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 use crate::notify::{
@@ -38,13 +38,13 @@ pub const FIRM_SLACK_NOT_CONNECTED: &str = "firm_slack_not_connected";
 /// The Firm has no active `slack_bot_token`, the runtime KMS cannot unseal
 /// it, or the store did not answer.
 pub async fn firm_bot(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
     kms: &dyn cloud::RuntimeKms,
     base_url: Option<&str>,
 ) -> Result<SlackBotClient, SecretStoreError> {
     let credential = store::firm_secrets::resolve_firm_credential(
-        surreal,
+        application_store,
         firm_id,
         IntegrationProvider::Slack,
         IntegrationSecretKind::SlackBotToken,
@@ -64,8 +64,7 @@ pub async fn firm_bot(
 #[must_use]
 pub fn credential_error(error: &SecretStoreError) -> SlackBotError {
     match error {
-        SecretStoreError::Db(_)
-        | SecretStoreError::Postgres
+        SecretStoreError::Postgres
         | SecretStoreError::Kms(
             cloud::KmsError::Unavailable | cloud::KmsError::Transport | cloud::KmsError::Http(_),
         ) => SlackBotError::Transport("Firm Slack credential is unavailable".to_owned()),
@@ -101,19 +100,24 @@ impl DeploymentSlackFirm {
     ///
     /// # Errors
     /// The store did not answer.
-    pub async fn resolve(self, surreal: &SurrealDb) -> Result<Option<Uuid>, SlackBotError> {
+    pub async fn resolve(
+        self,
+        application_store: &ApplicationStore,
+    ) -> Result<Option<Uuid>, SlackBotError> {
         match self {
             Self::Configured(firm_id) => Ok(Some(firm_id)),
-            Self::DefaultBrand => store::firms::firm_id_for_brand_key(surreal, DEFAULT_SLACK_BRAND)
-                .await
-                .map_err(|_| SlackBotError::Transport("Firm lookup failed".to_owned())),
+            Self::DefaultBrand => {
+                store::firms::firm_id_for_brand_key(application_store, DEFAULT_SLACK_BRAND)
+                    .await
+                    .map_err(|_| SlackBotError::Transport("Firm lookup failed".to_owned()))
+            }
         }
     }
 }
 
 /// The deployment's own bot: the Slack Firm's bot, resolved per call.
 pub struct FirmSlackBot {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     kms: Arc<dyn cloud::RuntimeKms>,
     firm: DeploymentSlackFirm,
     base_url: Option<String>,
@@ -122,13 +126,13 @@ pub struct FirmSlackBot {
 impl FirmSlackBot {
     #[must_use]
     pub fn new(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         kms: Arc<dyn cloud::RuntimeKms>,
         firm: DeploymentSlackFirm,
         base_url: Option<String>,
     ) -> Self {
         Self {
-            surreal,
+            application_store,
             kms,
             firm,
             base_url,
@@ -138,11 +142,11 @@ impl FirmSlackBot {
     async fn bot(&self) -> Result<SlackBotClient, SlackBotError> {
         let firm_id = self
             .firm
-            .resolve(&self.surreal)
+            .resolve(&self.application_store)
             .await?
             .ok_or_else(|| SlackBotError::Api(FIRM_SLACK_NOT_CONNECTED.to_owned()))?;
         firm_bot(
-            &self.surreal,
+            &self.application_store,
             firm_id,
             self.kms.as_ref(),
             self.base_url.as_deref(),
@@ -160,7 +164,7 @@ impl FirmSlackBot {
 /// # Errors
 /// An invalid [`SLACK_FIRM_ENV`], or `SLACK_API_BASE_URL` outside the harness.
 pub fn deployment_bot(
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     kms: Arc<dyn cloud::RuntimeKms>,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<Option<Arc<dyn SlackBot>>, String> {
@@ -172,7 +176,9 @@ pub fn deployment_bot(
         ))));
     }
     let sealed = lookup(cloud::RUNTIME_KMS_KEY_ENV).is_some_and(|key| !key.trim().is_empty());
-    Ok(sealed.then(|| Arc::new(FirmSlackBot::new(surreal, kms, firm, None)) as Arc<dyn SlackBot>))
+    Ok(sealed.then(|| {
+        Arc::new(FirmSlackBot::new(application_store, kms, firm, None)) as Arc<dyn SlackBot>
+    }))
 }
 
 /// [`deployment_bot`], capturing when nothing may post, and whether it posts.
@@ -180,11 +186,11 @@ pub fn deployment_bot(
 /// # Errors
 /// As [`deployment_bot`].
 pub fn deployment_bot_or_capture(
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     kms: Arc<dyn cloud::RuntimeKms>,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<(Arc<dyn SlackBot>, bool), String> {
-    Ok(match deployment_bot(surreal, kms, lookup)? {
+    Ok(match deployment_bot(application_store, kms, lookup)? {
         Some(bot) => (bot, true),
         None => (Arc::new(CapturingSlackBot::new()), false),
     })
@@ -328,9 +334,9 @@ mod tests {
     };
     use crate::notify::{SlackBot, SlackBotError};
     use std::sync::Arc;
+    use store::application_store::ApplicationStore;
     use store::firm_secrets::{put, IntegrationProvider, IntegrationSecretKind, SecretPutRequest};
     use store::persons::Role;
-    use store::surreal::SurrealDb;
     use uuid::Uuid;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -339,15 +345,16 @@ mod tests {
 
     /// A Firm wearing `brand`, holding `token` as its bot when given.
     async fn firm(
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         kms: &cloud::FakeKms,
         brand: &str,
         token: Option<&str>,
     ) -> Uuid {
-        let (firm, admin) = store::test_support::seed_firm_with_new_brand(surreal, brand).await;
+        let (firm, admin) =
+            store::test_support::seed_firm_with_new_brand(application_store, brand).await;
         if let Some(value) = token {
             put(
-                surreal,
+                application_store,
                 SecretPutRequest {
                     actor_role: Role::Admin,
                     actor_person_id: Some(admin),
@@ -383,14 +390,14 @@ mod tests {
     #[tokio::test]
     async fn the_deployment_bot_posts_with_its_slack_firms_own_token() {
         store::test_support::with_postgres(async {
-            let surreal = SurrealDb::uninitialized();
+            let application_store = ApplicationStore::uninitialized();
             let kms = cloud::FakeKms::new(KEY);
-            firm(&surreal, &kms, "neon", Some("xoxb-neon")).await;
-            let other = firm(&surreal, &kms, "other", Some("xoxb-other")).await;
+            firm(&application_store, &kms, "neon", Some("xoxb-neon")).await;
+            let other = firm(&application_store, &kms, "other", Some("xoxb-other")).await;
 
             let server = slack_expecting("xoxb-neon").await;
             let default = FirmSlackBot::new(
-                surreal.clone(),
+                application_store.clone(),
                 Arc::new(kms.clone()),
                 DeploymentSlackFirm::DefaultBrand,
                 Some(server.uri()),
@@ -399,7 +406,7 @@ mod tests {
 
             let server = slack_expecting("xoxb-other").await;
             let configured = FirmSlackBot::new(
-                surreal,
+                application_store,
                 Arc::new(kms),
                 DeploymentSlackFirm::Configured(other),
                 Some(server.uri()),
@@ -412,15 +419,15 @@ mod tests {
     #[tokio::test]
     async fn a_firm_without_a_bot_is_refused_without_calling_slack() {
         store::test_support::with_postgres(async {
-            let surreal = SurrealDb::uninitialized();
+            let application_store = ApplicationStore::uninitialized();
             let kms = cloud::FakeKms::new(KEY);
-            let unconnected = firm(&surreal, &kms, "neon", None).await;
+            let unconnected = firm(&application_store, &kms, "neon", None).await;
             for firm in [
                 DeploymentSlackFirm::Configured(unconnected),
                 DeploymentSlackFirm::Configured(Uuid::now_v7()),
             ] {
                 let bot = FirmSlackBot::new(
-                    surreal.clone(),
+                    application_store.clone(),
                     Arc::new(kms.clone()),
                     firm,
                     Some("http://127.0.0.1:9".into()),
@@ -437,7 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn hosts_select_firm_capture_or_harness_and_reject_bad_configuration() {
-        let surreal = SurrealDb::uninitialized;
+        let application_store = ApplicationStore::uninitialized;
         let kms = || Arc::new(cloud::NoRuntimeKms) as Arc<dyn cloud::RuntimeKms>;
         let get = |pairs: &'static [(&'static str, &'static str)]| {
             move |key: &str| {
@@ -447,25 +454,31 @@ mod tests {
                     .map(|(_, value)| (*value).to_owned())
             }
         };
-        let (captured, live) = deployment_bot_or_capture(surreal(), kms(), get(&[])).unwrap();
+        let (captured, live) =
+            deployment_bot_or_capture(application_store(), kms(), get(&[])).unwrap();
         assert!(!live);
         assert!(captured.post_message("C0OPS", "captured").await.is_ok());
         let sealed = &[(
             cloud::RUNTIME_KMS_KEY_ENV,
             "projects/p/locations/l/keyRings/r/cryptoKeys/k",
         )];
-        assert!(deployment_bot(surreal(), kms(), get(sealed))
+        assert!(deployment_bot(application_store(), kms(), get(sealed))
             .unwrap()
             .is_some());
-        assert!(deployment_bot(surreal(), kms(), get(&[("SLACK_FIRM_ID", "neon")])).is_err());
         assert!(deployment_bot(
-            surreal(),
+            application_store(),
+            kms(),
+            get(&[("SLACK_FIRM_ID", "neon")])
+        )
+        .is_err());
+        assert!(deployment_bot(
+            application_store(),
             kms(),
             get(&[("SLACK_API_BASE_URL", "http://127.0.0.1:9")])
         )
         .is_err());
         assert!(deployment_bot(
-            surreal(),
+            application_store(),
             kms(),
             get(&[
                 ("NAVIGATOR_CI_HARNESS", "1"),

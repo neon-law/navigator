@@ -111,17 +111,18 @@ pub async fn matter_viewer_kind() -> Result<MatterViewerKind, ServerFnError> {
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
     else {
         commit_not_found();
         return Ok(MatterViewerKind::None);
     };
-    let viewer = store::access::matter_viewer(&surreal, person_id, store_role, project.id)
-        .await
-        .map_err(|e| ServerFnError::new(e.clone()))?;
+    let viewer =
+        store::access::matter_viewer(&application_store, person_id, store_role, project.id)
+            .await
+            .map_err(|e| ServerFnError::new(e.clone()))?;
     let kind = match viewer {
         // `matter_viewer` itself carries no privileged short-circuit (ENG-81)
         // — this branch is the dispatcher's own, on top of that unchanged
@@ -133,7 +134,10 @@ pub async fn matter_viewer_kind() -> Result<MatterViewerKind, ServerFnError> {
         // tier claims.
         None if person_id.is_some()
             && store::projects::can_administer_project(
-                &surreal, person_id, store_role, &project,
+                &application_store,
+                person_id,
+                store_role,
+                &project,
             )
             .await
             .map_err(ServerFnError::new)? =>

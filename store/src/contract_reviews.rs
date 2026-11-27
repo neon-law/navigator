@@ -20,17 +20,13 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::matter;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 use serde_json::json;
 
 const TABLE: &str = "contract_review";
-const NOTATION_TABLE: &str = "notation";
-const PLAYBOOK_TABLE: &str = "playbook";
-const ASSET_TABLE: &str = "asset";
 
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_ANALYZED: &str = "analyzed";
@@ -75,54 +71,11 @@ pub struct ContractReview {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(SurrealValue)]
-struct ContractReviewRow {
-    id: surrealdb::types::RecordId,
-    notation_id: surrealdb::types::RecordId,
-    playbook_id: surrealdb::types::RecordId,
-    asset_id: Option<surrealdb::types::RecordId>,
-    status: String,
-    risk_summary: Option<String>,
-    findings: Json,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl ContractReviewRow {
-    /// `None` when a record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`].
-    fn into_contract_review(self) -> Option<ContractReview> {
-        Some(ContractReview {
-            id: record_uuid(&self.id)?,
-            notation_id: record_uuid(&self.notation_id)?,
-            playbook_id: record_uuid(&self.playbook_id)?,
-            asset_id: self.asset_id.as_ref().and_then(record_uuid),
-            status: self.status,
-            risk_summary: self.risk_summary,
-            findings: self.findings,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const SELECT: &str = "id, notation_id, playbook_id, asset_id, status, risk_summary, findings, \
-     inserted_at, updated_at";
-
-fn one(
-    mut response: surrealdb::IndexedResults,
-) -> Result<Option<ContractReview>, surrealdb::Error> {
-    let row: Option<ContractReviewRow> = response.take(0)?;
-    Ok(row.and_then(ContractReviewRow::into_contract_review))
-}
-
 /// Why a contract-review command refused.
 #[derive(Debug, thiserror::Error)]
 pub enum ContractReviewError {
     #[error(transparent)]
     Postgres(#[from] matter::MatterAuthorityError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back.
     #[error("writing a contract review returned no usable row")]
@@ -153,49 +106,25 @@ pub struct NewContractReview {
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn create(db: &SurrealDb, new: &NewContractReview) -> Result<Uuid, ContractReviewError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let now = chrono::Utc::now();
-        let row = ContractReview {
-            id: Uuid::now_v7(),
-            notation_id: new.notation_id,
-            playbook_id: new.playbook_id,
-            asset_id: new.asset_id,
-            status: STATUS_PENDING.to_owned(),
-            risk_summary: None,
-            findings: json!([]),
-            inserted_at: now,
-            updated_at: now,
-        };
-        let stored: ContractReview = matter::upsert(&pg, TABLE, &row).await?;
-        return Ok(stored.id);
-    }
-
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             notation_id = $notation_id, playbook_id = $playbook_id, asset_id = $asset_id, \
-             status = $status, findings = $findings \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("notation_id", record_id(NOTATION_TABLE, new.notation_id)))
-        .bind(("playbook_id", record_id(PLAYBOOK_TABLE, new.playbook_id)))
-        .bind((
-            "asset_id",
-            new.asset_id.map(|id| record_id(ASSET_TABLE, id)),
-        ))
-        .bind(("status", STATUS_PENDING.to_string()))
-        .bind(("findings", Json::Array(Vec::new())))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ContractReviewRow> = response.take(0)?;
-    let review = row
-        .and_then(ContractReviewRow::into_contract_review)
-        .ok_or(ContractReviewError::WriteReturnedNothing)?;
-    crate::postgres_mirror::records::after_write(db, TABLE, review.id).await;
-    Ok(review.id)
+pub async fn create(
+    _db: &ApplicationStore,
+    new: &NewContractReview,
+) -> Result<Uuid, ContractReviewError> {
+    let pg = matter::authority_for(TABLE).await?;
+    let now = chrono::Utc::now();
+    let row = ContractReview {
+        id: Uuid::now_v7(),
+        notation_id: new.notation_id,
+        playbook_id: new.playbook_id,
+        asset_id: new.asset_id,
+        status: STATUS_PENDING.to_owned(),
+        risk_summary: None,
+        findings: json!([]),
+        inserted_at: now,
+        updated_at: now,
+    };
+    let stored: ContractReview = matter::upsert(&pg, TABLE, &row).await?;
+    Ok(stored.id)
 }
 
 /// Load one contract review by id.
@@ -204,19 +133,11 @@ pub async fn create(db: &SurrealDb, new: &NewContractReview) -> Result<Uuid, Con
 ///
 /// Propagates any database error.
 pub async fn by_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<ContractReview>, ContractReviewError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::find(&pg, TABLE, json!({"id": id})).await?);
-    }
-
-    let response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?)
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::find(&pg, TABLE, json!({"id": id})).await?)
 }
 
 /// `notation_events.machine_kind` token for the attorney's per-finding
@@ -232,10 +153,10 @@ pub const MACHINE_CONTRACT_REVIEW: &str = "contract_review";
 ///
 /// Propagates any database error.
 pub async fn acted_finding_indices(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<std::collections::HashSet<usize>, ContractReviewError> {
-    let events: Vec<_> = crate::notation_events::for_notation(surreal, notation_id)
+    let events: Vec<_> = crate::notation_events::for_notation(application_store, notation_id)
         .await?
         .into_iter()
         .filter(|e| e.machine_kind == MACHINE_CONTRACT_REVIEW)
@@ -258,30 +179,19 @@ pub async fn acted_finding_indices(
 ///
 /// Propagates any database error.
 pub async fn latest_for_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Option<ContractReview>, ContractReviewError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::select(
-            &pg,
-            TABLE,
-            json!({"notation_id": notation_id}),
-            &["id DESC"],
-        )
-        .await?
-        .into_iter()
-        .next());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation \
-             ORDER BY id DESC LIMIT 1"
-        ))
-        .bind(("notation", record_id(NOTATION_TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?)
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::select(
+        &pg,
+        TABLE,
+        json!({"notation_id": notation_id}),
+        &["id DESC"],
+    )
+    .await?
+    .into_iter()
+    .next())
 }
 
 /// Record the analysis result: store the risk summary and findings and
@@ -292,38 +202,17 @@ pub async fn latest_for_notation(
 /// [`ContractReviewError::NotFound`] if the id is unknown, or a database
 /// error.
 pub async fn record_analysis(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     risk_summary: &str,
     findings: &[Finding],
 ) -> Result<(), ContractReviewError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let changed: Vec<ContractReview> = matter::update(&pg, TABLE, json!({"id": id}),
-            json!({"risk_summary": risk_summary, "findings": findings, "status": STATUS_ANALYZED, "updated_at": chrono::Utc::now()})).await?;
-        if changed.is_empty() {
-            return Err(ContractReviewError::NotFound(id));
-        }
-        return Ok(());
+    let pg = matter::authority_for(TABLE).await?;
+    let changed: Vec<ContractReview> = matter::update(&pg, TABLE, json!({"id": id}),
+        json!({"risk_summary": risk_summary, "findings": findings, "status": STATUS_ANALYZED, "updated_at": chrono::Utc::now()})).await?;
+    if changed.is_empty() {
+        return Err(ContractReviewError::NotFound(id));
     }
-
-    let value = serde_json::to_value(findings)?;
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET \
-             risk_summary = $risk_summary, findings = $findings, status = $status, \
-             updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("risk_summary", risk_summary.to_string()))
-        .bind(("findings", value))
-        .bind(("status", STATUS_ANALYZED.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ContractReviewRow> = response.take(0)?;
-    row.and_then(ContractReviewRow::into_contract_review)
-        .ok_or(ContractReviewError::NotFound(id))?;
-    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
     Ok(())
 }
 
@@ -334,37 +223,21 @@ pub async fn record_analysis(
 /// [`ContractReviewError::NotFound`] if the id is unknown, or a database
 /// error.
 pub async fn update_findings(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     findings: &[Finding],
 ) -> Result<(), ContractReviewError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let changed: Vec<ContractReview> = matter::update(
-            &pg,
-            TABLE,
-            json!({"id": id}),
-            json!({"findings": findings, "updated_at": chrono::Utc::now()}),
-        )
-        .await?;
-        if changed.is_empty() {
-            return Err(ContractReviewError::NotFound(id));
-        }
-        return Ok(());
+    let pg = matter::authority_for(TABLE).await?;
+    let changed: Vec<ContractReview> = matter::update(
+        &pg,
+        TABLE,
+        json!({"id": id}),
+        json!({"findings": findings, "updated_at": chrono::Utc::now()}),
+    )
+    .await?;
+    if changed.is_empty() {
+        return Err(ContractReviewError::NotFound(id));
     }
-
-    let value = serde_json::to_value(findings)?;
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET findings = $findings, updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("findings", value))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ContractReviewRow> = response.take(0)?;
-    row.and_then(ContractReviewRow::into_contract_review)
-        .ok_or(ContractReviewError::NotFound(id))?;
-    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
     Ok(())
 }
 
@@ -376,37 +249,21 @@ pub async fn update_findings(
 /// [`ContractReviewError::NotFound`] if the id is unknown, or a database
 /// error.
 pub async fn update_risk_summary(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     risk_summary: &str,
 ) -> Result<(), ContractReviewError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let changed: Vec<ContractReview> = matter::update(
-            &pg,
-            TABLE,
-            json!({"id": id}),
-            json!({"risk_summary": risk_summary, "updated_at": chrono::Utc::now()}),
-        )
-        .await?;
-        if changed.is_empty() {
-            return Err(ContractReviewError::NotFound(id));
-        }
-        return Ok(());
+    let pg = matter::authority_for(TABLE).await?;
+    let changed: Vec<ContractReview> = matter::update(
+        &pg,
+        TABLE,
+        json!({"id": id}),
+        json!({"risk_summary": risk_summary, "updated_at": chrono::Utc::now()}),
+    )
+    .await?;
+    if changed.is_empty() {
+        return Err(ContractReviewError::NotFound(id));
     }
-
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET risk_summary = $risk_summary, updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("risk_summary", risk_summary.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ContractReviewRow> = response.take(0)?;
-    row.and_then(ContractReviewRow::into_contract_review)
-        .ok_or(ContractReviewError::NotFound(id))?;
-    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
     Ok(())
 }
 
@@ -416,33 +273,22 @@ pub async fn update_risk_summary(
 ///
 /// [`ContractReviewError::NotFound`] if the id is unknown, or a database
 /// error.
-pub async fn set_status(db: &SurrealDb, id: Uuid, status: &str) -> Result<(), ContractReviewError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let changed: Vec<ContractReview> = matter::update(
-            &pg,
-            TABLE,
-            json!({"id": id}),
-            json!({"status": status, "updated_at": chrono::Utc::now()}),
-        )
-        .await?;
-        if changed.is_empty() {
-            return Err(ContractReviewError::NotFound(id));
-        }
-        return Ok(());
+pub async fn set_status(
+    _db: &ApplicationStore,
+    id: Uuid,
+    status: &str,
+) -> Result<(), ContractReviewError> {
+    let pg = matter::authority_for(TABLE).await?;
+    let changed: Vec<ContractReview> = matter::update(
+        &pg,
+        TABLE,
+        json!({"id": id}),
+        json!({"status": status, "updated_at": chrono::Utc::now()}),
+    )
+    .await?;
+    if changed.is_empty() {
+        return Err(ContractReviewError::NotFound(id));
     }
-
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET status = $status, updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("status", status.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ContractReviewRow> = response.take(0)?;
-    row.and_then(ContractReviewRow::into_contract_review)
-        .ok_or(ContractReviewError::NotFound(id))?;
-    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
     Ok(())
 }
 

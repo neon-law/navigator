@@ -28,8 +28,10 @@ const LAWYER_EMAIL: &str = "lawyer@neonlaw.com";
 const LAWYER_NAME: &str = "Lawrence Lawyer";
 
 /// Find or promote the synthetic Lawyer through the authoritative Person accessor.
-async fn grant_lawyer_in(surreal: &store::surreal::SurrealDb) -> Result<()> {
-    match store::persons::find_by_email_ci(surreal, LAWYER_EMAIL)
+async fn grant_lawyer_in(
+    application_store: &store::application_store::ApplicationStore,
+) -> Result<()> {
+    match store::persons::find_by_email_ci(application_store, LAWYER_EMAIL)
         .await
         .context("look up the lawyer person")?
     {
@@ -42,7 +44,7 @@ async fn grant_lawyer_in(surreal: &store::surreal::SurrealDb) -> Result<()> {
                 .eq_ignore_ascii_case(&existing.email)
                 .then(|| LAWYER_NAME.to_owned());
             store::persons::edit(
-                surreal,
+                application_store,
                 existing.id,
                 &store::persons::PersonEdit {
                     name,
@@ -55,7 +57,7 @@ async fn grant_lawyer_in(surreal: &store::surreal::SurrealDb) -> Result<()> {
         }
         None => {
             store::persons::create(
-                surreal,
+                application_store,
                 &store::persons::NewPerson::with_role(
                     LAWYER_NAME,
                     LAWYER_EMAIL,
@@ -141,10 +143,10 @@ fn grant_lawyer_from_env() -> Result<()> {
         .build()
         .context("create tokio runtime")?;
     runtime.block_on(async {
-        let surreal = crate::application_store()
+        let application_store = crate::application_store()
             .await
             .context("verify PostgreSQL application authority")?;
-        grant_lawyer_in(&surreal).await?;
+        grant_lawyer_in(&application_store).await?;
         eprintln!("{LAWYER_EMAIL} role=lawyer");
         Ok(())
     })
@@ -237,7 +239,7 @@ mod tests {
     async fn seed_witnesses_read_native_rows_and_count_only_current_templates() {
         store::test_support::with_postgres(async {
             assert_eq!(count_seeded_rows().await.unwrap(), (0, 0));
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::questions::create(
                 &db,
                 &store::questions::NewQuestion::new("synthetic_question", "Synthetic?", "string"),
@@ -286,11 +288,11 @@ mod tests {
     #[tokio::test]
     async fn grant_lawyer_seeds_the_lawyer_person() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
 
-            grant_lawyer_in(&surreal).await.unwrap();
+            grant_lawyer_in(&application_store).await.unwrap();
 
-            let row = store::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
+            let row = store::persons::find_by_email_ci(&application_store, LAWYER_EMAIL)
                 .await
                 .unwrap()
                 .expect("the grant seeds the mailbox");
@@ -303,9 +305,9 @@ mod tests {
     #[tokio::test]
     async fn grant_lawyer_replaces_the_fixture_mailbox_display_name() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             let fixture = store::persons::create(
-                &surreal,
+                &application_store,
                 &store::persons::NewPerson::with_role(
                     LAWYER_EMAIL,
                     LAWYER_EMAIL,
@@ -315,9 +317,9 @@ mod tests {
             .await
             .unwrap();
 
-            grant_lawyer_in(&surreal).await.unwrap();
+            grant_lawyer_in(&application_store).await.unwrap();
 
-            let row = store::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
+            let row = store::persons::find_by_email_ci(&application_store, LAWYER_EMAIL)
                 .await
                 .unwrap()
                 .expect("the existing fixture remains");
@@ -337,9 +339,9 @@ mod tests {
     #[tokio::test]
     async fn grant_lawyer_folds_a_case_variant_row_instead_of_colliding() {
         store::test_support::with_postgres(async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
+            let application_store = store::application_store::ApplicationStore::uninitialized();
             store::persons::create(
-                &surreal,
+                &application_store,
                 &store::persons::NewPerson::with_role(
                     "Fixture Counsel",
                     "Lawyer@NeonLaw.com",
@@ -349,9 +351,11 @@ mod tests {
             .await
             .unwrap();
 
-            grant_lawyer_in(&surreal).await.unwrap();
+            grant_lawyer_in(&application_store).await.unwrap();
 
-            let rows = store::persons::list_directory(&surreal).await.unwrap();
+            let rows = store::persons::list_directory(&application_store)
+                .await
+                .unwrap();
             assert_eq!(
                 rows.len(),
                 1,

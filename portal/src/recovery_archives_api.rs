@@ -70,12 +70,12 @@ async fn authority(
     project_id: Uuid,
 ) -> Result<ArchiveAuthority, ApiError> {
     let person = admin.0.person_id.ok_or(ApiError::NotFound)?;
-    let project = store::projects::find_by_id(&state.surreal, project_id)
+    let project = store::projects::find_by_id(&state.application_store, project_id)
         .await
         .map_err(|_| ApiError::Db("the project could not be read".into()))?
         .ok_or(ApiError::NotFound)?;
     let firm_id = project.firm_id.ok_or(ApiError::NotFound)?;
-    archives::authorize(&state.surreal, admin.0.role, person, firm_id)
+    archives::authorize(&state.application_store, admin.0.role, person, firm_id)
         .await
         .map_err(|_| ApiError::NotFound)
 }
@@ -95,7 +95,7 @@ pub(crate) async fn request(
         return Ok(unavailable("archived_projects_lane_unconfigured"));
     };
     let stores = archives::ArchiveStores {
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         pg: &pg,
         documents: &state.storage,
         archive: &archive,

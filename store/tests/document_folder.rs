@@ -16,12 +16,12 @@ use uuid::Uuid;
 
 /// An admitted PostgreSQL fixture, owned filesystem storage, and a real matter.
 async fn fixtures() -> (
-    store::surreal::SurrealDb,
+    store::application_store::ApplicationStore,
     std::sync::Arc<dyn cloud::StorageService>,
     tempfile::TempDir,
     Uuid,
 ) {
-    let db = store::surreal::SurrealDb::uninitialized();
+    let db = store::application_store::ApplicationStore::uninitialized();
     let tmp = tempfile::tempdir().expect("tempdir");
     let storage: std::sync::Arc<dyn cloud::StorageService> = std::sync::Arc::new(
         cloud::FsStorage::new(tmp.path().to_path_buf())
@@ -33,7 +33,7 @@ async fn fixtures() -> (
 }
 
 async fn file_document(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     project_id: Uuid,
     folder: Option<&str>,

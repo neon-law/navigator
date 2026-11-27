@@ -83,7 +83,7 @@ pub async fn call(state: &McpState, arguments: &Value) -> Result<Value, ToolErro
     // from the `persons` row itself, so the name and email are never the
     // caller's to choose, and it writes the audit row on the way out.
     let person = send_welcome(
-        &state.surreal,
+        &state.application_store,
         email.as_ref(),
         &workflows::email::base_url_from_env(),
         args.person_id,
@@ -130,9 +130,9 @@ mod tests {
     /// lives; here the assertion is that the tool hands the command a
     /// message tagged so that row is attributable.
     fn state_with_mailer() -> (McpState, Arc<CapturingEmail>) {
-        let surreal = crate::test_fixtures::handle();
+        let application_store = crate::test_fixtures::handle();
         let runtime: Arc<dyn workflows::StateMachineRuntime> = Arc::new(InMemoryRuntime::new());
-        let mut st = McpState::new(surreal, runtime);
+        let mut st = McpState::new(application_store, runtime);
         let mailer = Arc::new(CapturingEmail::new());
         st.email = Some(mailer.clone());
         (st, mailer)
@@ -142,11 +142,18 @@ mod tests {
         state_with_mailer().0
     }
 
-    async fn seed_person(surreal: &store::surreal::SurrealDb, name: &str, email: &str) -> Uuid {
-        store::persons::create(surreal, &store::persons::NewPerson::new(name, email))
-            .await
-            .unwrap()
-            .id
+    async fn seed_person(
+        application_store: &store::application_store::ApplicationStore,
+        name: &str,
+        email: &str,
+    ) -> Uuid {
+        store::persons::create(
+            application_store,
+            &store::persons::NewPerson::new(name, email),
+        )
+        .await
+        .unwrap()
+        .id
     }
 
     #[test]
@@ -162,7 +169,7 @@ mod tests {
     async fn happy_path_sends_through_the_command_and_returns_sent_status() {
         store::test_support::with_postgres(async {
             let (state, mailer) = state_with_mailer();
-            let pid = seed_person(&state.surreal, "Aries", "aries@example.com").await;
+            let pid = seed_person(&state.application_store, "Aries", "aries@example.com").await;
             let r = call(&state, &json!({ "person_id": pid })).await.unwrap();
 
             // The message the shared command built — tagged with the template
@@ -197,7 +204,8 @@ mod tests {
             // The schema forbids extra fields, but even if a caller smuggles
             // an `email`, the greeting must target the DB row's address.
             let state = state();
-            let pid = seed_person(&state.surreal, "Real Person", "real@example.com").await;
+            let pid =
+                seed_person(&state.application_store, "Real Person", "real@example.com").await;
             let r = call(
                 &state,
                 &json!({ "person_id": pid, "email": "attacker@evil.test" }),
@@ -226,10 +234,10 @@ mod tests {
     #[tokio::test]
     async fn a_deployment_with_no_mailer_refuses_rather_than_sending_unaudited() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             let runtime: Arc<dyn workflows::StateMachineRuntime> = Arc::new(InMemoryRuntime::new());
-            let state = McpState::new(surreal, runtime);
-            let pid = seed_person(&state.surreal, "Aries", "aries@example.com").await;
+            let state = McpState::new(application_store, runtime);
+            let pid = seed_person(&state.application_store, "Aries", "aries@example.com").await;
             let err = call(&state, &json!({ "person_id": pid }))
                 .await
                 .unwrap_err();
@@ -256,7 +264,7 @@ mod tests {
     async fn the_tool_sends_through_the_injected_mailer_not_the_workflow_trigger() {
         store::test_support::with_postgres(async {
             let (state, mailer) = state_with_mailer();
-            let pid = seed_person(&state.surreal, "Libra", "libra@example.com").await;
+            let pid = seed_person(&state.application_store, "Libra", "libra@example.com").await;
             call(&state, &json!({ "person_id": pid })).await.unwrap();
             assert_eq!(
                 mailer.captured().len(),

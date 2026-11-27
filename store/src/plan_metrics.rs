@@ -617,12 +617,9 @@ pub async fn template_effect(
     firm_id: Uuid,
     template_codes: &[String],
 ) -> Result<Vec<TemplateEffect>, PlanMetricsError> {
-    crate::postgres_backfill::family::require_scope(
-        pg,
-        crate::postgres_backfill::family::Family::Notation,
-    )
-    .await
-    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
+    crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
+        .await
+        .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
     let rows = sqlx::query(
         "WITH codes AS (SELECT unnest($1::text[]) AS code), \
          scope AS ( \
@@ -708,18 +705,23 @@ pub async fn template_effect(
 /// fails, and [`PlanMetricsError::Database`] on a database failure.
 pub async fn firm_report(
     pg: &PostgresDb,
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     actor_person_id: Uuid,
     firm_id: Uuid,
     from: NaiveDate,
     to: NaiveDate,
 ) -> Result<PlanMetricsReport, PlanMetricsError> {
-    let person = crate::persons::find_by_id(surreal, actor_person_id)
+    let person = crate::persons::find_by_id(application_store, actor_person_id)
         .await
         .map_err(crate::firms::FirmError::from)?
         .ok_or(PlanMetricsError::Denied)?;
     let decision = crate::firm_capability::FirmCapability::ViewPlanMetrics
-        .resolve(surreal, person.role, Some(actor_person_id), firm_id)
+        .resolve(
+            application_store,
+            person.role,
+            Some(actor_person_id),
+            firm_id,
+        )
         .await?;
     if !decision.is_allowed() {
         return Err(PlanMetricsError::Denied);
@@ -795,11 +797,11 @@ mod tests {
 #[cfg(test)]
 mod database {
     use super::*;
-    use crate::firms::{self, FirmMembership, NewFirm, NewPersonFirmRole};
+
     use crate::legal_plans::{self, NewLegalPlan, NewPlanFeeSchedule};
-    use crate::persons::{self, NewPerson, Role};
-    use crate::postgres_mirror::tests::{connect, fresh_schema};
-    use crate::test_support::{mem_surreal, seed_entity};
+
+    use crate::postgres::fixtures::{connect, fresh_schema};
+
     use crate::time_entries::{self, NewTimeEntry, TimeEntrySource};
     use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 
@@ -1638,11 +1640,8 @@ mod database {
         notation(&pg, letter_v2, scribe, other_type, stamp(502)).await;
         let _ = entry(&pg, other_type, a.attorney, 10, 20_000, Some(draft)).await;
 
-        crate::postgres::fixtures::activate_family(
-            &pg,
-            crate::postgres_backfill::family::Family::Notation,
-        )
-        .await;
+        crate::postgres::fixtures::activate_family(&pg, crate::postgres::history::Family::Notation)
+            .await;
         let effects = template_effect(&pg, a.firm_id, &["demand-letter".to_owned()])
             .await
             .unwrap_or_else(|error| panic!("template effect: {error}"));
@@ -1724,117 +1723,6 @@ mod database {
                 .await
                 .unwrap()
                 .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn firm_report_resolves_the_view_plan_metrics_capability() {
-        let Some((options, database)) = fresh_schema().await else {
-            return;
-        };
-        let pg = connect(&options, &database).await;
-        let surreal = mem_surreal().await;
-        let entity_id = seed_entity(&surreal).await;
-
-        let owner = persons::create(
-            &surreal,
-            &NewPerson::with_role("Synthetic Owner", "owner-metrics@example.com", Role::Owner),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("owner: {error}"));
-        let admin = persons::create(
-            &surreal,
-            &NewPerson::with_role("Synthetic Admin", "admin-metrics@example.com", Role::Admin),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("admin: {error}"));
-        let lawyer = persons::create(
-            &surreal,
-            &NewPerson::with_role(
-                "Synthetic Lawyer",
-                "lawyer-metrics@example.com",
-                Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("lawyer: {error}"));
-
-        let created = firms::create(
-            &surreal,
-            &NewFirm {
-                name: "Synthetic Metrics Firm".to_owned(),
-                status: "active".to_owned(),
-                entity_id,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap_or_else(|error| panic!("firm: {error}"));
-        // `firms::create` already seats the admin DRI in the firm; only
-        // the lawyer needs an explicit membership row.
-        firms::add_membership(
-            &surreal,
-            &NewPersonFirmRole {
-                person_id: lawyer.id,
-                firm_id: created.id,
-                membership: FirmMembership::Lawyer,
-                is_dri: false,
-            },
-        )
-        .await
-        .unwrap_or_else(|error| panic!("lawyer membership: {error}"));
-
-        // The same Firm mirrored to PostgreSQL, where the plan data lives.
-        let fixture = FirmFixture {
-            firm_id: created.id,
-            entity_id: entity(&pg).await,
-            attorney: person(&pg, "Attorney").await,
-        };
-        sqlx::query("INSERT INTO firm (id, name, slug, status) VALUES ($1, 'Synthetic Metrics Firm', $2, 'active')")
-            .bind(created.id)
-            .bind(format!("pm-{}", Uuid::new_v4().simple()))
-            .execute(&pg.0)
-            .await
-            .unwrap_or_else(|error| panic!("mirrored firm row: {error}"));
-        let arag = plan(&pg, created.id, "ARAG").await;
-        let matter_a = matter(
-            &pg,
-            &fixture,
-            "plan-a1",
-            Some(arag),
-            Some("document_review"),
-            Some("ny"),
-            Some(day(11, 3)),
-            Some(day(11, 4)),
-            None,
-        )
-        .await;
-        let _ = entry(&pg, matter_a, fixture.attorney, 45, 20_000, None).await;
-
-        let window = (day(11, 1), day(11, 30));
-        let admin_report = firm_report(&pg, &surreal, admin.id, created.id, window.0, window.1)
-            .await
-            .unwrap_or_else(|error| panic!("admin report: {error}"));
-        assert_eq!(admin_report.counts.len(), 1);
-        assert_eq!(admin_report.counts[0].plan_name, "ARAG");
-        assert_eq!(admin_report.economics.len(), 1);
-        assert_eq!(admin_report.economics[0].minutes, 45);
-        assert_eq!(admin_report.acceptance_misses.len(), 0);
-        assert_eq!(admin_report.turnaround_misses.len(), 0);
-
-        // The Owner is system-wide and reads the same report.
-        let owner_report = firm_report(&pg, &surreal, owner.id, created.id, window.0, window.1)
-            .await
-            .unwrap_or_else(|error| panic!("owner report: {error}"));
-        assert_eq!(owner_report, admin_report);
-
-        // The Lawyer is refused their own Firm's economics.
-        assert!(
-            matches!(
-                firm_report(&pg, &surreal, lawyer.id, created.id, window.0, window.1).await,
-                Err(PlanMetricsError::Denied)
-            ),
-            "a Lawyer's ViewPlanMetrics resolution refuses"
         );
     }
 }

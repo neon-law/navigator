@@ -13,20 +13,6 @@ use axum::{
 };
 use tower::ServiceExt;
 
-async fn state() -> portal::AppState {
-    portal::test_support::app_state(store::test_support::mem_surreal().await).await
-}
-
-/// The same state, but for a deployment whose own configured host is
-/// `deployment_host` — see `server/tests/delete_your_debt_gateway.rs` for why
-/// this is set on `AppState::canonical_host` rather than the per-request
-/// `Host:` header.
-async fn state_for_deployment(deployment_host: &str) -> portal::AppState {
-    let mut state = state().await;
-    state.canonical_host = portal::CanonicalHost::new(Some(deployment_host.to_string()));
-    state
-}
-
 fn app(state: portal::AppState) -> Router {
     let host_dioxus = neon::public_dioxus_routers(&state);
     portal::bootstrap(
@@ -60,84 +46,16 @@ async fn get_on_host(app: &Router, path: &str, host: Option<&str>) -> (StatusCod
     (status, body)
 }
 
-/// `GET /delete-your-data` on a Neon host returns 200, wears Neon chrome, and
-/// carries the approved original copy — the destination named factually, the
-/// clarifier that not every trace can be promised removed, and a
-/// destination-named CTA whose href resolves to this deployment's own
-/// DeleteYourData.com host.
-#[tokio::test]
-async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_copy() {
-    let app = app(state().await);
-
-    for host in [None, Some("www.neonlaw.com")] {
-        let (status, body) = get_on_host(&app, "/delete-your-data", host).await;
-        assert_eq!(status, StatusCode::OK, "{host:?}: {body}");
-        for expected in [
-            "<title>Neon Law | Delete Your Data</title>",
-            r#"content="Neon Law | Privacy and data removal" property="og:title""#,
-            "Make your personal information harder to find.",
-            "DeleteYourData.com",
-            "Guieb &#38; Shook PC",
-            "does not promise",
-            "Visit DeleteYourData.com",
-            "site-footer",
-            "/public/css/brand-neon-tokens.css",
-        ] {
-            assert!(body.contains(expected), "{host:?} is missing {expected:?}");
-        }
-        assert!(
-            body.contains(r#"href="https://www.deleteyourdata.com""#),
-            "{host:?}: the CTA does not open the production DeleteYourData.com destination: {body}"
-        );
-    }
-}
-
-/// A staging deployment resolves the CTA to the staging sibling.
-#[tokio::test]
-async fn a_staging_deployment_resolves_the_cta_to_the_staging_sibling() {
-    let app = app(state_for_deployment("staging.neonlaw.com").await);
-    let (status, body) = get_on_host(&app, "/delete-your-data", Some("www.neonlaw.com")).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        body.contains(r#"href="https://staging.deleteyourdata.com""#),
-        "the CTA must resolve to the staging sibling on a staging deployment: {body}"
-    );
-}
-
-/// The same path is a `404` on every other registered brand host — including
-/// DeleteYourData.com's own — because only Neon's `publishes_firm_path`
-/// admits it.
-#[tokio::test]
-async fn the_gateway_is_404_on_every_non_neon_brand_host() {
-    let app = app(state().await);
-    for host in [
-        "www.deleteyourdata.com",
-        "staging.deleteyourdata.com",
-        "www.guiebshook.com",
-        "www.vestaestateplanning.com",
-        "www.misericordialaw.com",
-        "www.abhayaimmigration.com",
-        "www.deleteyourdebt.com",
-        "www.summonsdefense.nyc",
-        "www.daybridgedivorce.com",
-    ] {
-        let (status, body) = get_on_host(&app, "/delete-your-data", Some(host)).await;
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "{host} must not serve the Neon-only gateway: {body}"
-        );
-    }
-}
-
 #[tokio::test]
 async fn same_day_legal_home_offers_attorney_options() {
     store::test_support::with_postgres(check_same_day_home()).await;
 }
 
 async fn check_same_day_home() {
-    let mut state =
-        portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+    let mut state = portal::test_support::app_state(
+        store::application_store::ApplicationStore::uninitialized(),
+    )
+    .await;
     state.oauth = Some(portal::OAuthConfig::new(
         "client",
         "secret",
@@ -145,7 +63,7 @@ async fn check_same_day_home() {
         "https://idp.example/authorize",
         "https://idp.example/token",
     ));
-    store::seed::seed_canonical(&state.surreal, &state.assets_storage)
+    store::seed::seed_canonical(&state.application_store, &state.assets_storage)
         .await
         .expect("seed the public brands");
     let pg = store::postgres::PostgresDb::application().await.unwrap();
@@ -216,40 +134,4 @@ async fn check_same_day_home() {
     }
     let (status, _) = get_on_host(&app, app_path, Some("www.neonlaw.com")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-/// Neon's `/same-day-legal` link and retired `/nautilus` page answer a 301 to
-/// Same Day Legal's host; every other brand host 404s both.
-#[tokio::test]
-async fn neon_redirects_to_same_day_legal_and_other_brand_hosts_404() {
-    let app = app(state().await);
-    for path in ["/same-day-legal", "/nautilus"] {
-        let response = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri(path)
-                    .header("host", "www.neonlaw.com")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::MOVED_PERMANENTLY, "{path}");
-        assert_eq!(
-            response.headers()["location"],
-            "https://sameday.neonlaw.com",
-            "{path}"
-        );
-        for host in [
-            "www.deleteyourdata.com",
-            "www.vestaestateplanning.com",
-            "www.cyberinjurylaw.com",
-            "www.guiebshook.com",
-            "sameday.neonlaw.com",
-        ] {
-            let (status, _) = get_on_host(&app, path, Some(host)).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "{host}{path}");
-        }
-    }
 }

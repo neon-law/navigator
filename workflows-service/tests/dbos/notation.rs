@@ -29,7 +29,7 @@ struct PersistedNotation {
     directory: Arc<tempfile::TempDir>,
     worker: dbos::DBOS,
     workflow: dbos_notation::NotationTransitionWorkflow,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     email: Arc<workflows::CapturingEmail>,
     id: uuid::Uuid,
     actor: uuid::Uuid,
@@ -44,14 +44,14 @@ impl PersistedNotation {
         servers: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     ) -> Self {
         let postgres = database.store();
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let storage: Arc<dyn cloud::StorageService> =
             Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
         let (id, actor) = crate::persisted_fixture::seed(&postgres, storage.clone()).await;
         let email = Arc::new(workflows::CapturingEmail::default());
         let workflow = dbos_notation::register(
             &worker,
-            Context::new(surreal.clone(), postgres, email.clone(), storage),
+            Context::new(application_store.clone(), postgres, email.clone(), storage),
         )
         .unwrap();
         worker.launch().await.unwrap();
@@ -60,7 +60,7 @@ impl PersistedNotation {
             directory,
             worker,
             workflow,
-            surreal,
+            application_store,
             email,
             id,
             actor,
@@ -116,7 +116,7 @@ impl PersistedNotation {
     }
 
     async fn events(&self) -> Vec<store::notation_events::NotationEvent> {
-        store::notation_events::for_notation(&self.surreal, self.id)
+        store::notation_events::for_notation(&self.application_store, self.id)
             .await
             .unwrap()
     }
@@ -171,16 +171,16 @@ where
 #[tokio::test]
 async fn persisted_review_hops_journal_the_actor_and_capture_both_notifications() {
     with_persisted(|fixture| async move {
-        let notation = store::notations::find_by_id(&fixture.surreal, fixture.id)
+        let notation = store::notations::find_by_id(&fixture.application_store, fixture.id)
             .await
             .unwrap()
             .unwrap();
-        for row in store::projects::participations_for_project(&fixture.surreal, notation.project_id)
+        for row in store::projects::participations_for_project(&fixture.application_store, notation.project_id)
             .await
             .unwrap()
         {
-            store::projects::clear_dri_in_surreal(
-                &fixture.surreal,
+            store::projects::clear_dri(
+                &fixture.application_store,
                 row.id,
                 store::projects::DriSide::Client,
             )
@@ -188,7 +188,7 @@ async fn persisted_review_hops_journal_the_actor_and_capture_both_notifications(
             .unwrap();
         }
         let lawyer = store::persons::create(
-            &fixture.surreal,
+            &fixture.application_store,
             &store::persons::NewPerson::with_role(
                 "Synthetic Reviewer",
                 format!("reviewer-{}@example.com", uuid::Uuid::now_v7()),
@@ -197,16 +197,16 @@ async fn persisted_review_hops_journal_the_actor_and_capture_both_notifications(
         )
         .await
         .unwrap();
-        store::projects::designate_dri_in_surreal(
-            &fixture.surreal,
+        store::projects::designate_dri(
+            &fixture.application_store,
             notation.project_id,
             lawyer.id,
             store::projects::DriSide::Lawyer,
         )
         .await
         .unwrap();
-        store::projects::designate_dri_in_surreal(
-            &fixture.surreal,
+        store::projects::designate_dri(
+            &fixture.application_store,
             notation.project_id,
             fixture.actor,
             store::projects::DriSide::Client,
@@ -372,7 +372,7 @@ async fn repair_worker(
     let workflow = dbos_notation::register(
         &worker,
         Context::new(
-            store::surreal::SurrealDb::uninitialized(),
+            store::application_store::ApplicationStore::uninitialized(),
             postgres.clone(),
             email,
             Arc::new(cloud::FsStorage::new(directory).await.unwrap()),
@@ -695,7 +695,7 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
 }
 
 async fn notation_project(fixture: &PersistedNotation) -> uuid::Uuid {
-    store::notations::find_by_id(&fixture.surreal, fixture.id)
+    store::notations::find_by_id(&fixture.application_store, fixture.id)
         .await
         .unwrap()
         .unwrap()
@@ -704,7 +704,7 @@ async fn notation_project(fixture: &PersistedNotation) -> uuid::Uuid {
 
 async fn review_lawyer(fixture: &PersistedNotation, name: &str) -> store::persons::Person {
     store::persons::create(
-        &fixture.surreal,
+        &fixture.application_store,
         &store::persons::NewPerson::with_role(
             name,
             format!("review-{}@example.com", uuid::Uuid::now_v7()),
@@ -722,7 +722,7 @@ async fn completing_the_firm_signature_state_closes_the_persisted_matter() {
         let signer = review_lawyer(&fixture, "Synthetic Signer").await;
         let storage: Arc<dyn cloud::StorageService> = Arc::new(cloud::FsStorage::new(fixture.directory.path()).await.unwrap());
         store::assets::file_revision(
-            &fixture.surreal,&storage,
+            &fixture.application_store,&storage,
             &store::documents::IngestArgs {project_id:project,source:"upload",filename:"closing.pdf",kind:"offboarding",content_type:"application/pdf",
                 description:None,visibility:"internal",secondary_storage_key:None},
             &store::documents::DocumentIdentity {slug:Some("closing-letter"),..Default::default()},
@@ -736,7 +736,7 @@ async fn completing_the_firm_signature_state_closes_the_persisted_matter() {
             "firm_signature__closing_letter"
         );
         assert_eq!(
-            store::projects::find_by_id(&fixture.surreal, project)
+            store::projects::find_by_id(&fixture.application_store, project)
                 .await
                 .unwrap()
                 .unwrap()
@@ -747,7 +747,7 @@ async fn completing_the_firm_signature_state_closes_the_persisted_matter() {
             fixture.signal(MachineKind::Workflow, "signed", None).await,
             "END"
         );
-        let closed = store::projects::find_by_id(&fixture.surreal, project)
+        let closed = store::projects::find_by_id(&fixture.application_store, project)
             .await
             .unwrap()
             .unwrap();
@@ -763,20 +763,24 @@ async fn a_demoted_review_dri_falls_back_to_a_current_lawyer() {
     with_persisted(|fixture| async move {
         let project = notation_project(&fixture).await;
         let stale = review_lawyer(&fixture, "Former Reviewer").await;
-        store::projects::designate_dri_in_surreal(
-            &fixture.surreal,
+        store::projects::designate_dri(
+            &fixture.application_store,
             project,
             stale.id,
             store::projects::DriSide::Lawyer,
         )
         .await
         .unwrap();
-        store::persons::set_role(&fixture.surreal, stale.id, store::persons::Role::Client)
-            .await
-            .unwrap();
+        store::persons::set_role(
+            &fixture.application_store,
+            stale.id,
+            store::persons::Role::Client,
+        )
+        .await
+        .unwrap();
         let current = review_lawyer(&fixture, "Current Reviewer").await;
         store::projects::add_participation(
-            &fixture.surreal,
+            &fixture.application_store,
             project,
             current.id,
             store::projects::participation_for_role(store::persons::Role::Lawyer),
@@ -855,7 +859,7 @@ async fn a_back_event_written_before_its_state_move_keeps_later_back_navigation_
         // A process loss after the append but before the machine CAS leaves
         // exactly these durable facts for the recovered command to read.
         store::notation_events::append_event(
-            &fixture.surreal,
+            &fixture.application_store,
             store::notation_events::TransitionRecord {
                 notation_id: fixture.id,
                 acting_person_id: Some(fixture.actor),
@@ -969,7 +973,7 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
             fixture.signal(MachineKind::Workflow, "_", None).await,
             "lawyer_review"
         );
-        let notation = store::notations::update_state(&fixture.surreal, fixture.id, "lawyer_review")
+        let notation = store::notations::update_state(&fixture.application_store, fixture.id, "lawyer_review")
             .await
             .unwrap();
         let postgres = fixture.database.store();
@@ -1027,7 +1031,7 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
                 .unwrap(),
             Some(workflows::ApprovalProgress::Ready)
         );
-        let persisted = store::notations::find_by_id(&fixture.surreal, fixture.id)
+        let persisted = store::notations::find_by_id(&fixture.application_store, fixture.id)
             .await
             .unwrap()
             .unwrap();

@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 #[tokio::test]
 async fn personal_formations_resume_independently_without_a_lawyer() {
     store::test_support::with_postgres(async {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let app = crate::test_support::app_state(db.clone()).await;
         store::seed::seed_canonical(&db, &app.storage)
             .await
@@ -92,7 +92,7 @@ async fn personal_formations_resume_independently_without_a_lawyer() {
     .await;
 }
 async fn check_founder_and_onboarding(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     project_id: Uuid,
     owner: Uuid,
 ) {

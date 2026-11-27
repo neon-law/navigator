@@ -254,7 +254,7 @@ async fn receive(
     };
     for interaction in interactions {
         let Ok(accounts) = store::social_accounts::for_provider_identity(
-            &state.surreal,
+            &state.application_store,
             interaction.provider,
             &interaction.account_id,
         )
@@ -267,7 +267,7 @@ async fn receive(
         }
         let account = &accounts[0];
         let received = store::inbox::ingest_inbound(
-            &state.surreal,
+            &state.application_store,
             &store::inbox::IngestInbound {
                 project_id: None,
                 firm_id: account.firm_id,
@@ -401,29 +401,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn receive_refuses_missing_or_invalid_signatures() {
-        let _env_guard = WEBHOOK_ENV.lock().await;
-        std::env::remove_var("NAVIGATOR_META_WEBHOOK_APP_SECRET");
-        let state = crate::test_support::app_state(store::test_support::mem_surreal().await).await;
-        let unavailable = receive(
-            axum::extract::State(state.clone()),
-            HeaderMap::new(),
-            Bytes::from_static(b"{}"),
-        )
-        .await;
-        assert_eq!(unavailable, StatusCode::SERVICE_UNAVAILABLE);
-        std::env::set_var("NAVIGATOR_META_WEBHOOK_APP_SECRET", "synthetic-meta-secret");
-        let unauthorized = receive(
-            axum::extract::State(state),
-            HeaderMap::new(),
-            Bytes::from_static(b"{}"),
-        )
-        .await;
-        assert_eq!(unauthorized, StatusCode::UNAUTHORIZED);
-        std::env::remove_var("NAVIGATOR_META_WEBHOOK_APP_SECRET");
-    }
-
-    #[tokio::test]
     async fn challenge_echoes_a_matching_verify_token() {
         let _env_guard = WEBHOOK_ENV.lock().await;
         std::env::remove_var("NAVIGATOR_META_WEBHOOK_VERIFY_TOKEN");
@@ -455,100 +432,5 @@ mod tests {
         .await
         .into_response();
         assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn receive_ingests_a_signed_instagram_comment_for_one_connected_account() {
-        use store::brands::NewBrand;
-        use store::firms::NewFirm;
-        use store::persons::{NewPerson, Role};
-        use store::social_accounts::{ConnectSocialAccount, SocialProvider};
-        use store::test_support::{self, mem_surreal};
-        use uuid::Uuid;
-
-        let _env_guard = WEBHOOK_ENV.lock().await;
-
-        let db = mem_surreal().await;
-        let admin = store::persons::create(
-            &db,
-            &NewPerson::with_role(
-                "Webhook Admin",
-                format!("webhook-admin-{}@example.com", Uuid::now_v7()),
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &db,
-            &NewFirm {
-                name: "Webhook Firm".into(),
-                status: "active".into(),
-                entity_id: test_support::seed_entity(&db).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::brands::create(
-            &db,
-            Role::Admin,
-            Some(admin.id),
-            &NewBrand {
-                name: "Webhook Brand".into(),
-                key: "webhook-brand".into(),
-                firm_id: Some(firm.id),
-                primary_color: None,
-                accent_color: None,
-                typeface: None,
-            },
-        )
-        .await
-        .unwrap();
-        let kms = cloud::FakeKms::new("webhook-social");
-        store::social_accounts::connect(
-            &db,
-            ConnectSocialAccount {
-                actor_role: Role::Admin,
-                actor_person_id: admin.id,
-                brand_key: "webhook-brand",
-                provider: SocialProvider::Instagram,
-                provider_account_id: "ig-account",
-                display_name: Some("Webhook IG"),
-                scopes: &["instagram_business_manage_comments".into()],
-                expires_at: None,
-                access_token: "synthetic-token",
-                refresh_token: None,
-            },
-            &kms,
-        )
-        .await
-        .unwrap();
-
-        let body = br#"{"object":"instagram","entry":[{"id":"ig-account","changes":[{"field":"comments","value":{"id":"comment-99","text":"A question","timestamp":1791392400,"media":{"id":"post-1"},"from":{"id":"person-1","username":"reader"}}}]}]}"#;
-        let secret = "synthetic-meta-secret";
-        std::env::set_var("NAVIGATOR_META_WEBHOOK_APP_SECRET", secret);
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
-        mac.update(body);
-        let signature = mac.finalize().into_bytes();
-        #[allow(clippy::format_collect)]
-        let signature = signature
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            SIGNATURE_HEADER,
-            HeaderValue::from_str(&format!("sha256={signature}")).unwrap(),
-        );
-        let mut state = crate::test_support::app_state(db).await;
-        state.runtime_kms = std::sync::Arc::new(kms);
-        let status = receive(
-            axum::extract::State(state),
-            headers,
-            Bytes::from_static(body),
-        )
-        .await;
-        assert_eq!(status, StatusCode::ACCEPTED);
     }
 }

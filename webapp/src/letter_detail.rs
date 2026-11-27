@@ -3,7 +3,7 @@
 //! The successor to the `views::pages::admin::letters::detail` /
 //! `not_found` views — the first migrated **detail** page (a single record's
 //! fields, not a listing). It follows the listing seam: a `#[server]` function
-//! reads the `{id}` path parameter and the injected `SurrealDb`, refuses any
+//! reads the `{id}` path parameter and the injected `ApplicationStore`, refuses any
 //! non-lawyer caller, resolves the letter's mailroom (name + address) through the
 //! same nested join the handler did, and `use_server_future` renders the
 //! record's fields — or a not-found state when no letter has that id — into the
@@ -45,7 +45,7 @@ pub struct LetterDetailView {
 
 /// Fetch one letter for the `{id}` in the request path: refuse non-lawyer,
 /// scope to the caller's participation ledger (ENG-310), read the injected
-/// `SurrealDb`, load the letter, and resolve its mailroom name and address
+/// `ApplicationStore`, load the letter, and resolve its mailroom name and address
 /// through the same nested join the detail handler used. Returns `fields:
 /// None` — the same not-found state a missing id renders — both when no
 /// letter has that id and when one exists outside the caller's scope, so
@@ -53,15 +53,15 @@ pub struct LetterDetailView {
 /// to read".
 #[server]
 pub async fn get_letter() -> Result<LetterDetailView, ServerFnError> {
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&surreal).await?;
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&application_store).await?;
     let axum::extract::Path(id) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Path<uuid::Uuid>, _>()
             .await?;
 
     // The whole `letter -> mailroom -> address` chain lives in SurrealDB
     // now, so the detail page is one engine's work end to end.
-    let letter = store::letters::find_by_id(&surreal, id)
+    let letter = store::letters::find_by_id(&application_store, id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .filter(|letter| scope.admits(letter.project_id));
@@ -69,12 +69,12 @@ pub async fn get_letter() -> Result<LetterDetailView, ServerFnError> {
     let fields = match letter {
         None => None,
         Some(letter) => {
-            let mailroom = store::mailrooms::find_by_id(&surreal, letter.mailroom_id)
+            let mailroom = store::mailrooms::find_by_id(&application_store, letter.mailroom_id)
                 .await
                 .map_err(|e| ServerFnError::new(e.to_string()))?;
             let (mailroom_name, mailroom_address) = match mailroom {
                 Some(m) => {
-                    let address = store::addresses::find_by_id(&surreal, m.address_id)
+                    let address = store::addresses::find_by_id(&application_store, m.address_id)
                         .await
                         .map_err(|e| ServerFnError::new(e.to_string()))?
                         .map_or_else(

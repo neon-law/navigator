@@ -7,29 +7,22 @@
 //! The canonical seed uses [`find_or_grant`] without overwriting a licence.
 
 use chrono::{DateTime, Utc};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
+use crate::application_store::ApplicationStore;
 use crate::jurisdictions::{self, JurisdictionError};
 use crate::persons::{self, PersonError};
 use crate::postgres::identity::{self as authority, AuthorityError};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
 const TABLE: &str = "credential";
-/// The table `person_id` links into.
-const PERSON_TABLE: &str = "person";
-/// The table `jurisdiction_id` links into.
-const JURISDICTION_TABLE: &str = "jurisdiction";
 
 /// Errors reading or writing a credential.
 #[derive(Debug, thiserror::Error)]
 pub enum CredentialError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// Reading the person a write links to failed.
     #[error(transparent)]
     Person(#[from] PersonError),
@@ -76,10 +69,7 @@ fn pg_error(error: sqlx::Error) -> CredentialError {
 
 /// Credential writes require admitted PostgreSQL identity authority.
 async fn write_authority() -> Result<crate::postgres::PostgresDb, CredentialError> {
-    authority::authority().await?.ok_or_else(|| {
-        AuthorityError::Unavailable("credential writes are unavailable in Source context".into())
-            .into()
-    })
+    Ok(authority::authority().await?)
 }
 
 /// One licensure record.
@@ -91,35 +81,6 @@ pub struct Credential {
     pub license_number: String,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// The row as the engine reads and writes it. Separate from
-/// [`Credential`] because the SDK owns its own `RecordId` and
-/// `Datetime`, and the conversion belongs at this seam rather than in
-/// every caller.
-#[derive(SurrealValue)]
-struct CredentialRow {
-    id: surrealdb::types::RecordId,
-    person_id: surrealdb::types::RecordId,
-    jurisdiction_id: surrealdb::types::RecordId,
-    license_number: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl CredentialRow {
-    /// `None` when any record id is not a native UUID key — see
-    /// [`crate::surreal`] for why the two key spellings differ.
-    fn into_credential(self) -> Option<Credential> {
-        Some(Credential {
-            id: record_uuid(&self.id)?,
-            person_id: record_uuid(&self.person_id)?,
-            jurisdiction_id: record_uuid(&self.jurisdiction_id)?,
-            license_number: self.license_number,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
 }
 
 /// The projection every read shares, so one field list describes the row
@@ -136,7 +97,7 @@ const SELECT: &str = "id, person_id, jurisdiction_id, license_number, inserted_a
 /// is already listed under this jurisdiction, and
 /// [`CredentialError::Authority`] for a database failure.
 pub async fn grant(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     jurisdiction_id: Uuid,
     license_number: &str,
@@ -176,37 +137,20 @@ pub async fn grant(
 ///
 /// [`CredentialError::Db`] if the lookup fails.
 pub async fn find_by_person_and_jurisdiction(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> Result<Option<Credential>, CredentialError> {
-    if let Some(pg) = authority::authority().await? {
-        let row = sqlx::query(AssertSqlSafe(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 AND jurisdiction_id = $2"
-        )))
-        .bind(person_id)
-        .bind(jurisdiction_id)
-        .fetch_optional(&pg.0)
-        .await
-        .map_err(pg_error)?;
-        return row.as_ref().map(from_pg).transpose().map_err(pg_error);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE person_id = $person_id AND jurisdiction_id = $jurisdiction_id \
-             LIMIT 1"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind((
-            "jurisdiction_id",
-            record_id(JURISDICTION_TABLE, jurisdiction_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let row: Option<CredentialRow> = response.take(0)?;
-    Ok(row.and_then(CredentialRow::into_credential))
+    let pg = authority::authority().await?;
+    let row = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 AND jurisdiction_id = $2"
+    )))
+    .bind(person_id)
+    .bind(jurisdiction_id)
+    .fetch_optional(&pg.0)
+    .await
+    .map_err(pg_error)?;
+    row.as_ref().map(from_pg).transpose().map_err(pg_error)
 }
 
 /// Grant the credential unless this person already holds one in this
@@ -228,7 +172,7 @@ pub async fn find_by_person_and_jurisdiction(
 /// [`CredentialError::NoSuchJurisdiction`] as [`grant`] documents, and
 /// [`CredentialError::Db`] if a lookup or the insert fails.
 pub async fn find_or_grant(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     jurisdiction_id: Uuid,
     license_number: &str,
@@ -253,36 +197,21 @@ pub async fn find_or_grant(
 ///
 /// [`CredentialError::Db`] if the lookup fails.
 pub async fn for_person(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Vec<Credential>, CredentialError> {
-    if let Some(pg) = authority::authority().await? {
-        let rows = sqlx::query(AssertSqlSafe(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 ORDER BY inserted_at, id"
-        )))
-        .bind(person_id)
-        .fetch_all(&pg.0)
-        .await
-        .map_err(pg_error)?;
-        return rows
-            .iter()
-            .map(from_pg)
-            .collect::<Result<_, _>>()
-            .map_err(pg_error);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $person_id ORDER BY inserted_at ASC"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let rows: Vec<CredentialRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(CredentialRow::into_credential)
-        .collect())
+    let pg = authority::authority().await?;
+    let rows = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 ORDER BY inserted_at, id"
+    )))
+    .bind(person_id)
+    .fetch_all(&pg.0)
+    .await
+    .map_err(pg_error)?;
+    rows.iter()
+        .map(from_pg)
+        .collect::<Result<_, _>>()
+        .map_err(pg_error)
 }
 
 /// Whether this person is licensed in this jurisdiction — the question a
@@ -293,33 +222,15 @@ pub async fn for_person(
 ///
 /// [`CredentialError::Db`] if the lookup fails.
 pub async fn is_licensed_in(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> Result<bool, CredentialError> {
-    if authority::authority().await?.is_some() {
-        return Ok(
-            find_by_person_and_jurisdiction(db, person_id, jurisdiction_id)
-                .await?
-                .is_some(),
-        );
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE count() FROM {TABLE} \
-             WHERE person_id = $person_id AND jurisdiction_id = $jurisdiction_id \
-             GROUP ALL"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind((
-            "jurisdiction_id",
-            record_id(JURISDICTION_TABLE, jurisdiction_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let counts: Vec<i64> = response.take(0)?;
-    Ok(counts.first().is_some_and(|count| *count > 0))
+    Ok(
+        find_by_person_and_jurisdiction(db, person_id, jurisdiction_id)
+            .await?
+            .is_some(),
+    )
 }
 
 /// Remove a credential — a licence lapsed or was recorded in error.
@@ -328,7 +239,7 @@ pub async fn is_licensed_in(
 /// # Errors
 ///
 /// [`CredentialError::Authority`] if the delete fails.
-pub async fn revoke(_db: &SurrealDb, credential_id: Uuid) -> Result<(), CredentialError> {
+pub async fn revoke(_db: &ApplicationStore, credential_id: Uuid) -> Result<(), CredentialError> {
     let pg = write_authority().await?;
     sqlx::query(AssertSqlSafe(format!("DELETE FROM {TABLE} WHERE id = $1")))
         .bind(credential_id)
@@ -344,19 +255,19 @@ mod tests {
         find_by_person_and_jurisdiction, find_or_grant, for_person, grant, is_licensed_in, revoke,
         CredentialError,
     };
+    use crate::application_store::ApplicationStore;
     use crate::jurisdictions::{self, NewJurisdiction};
     use crate::persons::{self, NewPerson, Role};
-    use crate::surreal::SurrealDb;
     use uuid::Uuid;
 
-    async fn an_attorney(db: &SurrealDb, email: &str) -> Uuid {
+    async fn an_attorney(db: &ApplicationStore, email: &str) -> Uuid {
         persons::create(db, &NewPerson::with_role("Scorpio", email, Role::Lawyer))
             .await
             .unwrap()
             .id
     }
 
-    async fn a_state(db: &SurrealDb, name: &str, code: &str) -> Uuid {
+    async fn a_state(db: &ApplicationStore, name: &str, code: &str) -> Uuid {
         jurisdictions::create(db, &NewJurisdiction::new(name, code, "state"))
             .await
             .unwrap()
@@ -364,26 +275,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_context_refuses_credential_writes() {
-        let db = SurrealDb::uninitialized();
-        let id = Uuid::now_v7();
-        crate::postgres_mirror::from_source(async {
-            assert!(matches!(
-                grant(&db, id, id, "synthetic").await,
-                Err(CredentialError::Authority(_))
-            ));
-            assert!(matches!(
-                revoke(&db, id).await,
-                Err(CredentialError::Authority(_))
-            ));
-        })
-        .await;
-    }
-
-    #[tokio::test]
     async fn a_granted_credential_reads_back_for_its_person() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let person_id = an_attorney(&db, "scorpio@example.com").await;
             let nevada = a_state(&db, "Nevada", "NV").await;
 
@@ -401,7 +295,7 @@ mod tests {
     #[tokio::test]
     async fn the_natural_key_lookup_finds_only_that_pair() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let person_id = an_attorney(&db, "scorpio@example.com").await;
             let nevada = a_state(&db, "Nevada", "NV").await;
             let utah = a_state(&db, "Utah", "UT").await;
@@ -427,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn find_or_grant_is_idempotent_on_the_person_jurisdiction_pair() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let person_id = an_attorney(&db, "scorpio@example.com").await;
             let nevada = a_state(&db, "Nevada", "NV").await;
 
@@ -452,7 +346,7 @@ mod tests {
     #[tokio::test]
     async fn find_or_grant_still_refuses_a_dangling_person() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let nobody = Uuid::now_v7();
 
             // Find-or-create does not weaken the read-backs: the lookup
@@ -469,7 +363,7 @@ mod tests {
     #[tokio::test]
     async fn a_credential_for_a_person_who_does_not_exist_is_refused() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let nobody = Uuid::now_v7();
 
             // The accessor names the missing Person before the foreign key rejects it.
@@ -485,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn a_credential_for_a_jurisdiction_that_does_not_exist_is_refused() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let person_id = an_attorney(&db, "scorpio@example.com").await;
             let nowhere = Uuid::now_v7();
 
@@ -502,7 +396,7 @@ mod tests {
     #[tokio::test]
     async fn a_second_credential_in_the_same_jurisdiction_is_reported_as_granted() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let person_id = an_attorney(&db, "scorpio@example.com").await;
             let nevada = a_state(&db, "Nevada", "NV").await;
 
@@ -519,7 +413,7 @@ mod tests {
     #[tokio::test]
     async fn the_same_person_may_hold_several_jurisdictions() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let person_id = an_attorney(&db, "scorpio@example.com").await;
             let nevada = a_state(&db, "Nevada", "NV").await;
             let california = a_state(&db, "California", "CA").await;
@@ -537,7 +431,7 @@ mod tests {
     #[tokio::test]
     async fn a_credential_is_scoped_to_its_own_person() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let licensed = an_attorney(&db, "licensed@example.com").await;
             let unlicensed = an_attorney(&db, "unlicensed@example.com").await;
             let nevada = a_state(&db, "Nevada", "NV").await;
@@ -553,7 +447,7 @@ mod tests {
     #[tokio::test]
     async fn revoking_clears_the_licence_and_is_idempotent() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let person_id = an_attorney(&db, "scorpio@example.com").await;
             let nevada = a_state(&db, "Nevada", "NV").await;
             let granted = grant(&db, person_id, nevada, "NV-1").await.unwrap();
@@ -572,7 +466,7 @@ mod tests {
     #[tokio::test]
     async fn a_revoked_jurisdiction_can_be_granted_again() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let person_id = an_attorney(&db, "scorpio@example.com").await;
             let nevada = a_state(&db, "Nevada", "NV").await;
 

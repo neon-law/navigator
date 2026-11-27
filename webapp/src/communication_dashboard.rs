@@ -42,7 +42,7 @@ pub async fn communications_page() -> Result<CommunicationsPage, ServerFnError> 
         brand: Option<String>,
     }
     let role = crate::admin_listing::require_firm_person().await?;
-    let db = consume_context::<store::surreal::SurrealDb>();
+    let db = consume_context::<store::application_store::ApplicationStore>();
     let actor = dioxus_fullstack_core::FullstackContext::extract::<
         axum::Extension<crate::portal_project_list::PersonId>,
         _,

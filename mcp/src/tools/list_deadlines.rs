@@ -21,13 +21,13 @@ pub fn descriptor() -> Value {
 }
 
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     scope: &ReadScope,
     _arguments: &Value,
 ) -> Result<Value, ToolError> {
     let projects = match scope {
         ReadScope::Membership { person_id, role } => super::portal_access()
-            .visible_projects(surreal, Some(*person_id), *role)
+            .visible_projects(application_store, Some(*person_id), *role)
             .await
             .map_err(ToolError::Database)?,
         // A directory is deliberately metadata-only, and no identity cannot
@@ -39,7 +39,7 @@ pub async fn call(
     let mut deadlines = Vec::new();
     for project in projects {
         deadlines.extend(
-            store::statutory_deadlines::by_project(surreal, project.id)
+            store::statutory_deadlines::by_project(application_store, project.id)
                 .await
                 .map_err(|error| ToolError::Database(error.to_string()))?,
         );
@@ -101,15 +101,18 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    async fn project(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
-        crate::test_fixtures::seed_brands(surreal).await;
+    async fn project(
+        application_store: &store::application_store::ApplicationStore,
+        name: &str,
+    ) -> Uuid {
+        crate::test_fixtures::seed_brands(application_store).await;
         store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: format!("deadline-{}", Uuid::now_v7()),
                 name: name.into(),
                 status: "open".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: store::test_support::seed_entity(application_store).await,
                 ..Default::default()
             },
         )
@@ -119,11 +122,11 @@ mod tests {
     }
 
     async fn lawyer(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         project_id: Option<Uuid>,
     ) -> store::persons::Person {
         let person = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 format!("Lawyer {project_id:?}"),
                 format!("lawyer-{}@example.com", Uuid::now_v7()),
@@ -134,7 +137,7 @@ mod tests {
         .unwrap();
         if let Some(project_id) = project_id {
             store::participation::add_participant(
-                surreal,
+                application_store,
                 &store::participation::AddParticipantCommand {
                     project_id,
                     person_id: person.id,
@@ -148,9 +151,13 @@ mod tests {
         person
     }
 
-    async fn deadline(surreal: &store::surreal::SurrealDb, project_id: Uuid, source: &str) {
+    async fn deadline(
+        application_store: &store::application_store::ApplicationStore,
+        project_id: Uuid,
+        source: &str,
+    ) {
         store::statutory_deadlines::record(
-            surreal,
+            application_store,
             &store::statutory_deadlines::NewStatutoryDeadline {
                 project_id,
                 kind: "filing",
@@ -178,15 +185,15 @@ mod tests {
     #[tokio::test]
     async fn participating_lawyer_receives_only_their_deadlines_with_authority_and_source() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let permitted = project(&surreal, "Permitted Matter").await;
-            let denied = project(&surreal, "Denied Matter").await;
-            deadline(&surreal, permitted, "triage:permitted").await;
-            deadline(&surreal, denied, "triage:denied").await;
-            let person = lawyer(&surreal, Some(permitted)).await;
+            let application_store = crate::test_fixtures::handle();
+            let permitted = project(&application_store, "Permitted Matter").await;
+            let denied = project(&application_store, "Denied Matter").await;
+            deadline(&application_store, permitted, "triage:permitted").await;
+            deadline(&application_store, denied, "triage:denied").await;
+            let person = lawyer(&application_store, Some(permitted)).await;
 
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Membership {
                     person_id: person.id,
                     role: person.role,
@@ -212,13 +219,13 @@ mod tests {
     #[tokio::test]
     async fn lawyer_without_participation_receives_no_deadlines() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let project_id = project(&surreal, "Private Matter").await;
-            deadline(&surreal, project_id, "triage:private").await;
-            let person = lawyer(&surreal, None).await;
+            let application_store = crate::test_fixtures::handle();
+            let project_id = project(&application_store, "Private Matter").await;
+            deadline(&application_store, project_id, "triage:private").await;
+            let person = lawyer(&application_store, None).await;
 
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Membership {
                     person_id: person.id,
                     role: person.role,

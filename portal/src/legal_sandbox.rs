@@ -40,12 +40,12 @@ use gateway::{
 };
 use mcp::SearchBackends;
 use serde::Deserialize;
+use store::application_store::ApplicationStore;
 use store::assistant_turns::{self, NewTurn, TurnKind};
 use store::persons::{self, Person};
 use store::postgres::PostgresDb;
 use store::purchases::{self, Purchase};
 use store::sandbox_usage::billing_period;
-use store::surreal::SurrealDb;
 use webapp::sandbox::SandboxView;
 
 use crate::{gated, AppState, AuthClaims, SessionData};
@@ -114,7 +114,7 @@ pub fn access_for(purchases: &[Purchase]) -> SandboxAccess {
 /// clone.
 #[derive(Clone)]
 pub struct SandboxGateState {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     /// A Postgres handle for the Purchase ledger. When absent, the layer
     /// resolves one from the environment per request — the same lazy posture
     /// the purchase page takes. When the environment is unconfigured too,
@@ -167,7 +167,7 @@ pub fn routes(state: &AppState) -> Router {
 /// backends.
 pub fn routes_with(state: &AppState, pg: Option<PostgresDb>, backends: SandboxBackends) -> Router {
     let gate = SandboxGateState {
-        surreal: state.surreal.clone(),
+        application_store: state.application_store.clone(),
         pg,
         model: backends.model,
         search: backends.search,
@@ -246,13 +246,16 @@ impl Caller {
     /// it. So a session without a person id resolves by OIDC subject
     /// first, the identity a bearer-JWT caller actually carries, and only
     /// then by email.
-    async fn person(&self, surreal: &SurrealDb) -> Option<Person> {
+    async fn person(&self, application_store: &ApplicationStore) -> Option<Person> {
         match self {
             Caller::Session(session) => {
                 if let Some(person_id) = session.person_id {
-                    return persons::find_by_id(surreal, person_id).await.ok().flatten();
+                    return persons::find_by_id(application_store, person_id)
+                        .await
+                        .ok()
+                        .flatten();
                 }
-                if let Some(person) = persons::find_by_oidc_subject(surreal, &session.sub)
+                if let Some(person) = persons::find_by_oidc_subject(application_store, &session.sub)
                     .await
                     .ok()
                     .flatten()
@@ -260,12 +263,12 @@ impl Caller {
                     return Some(person);
                 }
                 let email = session.email.as_deref()?;
-                persons::find_by_any_email(surreal, email)
+                persons::find_by_any_email(application_store, email)
                     .await
                     .ok()
                     .flatten()
             }
-            Caller::Oidc(subject) => persons::find_by_oidc_subject(surreal, subject)
+            Caller::Oidc(subject) => persons::find_by_oidc_subject(application_store, subject)
                 .await
                 .ok()
                 .flatten(),
@@ -277,7 +280,7 @@ impl Caller {
 type Access = (SandboxAccess, Option<uuid::Uuid>);
 
 async fn access_for_caller(state: &SandboxGateState, caller: &Caller) -> Access {
-    let Some(person) = caller.person(&state.surreal).await else {
+    let Some(person) = caller.person(&state.application_store).await else {
         return (SandboxAccess::Preview, None);
     };
     let person_id = person.id;
@@ -289,7 +292,8 @@ async fn access_for_caller(state: &SandboxGateState, caller: &Caller) -> Access 
         Ok(mut purchases) => {
             for purchase in purchases.iter_mut().filter(|p| p.stripe.is_some()) {
                 if let Ok(fresh) =
-                    crate::subscription_purchases::sync(&state.surreal, &pg, purchase).await
+                    crate::subscription_purchases::sync(&state.application_store, &pg, purchase)
+                        .await
                 {
                     *purchase = fresh;
                 }
@@ -340,15 +344,17 @@ async fn sandbox_page(
     query: RawQuery,
 ) -> Response {
     let turns = match person.0 {
-        Some(person_id) => match assistant_turns::history(&state.surreal, person_id).await {
-            Ok(turns) => turns.iter().map(sandbox_turn).collect(),
-            // A transcript read that fails renders an empty conversation —
-            // the page is the session's front door, not the place for a 500.
-            Err(e) => {
-                tracing::warn!(error = %e, "sandbox: transcript unreadable; rendering an empty chat");
-                Vec::new()
+        Some(person_id) => {
+            match assistant_turns::history(&state.application_store, person_id).await {
+                Ok(turns) => turns.iter().map(sandbox_turn).collect(),
+                // A transcript read that fails renders an empty conversation —
+                // the page is the session's front door, not the place for a 500.
+                Err(e) => {
+                    tracing::warn!(error = %e, "sandbox: transcript unreadable; rendering an empty chat");
+                    Vec::new()
+                }
             }
-        },
+        }
         None => Vec::new(),
     };
     let credit = match (access, person.0) {
@@ -399,7 +405,9 @@ async fn credit_view(
     person_id: uuid::Uuid,
 ) -> Option<webapp::sandbox::SandboxCredit> {
     let period = current_period();
-    let usage = match store::sandbox_usage::grant(&state.surreal, person_id, &period).await {
+    let usage = match store::sandbox_usage::grant(&state.application_store, person_id, &period)
+        .await
+    {
         Ok(usage) => usage,
         Err(e) => {
             tracing::warn!(person = %person_id, error = %e, "sandbox: credit row unprovisionable; rendering no meter");
@@ -485,7 +493,7 @@ async fn run_exchange(
     person_id: uuid::Uuid,
     prompt: &str,
 ) -> Result<(), SandboxExchangeError> {
-    let db = state.surreal.clone();
+    let db = state.application_store.clone();
     // The transcript records the ask even when no answer comes back: the
     // page then shows the prompt and the nothing-charged notice.
     assistant_turns::append(
@@ -581,7 +589,7 @@ async fn run_exchange(
 
 /// Append one turn, mapping the error into the exchange's own.
 async fn append_turn(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: uuid::Uuid,
     kind: TurnKind,
     content: String,

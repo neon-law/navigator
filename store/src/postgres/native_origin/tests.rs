@@ -257,7 +257,7 @@ async fn assert_runtime_project_delivery(pg: &PostgresDb, runtime: &PostgresDb) 
         .execute(pg.pool())
         .await
         .unwrap();
-    let source = crate::surreal::SurrealDb::uninitialized();
+    let source = crate::application_store::ApplicationStore::uninitialized();
     let input = crate::projects::NewProject {
         code: format!("synthetic-{}", Uuid::new_v4().simple()),
         name: "Synthetic native matter".into(),
@@ -435,101 +435,6 @@ async fn raw_canonical_schema_accepts_origin_attestation_without_a_sqlx_ledger()
         Some("42P01")
     );
     cleanup(options, created.postgres, operation).await;
-}
-
-#[tokio::test]
-async fn native_origin_fences_forced_source_replay_without_claiming_captured_history() {
-    use crate::postgres_backfill::{
-        self,
-        family::{self, Family, ImportMode},
-    };
-    use crate::postgres_mirror::{self as mirror, MirrorKey, Mirrored};
-    let options = options();
-    let operation = Uuid::new_v4();
-    let native = create(options.clone(), operation, tier())
-        .await
-        .unwrap()
-        .initialize()
-        .await
-        .unwrap();
-    let pg = native.postgres();
-    let source = crate::surreal::SurrealDb::uninitialized();
-    assert!(
-        !mirror::backfilled(pg).await.unwrap(),
-        "native creation is never relabeled captured-global history"
-    );
-    family::require_runtime_scopes(pg).await.unwrap();
-    for selected in Family::all() {
-        family::require_scope(pg, *selected).await.unwrap();
-    }
-    let person = PostgresDb::with_test_db(
-        pg.clone(),
-        crate::persons::create(
-            &source,
-            &crate::persons::NewPerson::with_role(
-                "Synthetic native person",
-                format!("synthetic-{}@example.com", Uuid::new_v4()),
-                crate::persons::Role::Client,
-            ),
-        ),
-    )
-    .await
-    .unwrap();
-    mirror::from_source(mirror::during_initial_copy(async {
-        assert_eq!(
-            family::import_mode(pg, "person").await.unwrap(),
-            ImportMode::Refuse
-        );
-        assert!(matches!(
-            mirror::mirror(&source, pg, &MirrorKey::Person(person.id))
-                .await
-                .unwrap(),
-            Mirrored::Unchanged
-        ));
-        let parity = mirror::parity_all(&source, pg).await.unwrap();
-        assert!(!parity.is_empty());
-        assert!(parity.iter().all(|report| report.report.tables.is_empty()));
-        let reconciled = mirror::reconcile_all(&source, pg).await.unwrap();
-        assert!(!reconciled.is_empty());
-        assert!(reconciled
-            .iter()
-            .all(|report| report.report.tables.is_empty()));
-        assert_eq!(
-            parity
-                .iter()
-                .map(|report| report.mirror)
-                .collect::<Vec<_>>(),
-            reconciled
-                .iter()
-                .map(|report| report.mirror)
-                .collect::<Vec<_>>()
-        );
-    }))
-    .await;
-    assert!(matches!(
-        postgres_backfill::start(&source, pg, 10, None).await,
-        Err(postgres_backfill::BackfillError::Family(
-            family::FamilyError::NativeOwnership
-        ))
-    ));
-    assert!(matches!(
-        postgres_backfill::resume(&source, pg, Uuid::new_v4(), None).await,
-        Err(postgres_backfill::BackfillError::Family(
-            family::FamilyError::NativeOwnership
-        ))
-    ));
-    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM person WHERE id=$1")
-        .bind(person.id)
-        .fetch_one(pg.pool())
-        .await
-        .unwrap();
-    assert_eq!(remaining, 1);
-    let histories: i64 = sqlx::query_scalar("SELECT count(*) FROM mirror_backfill_run")
-        .fetch_one(pg.pool())
-        .await
-        .unwrap();
-    assert_eq!(histories, 0);
-    cleanup(options, native.postgres, operation).await;
 }
 
 fn future_schema(gated: bool) -> sqlx::migrate::Migrator {
@@ -934,9 +839,6 @@ async fn existing_esign_ledger_accepts_earlier_handover_migrations_without_nativ
         "schema migration never attests fresh-native creation"
     );
     assert!(!admits(&pg).await.unwrap());
-    crate::postgres_backfill::family::require_capture_target(&pg)
-        .await
-        .unwrap();
     assert!(matches!(
         pg.require_application_history().await,
         Err(crate::postgres::PostgresError::History)
@@ -1000,7 +902,7 @@ async fn recovery_target_is_bound_pending_and_has_no_fresh_ownership_epoch() {
         sqlx::raw_sql(sqlx::AssertSqlSafe(original_function)).execute(pg.pool()).await.unwrap();
         assert!(matches!(admits(&pg).await, Err(OriginError::Recovery)));
         assert!(pg.require_application_history().await.is_err());
-        assert!(crate::postgres_backfill::family::require_scope(&pg, crate::postgres_backfill::family::Family::Satellites).await.is_err());
+        assert!(crate::postgres::history::require_scope(&pg, crate::postgres::history::Family::Satellites).await.is_err());
         for sql in ["DELETE FROM database_recovery", "UPDATE database_recovery SET manifest_bytes='changed'::bytea", "TRUNCATE database_recovery"] {
             assert!(sqlx::raw_sql(sql).execute(pg.pool()).await.is_err());
         }

@@ -32,7 +32,7 @@ pub(crate) async fn webhook(
         .ok_or(StatusCode::UNAUTHORIZED)?;
     let account = state
         .signature_provider
-        .verify_firm_connect(&state.surreal, firm, signature, &body)
+        .verify_firm_connect(&state.application_store, firm, signature, &body)
         .await
         .ok_or(StatusCode::UNAUTHORIZED)?;
     let payload: ConnectPayload =
@@ -73,7 +73,7 @@ async fn observe_progress(
     account: Uuid,
     id: Uuid,
 ) -> anyhow::Result<()> {
-    let db = &state.surreal;
+    let db = &state.application_store;
     let provider = state
         .signature_provider
         .for_firm(db, firm)
@@ -119,7 +119,7 @@ async fn progress(
     payload: ConnectPayload,
     body: &[u8],
 ) -> Result<StatusCode, StatusCode> {
-    let db = &state.surreal;
+    let db = &state.application_store;
     let unavailable = |_| StatusCode::SERVICE_UNAVAILABLE;
     let Some(signature) = signatures::by_provider(db, DocuSign, &payload.data.envelope_id)
         .await
@@ -179,14 +179,14 @@ pub(crate) fn spawn(state: &AppState) {
 }
 
 async fn poll_accounts(state: &AppState, db: &PostgresDb) {
-    let Ok(firms) = store::firms::all(&state.surreal).await else {
+    let Ok(firms) = store::firms::all(&state.application_store).await else {
         tracing::error!("DocuSign completion worker could not list Firms");
         return;
     };
     for firm in firms {
         let Ok(Some(provider)) = state
             .signature_provider
-            .for_firm(&state.surreal, firm.id)
+            .for_firm(&state.application_store, firm.id)
             .await
         else {
             continue;
@@ -258,13 +258,13 @@ async fn notify(state: &AppState, db: &PostgresDb) -> anyhow::Result<()> {
 }
 
 async fn notify_project(state: &AppState, firm: Uuid, project: Uuid) -> anyhow::Result<()> {
-    let row = store::projects::find_by_id(&state.surreal, project)
+    let row = store::projects::find_by_id(&state.application_store, project)
         .await?
         .filter(|row| row.firm_id == Some(firm))
         .ok_or_else(|| anyhow::anyhow!("Project is outside the Firm"))?;
     let slack = state
         .integration_providers
-        .slack(&state.surreal, project)
+        .slack(&state.application_store, project)
         .await?;
     let name = workflows::project_channel_name(cloud::labels_slack_from_staging_env(), &row.code);
     let channel = slack
@@ -279,7 +279,7 @@ async fn notify_project(state: &AppState, firm: Uuid, project: Uuid) -> anyhow::
 
 #[allow(clippy::too_many_lines)]
 async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcome> {
-    let db = &state.surreal;
+    let db = &state.application_store;
     let provider = state
         .signature_provider
         .for_firm(db, receipt.firm_id)
@@ -403,7 +403,7 @@ async fn reconcile(state: &AppState, receipt: &Receipt) -> anyhow::Result<Outcom
 }
 
 pub(crate) async fn unique_account(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     connections: &dyn SignatureProvider,
     firm: Uuid,
     account: &str,
@@ -422,7 +422,7 @@ pub(crate) async fn unique_account(
 }
 
 pub(crate) async fn identify_project(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     firm: Uuid,
     envelope: &crate::signature::ExternalEnvelope,
     fields: &[String],
@@ -511,7 +511,7 @@ enum Onboarding {
 }
 
 async fn onboarding_notation(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     project: &Project,
     client: Uuid,
     names: &[String],

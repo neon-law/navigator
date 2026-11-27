@@ -58,7 +58,7 @@ impl crate::drive_import::IngestScreen for Clean {
 }
 
 async fn folders(
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     pg: &PostgresDb,
     id: Uuid,
 ) -> (
@@ -89,7 +89,7 @@ async fn drive_public_import_files_only_into_the_owning_pool() {
         crate::test_support::with_postgres(async {
             let ambient = PostgresDb::application().await.unwrap();
             PostgresDb::with_application_db(owned.clone(), async {
-                let db = crate::surreal::SurrealDb::uninitialized();
+                let db = crate::application_store::ApplicationStore::uninitialized();
                 let (drive, _) = folders(&db, &owned, id).await;
                 let slot = crate::project_folders::ProjectFolderSlot::Matter(
                     crate::document_pointers::MatterFolder::WorkProduct,
@@ -186,7 +186,7 @@ async fn configured_folder_tail_uses_owned_bindings_and_real_acl_reconciliation(
         crate::test_support::with_postgres(async {
             let ambient = PostgresDb::application().await.unwrap();
             PostgresDb::with_application_db(owned.clone(), async {
-                let db = crate::surreal::SurrealDb::uninitialized();
+                let db = crate::application_store::ApplicationStore::uninitialized();
                 let drive = cloud::drive::FakeDrive::default();
                 let parent = drive.create_folder("synthetic-projects").await.unwrap();
                 let policy = crate::project_folder_reconcile::FolderProvisioningPolicy {
@@ -293,7 +293,7 @@ async fn plan_seed_public_wrapper_keeps_owned_anchor_and_user_choices_on_replay(
         crate::test_support::with_postgres(async {
             let ambient=PostgresDb::application().await.unwrap();
             PostgresDb::with_application_db(owned.clone(),async {
-                let db=crate::surreal::SurrealDb::uninitialized();
+                let db=crate::application_store::ApplicationStore::uninitialized();
                 assert_eq!(crate::firms::anchor_firm(&db).await.unwrap().unwrap().id,firm);
                 crate::plan_seeds::seed_quickstart(&db).await.unwrap();
                 let before:Vec<(Uuid,i32)>=sqlx::query_as("SELECT id,plan_fee_cents FROM plan_fee_schedule WHERE firm_id=$1 ORDER BY id")
@@ -351,7 +351,7 @@ async fn membership_removal_reconciles_keys_and_stamps_only_the_owning_pool() {
         crate::test_support::with_postgres(async {
             let ambient = PostgresDb::application().await.unwrap();
             PostgresDb::with_application_db(owned.clone(), async {
-                let db = crate::surreal::SurrealDb::uninitialized();
+                let db = crate::application_store::ApplicationStore::uninitialized();
                 crate::firms::remove_membership(
                     &db,
                     crate::persons::Role::Owner,

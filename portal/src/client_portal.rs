@@ -5,7 +5,7 @@ use axum::{
     http::StatusCode,
     RequestExt,
 };
-use store::{access::ClientPortal, projects, surreal::SurrealDb};
+use store::{access::ClientPortal, application_store::ApplicationStore, projects};
 
 pub(crate) fn access() -> ClientPortal<'static> {
     ClientPortal {
@@ -25,7 +25,7 @@ pub(crate) async fn apply_host_mark(request: &mut Request) {
         .get::<AppBrandMark>()
         .is_some_and(|mark| mark.tokens_href != tokens)
     {
-        if let Some(db) = request.extensions().get::<SurrealDb>() {
+        if let Some(db) = request.extensions().get::<ApplicationStore>() {
             let mark = resolve_app_brand_mark(db, host).await;
             request.extensions_mut().insert(mark);
         }
@@ -51,7 +51,7 @@ pub(crate) async fn admits_page(request: &mut Request) -> Result<bool, StatusCod
     let code = params.first().ok_or(StatusCode::BAD_REQUEST)?;
     let db = request
         .extensions()
-        .get::<SurrealDb>()
+        .get::<ApplicationStore>()
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     let project = projects::find_by_code(db, code)
         .await

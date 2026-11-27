@@ -13,22 +13,19 @@
 //! demotes the others in the same transaction when choosing a primary.
 
 use chrono::{DateTime, Utc};
-use surrealdb::types::{RecordId, SurrealValue};
 use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::postgres::PostgresDb;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 pub use model::person_phones::PhoneLabel;
 
 /// Errors reading, writing, or normalizing a phone number.
 #[derive(Debug, thiserror::Error)]
 pub enum PhoneError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// The number cannot be normalized to E.164. It names what was
     /// rejected, never what the caller might have meant.
     #[error("cannot normalize {0:?} to E.164")]
@@ -193,59 +190,9 @@ pub struct PersonPhone {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads it. Separate from [`PersonPhone`] because
-/// the SDK owns its own `RecordId` and `Datetime` and `label` arrives as
-/// the stored string; the conversion belongs at this seam rather than in
-/// every caller.
-#[derive(SurrealValue)]
-struct PersonPhoneRow {
-    id: RecordId,
-    person_id: RecordId,
-    e164: String,
-    label: String,
-    is_primary: bool,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl PersonPhoneRow {
-    /// Read one row, dropping one this module could not have written —
-    /// an unknown `label` spelling in a row this module never wrote
-    /// hides that row rather than failing every read beside it.
-    fn into_phone(self) -> Option<PersonPhone> {
-        Some(PersonPhone {
-            id: record_uuid(&self.id)?,
-            person_id: record_uuid(&self.person_id)?,
-            e164: self.e164,
-            label: PhoneLabel::parse(&self.label)?,
-            is_primary: self.is_primary,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// Read every row out of a query response, primary first, then in the
-/// order they were written.
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<PersonPhone>, PhoneError> {
-    let rows: Vec<PersonPhoneRow> = response.take(0)?;
-    let mut phones: Vec<PersonPhone> = rows
-        .into_iter()
-        .filter_map(PersonPhoneRow::into_phone)
-        .collect();
-    phones.sort_by(|a, b| {
-        b.is_primary
-            .cmp(&a.is_primary)
-            .then_with(|| a.inserted_at.cmp(&b.inserted_at))
-    });
-    Ok(phones)
-}
-
 /// Phone writes require admitted PostgreSQL identity authority.
 async fn write_authority() -> Result<PostgresDb, PhoneError> {
-    authority::authority().await?.ok_or_else(|| {
-        AuthorityError::Unavailable("phone writes are unavailable in Source context".into()).into()
-    })
+    Ok(authority::authority().await?)
 }
 
 /// List a Person's phone numbers, primary first, then in the order they
@@ -254,37 +201,25 @@ async fn write_authority() -> Result<PostgresDb, PhoneError> {
 /// # Errors
 ///
 /// [`PhoneError::Db`] if the query fails.
-pub async fn list_phones(db: &SurrealDb, person_id: Uuid) -> Result<Vec<PersonPhone>, PhoneError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_list_on(&pg, person_id).await;
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM person_phone WHERE person_id = $person"
-        ))
-        .bind(("person", record_id("person", person_id)))
-        .await?;
-    many(response)
+pub async fn list_phones(
+    _db: &ApplicationStore,
+    person_id: Uuid,
+) -> Result<Vec<PersonPhone>, PhoneError> {
+    let pg = authority::authority().await?;
+    pg_list_on(&pg, person_id).await
 }
 
 /// Find every Person that records this normalized number.
 ///
 /// # Errors
 /// [`PhoneError`] when normalization or the store lookup fails.
-pub async fn person_ids_for_phone(db: &SurrealDb, raw: &str) -> Result<Vec<Uuid>, PhoneError> {
+pub async fn person_ids_for_phone(
+    _db: &ApplicationStore,
+    raw: &str,
+) -> Result<Vec<Uuid>, PhoneError> {
     let e164 = normalize_e164(raw)?;
-    if let Some(pg) = authority::authority().await? {
-        return pg_person_ids_for_phone(&pg, &e164).await;
-    }
-    let mut response = db
-        .query("SELECT VALUE person_id FROM person_phone WHERE e164 = $e164")
-        .bind(("e164", e164))
-        .await?;
-    let rows: Vec<RecordId> = response.take(0)?;
-    let mut people: Vec<Uuid> = rows.iter().filter_map(record_uuid).collect();
-    people.sort_unstable();
-    people.dedup();
-    Ok(people)
+    let pg = authority::authority().await?;
+    pg_person_ids_for_phone(&pg, &e164).await
 }
 
 /// Set one of a Person's phone numbers, creating or updating its row.
@@ -304,7 +239,7 @@ pub async fn person_ids_for_phone(db: &SurrealDb, raw: &str) -> Result<Vec<Uuid>
 /// normalized, [`PhoneError::WriteLost`] when the write returns nothing
 /// usable, [`PhoneError::Authority`] when PostgreSQL fails.
 pub async fn set_phone(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     raw: &str,
     label: PhoneLabel,
@@ -333,7 +268,7 @@ pub async fn set_phone(
 ///
 /// Returns [`PhoneError`] on store or normalization failure.
 pub async fn remove_phone(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
     raw: &str,
 ) -> Result<Option<String>, PhoneError> {
@@ -364,7 +299,7 @@ pub async fn remove_phone(
 ///
 /// [`PhoneError::Db`] if the database fails.
 pub async fn seed_from_legacy_phone(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Option<PersonPhone>, PhoneError> {
     let Some(person) = crate::persons::find_by_id(db, person_id).await? else {
@@ -389,23 +324,6 @@ pub async fn seed_from_legacy_phone(
 #[cfg(test)]
 mod tests {
     use super::{normalize_e164, PhoneError, PhoneLabel};
-
-    #[tokio::test]
-    async fn source_context_refuses_phone_writes() {
-        let db = crate::surreal::SurrealDb::uninitialized();
-        let id = uuid::Uuid::now_v7();
-        crate::postgres_mirror::from_source(async {
-            assert!(matches!(
-                super::set_phone(&db, id, "+15555550123", PhoneLabel::Mobile, true).await,
-                Err(PhoneError::Authority(_))
-            ));
-            assert!(matches!(
-                super::remove_phone(&db, id, "+15555550123").await,
-                Err(PhoneError::Authority(_))
-            ));
-        })
-        .await;
-    }
 
     #[test]
     fn normalize_e164_accepts_an_explicit_country_code() {

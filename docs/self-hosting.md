@@ -173,25 +173,13 @@ data when changing its storage engine. Production continues to use its configure
   Cloud Storage bucket the operator names in the `navigator-postgres-backup-target` ConfigMap.
   `k8s/postgres/restore-drill/` restores into scratch storage and reports row counts and AGE graph counts. See
   [`postgres-kubernetes.md`](postgres-kubernetes.md#backups-and-point-in-time-recovery).
-- **SurrealDB (Interim).** `hudson ops surreal-archive export` writes a best-effort recovery archive by
-  default, and `hudson ops surreal-archive restore-drill --key <key>` checks it against its export receipt when
-  available. This verifies recovery only; strict consistency requires an explicitly quiesced-writer export. See
-  [`surreal-archives.md`](surreal-archives.md).
 - **Projects.** Each Project has verified recovery archives under `/app/api/projects/{id}/recovery-archives`. See
   [`project-recovery-archives.md`](project-recovery-archives.md).
 
 ## DBOS
 
-DBOS runs inside `web` when `NAVIGATOR_DBOS_ENABLED=true`, keeping its system schema in PostgreSQL. `Heartbeat` runs on
-DBOS. `GeneralNag`, `DriDigest`, `ProjectRecovery`, `RetentionPurge`, and `SourceImport` each have a DBOS path behind
-its own flag. Do not rewrite DBOS's system tables by hand. [`dbos-durability.md`](dbos-durability.md) has the flags and
-the effect-key rule.
-
-## Restate (Interim)
-
-Restate runs every other durable workflow. `dev up` installs the pinned Restate Operator with Helm, and
-`k8s/staging/restate.yaml` declares the cluster. `workflows-service` is the registered worker.
-[`durable-workflows.md`](durable-workflows.md) lists what it owns.
+The web process hosts DBOS. DBOS uses a dedicated PostgreSQL login for its system schema. See the [workflow
+inventory](durable-workflows.md) and [durability rules](dbos-durability.md).
 
 ## Apache AGE
 

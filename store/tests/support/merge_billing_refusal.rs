@@ -1,6 +1,6 @@
 //! Immutable billing evidence retains its original Person identity.
 use serde_json::Value;
-use store::{postgres::PostgresDb, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, postgres::PostgresDb};
 use uuid::Uuid;
 
 async fn billing_rows(pg: &PostgresDb) -> Vec<Value> {
@@ -16,7 +16,7 @@ async fn billing_rows(pg: &PostgresDb) -> Vec<Value> {
 
 async fn refusal(reviewed: bool) {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = PostgresDb::application().await.unwrap();
         let parent = super::native_project::create("synthetic-immutable-billing-merge").await;
         let scenario = super::merge_fixture::Scenario::seed(&db, &pg, &parent).await;

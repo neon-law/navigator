@@ -73,7 +73,7 @@ struct Args {
 }
 
 pub(super) async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&std::sync::Arc<dyn cloud::StorageService>>,
     post_questionnaire: Option<&dyn workflows::PostQuestionnaireDrive>,
@@ -89,12 +89,12 @@ pub(super) async fn call(
         ));
     }
 
-    let notation = store::notations::find_by_id(surreal, args.notation_id)
+    let notation = store::notations::find_by_id(application_store, args.notation_id)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?
         .ok_or_else(|| ToolError::NotFound("notation".into()))?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        surreal,
+        application_store,
         Some(identity.person_id),
         identity.role,
         notation.project_id,
@@ -106,7 +106,7 @@ pub(super) async fn call(
     }
 
     let next = notation_session::answer_step(
-        surreal,
+        application_store,
         runtime,
         storage,
         args.notation_id,
@@ -267,17 +267,17 @@ mod tests {
     use workflows::{InMemoryRuntime, StateMachineRuntime};
 
     async fn call(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         runtime: &dyn StateMachineRuntime,
         storage: Option<&std::sync::Arc<dyn cloud::StorageService>>,
         post_questionnaire: Option<&dyn workflows::PostQuestionnaireDrive>,
         arguments: &Value,
     ) -> Result<Value, ToolError> {
-        let person = store::persons::find_by_email_ci(surreal, "principal@example.com")
+        let person = store::persons::find_by_email_ci(application_store, "principal@example.com")
             .await?
             .ok_or_else(|| ToolError::Internal("missing seeded lawyer".into()))?;
         call_as(
-            surreal,
+            application_store,
             runtime,
             storage,
             post_questionnaire,
@@ -290,9 +290,9 @@ mod tests {
         .await
     }
 
-    async fn seed(surreal: &store::surreal::SurrealDb) {
+    async fn seed(application_store: &store::application_store::ApplicationStore) {
         store::templates::save_version(
-            surreal,
+            application_store,
             None,
             "onboarding__letter",
             store::templates::Version {
@@ -308,31 +308,31 @@ mod tests {
         .unwrap();
         // The retainer's leading entity / principal-office questions.
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("entity", "Which entity?", "entity"),
         )
         .await
         .unwrap();
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("address", "What is the address?", "address"),
         )
         .await
         .unwrap();
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("person", "Who is the person?", "person"),
         )
         .await
         .unwrap();
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("project", "What is the project?", "project"),
         )
         .await
         .unwrap();
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("custom_text", "Prompt for custom text", "string"),
         )
         .await
@@ -340,7 +340,7 @@ mod tests {
         // The retainer's engagement-start-date question (N120): the walk
         // resolves `custom_datetime__engagement_start_date` through this code.
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new(
                 "custom_datetime",
                 "Prompt for a custom date",
@@ -352,7 +352,7 @@ mod tests {
         // The retainer's governing-law question (ENG-145): the walk resolves
         // `custom_single_choice__governing_law` through this question code.
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new(
                 "custom_single_choice",
                 "Prompt for a custom single choice",
@@ -362,7 +362,7 @@ mod tests {
         .await
         .unwrap();
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Libra",
                 "libra@example.com",
@@ -374,7 +374,7 @@ mod tests {
         // `start_retainer` hangs the notation on a matter whose lawyer-side
         // DRI is this firm principal.
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Firm Principal",
                 "principal@example.com",
@@ -388,40 +388,40 @@ mod tests {
     /// Helper: start a retainer via the create tool and return
     /// `(notation_id, first_question_code)`.
     async fn start_retainer(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         runtime: &InMemoryRuntime,
     ) -> (Uuid, String) {
-        let client = store::persons::find_by_email_ci(surreal, "libra@example.com")
+        let client = store::persons::find_by_email_ci(application_store, "libra@example.com")
             .await
             .unwrap()
             .unwrap();
-        let lawyer = store::persons::find_by_email_ci(surreal, "principal@example.com")
+        let lawyer = store::persons::find_by_email_ci(application_store, "principal@example.com")
             .await
             .unwrap()
             .unwrap();
-        crate::test_fixtures::seed_brands(surreal).await;
+        crate::test_fixtures::seed_brands(application_store).await;
         let project = store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: format!("answer-matter-{}", Uuid::now_v7()),
                 name: "Matter".into(),
                 status: "open".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: store::test_support::seed_entity(application_store).await,
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        store::projects::designate_dri_in_surreal(
-            surreal,
+        store::projects::designate_dri(
+            application_store,
             project.id,
             client.id,
             store::projects::DriSide::Client,
         )
         .await
         .unwrap();
-        store::projects::designate_dri_in_surreal(
-            surreal,
+        store::projects::designate_dri(
+            application_store,
             project.id,
             lawyer.id,
             store::projects::DriSide::Lawyer,
@@ -435,7 +435,7 @@ mod tests {
                 .unwrap(),
         );
         let out = create_notation::call(
-            surreal,
+            application_store,
             runtime,
             Some(&storage),
             None,
@@ -473,14 +473,14 @@ mod tests {
     #[tokio::test]
     async fn answering_one_question_returns_the_next_one() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store).await;
             let runtime = InMemoryRuntime::new();
-            let (id, code) = start_retainer(&surreal, &runtime).await;
+            let (id, code) = start_retainer(&application_store, &runtime).await;
             assert_eq!(code, "entity");
 
             let out = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,
@@ -504,10 +504,10 @@ mod tests {
     #[tokio::test]
     async fn full_walk_lands_on_complete_status() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store).await;
             let runtime = InMemoryRuntime::new();
-            let (id, mut code) = start_retainer(&surreal, &runtime).await;
+            let (id, mut code) = start_retainer(&application_store, &runtime).await;
             // The retainer walk asks the entity and its principal office, the
             // client, the firm DRI, the engagement name, the engagement's start
             // date/scope (N120 grounded these against the questionnaire), and
@@ -532,7 +532,7 @@ mod tests {
             for (expected_code, value) in values {
                 assert_eq!(code, expected_code);
                 let out = call(
-                    &surreal,
+                    &application_store,
                     &runtime,
                     None,
                     None,
@@ -587,10 +587,10 @@ mod tests {
     #[tokio::test]
     async fn the_last_answer_begins_the_notations_workflow() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store).await;
             let runtime = InMemoryRuntime::new();
-            let (id, mut code) = start_retainer(&surreal, &runtime).await;
+            let (id, mut code) = start_retainer(&application_store, &runtime).await;
             let drive = StubDrive::default();
 
             let values = [
@@ -612,7 +612,7 @@ mod tests {
             for (expected_code, value) in values {
                 assert_eq!(code, expected_code);
                 let out = call(
-                    &surreal,
+                    &application_store,
                     &runtime,
                     None,
                     Some(&drive),
@@ -636,10 +636,11 @@ mod tests {
                 last["structuredContent"]["workflow_state"], "lawyer_review",
                 "the tool reports where the workflow it began now sits"
             );
-            let principal = store::persons::find_by_email_ci(&surreal, "principal@example.com")
-                .await
-                .unwrap()
-                .unwrap();
+            let principal =
+                store::persons::find_by_email_ci(&application_store, "principal@example.com")
+                    .await
+                    .unwrap()
+                    .unwrap();
             assert_eq!(
                 *drive.began.lock().unwrap(),
                 vec![(id, Some(principal.id))],
@@ -652,12 +653,12 @@ mod tests {
     #[tokio::test]
     async fn an_out_of_scope_lawyer_cannot_answer_or_start_a_workflow() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store).await;
             let runtime = InMemoryRuntime::new();
-            let (id, code) = start_retainer(&surreal, &runtime).await;
+            let (id, code) = start_retainer(&application_store, &runtime).await;
             let outsider = store::persons::create(
-                &surreal,
+                &application_store,
                 &store::persons::NewPerson::with_role(
                     "Outside Lawyer",
                     "outside-lawyer@example.com",
@@ -669,7 +670,7 @@ mod tests {
             let drive = StubDrive::default();
 
             let error = call_as(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 Some(&drive),
@@ -683,7 +684,7 @@ mod tests {
             .unwrap_err();
 
             assert!(matches!(error, ToolError::NotFound(_)));
-            assert!(store::answers::for_notation(&surreal, id)
+            assert!(store::answers::for_notation(&application_store, id)
                 .await
                 .unwrap()
                 .is_empty());
@@ -701,10 +702,10 @@ mod tests {
     #[tokio::test]
     async fn an_undeclared_choice_is_invalid_arguments() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store).await;
             let runtime = InMemoryRuntime::new();
-            let (id, mut code) = start_retainer(&surreal, &runtime).await;
+            let (id, mut code) = start_retainer(&application_store, &runtime).await;
             let walk = [
                 ("entity", "Northstar Ventures LLC"),
                 (
@@ -722,7 +723,7 @@ mod tests {
             for (expected_code, value) in walk {
                 assert_eq!(code, expected_code);
                 let out = call(
-                    &surreal,
+                    &application_store,
                     &runtime,
                     None,
                     None,
@@ -738,7 +739,7 @@ mod tests {
             assert_eq!(code, "custom_single_choice__governing_law");
 
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,
@@ -764,7 +765,7 @@ mod tests {
 
             // A declared option is still accepted and still completes the walk.
             let out = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,
@@ -780,12 +781,12 @@ mod tests {
     #[tokio::test]
     async fn wrong_question_code_is_invalid_arguments() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store).await;
             let runtime = InMemoryRuntime::new();
-            let (id, _code) = start_retainer(&surreal, &runtime).await;
+            let (id, _code) = start_retainer(&application_store, &runtime).await;
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,
@@ -810,11 +811,11 @@ mod tests {
     #[tokio::test]
     async fn unknown_notation_id_is_not_found() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store).await;
             let runtime = InMemoryRuntime::new();
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,
@@ -837,12 +838,12 @@ mod tests {
     #[tokio::test]
     async fn blank_question_code_is_invalid_arguments() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store).await;
             let runtime = InMemoryRuntime::new();
-            let (id, _) = start_retainer(&surreal, &runtime).await;
+            let (id, _) = start_retainer(&application_store, &runtime).await;
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,

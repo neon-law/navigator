@@ -114,11 +114,11 @@ async fn hidden(role: ViewerRole) -> ParticipationView {
 /// person, so the form says which one it would move it from.
 #[cfg(feature = "server")]
 async fn dri_holders(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
     people: &[PersonChoice],
 ) -> Result<(Vec<String>, Vec<String>), ServerFnError> {
-    let rows = store::projects::participations_for_project(surreal, project_id)
+    let rows = store::projects::participations_for_project(application_store, project_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let names_of = |flagged: fn(&store::projects::PersonProjectRole) -> bool| {
@@ -193,8 +193,8 @@ async fn load(
     .map(|axum::extract::Query(q)| q)
     .unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(project) = store::projects::find_by_code(&surreal, project_code)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(project) = store::projects::find_by_code(&application_store, project_code)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
     else {
@@ -213,7 +213,7 @@ async fn load(
     } else {
         store::persons::Role::Admin
     };
-    if !store::projects::can_administer_project(&surreal, person_id, admin_role, &project)
+    if !store::projects::can_administer_project(&application_store, person_id, admin_role, &project)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
     {
@@ -226,7 +226,7 @@ async fn load(
     // cross-matter role id is a not-found, never an edit of someone else's row.
     let existing = match role_id {
         Some(id) => {
-            let row = store::projects::participation_by_id(&surreal, id)
+            let row = store::projects::participation_by_id(&application_store, id)
                 .await
                 .map_err(|e| ServerFnError::new(e.to_string()))?;
             match row {
@@ -237,7 +237,7 @@ async fn load(
         None => None,
     };
 
-    let people: Vec<PersonChoice> = store::persons::list_directory(&surreal)
+    let people: Vec<PersonChoice> = store::persons::list_directory(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -252,7 +252,7 @@ async fn load(
         .filter(|raw| !raw.is_empty())
         .or_else(|| existing.as_ref().map(|row| row.person_id.to_string()));
 
-    let (lawyer_dris, client_dris) = dri_holders(&surreal, project_id, &people).await?;
+    let (lawyer_dris, client_dris) = dri_holders(&application_store, project_id, &people).await?;
     let dri = seeded_dri(query.dri.clone(), existing.as_ref());
 
     Ok(ParticipationView {

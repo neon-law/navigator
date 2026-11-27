@@ -255,11 +255,11 @@ pub mod derive {
     /// # Errors
     /// Any store error, as text.
     pub async fn load(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         project: &store::projects::Project,
     ) -> Result<GraphView, String> {
         let mut parties: Vec<(NodeRef, String, String)> = Vec::new();
-        if let Some(entity) = store::entities::find_by_id(surreal, project.entity_id)
+        if let Some(entity) = store::entities::find_by_id(application_store, project.entity_id)
             .await
             .map_err(|e| e.to_string())?
         {
@@ -269,11 +269,11 @@ pub mod derive {
                 "Client".to_string(),
             ));
         }
-        let roles = store::projects::participations_for_project(surreal, project.id)
+        let roles = store::projects::participations_for_project(application_store, project.id)
             .await
             .map_err(|e| e.to_string())?;
         let ids: Vec<uuid::Uuid> = roles.iter().map(|row| row.person_id).collect();
-        let people = store::persons::find_by_ids(surreal, &ids)
+        let people = store::persons::find_by_ids(application_store, &ids)
             .await
             .map_err(|e| e.to_string())?;
         for row in &roles {
@@ -285,7 +285,7 @@ pub mod derive {
                 ));
             }
         }
-        let references = store::project_references::for_project(surreal, project.id)
+        let references = store::project_references::for_project(application_store, project.id)
             .await
             .map_err(|e| e.to_string())?;
         let ids = |kind: Endpoint| -> Vec<uuid::Uuid> {
@@ -295,10 +295,10 @@ pub mod derive {
                 .map(|row| row.party.id)
                 .collect()
         };
-        let ref_people = store::persons::find_by_ids(surreal, &ids(Endpoint::Person))
+        let ref_people = store::persons::find_by_ids(application_store, &ids(Endpoint::Person))
             .await
             .map_err(|e| e.to_string())?;
-        let ref_entities = store::entities::find_by_ids(surreal, &ids(Endpoint::Entity))
+        let ref_entities = store::entities::find_by_ids(application_store, &ids(Endpoint::Entity))
             .await
             .map_err(|e| e.to_string())?;
         for row in &references {
@@ -321,7 +321,7 @@ pub mod derive {
             }
         }
         let nodes: Vec<NodeRef> = parties.iter().map(|(node, _, _)| *node).collect();
-        let edges = store::conflicts::edges_among(surreal, &nodes).await?;
+        let edges = store::conflicts::edges_among(application_store, &nodes).await?;
         Ok(graph(&parties, &edges))
     }
 

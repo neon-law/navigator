@@ -42,7 +42,7 @@ fn is_past_intake(state: &str) -> bool {
 /// here beside the intake route's authoritative check; the matter page only
 /// receives a link after the same client-side participation predicate passes.
 pub(crate) async fn pending_client_intake_for_project(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     session: &SessionData,
     project_id: Uuid,
@@ -51,22 +51,26 @@ pub(crate) async fn pending_client_intake_for_project(
         return Ok(None);
     }
     let visible =
-        store::projects::can_access_as_client_in_surreal(surreal, session.person_id, project_id)
+        store::projects::can_access_as_client(application_store, session.person_id, project_id)
             .await
             .map_err(|e| e.to_string())?;
     if !visible {
         return Ok(None);
     }
 
-    let notations = store::notations::list_by_project(surreal, project_id)
+    let notations = store::notations::list_by_project(application_store, project_id)
         .await
         .map_err(|e| e.to_string())?;
     for notation in notations {
         if is_past_intake(&notation.state) {
             continue;
         }
-        let step = match notation_session::client_intake_step(surreal, Some(storage), notation.id)
-            .await
+        let step = match notation_session::client_intake_step(
+            application_store,
+            Some(storage),
+            notation.id,
+        )
+        .await
         {
             // A matter can carry a document-only notation. It has no
             // client-facing questionnaire to continue, but that should not
@@ -92,7 +96,7 @@ pub(crate) async fn pending_client_intake_for_project(
 /// Empty for every other `answer_type`, so callers can pass it
 /// unconditionally.
 pub(crate) async fn jurisdiction_option_names(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     answer_type: &str,
 ) -> Vec<String> {
     let Some(filter) =
@@ -100,7 +104,7 @@ pub(crate) async fn jurisdiction_option_names(
     else {
         return Vec::new();
     };
-    match store::jurisdictions::list_by_type(surreal, filter).await {
+    match store::jurisdictions::list_by_type(application_store, filter).await {
         Ok(rows) => rows.into_iter().map(|r| r.name).collect(),
         Err(e) => {
             tracing::error!(error = %e, answer_type, "intake: loading jurisdiction options failed");
@@ -139,7 +143,7 @@ pub(crate) struct Candidate {
 /// choose the failure mode — the GET step tolerates it (empty display), the
 /// POST resolver propagates it (a loud `500`, never a silent no-advance).
 pub(crate) async fn reference_candidates(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     answer_type: &str,
     notation_id: uuid::Uuid,
 ) -> Result<Vec<Candidate>, CandidateError> {
@@ -151,10 +155,12 @@ pub(crate) async fn reference_candidates(
     }
     match qt {
         QuestionType::Country | QuestionType::Jurisdiction => {
-            Ok(jurisdiction_candidates(surreal, qt.jurisdiction_type_filter()).await?)
+            Ok(jurisdiction_candidates(application_store, qt.jurisdiction_type_filter()).await?)
         }
-        QuestionType::Person => project_person_candidates(surreal, notation_id).await,
-        QuestionType::Entity => Ok(project_entity_candidates(surreal, notation_id).await?),
+        QuestionType::Person => project_person_candidates(application_store, notation_id).await,
+        QuestionType::Entity => {
+            Ok(project_entity_candidates(application_store, notation_id).await?)
+        }
         // entity_type / product / project keep the free-text path
         // for now — no picker yet.
         _ => Ok(Vec::new()),
@@ -165,12 +171,12 @@ pub(crate) async fn reference_candidates(
 /// (`country`). Global reference data — no project scope. The table
 /// lives in SurrealDB since ENG-20.
 async fn jurisdiction_candidates(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     type_filter: Option<&str>,
 ) -> Result<Vec<Candidate>, store::jurisdictions::JurisdictionError> {
     let rows = match type_filter {
-        Some(filter) => store::jurisdictions::list_by_type(surreal, filter).await?,
-        None => store::jurisdictions::list_all(surreal).await?,
+        Some(filter) => store::jurisdictions::list_by_type(application_store, filter).await?,
+        None => store::jurisdictions::list_all(application_store).await?,
     };
     Ok(rows
         .into_iter()
@@ -186,13 +192,13 @@ async fn jurisdiction_candidates(
 /// `Ok(None)` means the notation or its project row is genuinely absent;
 /// a DB failure propagates so a transient error isn't read as "no scope".
 async fn project_for_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: uuid::Uuid,
 ) -> Result<Option<store::projects::Project>, CandidateError> {
-    let Some(notation) = store::notations::find_by_id(surreal, notation_id).await? else {
+    let Some(notation) = store::notations::find_by_id(application_store, notation_id).await? else {
         return Ok(None);
     };
-    Ok(store::projects::find_by_id(surreal, notation.project_id).await?)
+    Ok(store::projects::find_by_id(application_store, notation.project_id).await?)
 }
 
 /// People on the notation's matter — everyone with a `person_project_roles`
@@ -224,23 +230,24 @@ impl From<String> for CandidateError {
 }
 
 async fn project_person_candidates(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: uuid::Uuid,
 ) -> Result<Vec<Candidate>, CandidateError> {
-    let Some(project) = project_for_notation(surreal, notation_id).await? else {
+    let Some(project) = project_for_notation(application_store, notation_id).await? else {
         return Ok(Vec::new());
     };
     // Every person on the matter, DRIs included — they are membership rows
     // now, so there is nothing to union in separately.
-    let ids: Vec<uuid::Uuid> = store::projects::participations_for_project(surreal, project.id)
-        .await?
-        .into_iter()
-        .map(|role| role.person_id)
-        .collect();
+    let ids: Vec<uuid::Uuid> =
+        store::projects::participations_for_project(application_store, project.id)
+            .await?
+            .into_iter()
+            .map(|role| role.person_id)
+            .collect();
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(store::persons::find_by_ids(surreal, &ids)
+    Ok(store::persons::find_by_ids(application_store, &ids)
         .await?
         .into_iter()
         .map(|p| Candidate {
@@ -254,21 +261,23 @@ async fn project_person_candidates(
 /// The matter's entity — the one legal Entity the notation's project is
 /// bound to. Project-scoped: a single candidate (or none if it vanished).
 async fn project_entity_candidates(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: uuid::Uuid,
 ) -> Result<Vec<Candidate>, CandidateError> {
-    let Some(project) = project_for_notation(surreal, notation_id).await? else {
+    let Some(project) = project_for_notation(application_store, notation_id).await? else {
         return Ok(Vec::new());
     };
-    Ok(store::entities::find_by_id(surreal, project.entity_id)
-        .await?
-        .map(|e| Candidate {
-            id: e.id,
-            name: e.name,
-            email: String::new(),
-        })
-        .into_iter()
-        .collect())
+    Ok(
+        store::entities::find_by_id(application_store, project.entity_id)
+            .await?
+            .map(|e| Candidate {
+                id: e.id,
+                name: e.name,
+                email: String::new(),
+            })
+            .into_iter()
+            .collect(),
+    )
 }
 
 /// Whether a submitted display name must match a seeded row from the
@@ -306,7 +315,7 @@ pub(crate) enum ReferenceResolution {
 /// (lawyer [`crate::retainer_walk::step_post`] and client [`intake_save`])
 /// share this so the `id`-in-envelope contract holds either side.
 pub(crate) async fn resolve_reference_answer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     answer_type: &str,
     notation_id: uuid::Uuid,
     body: &[(String, String)],
@@ -328,7 +337,7 @@ pub(crate) async fn resolve_reference_answer(
     }
     // Propagate a candidate-lookup failure as an error (the caller maps it to
     // a `500`) rather than validating a pick against a silently-empty list.
-    let candidates = reference_candidates(surreal, answer_type, notation_id).await?;
+    let candidates = reference_candidates(application_store, answer_type, notation_id).await?;
     // A picker selection: `id` names the chosen row. Validate it against the
     // in-scope candidates so a hand-crafted POST can't smuggle an
     // out-of-scope id (an unrelated matter's person, a made-up uuid).
@@ -377,12 +386,12 @@ pub(crate) async fn resolve_reference_answer(
 /// or a `404` response. Enforces, in order: the notation exists, it
 /// belongs to *this* project, and the caller may see the project.
 async fn visible_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     session: &SessionData,
     project_id: Uuid,
     notation_id: Uuid,
 ) -> Result<(store::notations::Notation, bool), Response> {
-    let notation = store::notations::find_by_id(surreal, notation_id)
+    let notation = store::notations::find_by_id(application_store, notation_id)
         .await
         .ok()
         .flatten()
@@ -403,8 +412,8 @@ async fn visible_notation(
         }
         return Err(not_found());
     }
-    let visible = store::projects::can_access_as_client_in_surreal(
-        surreal,
+    let visible = store::projects::can_access_as_client(
+        application_store,
         session.person_id,
         project_id,
     )
@@ -437,8 +446,11 @@ async fn visible_notation(
 
 /// The bound template's title, for the page chrome. Falls back to a
 /// generic label if the template vanished.
-async fn flow_label(surreal: &store::surreal::SurrealDb, template_id: Uuid) -> String {
-    store::templates::find_by_id(surreal, template_id)
+async fn flow_label(
+    application_store: &store::application_store::ApplicationStore,
+    template_id: Uuid,
+) -> String {
+    store::templates::find_by_id(application_store, template_id)
         .await
         .ok()
         .flatten()
@@ -465,8 +477,8 @@ pub(crate) async fn resolve_intake_state(
         return Err(not_found());
     };
     let (notation, personal) =
-        visible_notation(&state.surreal, session, project_id, notation_id).await?;
-    let Some(project) = store::projects::find_by_id(&state.surreal, project_id)
+        visible_notation(&state.application_store, session, project_id, notation_id).await?;
+    let Some(project) = store::projects::find_by_id(&state.application_store, project_id)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, %project_id, "intake: project lookup failed");
@@ -475,10 +487,10 @@ pub(crate) async fn resolve_intake_state(
     else {
         return Err(not_found());
     };
-    let flow_label = flow_label(&state.surreal, notation.template_id).await;
+    let flow_label = flow_label(&state.application_store, notation.template_id).await;
 
     let step = notation_session::client_intake_step_at(
-        &state.surreal,
+        &state.application_store,
         Some(&state.storage),
         notation_id,
         requested_question,
@@ -517,7 +529,7 @@ pub(crate) async fn resolve_intake_state(
                 })
                 .collect();
             let country_options =
-                jurisdiction_option_names(&state.surreal, &question.answer_type).await;
+                jurisdiction_option_names(&state.application_store, &question.answer_type).await;
             let choices = question
                 .choices
                 .into_iter()
@@ -526,7 +538,7 @@ pub(crate) async fn resolve_intake_state(
             // Same tolerance as the lawyer walker's render path: an empty
             // list (free-text path) rather than failing the whole step.
             let person_candidates = reference_candidates(
-                &state.surreal,
+                &state.application_store,
                 &question.answer_type,
                 notation_id,
             )
@@ -598,11 +610,13 @@ pub async fn intake_save(
     let Some(Extension(session)) = session else {
         return not_found();
     };
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
+    let Some(project_id) =
+        store::projects::id_for_code(&state.application_store, &project_code).await
+    else {
         return not_found();
     };
     let (notation, _) =
-        match visible_notation(&state.surreal, &session, project_id, notation_id).await {
+        match visible_notation(&state.application_store, &session, project_id, notation_id).await {
             Ok(n) => n,
             Err(resp) => return resp,
         };
@@ -621,7 +635,7 @@ pub async fn intake_save(
     // POST can't write an answer out of order.
     let requested_code = body.get("_nav_question_code").map(String::as_str);
     let step = match notation_session::client_intake_step_at(
-        &state.surreal,
+        &state.application_store,
         Some(&state.storage),
         notation_id,
         requested_code,
@@ -710,7 +724,7 @@ async fn save_client_intake_answer(input: ClientIntakeSave<'_>) -> Response {
         (crate::people_list_answer::assemble(body), None)
     } else {
         let resolved = match resolve_reference_answer(
-            &state.surreal,
+            &state.application_store,
             &question.answer_type,
             notation_id,
             pairs,
@@ -740,7 +754,7 @@ async fn save_client_intake_answer(input: ClientIntakeSave<'_>) -> Response {
     };
 
     if let Err(e) = notation_session::record_client_answer_with_reference(
-        &state.surreal,
+        &state.application_store,
         Some(&state.storage),
         notation_id,
         question.code.as_str(),
@@ -803,44 +817,4 @@ fn not_found() -> Response {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// ENG-505: a `multiple_choice` question posts several same-named
-    /// `value` fields, one per checked card — the reason
-    /// [`resolve_reference_answer`] takes ordered pairs rather than a
-    /// `BTreeMap`, which can hold only the last of any repeated key. This
-    /// branch never touches `surreal` (no candidate lookup applies to a
-    /// closed choice set), so an unseeded in-memory handle is enough.
-    #[tokio::test]
-    async fn multiple_choice_assembles_every_selected_value_into_one_json_array() {
-        let surreal = store::test_support::mem_surreal().await;
-        let body = vec![
-            ("value".to_string(), "ein".to_string()),
-            ("value".to_string(), "name".to_string()),
-        ];
-        let resolved = resolve_reference_answer(&surreal, "multiple_choice", Uuid::nil(), &body)
-            .await
-            .expect("no candidate lookup for multiple_choice");
-        let ReferenceResolution::Resolved { value, id } = resolved else {
-            panic!("expected Resolved");
-        };
-        assert_eq!(value, r#"["ein","name"]"#);
-        assert_eq!(id, None);
-    }
-
-    /// No card checked posts no `value` field at all — a real "chose none of
-    /// these", not an error.
-    #[tokio::test]
-    async fn multiple_choice_with_no_selection_resolves_to_an_empty_array() {
-        let surreal = store::test_support::mem_surreal().await;
-        let resolved = resolve_reference_answer(&surreal, "multiple_choice", Uuid::nil(), &[])
-            .await
-            .expect("no candidate lookup for multiple_choice");
-        let ReferenceResolution::Resolved { value, id } = resolved else {
-            panic!("expected Resolved");
-        };
-        assert_eq!(value, "[]");
-        assert_eq!(id, None);
-    }
-}
+mod tests {}

@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use dbos::{WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::finance_aggregate::{self, FinanceInput, Parameters};
-use store::surreal::SurrealDb;
 
 use cloud::StorageService;
 
@@ -31,14 +31,17 @@ pub enum FinanceAggregateError {
 
 #[derive(Clone)]
 pub struct Context {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     storage: Arc<dyn StorageService>,
 }
 
 impl Context {
     #[must_use]
-    pub fn new(surreal: SurrealDb, storage: Arc<dyn StorageService>) -> Self {
-        Self { surreal, storage }
+    pub fn new(application_store: ApplicationStore, storage: Arc<dyn StorageService>) -> Self {
+        Self {
+            application_store,
+            storage,
+        }
     }
 }
 
@@ -96,7 +99,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<FinanceAggregateW
             .await?;
 
             let storage = Arc::clone(&context.storage);
-            let surreal = context.surreal.clone();
+            let application_store = context.application_store.clone();
             let project_id = request.project_id;
             let key = finance_aggregate::report_key(&request.project_code, &run_id);
             let stored_key = key.clone();
@@ -105,7 +108,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<FinanceAggregateW
                 let storage = Arc::clone(&storage);
                 let key = stored_key.clone();
                 let report = stored_report.clone();
-                let surreal = surreal.clone();
+                let application_store = application_store.clone();
                 async move {
                     let bytes = serde_json::to_vec(&report)
                         .map_err(|_| dbos::Error::Application(FinanceAggregateError::Persist))?;
@@ -113,7 +116,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<FinanceAggregateW
                         .put(&key, &bytes, "application/json")
                         .await
                         .map_err(|_| dbos::Error::Application(FinanceAggregateError::Persist))?;
-                    finance_aggregate::upsert(&surreal, project_id, &report)
+                    finance_aggregate::upsert(&application_store, project_id, &report)
                         .await
                         .map_err(|_| dbos::Error::Application(FinanceAggregateError::Persist))
                 }

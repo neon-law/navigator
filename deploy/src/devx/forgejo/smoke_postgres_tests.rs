@@ -4,7 +4,7 @@ use store::postgres::PostgresDb;
 async fn native_forgejo_fixture_derives_real_owned_repository_and_routes_spawned_reads() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let source = store::surreal::SurrealDb::uninitialized();
+        let source = store::application_store::ApplicationStore::uninitialized();
         let seeded = super::seed_firm_project(&source).await.unwrap();
         assert_eq!(seeded.path.to_string(), "example-law-pc/sample-litigation");
         let linked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM project p JOIN brand b ON b.brand_key=p.brand AND b.firm_id=p.firm_id JOIN firm f ON f.id=p.firm_id JOIN person_firm_role m ON m.firm_id=f.id AND m.membership='admin' AND m.is_dri JOIN person a ON a.id=m.person_id JOIN entity e ON e.id=p.entity_id JOIN entity_type t ON t.id=e.entity_type_id JOIN jurisdiction j ON j.id=e.jurisdiction_id WHERE p.id=$1 AND a.role='admin')")

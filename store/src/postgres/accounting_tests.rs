@@ -1,11 +1,11 @@
 //! The accounting authority's tests, against the PostgreSQL fixture. Each
 //! test fails when `NAVIGATOR_TEST_POSTGRES_PORT` is unset.
 use super::*;
+use crate::application_store::ApplicationStore;
 use crate::finance_aggregate::{self, FinanceReport, Money, Parameters};
 use crate::iolta_accounts::{self, UpsertIoltaAccount};
 use crate::iolta_withdrawals::{self, WithdrawalInput};
-use crate::postgres_mirror::tests::{connect, fresh_schema};
-use crate::surreal::SurrealDb;
+use crate::postgres::fixtures::{connect, fresh_schema};
 use crate::xero_invoices::{self, UpsertXeroInvoice};
 use chrono::{TimeZone, Utc};
 use uuid::Uuid;
@@ -71,13 +71,16 @@ fn invoice(project_id: Uuid, xero_invoice_id: &str, reference: &str) -> UpsertXe
 #[tokio::test]
 async fn xero_invoice_upsert_reconcile_and_reads_are_postgres_only() {
     let Some(pg) = database().await else { return };
-    let surreal = SurrealDb::uninitialized();
+    let application_store = ApplicationStore::uninitialized();
     let (_, project) = seed_project(&pg).await;
 
     with_test_db(pg.clone(), async {
-        let created = xero_invoices::upsert(&surreal, &invoice(project, "xero-1", "Matter ACCT-1"))
-            .await
-            .unwrap();
+        let created = xero_invoices::upsert(
+            &application_store,
+            &invoice(project, "xero-1", "Matter ACCT-1"),
+        )
+        .await
+        .unwrap();
         assert_eq!(created.xero_invoice_id, "xero-1");
         assert_eq!(created.amount_paid_cents, 0);
         assert_eq!(created.status, "AUTHORISED");
@@ -87,7 +90,9 @@ async fn xero_invoice_upsert_reconcile_and_reads_are_postgres_only() {
         let mut refreshed = invoice(project, "xero-1", "Matter ACCT-1");
         refreshed.amount_cents = 120_000;
         refreshed.status = "VOIDED".to_string();
-        let updated = xero_invoices::upsert(&surreal, &refreshed).await.unwrap();
+        let updated = xero_invoices::upsert(&application_store, &refreshed)
+            .await
+            .unwrap();
         assert_eq!(updated.amount_cents, 120_000);
         assert_eq!(updated.status, "VOIDED");
         assert_eq!(updated.amount_paid_cents, 0);
@@ -105,31 +110,35 @@ async fn xero_invoice_upsert_reconcile_and_reads_are_postgres_only() {
         .execute(pg.pool())
         .await
         .unwrap();
-        xero_invoices::upsert(&surreal, &invoice(competitor, "xero-2", "Matter ACCT-1"))
-            .await
-            .unwrap();
+        xero_invoices::upsert(
+            &application_store,
+            &invoice(competitor, "xero-2", "Matter ACCT-1"),
+        )
+        .await
+        .unwrap();
         assert!(
-            xero_invoices::find_for_allocation(&surreal, "Matter ACCT-1")
+            xero_invoices::find_for_allocation(&application_store, "Matter ACCT-1")
                 .await
                 .unwrap()
                 .is_none()
         );
 
-        let reconciled = xero_invoices::record_reconcile(&surreal, "xero-1", "PAID", 120_000)
-            .await
-            .unwrap()
-            .expect("reconciled");
+        let reconciled =
+            xero_invoices::record_reconcile(&application_store, "xero-1", "PAID", 120_000)
+                .await
+                .unwrap()
+                .expect("reconciled");
         assert_eq!(reconciled.status, "PAID");
         assert_eq!(reconciled.amount_paid_cents, 120_000);
 
         assert_eq!(
-            xero_invoices::find_for_allocation(&surreal, "xero-1")
+            xero_invoices::find_for_allocation(&application_store, "xero-1")
                 .await
                 .unwrap(),
             Some(reconciled)
         );
         assert_eq!(
-            xero_invoices::find_for_allocation(&surreal, "xero-2")
+            xero_invoices::find_for_allocation(&application_store, "xero-2")
                 .await
                 .unwrap()
                 .map(|found| found.xero_invoice_id),
@@ -140,8 +149,10 @@ async fn xero_invoice_upsert_reconcile_and_reads_are_postgres_only() {
         // this invoice strictly newer than xero-1 so the order is stable.
         let mut late = invoice(project, "xero-3", "Matter ACCT-3");
         late.issued_at = when() + chrono::Duration::seconds(1);
-        let unique = xero_invoices::upsert(&surreal, &late).await.unwrap();
-        let projects = xero_invoices::for_projects(&surreal, &[project])
+        let unique = xero_invoices::upsert(&application_store, &late)
+            .await
+            .unwrap();
+        let projects = xero_invoices::for_projects(&application_store, &[project])
             .await
             .unwrap();
         assert_eq!(
@@ -152,7 +163,9 @@ async fn xero_invoice_upsert_reconcile_and_reads_are_postgres_only() {
             ["xero-3", "xero-1"]
         );
         // needing_reconcile does not order its results; compare as a set.
-        let mut needing = xero_invoices::needing_reconcile(&surreal).await.unwrap();
+        let mut needing = xero_invoices::needing_reconcile(&application_store)
+            .await
+            .unwrap();
         needing.sort_by(|a, b| a.xero_invoice_id.cmp(&b.xero_invoice_id));
         assert_eq!(
             needing
@@ -169,7 +182,7 @@ async fn xero_invoice_upsert_reconcile_and_reads_are_postgres_only() {
 #[tokio::test]
 async fn iolta_accounts_upsert_and_reads_are_postgres_only() {
     let Some(pg) = database().await else { return };
-    let surreal = SurrealDb::uninitialized();
+    let application_store = ApplicationStore::uninitialized();
     let (jurisdiction, _) = seed_project(&pg).await;
     // The jurisdiction lookup inside upsert and for_jurisdiction goes
     // through the shared catalogs' PostgreSQL authority; without that scope
@@ -178,7 +191,7 @@ async fn iolta_accounts_upsert_and_reads_are_postgres_only() {
         pg.clone(),
         with_test_db(pg.clone(), async {
             let account = iolta_accounts::upsert(
-                &surreal,
+                &application_store,
                 &UpsertIoltaAccount {
                     jurisdiction_id: jurisdiction,
                     xero_account_id: "xero-nv".to_string(),
@@ -198,7 +211,7 @@ async fn iolta_accounts_upsert_and_reads_are_postgres_only() {
             // write: one pooled account per state.
             assert!(matches!(
                 iolta_accounts::upsert(
-                    &surreal,
+                    &application_store,
                     &UpsertIoltaAccount {
                         jurisdiction_id: jurisdiction,
                         xero_account_id: "xero-other".to_string(),
@@ -222,22 +235,27 @@ async fn iolta_accounts_upsert_and_reads_are_postgres_only() {
                 balance_cents: 1_500_000,
                 mirrored_at: when(),
             };
-            let updated = iolta_accounts::upsert(&surreal, &refreshed).await.unwrap();
+            let updated = iolta_accounts::upsert(&application_store, &refreshed)
+                .await
+                .unwrap();
             assert_eq!(updated.balance_cents, 1_500_000);
 
             assert_eq!(
-                iolta_accounts::for_jurisdiction(&surreal, jurisdiction)
+                iolta_accounts::for_jurisdiction(&application_store, jurisdiction)
                     .await
                     .unwrap(),
                 Some(updated)
             );
             assert_eq!(
-                iolta_accounts::for_jurisdiction(&surreal, Uuid::new_v4())
+                iolta_accounts::for_jurisdiction(&application_store, Uuid::new_v4())
                     .await
                     .unwrap(),
                 None
             );
-            assert_eq!(iolta_accounts::all(&surreal).await.unwrap().len(), 1);
+            assert_eq!(
+                iolta_accounts::all(&application_store).await.unwrap().len(),
+                1
+            );
         }),
     )
     .await;
@@ -246,13 +264,16 @@ async fn iolta_accounts_upsert_and_reads_are_postgres_only() {
 #[tokio::test]
 async fn iolta_withdrawal_writes_and_reads_are_postgres_only() {
     let Some(pg) = database().await else { return };
-    let surreal = SurrealDb::uninitialized();
+    let application_store = ApplicationStore::uninitialized();
     let (jurisdiction, project) = seed_project(&pg).await;
 
     with_test_db(pg.clone(), async {
-        let settled = xero_invoices::upsert(&surreal, &invoice(project, "xero-1", "Matter ACCT-1"))
-            .await
-            .unwrap();
+        let settled = xero_invoices::upsert(
+            &application_store,
+            &invoice(project, "xero-1", "Matter ACCT-1"),
+        )
+        .await
+        .unwrap();
         let input = WithdrawalInput {
             xero_transaction_id: "txn-1".to_string(),
             xero_account_id: "xero-nv".to_string(),
@@ -261,14 +282,14 @@ async fn iolta_withdrawal_writes_and_reads_are_postgres_only() {
             occurred_at: when(),
             lines: Vec::new(),
         };
-        iolta_withdrawals::write_withdrawal(&surreal, &input, jurisdiction)
+        iolta_withdrawals::write_withdrawal(&application_store, &input, jurisdiction)
             .await
             .unwrap();
-        iolta_withdrawals::write_allocation(&surreal, &input, &settled, 40_000)
+        iolta_withdrawals::write_allocation(&application_store, &input, &settled, 40_000)
             .await
             .unwrap();
 
-        let withdrawal = iolta_withdrawals::find(&surreal, "txn-1")
+        let withdrawal = iolta_withdrawals::find(&application_store, "txn-1")
             .await
             .unwrap()
             .expect("withdrawal");
@@ -277,11 +298,11 @@ async fn iolta_withdrawal_writes_and_reads_are_postgres_only() {
 
         // Re-reading the same transfer refreshes its line instead of
         // doubling the matter's drawn total.
-        iolta_withdrawals::write_allocation(&surreal, &input, &settled, 40_000)
+        iolta_withdrawals::write_allocation(&application_store, &input, &settled, 40_000)
             .await
             .unwrap();
 
-        let lines = iolta_withdrawals::lines_for(&surreal, "txn-1")
+        let lines = iolta_withdrawals::lines_for(&application_store, "txn-1")
             .await
             .unwrap();
         assert_eq!(lines.len(), 1);
@@ -290,15 +311,17 @@ async fn iolta_withdrawal_writes_and_reads_are_postgres_only() {
         assert_eq!(lines[0].amount_cents, 40_000);
 
         assert_eq!(
-            iolta_withdrawals::for_project(&surreal, project)
+            iolta_withdrawals::for_project(&application_store, project)
                 .await
                 .unwrap(),
             lines
         );
-        assert!(iolta_withdrawals::for_project(&surreal, Uuid::new_v4())
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            iolta_withdrawals::for_project(&application_store, Uuid::new_v4())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     })
     .await;
 }
@@ -306,7 +329,7 @@ async fn iolta_withdrawal_writes_and_reads_are_postgres_only() {
 #[tokio::test]
 async fn finance_aggregate_upsert_and_latest_are_postgres_only() {
     let Some(pg) = database().await else { return };
-    let surreal = SurrealDb::uninitialized();
+    let application_store = ApplicationStore::uninitialized();
     let (_, project) = seed_project(&pg).await;
 
     with_test_db(pg.clone(), async {
@@ -332,15 +355,15 @@ async fn finance_aggregate_upsert_and_latest_are_postgres_only() {
             by_vertical: Vec::new(),
             by_attorney: Vec::new(),
         };
-        finance_aggregate::upsert(&surreal, project, &report)
+        finance_aggregate::upsert(&application_store, project, &report)
             .await
             .unwrap();
         // Replaying the same run overwrites its own row.
-        finance_aggregate::upsert(&surreal, project, &report)
+        finance_aggregate::upsert(&application_store, project, &report)
             .await
             .unwrap();
 
-        let latest = finance_aggregate::latest_for_project(&surreal, project)
+        let latest = finance_aggregate::latest_for_project(&application_store, project)
             .await
             .unwrap()
             .expect("report");
@@ -350,7 +373,7 @@ async fn finance_aggregate_upsert_and_latest_are_postgres_only() {
         assert_eq!(latest.computed_at, report.computed_at);
 
         assert!(
-            finance_aggregate::latest_for_project(&surreal, Uuid::new_v4())
+            finance_aggregate::latest_for_project(&application_store, Uuid::new_v4())
                 .await
                 .unwrap()
                 .is_none()

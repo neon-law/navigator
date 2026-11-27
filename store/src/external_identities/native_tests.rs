@@ -38,55 +38,6 @@ fn every_system_round_trips_through_its_stored_spelling() {
     }
 }
 
-/// The enum and the schema's ASSERT are two spellings of one
-/// vocabulary, and a variant added to only one of them is either a
-/// value the engine refuses or a value nothing can read back.
-#[test]
-fn the_assert_and_the_enum_name_the_same_systems() {
-    let definitions = include_str!("../schema/navigator.surql");
-    let assertion = definitions
-        .lines()
-        .skip_while(|line| !line.contains("system ON person_external_identity"))
-        .nth(1)
-        .expect("the ASSERT sits on the line after the system field definition");
-
-    for system in ExternalSystem::ALL {
-        assert!(
-            assertion.contains(&format!("'{}'", system.as_str())),
-            "{} is an ExternalSystem variant the ASSERT does not admit: {assertion}",
-            system.as_str()
-        );
-    }
-    let admitted = assertion.matches('\'').count() / 2;
-    assert_eq!(
-        admitted,
-        ExternalSystem::ALL.len(),
-        "the ASSERT admits {admitted} systems and the enum names {}: {assertion}",
-        ExternalSystem::ALL.len()
-    );
-}
-
-#[tokio::test]
-async fn source_context_refuses_identity_writes() {
-    let db = uninitialized_store();
-    let id = Uuid::now_v7();
-    crate::postgres_mirror::from_source(async {
-        assert!(matches!(
-            link(&db, id, ExternalSystem::Github, "synthetic", None).await,
-            Err(ExternalIdentityError::Authority(_))
-        ));
-        assert!(matches!(
-            set_for_person(&db, id, ExternalSystem::Github, Some("synthetic")).await,
-            Err(ExternalIdentityError::Authority(_))
-        ));
-        assert!(matches!(
-            unlink(&db, id).await,
-            Err(ExternalIdentityError::Authority(_))
-        ));
-    })
-    .await;
-}
-
 #[tokio::test]
 async fn a_linked_identity_reads_back_by_person_and_by_account() {
     crate::test_support::with_required_postgres(async {
@@ -573,50 +524,4 @@ async fn linking_an_identity_creates_no_participation() {
         assert_eq!(for_person(&db, client).await.unwrap().len(), 1);
     })
     .await;
-}
-
-/// This change adds a vocabulary; it does not touch the one that
-/// decides authority. The five stored tiers are the whole ladder in
-/// `docs/access-model.md`, the schema's ASSERT still admits exactly
-/// those five, and an `ExternalSystem` is not a sixth.
-#[test]
-fn the_role_vocabulary_is_untouched() {
-    let ladder = [
-        Role::Owner,
-        Role::Admin,
-        Role::Lawyer,
-        Role::Clerk,
-        Role::Client,
-    ];
-    for role in ladder {
-        assert_eq!(Role::parse(role.as_str()), Some(role));
-    }
-
-    let definitions = include_str!("../schema/navigator.surql");
-    let assertion = definitions
-        .lines()
-        .skip_while(|line| !line.contains("role ON person TYPE string"))
-        .nth(1)
-        .expect("the ASSERT sits on the line after the role field definition");
-    for role in ladder {
-        assert!(
-            assertion.contains(&format!("'{}'", role.as_str())),
-            "{} left the role ASSERT: {assertion}",
-            role.as_str()
-        );
-    }
-    assert_eq!(
-        assertion.matches('\'').count() / 2,
-        ladder.len(),
-        "the role ASSERT no longer admits exactly the five tiers: {assertion}"
-    );
-
-    for system in ExternalSystem::ALL {
-        assert_eq!(
-            Role::parse(system.as_str()),
-            None,
-            "{} must not read as an authorization tier",
-            system.as_str()
-        );
-    }
 }

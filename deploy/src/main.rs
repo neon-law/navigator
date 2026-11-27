@@ -47,7 +47,6 @@ mod scraper;
 mod sendgrid_openapi;
 mod site_asset;
 mod ssh_keys;
-mod surreal_free_tests;
 mod video_prepare;
 
 use cli::commands::{
@@ -1891,14 +1890,6 @@ enum OpsCmd {
         #[arg(long)]
         check: bool,
     },
-    /// Select the workspace tests that start no `SurrealDB` engine, for the PR
-    /// gate: writes a nextest filterset, a coverage ignore regex, and the
-    /// `features` targets into `--out`. Run from the repository root.
-    SurrealFreeTests {
-        /// The directory the three selection files are written into.
-        #[arg(long)]
-        out: PathBuf,
-    },
     /// Firm-scoped diagnostics.
     Firms {
         #[command(subcommand)]
@@ -3342,7 +3333,6 @@ fn run() -> ExitCode {
             | OpsCmd::ReleaseDefaultTag { .. }
             | OpsCmd::Release { .. }
             | OpsCmd::Notices { .. }
-            | OpsCmd::SurrealFreeTests { .. }
             | OpsCmd::Firms { .. }
             | OpsCmd::PrivateTerms { .. }
             | OpsCmd::Postgres(_)
@@ -3365,7 +3355,6 @@ fn run() -> ExitCode {
                 }
             },
             OpsCmd::Notices { out, check } => notices::run(&out, check),
-            OpsCmd::SurrealFreeTests { out } => surreal_free_tests::run(&out),
             OpsCmd::CutRelease {
                 repo,
                 manifest_path,
@@ -3472,12 +3461,11 @@ fn devx_result(result: anyhow::Result<()>) -> ExitCode {
 }
 
 /// Admit operator commands to the activated PostgreSQL application store.
-async fn application_store() -> anyhow::Result<store::surreal::SurrealDb> {
-    store::postgres::PostgresDb::application().await?;
-    Ok(store::surreal::SurrealDb::uninitialized())
+async fn application_store() -> anyhow::Result<store::application_store::ApplicationStore> {
+    Ok(store::application_store::ApplicationStore::connect().await?)
 }
 
-async fn open_application_store() -> Result<store::surreal::SurrealDb, ExitCode> {
+async fn open_application_store() -> Result<store::application_store::ApplicationStore, ExitCode> {
     application_store().await.map_err(|error| {
         eprintln!("hudson: postgres: {error}");
         ExitCode::from(2)
@@ -3487,7 +3475,7 @@ async fn open_application_store() -> Result<store::surreal::SurrealDb, ExitCode>
 /// Resolve the `person` argument — a Person UUID or an email (primary or
 /// alias) — to the Person's id.
 async fn resolve_person_id(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     spec: &str,
 ) -> Result<uuid::Uuid, String> {
     if let Ok(id) = spec.parse::<uuid::Uuid>() {
@@ -3606,7 +3594,7 @@ async fn run_person(action: PersonCmd) -> ExitCode {
 use cli::notation_render::{run_render, run_word_redline};
 
 async fn run_catalog_seed(dir: &std::path::Path) -> ExitCode {
-    let surreal = match open_application_store().await {
+    let application_store = match open_application_store().await {
         Ok(s) => s,
         Err(code) => return code,
     };
@@ -3617,7 +3605,7 @@ async fn run_catalog_seed(dir: &std::path::Path) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let report = match import::import_directory(&surreal, &storage, dir).await {
+    let report = match import::import_directory(&application_store, &storage, dir).await {
         Ok(r) => r,
         Err(e) => {
             eprintln!("navigator: site seed: {e}");
@@ -3651,7 +3639,7 @@ async fn run_synthetic_portfolio(target: Option<String>, apply: bool) -> ExitCod
             return ExitCode::from(2);
         }
     };
-    let surreal = match open_application_store().await {
+    let application_store = match open_application_store().await {
         Ok(s) => s,
         Err(code) => return code,
     };
@@ -3663,10 +3651,21 @@ async fn run_synthetic_portfolio(target: Option<String>, apply: bool) -> ExitCod
         }
     };
     let result = if apply {
-        store::synthetic_portfolio::apply(&surreal, &storage, environment, target.as_deref()).await
+        store::synthetic_portfolio::apply(
+            &application_store,
+            &storage,
+            environment,
+            target.as_deref(),
+        )
+        .await
     } else {
-        store::synthetic_portfolio::dry_run(&surreal, &storage, environment, target.as_deref())
-            .await
+        store::synthetic_portfolio::dry_run(
+            &application_store,
+            &storage,
+            environment,
+            target.as_deref(),
+        )
+        .await
     };
     let plan = match result {
         Ok(plan) => plan,

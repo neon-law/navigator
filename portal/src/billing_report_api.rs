@@ -22,18 +22,24 @@ pub(super) async fn personal(
     LawyerSession(session): LawyerSession,
 ) -> Result<Response, ApiError> {
     let person = session.person_id.ok_or(ApiError::Forbidden)?;
-    let projects = access::visible_projects_as_lawyer(&state.surreal, Some(person), session.role)
-        .await
-        .map_err(ApiError::Db)?;
+    let projects =
+        access::visible_projects_as_lawyer(&state.application_store, Some(person), session.role)
+            .await
+            .map_err(ApiError::Db)?;
     let pg = match postgres().await {
         Ok(pg) => pg,
         Err(unavailable) => return Ok(unavailable),
     };
     let mut report = BillingReport::default();
     for project in projects {
-        let view = access::matter_viewer(&state.surreal, Some(person), session.role, project.id)
-            .await
-            .map_err(ApiError::Db)?;
+        let view = access::matter_viewer(
+            &state.application_store,
+            Some(person),
+            session.role,
+            project.id,
+        )
+        .await
+        .map_err(ApiError::Db)?;
         if let Some(view) = view.filter(|view| view.is_firm_side()) {
             add(&mut report, &state, &pg, &session, &project, view, false).await?;
         }
@@ -46,12 +52,17 @@ pub(super) async fn project(
     LawyerSession(session): LawyerSession,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let view = access::matter_viewer(&state.surreal, session.person_id, session.role, id)
-        .await
-        .map_err(ApiError::Db)?
-        .filter(|view| view.is_firm_side())
-        .ok_or(ApiError::NotFound)?;
-    let project = projects::find_by_id(&state.surreal, id)
+    let view = access::matter_viewer(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?
+    .filter(|view| view.is_firm_side())
+    .ok_or(ApiError::NotFound)?;
+    let project = projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;

@@ -3,9 +3,9 @@
 
 use std::sync::Arc;
 
+use store::application_store::ApplicationStore;
 use store::inbox::{ingest_inbound, IngestInbound};
 use store::postgres::PostgresDb;
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::{InboundMessageAlertReport, InboundMessageAlertRequest};
 use workflows_service::dbos_inbound_message_alert::{self, InboundMessageAlertError};
@@ -21,20 +21,20 @@ const MESSAGES_CHANNEL: &str = "CSYNTHETICMESSAGES";
 
 /// One inbound email for the Firm that wears the deployment's default Brand,
 /// so the alert routes to the deployment's messages channel.
-async fn inbound_for_default_brand(surreal: &SurrealDb) -> Uuid {
-    let firm_id = match store::firms::firm_id_for_brand_key(surreal, "neon")
+async fn inbound_for_default_brand(application_store: &ApplicationStore) -> Uuid {
+    let firm_id = match store::firms::firm_id_for_brand_key(application_store, "neon")
         .await
         .expect("read the default Brand")
     {
         Some(firm_id) => firm_id,
         None => {
-            store::test_support::seed_firm_with_new_brand(surreal, "neon")
+            store::test_support::seed_firm_with_new_brand(application_store, "neon")
                 .await
                 .0
         }
     };
     ingest_inbound(
-        surreal,
+        application_store,
         &IngestInbound {
             firm_id,
             brand_key: Some("neon"),
@@ -72,16 +72,19 @@ async fn an_alert_accepted_before_its_checkpoint_is_reconciled_not_reposted() {
         return;
     };
     let postgres = db.store();
-    let surreal = SurrealDb::uninitialized();
-    let message_id =
-        PostgresDb::with_test_db(postgres.clone(), inbound_for_default_brand(&surreal)).await;
+    let application_store = ApplicationStore::uninitialized();
+    let message_id = PostgresDb::with_test_db(
+        postgres.clone(),
+        inbound_for_default_brand(&application_store),
+    )
+    .await;
     let bot = Arc::new(LostResponseSlackBot::default());
     let dbos = dbos::DBOS::new(workflows::dbos_engine::config(&db.url, APP_VERSION));
     let workflow = dbos_inbound_message_alert::register(
         &dbos,
         dbos_inbound_message_alert::Context::new(
             InboundMessageAlertService::new(
-                surreal,
+                application_store,
                 bot.clone(),
                 MESSAGES_CHANNEL.to_owned(),
                 "CSYNTHETICSTAGING".to_owned(),

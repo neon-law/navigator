@@ -23,7 +23,12 @@ pub(super) async fn authorize(
     capability: FirmCapability,
 ) -> Result<(), ApiError> {
     let decision = capability
-        .resolve(&state.surreal, session.role, session.person_id, firm)
+        .resolve(
+            &state.application_store,
+            session.role,
+            session.person_id,
+            firm,
+        )
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     if !decision.is_allowed() {
@@ -127,7 +132,7 @@ pub(super) async fn firm_project(
     session: &crate::SessionData,
     project_id: Uuid,
 ) -> Result<(Project, Uuid), ApiError> {
-    let project = store::projects::find_by_id(&state.surreal, project_id)
+    let project = store::projects::find_by_id(&state.application_store, project_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
@@ -239,8 +244,8 @@ async fn apply_manifest_plan(
     if session.scope.is_some()
         || firm != request.firm_id
         || project.brand != request.brand
-        || !store::projects::can_access_as_lawyer_in_surreal(
-            &state.surreal,
+        || !store::projects::can_access_as_lawyer(
+            &state.application_store,
             session.person_id,
             session.role,
             project.id,
@@ -264,7 +269,7 @@ async fn apply_manifest_plan(
         Err(error) => return Ok(plan_error(&error)),
     };
     store::projects::link_manifest_legal_plan(
-        &state.surreal,
+        &state.application_store,
         project,
         firm,
         &request.brand,
@@ -338,7 +343,7 @@ pub(super) async fn set_project(
     overlay(&mut columns.plan_accepted_on, patch.plan_accepted_on);
     overlay(&mut columns.plan_closed_on, patch.plan_closed_on);
     let updated = store::projects::set_plan_columns_with_benefit(
-        &state.surreal,
+        &state.application_store,
         &pg,
         project_id,
         &columns,

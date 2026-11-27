@@ -15,10 +15,10 @@ pub use model::matter_record_links::LinkRefusal;
 
 /// The Project exists.
 pub(crate) async fn require_project(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     project_id: Uuid,
 ) -> Result<(), LinkRefusal> {
-    match crate::projects::find_by_id(surreal, project_id).await {
+    match crate::projects::find_by_id(application_store, project_id).await {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err("no such Project".into()),
         Err(error) => Err(error.to_string()),
@@ -42,34 +42,6 @@ pub(crate) async fn require_project_on(
     }
 }
 
-/// The Person or Entity `party` names exists. `noun` names the link in the
-/// refusal ("fiduciary", "holder").
-pub(crate) async fn require_party(
-    surreal: &crate::surreal::SurrealDb,
-    noun: &str,
-    party: Party,
-) -> Result<(), LinkRefusal> {
-    let found = match party.kind {
-        Endpoint::Person => crate::persons::find_by_id(surreal, party.id)
-            .await
-            .map(|row| row.is_some())
-            .map_err(|error| error.to_string())?,
-        Endpoint::Entity => crate::entities::find_by_id(surreal, party.id)
-            .await
-            .map(|row| row.is_some())
-            .map_err(|error| error.to_string())?,
-    };
-    if found {
-        Ok(())
-    } else {
-        let table = match party.kind {
-            Endpoint::Person => "Person",
-            Endpoint::Entity => "Entity",
-        };
-        Err(format!("the {noun} names no such {table}"))
-    }
-}
-
 /// Keep a native party alive until its caller's record transaction finishes.
 /// Recheck here because public validation can precede a concurrent Person merge.
 pub(crate) async fn lock_party_on(
@@ -85,34 +57,6 @@ pub(crate) async fn lock_party_on(
         .fetch_optional(connection)
         .await?;
     Ok(found.is_some())
-}
-
-/// The union record link a [`Party`] is stored as.
-pub(crate) fn party_record(party: Party) -> surrealdb::types::RecordId {
-    crate::surreal::record_id(party.kind.table(), party.id)
-}
-
-/// The [`Party`] a stored `record<person|entity>` link names, or `None` for
-/// a link this module cannot read.
-pub(crate) fn party_from_record(record: &surrealdb::types::RecordId) -> Option<Party> {
-    Some(Party {
-        kind: Endpoint::from_table(record.table.as_str())?,
-        id: crate::surreal::record_uuid(record)?,
-    })
-}
-
-/// The Notation exists and belongs to this Project.
-pub(crate) async fn require_project_notation(
-    surreal: &crate::surreal::SurrealDb,
-    project_id: Uuid,
-    notation_id: Uuid,
-) -> Result<(), LinkRefusal> {
-    match crate::notations::find_by_id(surreal, notation_id).await {
-        Ok(Some(notation)) if notation.project_id == project_id => Ok(()),
-        Ok(Some(_)) => Err("the instrument Notation is not on this Project".into()),
-        Ok(None) => Err("no such instrument Notation".into()),
-        Err(error) => Err(error.to_string()),
-    }
 }
 
 /// The Notation exists in PostgreSQL and belongs to this Project.

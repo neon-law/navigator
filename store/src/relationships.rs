@@ -14,14 +14,11 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::Row;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
 use crate::postgres_graph::{ensure_vertices, graph_authority, load_edge};
-use crate::surreal::{record_uuid, SurrealDb};
-
-const TABLE: &str = "relationship";
 
 /// Relationship kind: one node is legally adverse to the other. The
 /// strongest conflict signal — a confident `adverse_to` edge between
@@ -105,44 +102,8 @@ pub struct NewRelationship {
     pub detail: Option<String>,
 }
 
-#[derive(SurrealValue)]
-struct RelationshipRow {
-    r#in: surrealdb::types::RecordId,
-    out: surrealdb::types::RecordId,
-    kind: String,
-    confidence_pct: i32,
-    source_kind: String,
-    source_id: Option<surrealdb::types::RecordId>,
-    detail: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl RelationshipRow {
-    fn into_relationship(self) -> Option<Relationship> {
-        Some(Relationship {
-            from: Endpoint::from_table(self.r#in.table.as_str())?,
-            from_id: record_uuid(&self.r#in)?,
-            to: Endpoint::from_table(self.out.table.as_str())?,
-            to_id: record_uuid(&self.out)?,
-            kind: self.kind,
-            confidence_pct: self.confidence_pct,
-            source_kind: self.source_kind,
-            source_id: self.source_id.as_ref().and_then(record_uuid),
-            detail: self.detail,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const SELECT: &str =
-    "in, out, kind, confidence_pct, source_kind, source_id, detail, inserted_at, updated_at";
-
 #[derive(Debug, thiserror::Error)]
 pub enum RelationshipError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// The input does not meet the Relationship validation rules.
     #[error("{0}")]
     Invalid(String),
@@ -167,17 +128,15 @@ pub enum RelationshipError {
 /// Returns an error if validation fails, PostgreSQL graph authority is
 /// unavailable, or the relational or graph write fails.
 pub async fn record(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     input: &NewRelationship,
 ) -> Result<Relationship, RelationshipError> {
     validate_new_relationship(input)?;
-    let postgres = authority().await?.ok_or_else(|| {
-        RelationshipError::Engine("Relationship writes require PostgreSQL graph authority".into())
-    })?;
+    let postgres = authority().await?;
     record_in_postgres(db, &postgres, input).await
 }
 
-async fn authority() -> Result<Option<PostgresDb>, RelationshipError> {
+async fn authority() -> Result<PostgresDb, RelationshipError> {
     graph_authority().await.map_err(RelationshipError::Engine)
 }
 
@@ -205,7 +164,7 @@ fn validate_new_relationship(input: &NewRelationship) -> Result<(), Relationship
 /// Names resolve through the endpoint accessors; a missing name keeps the
 /// existing vertex fallback, while a lookup or graph error leaves no committed row.
 async fn record_in_postgres(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     postgres: &PostgresDb,
     input: &NewRelationship,
 ) -> Result<Relationship, RelationshipError> {
@@ -316,7 +275,7 @@ async fn write_edge(
 /// gone reads as `None`, and the vertex projects with no name — the
 /// explanation falls back to the id until the next rebuild.
 pub(crate) async fn endpoint_name(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     endpoint: Endpoint,
     id: Uuid,
 ) -> Result<Option<String>, RelationshipError> {
@@ -339,21 +298,9 @@ pub(crate) async fn endpoint_name(
 ///
 /// [`RelationshipError::Db`] or [`RelationshipError::Sqlx`] if the lookup
 /// fails.
-pub async fn all(db: &SurrealDb) -> Result<Vec<Relationship>, RelationshipError> {
-    if let Some(postgres) = authority().await? {
-        return all_in_postgres(&postgres).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<RelationshipRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(RelationshipRow::into_relationship)
-        .collect())
+pub async fn all(_db: &ApplicationStore) -> Result<Vec<Relationship>, RelationshipError> {
+    let postgres = authority().await?;
+    all_in_postgres(&postgres).await
 }
 
 /// Every typed edge PostgreSQL holds, oldest first. The endpoint columns
@@ -412,10 +359,10 @@ mod tests {
     use super::{
         all, record, Endpoint, NewRelationship, KIND_ADVERSE_TO, SOURCE_LLM, SOURCE_MANUAL,
     };
-    use crate::surreal::SurrealDb;
+    use crate::application_store::ApplicationStore;
     use uuid::Uuid;
 
-    async fn person(db: &SurrealDb, name: &str) -> Uuid {
+    async fn person(db: &ApplicationStore, name: &str) -> Uuid {
         crate::persons::create(
             db,
             &crate::persons::NewPerson::new(name, format!("{}@example.com", Uuid::now_v7())),
@@ -425,7 +372,7 @@ mod tests {
         .id
     }
 
-    async fn entity(db: &SurrealDb, name: &str) -> Uuid {
+    async fn entity(db: &ApplicationStore, name: &str) -> Uuid {
         let kind = crate::entity_types::find_or_create(db, "Synthetic relationship entity")
             .await
             .unwrap();
@@ -471,26 +418,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recording_requires_postgres_graph_authority() {
-        let db = SurrealDb::uninitialized();
-        let input = edge(
-            Endpoint::Person,
-            Uuid::now_v7(),
-            Endpoint::Entity,
-            Uuid::now_v7(),
-        );
-        let error = crate::postgres_mirror::from_source(record(&db, &input))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(error, super::RelationshipError::Engine(message) if message.contains("require PostgreSQL graph authority"))
-        );
-    }
-
-    #[tokio::test]
     async fn a_recorded_edge_reads_back_with_both_endpoints_typed() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let alice = person(&db, "Alice").await;
             let acme = entity(&db, "Acme LLC").await;
 
@@ -511,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn provenance_and_detail_travel_with_the_edge() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let alice = person(&db, "Parsed Alice").await;
             let bob = person(&db, "Parsed Bob").await;
             let source = Uuid::now_v7();
@@ -542,7 +472,7 @@ mod tests {
     #[tokio::test]
     async fn an_out_of_range_confidence_is_refused() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let alice = person(&db, "Over Confident").await;
             let acme = entity(&db, "Over LLC").await;
 
@@ -564,7 +494,7 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_source_kind_is_refused() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let alice = person(&db, "Bad Source").await;
             let acme = entity(&db, "Bad Source LLC").await;
 
@@ -590,11 +520,8 @@ mod tests {
     async fn an_age_engine_write_lands_the_row_and_the_graph_edge() {
         crate::test_support::with_postgres(async {
             use sqlx::Row;
-            let postgres = crate::postgres_graph::graph_authority()
-                .await
-                .unwrap()
-                .unwrap();
-            let db = SurrealDb::uninitialized();
+            let postgres = crate::postgres_graph::graph_authority().await.unwrap();
+            let db = ApplicationStore::uninitialized();
             let alice = person(&db, "Libra Tidewell").await;
             let acme = entity(&db, "Acme Age LLC").await;
 
@@ -640,13 +567,10 @@ mod tests {
     #[tokio::test]
     async fn an_age_edge_failure_rolls_back_the_authoritative_relationship_row() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let alice = person(&db, "Libra Tidewell").await;
             let acme = entity(&db, "Rollback LLC").await;
-            let postgres = crate::postgres_graph::graph_authority()
-                .await
-                .unwrap()
-                .unwrap();
+            let postgres = crate::postgres_graph::graph_authority().await.unwrap();
             crate::postgres_graph::fail_after_loading_edge(&postgres).await;
             let rejected =
                 record(&db, &edge(Endpoint::Person, alice, Endpoint::Entity, acme)).await;

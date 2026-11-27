@@ -21,11 +21,11 @@ use crate::session::SessionData;
 
 /// The bound template's title, for the page chrome.
 async fn flow_label(state: &AdminState, notation_id: Uuid) -> Option<String> {
-    let n = store::notations::find_by_id(&state.surreal, notation_id)
+    let n = store::notations::find_by_id(&state.application_store, notation_id)
         .await
         .ok()
         .flatten()?;
-    let t = store::templates::find_by_id(&state.surreal, n.template_id)
+    let t = store::templates::find_by_id(&state.application_store, n.template_id)
         .await
         .ok()
         .flatten()?;
@@ -55,7 +55,7 @@ pub(crate) async fn clauses_json(
     if flow_label(state, notation_id).await.is_none() {
         return Some((StatusCode::NOT_FOUND, "notation not found").into_response());
     }
-    let clauses = store::notation_clauses::for_notation(&state.surreal, notation_id)
+    let clauses = store::notation_clauses::for_notation(&state.application_store, notation_id)
         .await
         .unwrap_or_default();
     let json: Vec<_> = clauses
@@ -90,7 +90,8 @@ pub async fn clause_add(
         return redirect_to_clauses(notation_id);
     }
     let author = session.as_deref().and_then(|s| s.person_id);
-    if let Err(e) = store::notation_clauses::append(&state.surreal, notation_id, body, author).await
+    if let Err(e) =
+        store::notation_clauses::append(&state.application_store, notation_id, body, author).await
     {
         tracing::error!(error = %e, %notation_id, "clauses: append failed");
         return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
@@ -109,7 +110,9 @@ pub async fn clause_edit(
     if body.is_empty() {
         return redirect_to_clauses(notation_id);
     }
-    if let Err(e) = store::notation_clauses::update_body(&state.surreal, clause_id, body).await {
+    if let Err(e) =
+        store::notation_clauses::update_body(&state.application_store, clause_id, body).await
+    {
         tracing::error!(error = %e, %clause_id, "clauses: update failed");
         return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
     }
@@ -121,7 +124,7 @@ pub async fn clause_delete(
     State(state): State<AdminState>,
     Path((notation_id, clause_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    if let Err(e) = store::notation_clauses::delete(&state.surreal, clause_id).await {
+    if let Err(e) = store::notation_clauses::delete(&state.application_store, clause_id).await {
         tracing::error!(error = %e, %clause_id, "clauses: delete failed");
         return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
     }
@@ -142,7 +145,9 @@ pub async fn clause_move(
     Form(form): Form<MoveBody>,
 ) -> Response {
     let up = form.direction == "up";
-    if let Err(e) = store::notation_clauses::move_clause(&state.surreal, clause_id, up).await {
+    if let Err(e) =
+        store::notation_clauses::move_clause(&state.application_store, clause_id, up).await
+    {
         tracing::error!(error = %e, %clause_id, "clauses: move failed");
         return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
     }

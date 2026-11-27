@@ -53,8 +53,8 @@ pub enum FirmDigestError {
     Invalid(&'static str),
     #[error("the PostgreSQL rollup failed")]
     Database(#[from] sqlx::Error),
-    #[error("a SurrealDB-authored read failed: {0}")]
-    Surreal(String),
+    #[error("the application record read failed: {0}")]
+    Store(String),
 }
 
 /// The matter lines a Firm's projects split into. The plan columns separate
@@ -165,11 +165,11 @@ pub async fn open_matters(
 ///
 /// # Errors
 ///
-/// [`FirmDigestError::Database`] or [`FirmDigestError::Surreal`] when a
+/// [`FirmDigestError::Database`] or [`FirmDigestError::Store`] when a
 /// per-matter read fails.
 pub async fn line_money(
     pg: &PostgresDb,
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     firm_id: Uuid,
 ) -> Result<BTreeMap<MatterLine, LineMoney>, FirmDigestError> {
     let mut totals = BTreeMap::from([
@@ -177,12 +177,13 @@ pub async fn line_money(
         (MatterLine::Other, LineMoney::default()),
     ]);
     for matter in open_matters(pg, firm_id).await? {
-        let financials = crate::matter_financials::for_project(surreal, pg, matter.project_id)
+        let financials =
+            crate::matter_financials::for_project(application_store, pg, matter.project_id)
+                .await
+                .map_err(|error| FirmDigestError::Store(error.to_string()))?;
+        let trust = crate::trust::position_for_project(application_store, matter.project_id)
             .await
-            .map_err(|error| FirmDigestError::Surreal(error.to_string()))?;
-        let trust = crate::trust::position_for_project(surreal, matter.project_id)
-            .await
-            .map_err(FirmDigestError::Surreal)?;
+            .map_err(FirmDigestError::Store)?;
         let line = totals.entry(matter.line).or_default();
         line.wip_cents += financials.wip_cents;
         line.outstanding_cents += financials.outstanding_cents;
@@ -229,11 +230,11 @@ pub struct DeadlineItem {
 ///
 /// # Errors
 ///
-/// [`FirmDigestError::Database`] or [`FirmDigestError::Surreal`] on a
+/// [`FirmDigestError::Database`] or [`FirmDigestError::Store`] on a
 /// database failure.
 pub async fn deadlines(
     pg: &PostgresDb,
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     firm_id: Uuid,
     now: DateTime<Utc>,
     horizon_days: u32,
@@ -277,7 +278,15 @@ pub async fn deadlines(
             deadlines.due_soon.push(row);
         }
     }
-    append_statutory(pg, surreal, firm_id, now, horizon_days, &mut deadlines).await?;
+    append_statutory(
+        pg,
+        application_store,
+        firm_id,
+        now,
+        horizon_days,
+        &mut deadlines,
+    )
+    .await?;
     Ok(deadlines)
 }
 
@@ -292,7 +301,7 @@ pub struct FirmDeadlines {
 /// through [`crate::statutory_deadlines::by_project`] and folded here.
 async fn append_statutory(
     pg: &PostgresDb,
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     firm_id: Uuid,
     now: DateTime<Utc>,
     horizon_days: u32,
@@ -303,9 +312,9 @@ async fn append_statutory(
         .checked_add_days(chrono::Days::new(u64::from(horizon_days)))
         .ok_or(FirmDigestError::Invalid("horizon"))?;
     for matter in open_matters(pg, firm_id).await? {
-        for deadline in crate::statutory_deadlines::by_project(surreal, matter.project_id)
+        for deadline in crate::statutory_deadlines::by_project(application_store, matter.project_id)
             .await
-            .map_err(|error| FirmDigestError::Surreal(error.to_string()))?
+            .map_err(|error| FirmDigestError::Store(error.to_string()))?
         {
             if deadline.status != crate::statutory_deadlines::STATUS_OPEN {
                 continue;
@@ -387,7 +396,17 @@ pub async fn needs_you(
     )
     .bind(firm_id)
     .fetch_all(&pg.0)
-    .await?
+    .await
+    .map_err(|error| {
+        if error.as_database_error().and_then(sqlx::error::DatabaseError::code)
+            .as_deref()
+            .is_some_and(|state| matches!(state, "22007" | "22008"))
+        {
+            FirmDigestError::Invalid("message.occurred_at")
+        } else {
+            FirmDigestError::Database(error)
+        }
+    })?
     .iter()
     .map(|row| -> Result<Option<NeedsYouItem>, FirmDigestError> {
         let first: DateTime<Utc> = row.try_get("first_unanswered")?;
@@ -510,11 +529,11 @@ pub struct MatterLastActivity {
 ///
 /// # Errors
 ///
-/// [`FirmDigestError::Database`] or [`FirmDigestError::Surreal`] on a
+/// [`FirmDigestError::Database`] or [`FirmDigestError::Store`] on a
 /// database failure.
 pub async fn last_activity(
     pg: &PostgresDb,
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     firm_id: Uuid,
 ) -> Result<Vec<MatterLastActivity>, FirmDigestError> {
     let rows = sqlx::query(
@@ -553,7 +572,7 @@ pub async fn last_activity(
                 newest = Some(entry_at);
             }
         }
-        if let Some(docket_at) = docket_activity(surreal, item.project_id)
+        if let Some(docket_at) = docket_activity(application_store, item.project_id)
             .await
             .unwrap_or(None)
         {
@@ -569,12 +588,12 @@ pub async fn last_activity(
 
 /// The newest DocketEntry date on one matter, `None` when it has none.
 async fn docket_activity(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     project_id: Uuid,
 ) -> Result<Option<DateTime<Utc>>, FirmDigestError> {
-    let newest = crate::cases::docket_for_project(surreal, project_id)
+    let newest = crate::cases::docket_for_project(application_store, project_id)
         .await
-        .map_err(|error| FirmDigestError::Surreal(error.to_string()))?
+        .map_err(|error| FirmDigestError::Store(error.to_string()))?
         .into_iter()
         .filter_map(|entry| {
             entry
@@ -642,13 +661,12 @@ mod tests {
 #[cfg(test)]
 mod database {
     use super::{
-        deadlines, last_activity, line_money, minutes_by_attorney_and_stage, needs_you,
-        open_matters_by_line, DeadlineSource, FirmDigestError, MatterLine,
+        minutes_by_attorney_and_stage, needs_you, open_matters_by_line, FirmDigestError, MatterLine,
     };
+    use crate::postgres::fixtures::{connect, fresh_schema};
     use crate::postgres::PostgresDb;
-    use crate::postgres_mirror::tests::{connect, fresh_schema};
-    use crate::test_support::mem_surreal;
-    use chrono::{Duration, NaiveDate, TimeZone, Utc};
+
+    use chrono::{NaiveDate, TimeZone, Utc};
     use sqlx::Row;
     use uuid::Uuid;
 
@@ -884,83 +902,6 @@ mod database {
     }
 
     #[tokio::test]
-    async fn line_money_sums_the_per_matter_pieces() {
-        let Some(world) = world().await else {
-            return;
-        };
-        let surreal = mem_surreal().await;
-        let plan_matter = matter(
-            &world.pg,
-            world.firm_id,
-            world.entity_id,
-            "digest-money",
-            true,
-        )
-        .await;
-        entry(
-            &world.pg,
-            plan_matter,
-            world.attorney,
-            90,
-            NaiveDate::from_ymd_opt(2026, 11, 2).unwrap(),
-        )
-        .await;
-        let totals = line_money(&world.pg, &surreal, world.firm_id)
-            .await
-            .unwrap();
-        let plan = totals.get(&MatterLine::Plan).unwrap();
-        // 90 minutes at 25_000 cents/hour truncates to 37_500 cents — the
-        // per-entry piece the rule sums.
-        assert_eq!(plan.wip_cents, 37_500);
-        // No mirrored invoices and no trust notations on a fresh database.
-        assert_eq!(plan.outstanding_cents, 0);
-        assert_eq!(plan.trust_held_cents, 0);
-    }
-
-    #[tokio::test]
-    async fn deadlines_scan_the_mirror_and_flag_missed_and_due_soon() {
-        let Some(world) = world().await else {
-            return;
-        };
-        let surreal = mem_surreal().await;
-        let matter_id = matter(
-            &world.pg,
-            world.firm_id,
-            world.entity_id,
-            "digest-deadline",
-            false,
-        )
-        .await;
-        let now = Utc.with_ymd_and_hms(2026, 11, 8, 12, 0, 0).unwrap();
-        for (due_at, label) in [
-            ("2026-11-06T12:00:00Z", "missed"),
-            ("2026-11-12T12:00:00Z", "due soon"),
-            ("2027-01-01T12:00:00Z", "far off"),
-        ] {
-            sqlx::query(
-                "INSERT INTO project_deadlines (id, project_id, due_at, title, authority_kind, \
-                 authority, source, status, calendar_role, inserted_at, updated_at) \
-                 VALUES ($1, $2, $3, $4, 'statute', 'Synthetic statute', 'test', 'open', 'firm', \
-                 now(), now())",
-            )
-            .bind(Uuid::new_v4())
-            .bind(matter_id)
-            .bind(super::parse_instant(due_at).unwrap())
-            .bind(label)
-            .execute(&world.pg.0)
-            .await
-            .unwrap_or_else(|error| panic!("deadline row: {error}"));
-        }
-        let scan = deadlines(&world.pg, &surreal, world.firm_id, now, 14)
-            .await
-            .unwrap();
-        assert_eq!(scan.missed.len(), 1);
-        assert_eq!(scan.due_soon.len(), 1);
-        assert_eq!(scan.missed[0].label, "missed");
-        assert_eq!(scan.due_soon[0].source, DeadlineSource::Deadline);
-    }
-
-    #[tokio::test]
     async fn needs_you_requires_an_unanswered_old_inbound() {
         let Some(world) = world().await else {
             return;
@@ -1045,57 +986,6 @@ mod database {
             .find(|row| row.line == MatterLine::Other)
             .unwrap_or_else(|| panic!("other row present"));
         assert_eq!(other_row.minutes, 30);
-    }
-
-    #[tokio::test]
-    async fn last_activity_takes_the_max_of_the_three_sources() {
-        let Some(world) = world().await else {
-            return;
-        };
-        let surreal = mem_surreal().await;
-        let matter_id = matter(
-            &world.pg,
-            world.firm_id,
-            world.entity_id,
-            "digest-last",
-            false,
-        )
-        .await;
-        // A time entry Tuesday and a stage event Thursday: the stage event wins.
-        entry(
-            &world.pg,
-            matter_id,
-            world.attorney,
-            45,
-            NaiveDate::from_ymd_opt(2026, 11, 3).unwrap(),
-        )
-        .await;
-        let stage_id: Uuid = sqlx::query(
-            "INSERT INTO stage_definition (id, firm_id, label, position, inserted_at, updated_at) \
-             VALUES ($1, $2, 'Synthetic Stage', 1, now(), now()) RETURNING id",
-        )
-        .bind(Uuid::new_v4())
-        .bind(world.firm_id)
-        .fetch_one(&world.pg.0)
-        .await
-        .unwrap_or_else(|error| panic!("stage row: {error}"))
-        .try_get(0)
-        .unwrap_or_else(|error| panic!("stage id: {error}"));
-        crate::case_stages::set_stage(&world.pg, matter_id, world.attorney, stage_id, None)
-            .await
-            .unwrap_or_else(|error| panic!("stage event: {error}"));
-        let rows = last_activity(&world.pg, &surreal, world.firm_id)
-            .await
-            .unwrap();
-        assert_eq!(rows.len(), 1);
-        let only = &rows[0];
-        // The stage event's occurred_at is the real "now" — newer than the
-        // Tuesday entry — so the max picks it over the time entry.
-        let age = Utc::now()
-            - only
-                .last_activity
-                .unwrap_or_else(|| panic!("stage event wins"));
-        assert!(age < Duration::hours(1));
     }
 
     #[tokio::test]

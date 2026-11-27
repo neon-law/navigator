@@ -1,12 +1,12 @@
 //! Inbox Project choices must use the admitted native authority without Source.
+use store::application_store::ApplicationStore;
 use store::inbox::{self, InboxError, ProjectChoice};
 use store::persons::Role;
 use store::postgres::PostgresDb;
 use store::projects;
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
-async fn entity(db: &SurrealDb) -> Uuid {
+async fn entity(db: &ApplicationStore) -> Uuid {
     let id = Uuid::new_v4();
     let jurisdiction = store::jurisdictions::create(
         db,
@@ -38,7 +38,7 @@ async fn entity(db: &SurrealDb) -> Uuid {
     .id
 }
 
-async fn fixture(db: &SurrealDb) -> (Uuid, Uuid) {
+async fn fixture(db: &ApplicationStore) -> (Uuid, Uuid) {
     let admin = store::persons::create(
         db,
         &store::persons::NewPerson::with_role(
@@ -95,7 +95,7 @@ async fn fixture(db: &SurrealDb) -> (Uuid, Uuid) {
 }
 
 async fn additional_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     base: &projects::Project,
     name: &str,
     status: &str,
@@ -121,7 +121,7 @@ async fn additional_project(
 #[tokio::test]
 async fn project_choices_use_native_firm_filter_order_and_complete_row_shape() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (id, _) = fixture(&db).await;
         let base = projects::find_by_id(&db, id).await.unwrap().unwrap();
         // Open-only picker: the excluded rows prove archived and closed
@@ -182,7 +182,7 @@ async fn project_choices_use_native_firm_filter_order_and_complete_row_shape() {
 #[tokio::test]
 async fn native_intake_detail_includes_project_choices_without_source() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (project, admin) = fixture(&db).await;
         let base = projects::find_by_id(&db, project).await.unwrap().unwrap();
         let received = inbox::ingest_inbound(
@@ -251,7 +251,7 @@ async fn native_intake_detail_includes_project_choices_without_source() {
 #[tokio::test]
 async fn unavailable_native_project_choices_do_not_fall_back_to_source() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let (project, _) = fixture(&db).await;
         let base = projects::find_by_id(&db, project).await.unwrap().unwrap();
         let pg = PostgresDb::application().await.unwrap();

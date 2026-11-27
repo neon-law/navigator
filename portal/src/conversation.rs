@@ -67,14 +67,14 @@ impl std::error::Error for PostMessageError {}
 /// when `internal` is set — a portal `internal` flag is ignored, since only the
 /// lawyer lens produces an internal note.
 pub async fn post_conversation_message(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Option<Uuid>,
     role: store::persons::Role,
     project_id: Uuid,
     body: &str,
     internal: bool,
 ) -> Result<(), PostMessageError> {
-    if !can_see_project(surreal, person_id, role, project_id)
+    if !can_see_project(application_store, person_id, role, project_id)
         .await
         .unwrap_or(false)
     {
@@ -104,14 +104,14 @@ pub async fn post_conversation_message(
         asset_id: None,
         occurred_at: &chrono::Utc::now().to_rfc3339(),
     };
-    store::communications::ingest(surreal, &args)
+    store::communications::ingest(application_store, &args)
         .await
         .map_err(|e| PostMessageError::Db(e.to_string()))?;
     Ok(())
 }
 
 pub async fn post_message(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path(project_code): Path<String>,
     session: Option<Extension<SessionData>>,
     axum::Form(form): axum::Form<MessageForm>,
@@ -119,11 +119,12 @@ pub async fn post_message(
     let Some(Extension(session)) = session else {
         return not_found();
     };
-    let Some(project_id) = store::projects::id_for_code(&surreal, &project_code).await else {
+    let Some(project_id) = store::projects::id_for_code(&application_store, &project_code).await
+    else {
         return not_found();
     };
     match post_conversation_message(
-        &surreal,
+        &application_store,
         session.person_id,
         session.role,
         project_id,

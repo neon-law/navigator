@@ -57,7 +57,7 @@ struct Args {
 }
 
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     scope: &ReadScope,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
@@ -68,7 +68,7 @@ pub async fn call(
     // never learns whether the id even exists.
     let viewer = match scope {
         ReadScope::Membership { person_id, role } => super::portal_access()
-            .matter_viewer(surreal, Some(*person_id), *role, args.project_id)
+            .matter_viewer(application_store, Some(*person_id), *role, args.project_id)
             .await
             .map_err(ToolError::Database)?,
         // The directory lens is metadata-only, and neither an unlinked
@@ -83,24 +83,24 @@ pub async fn call(
         )));
     };
 
-    let project = store::projects::find_by_id(surreal, args.project_id)
+    let project = store::projects::find_by_id(application_store, args.project_id)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?
         .ok_or_else(|| ToolError::NotFound(format!("project_id={}", args.project_id)))?;
 
     let pending_handoffs = read_pending_handoffs(viewer, &project).await?;
 
-    let deadlines = store::statutory_deadlines::by_project(surreal, args.project_id)
+    let deadlines = store::statutory_deadlines::by_project(application_store, args.project_id)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?;
 
-    let notations = store::notations::list_by_project(surreal, args.project_id)
+    let notations = store::notations::list_by_project(application_store, args.project_id)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?;
     let mut events = Vec::new();
     for notation in &notations {
         events.extend(
-            store::notation_events::for_notation(surreal, notation.id)
+            store::notation_events::for_notation(application_store, notation.id)
                 .await
                 .map_err(|error| ToolError::Database(error.to_string()))?,
         );
@@ -110,11 +110,12 @@ pub async fn call(
     events.sort_by_key(|event| std::cmp::Reverse(event.id));
     events.truncate(RECENT_EVENTS_LIMIT);
 
-    let participations = store::projects::participations_for_project(surreal, args.project_id)
-        .await
-        .map_err(|error| ToolError::Database(error.to_string()))?;
+    let participations =
+        store::projects::participations_for_project(application_store, args.project_id)
+            .await
+            .map_err(|error| ToolError::Database(error.to_string()))?;
     let people: HashMap<Uuid, store::persons::Person> = store::persons::find_by_ids(
-        surreal,
+        application_store,
         &participations
             .iter()
             .map(|row| row.person_id)
@@ -166,10 +167,10 @@ async fn read_pending_handoffs(
     if !viewer.is_firm_side() {
         return Ok(None);
     }
-    let pg = store::postgres::PostgresDb::configured()
+    let pg = store::postgres::PostgresDb::application()
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?;
-    store::task_handoffs::for_project(pg.as_ref(), viewer, project.id, &project.code, false)
+    store::task_handoffs::for_project(Some(&pg), viewer, project.id, &project.code, false)
         .await
         .map(Some)
         .map_err(|error| ToolError::Database(error.to_string()))
@@ -298,15 +299,18 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    async fn project(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
-        crate::test_fixtures::seed_brands(surreal).await;
+    async fn project(
+        application_store: &store::application_store::ApplicationStore,
+        name: &str,
+    ) -> Uuid {
+        crate::test_fixtures::seed_brands(application_store).await;
         store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: format!("status-{}", Uuid::now_v7()),
                 name: name.into(),
                 status: "open".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: store::test_support::seed_entity(application_store).await,
                 ..Default::default()
             },
         )
@@ -316,11 +320,11 @@ mod tests {
     }
 
     async fn lawyer(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         project_id: Option<Uuid>,
     ) -> store::persons::Person {
         let person = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Lawyer",
                 format!("lawyer-{}@example.com", Uuid::now_v7()),
@@ -331,7 +335,7 @@ mod tests {
         .unwrap();
         if let Some(project_id) = project_id {
             store::participation::add_participant(
-                surreal,
+                application_store,
                 &store::participation::AddParticipantCommand {
                     project_id,
                     person_id: person.id,
@@ -347,9 +351,13 @@ mod tests {
         person
     }
 
-    async fn deadline(surreal: &store::surreal::SurrealDb, project_id: Uuid, source: &str) {
+    async fn deadline(
+        application_store: &store::application_store::ApplicationStore,
+        project_id: Uuid,
+        source: &str,
+    ) {
         store::statutory_deadlines::record(
-            surreal,
+            application_store,
             &store::statutory_deadlines::NewStatutoryDeadline {
                 project_id,
                 kind: "filing",
@@ -366,12 +374,12 @@ mod tests {
     /// One notation on `project_id`, with one journaled event moving it
     /// `BEGIN -> lawyer_review`.
     async fn notation_with_event(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         project_id: Uuid,
         respondent_id: Uuid,
     ) {
         let template = store::templates::save_version(
-            surreal,
+            application_store,
             None,
             &format!("status-template-{}", Uuid::now_v7()),
             store::templates::Version {
@@ -388,7 +396,7 @@ mod tests {
         .into_model();
 
         let notation = store::notations::create(
-            surreal,
+            application_store,
             &store::notations::NewNotation::new(
                 template.id,
                 respondent_id,
@@ -400,7 +408,7 @@ mod tests {
         .unwrap();
 
         store::notation_events::append_event(
-            surreal,
+            application_store,
             store::notation_events::TransitionRecord {
                 notation_id: notation.id,
                 acting_person_id: Some(respondent_id),
@@ -429,14 +437,14 @@ mod tests {
     #[tokio::test]
     async fn a_participating_lawyer_receives_deadlines_events_and_participation() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let matter = project(&surreal, "Status Matter").await;
-            let person = lawyer(&surreal, Some(matter)).await;
-            deadline(&surreal, matter, "triage:status").await;
-            notation_with_event(&surreal, matter, person.id).await;
+            let application_store = crate::test_fixtures::handle();
+            let matter = project(&application_store, "Status Matter").await;
+            let person = lawyer(&application_store, Some(matter)).await;
+            deadline(&application_store, matter, "triage:status").await;
+            notation_with_event(&application_store, matter, person.id).await;
 
             let result = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Membership {
                     person_id: person.id,
                     role: person.role,
@@ -484,13 +492,13 @@ mod tests {
     #[tokio::test]
     async fn a_lawyer_without_participation_is_refused_as_not_found() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let matter = project(&surreal, "Private Matter").await;
-            deadline(&surreal, matter, "triage:private").await;
-            let person = lawyer(&surreal, None).await;
+            let application_store = crate::test_fixtures::handle();
+            let matter = project(&application_store, "Private Matter").await;
+            deadline(&application_store, matter, "triage:private").await;
+            let person = lawyer(&application_store, None).await;
 
             let error = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Membership {
                     person_id: person.id,
                     role: person.role,
@@ -510,11 +518,11 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_project_id_is_also_refused_as_not_found() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let person = lawyer(&surreal, None).await;
+            let application_store = crate::test_fixtures::handle();
+            let person = lawyer(&application_store, None).await;
 
             let error = call(
-                &surreal,
+                &application_store,
                 &ReadScope::Membership {
                     person_id: person.id,
                     role: person.role,
@@ -535,8 +543,8 @@ mod tests {
     #[tokio::test]
     async fn no_non_membership_scope_reaches_matter_contents() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let matter = project(&surreal, "Scoped Matter").await;
+            let application_store = crate::test_fixtures::handle();
+            let matter = project(&application_store, "Scoped Matter").await;
 
             for scope in [
                 ReadScope::Deployment,
@@ -545,7 +553,7 @@ mod tests {
                 },
                 ReadScope::Unlinked,
             ] {
-                let error = call(&surreal, &scope, &json!({ "project_id": matter }))
+                let error = call(&application_store, &scope, &json!({ "project_id": matter }))
                     .await
                     .unwrap_err();
                 assert!(matches!(error, crate::tools::ToolError::NotFound(_)));
@@ -557,21 +565,23 @@ mod tests {
     #[tokio::test]
     async fn rejects_unknown_fields_and_missing_project_id() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let person = lawyer(&surreal, None).await;
+            let application_store = crate::test_fixtures::handle();
+            let person = lawyer(&application_store, None).await;
             let scope = ReadScope::Membership {
                 person_id: person.id,
                 role: person.role,
             };
 
-            let error = call(&surreal, &scope, &json!({})).await.unwrap_err();
+            let error = call(&application_store, &scope, &json!({}))
+                .await
+                .unwrap_err();
             assert!(matches!(
                 error,
                 crate::tools::ToolError::InvalidArguments(_)
             ));
 
             let error = call(
-                &surreal,
+                &application_store,
                 &scope,
                 &json!({ "project_id": Uuid::now_v7(), "extra": true }),
             )

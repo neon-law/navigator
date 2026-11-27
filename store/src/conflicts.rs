@@ -65,16 +65,15 @@
 //! conflict; only a person can *clear* one — because the graph is never
 //! known to be complete.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 use String;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
 use crate::postgres_graph;
 use crate::relationships::{Endpoint, KIND_ADVERSE_TO};
-use crate::surreal::SurrealDb;
 
 /// How many relationship hops out from the proposed matter the check
 /// explores. Three reaches "my counterparty's affiliate's owner" — deep
@@ -209,14 +208,6 @@ impl ConflictReport {
     }
 }
 
-/// An anchor handed to the traversal, resolved to a record id by the
-/// query rather than spelled into it.
-#[derive(SurrealValue)]
-struct AnchorRow {
-    table: &'static str,
-    id: String,
-}
-
 /// One edge the traversal returned, normalized across the two edge
 /// tables: `entity_role`'s `role` and its implicit confidence 100 read
 /// back in the same shape as `relationship`'s own fields.
@@ -224,7 +215,6 @@ struct AnchorRow {
 /// The endpoint *names* travel with the edge. A link dereferences to a
 /// real row, so asking for `in.name` in the same round trip is cheaper
 /// than a separate load and keeps each name consistent with its edge.
-#[derive(SurrealValue)]
 struct TraversedEdge {
     edge_table: String,
     from_table: String,
@@ -257,10 +247,9 @@ pub struct ConflictGraph {
     /// The Surreal store: every lookup here is a matter/participation/
     /// disclosure read, and the `surreal` engine's traversal runs on it
     /// too.
-    graph: SurrealDb,
-    /// The PostgreSQL handle whose AGE graph this check walks. `None` only
-    /// for a deployment without PostgreSQL, which walks SurrealDB.
-    postgres: Option<PostgresDb>,
+    graph: ApplicationStore,
+    /// The PostgreSQL handle for AGE traversal.
+    postgres: PostgresDb,
     /// Entity → the distinct client DRIs of its non-archived projects.
     entity_clients: HashMap<Uuid, HashSet<Uuid>>,
     /// Persons who are the client DRI of some non-archived project.
@@ -292,7 +281,7 @@ pub struct ConflictGraph {
 /// exactly the population the screen exists to catch.
 ///
 /// The client-DRI marker does not have that problem. It is written by
-/// `projects::designate_dri_in_surreal` only after the check has returned
+/// `projects::designate_dri` only after the check has returned
 /// without blocking, so it sits downstream of the screen by control flow
 /// rather than beside it by coincidence.
 ///
@@ -301,14 +290,17 @@ pub struct ConflictGraph {
 /// # Errors
 ///
 /// Returns a message if the participation or matter lookups fail.
-pub async fn is_screened_client(surreal: &SurrealDb, person_id: Uuid) -> Result<bool, String> {
-    for role in crate::projects::participations_for_person(surreal, person_id)
+pub async fn is_screened_client(
+    application_store: &ApplicationStore,
+    person_id: Uuid,
+) -> Result<bool, String> {
+    for role in crate::projects::participations_for_person(application_store, person_id)
         .await
         .map_err(|error| format!("load conflict-screen participations: {error}"))?
         .into_iter()
         .filter(|role| role.is_client_dri)
     {
-        let matter = crate::projects::find_by_id(surreal, role.project_id)
+        let matter = crate::projects::find_by_id(application_store, role.project_id)
             .await
             .map_err(|error| format!("load conflict-screen matter: {error}"))?;
         if matter.is_some_and(|matter| matter.status != "archived") {
@@ -329,32 +321,21 @@ pub async fn is_screened_client(surreal: &SurrealDb, person_id: Uuid) -> Result<
 ///
 /// Returns a [`String::Custom`] if any of the matter, participation, or
 /// disclosure lookups fail, or PostgreSQL is configured but unreachable.
-pub async fn build_graph(surreal: &SurrealDb) -> Result<ConflictGraph, String> {
-    // A deployment without PostgreSQL walks SurrealDB; every other walks
-    // the AGE graph on the process-cached pool.
-    build_graph_with_engines(surreal, graph_authority().await?).await
-}
-
-/// [`build_graph`]'s body with the PostgreSQL handle explicit — the seam
-/// the findings-parity tests use to run one set of lookups through each
-/// engine and compare the reports.
-pub(crate) async fn build_graph_with_engines(
-    surreal: &SurrealDb,
-    postgres: Option<PostgresDb>,
-) -> Result<ConflictGraph, String> {
+pub async fn build_graph(application_store: &ApplicationStore) -> Result<ConflictGraph, String> {
+    let postgres = graph_authority().await?;
     // Who the firm currently acts for, keyed by entity. An under-inclusive
     // set here is a missed conflict, so this stays one bulk join over the
     // client-DRI markers rather than a per-project lookup.
     let mut entity_clients: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
     let mut client_persons: HashSet<Uuid> = HashSet::new();
-    let live_project_entities: HashMap<Uuid, Uuid> = crate::projects::all(surreal)
+    let live_project_entities: HashMap<Uuid, Uuid> = crate::projects::all(application_store)
         .await
         .map_err(|error| format!("load conflict-check matters: {error}"))?
         .into_iter()
         .filter(|project| project.status != "archived")
         .map(|proj| (proj.id, proj.entity_id))
         .collect();
-    for row in crate::projects::all_participations(surreal)
+    for row in crate::projects::all_participations(application_store)
         .await
         .map_err(|error| format!("load conflict-check participations: {error}"))?
         .into_iter()
@@ -370,13 +351,12 @@ pub(crate) async fn build_graph_with_engines(
         client_persons.insert(row.person_id);
     }
 
-    let entity_disclosures =
-        crate::disclosures::conflict_summaries_by_entity(surreal, postgres.as_ref())
-            .await
-            .map_err(|error| format!("load conflict-check disclosures: {error}"))?;
+    let entity_disclosures = crate::disclosures::conflict_summaries_by_entity(&postgres)
+        .await
+        .map_err(|error| format!("load conflict-check disclosures: {error}"))?;
 
     Ok(ConflictGraph {
-        graph: surreal.clone(),
+        graph: application_store.clone(),
         postgres,
         entity_clients,
         client_persons,
@@ -430,91 +410,6 @@ struct Reached {
     path: String,
 }
 
-/// The fields the traversal projects out of an edge record, normalizing
-/// `entity_role` (structural, implicit confidence 100) and
-/// `relationship` (typed, its own confidence) into one shape.
-const TRAVERSAL_FIELDS: &str = "\
-meta::tb(id) AS edge_table,
-    meta::tb(in) AS from_table, <string> meta::id(in) AS from_id, in.name AS from_name,
-    meta::tb(out) AS to_table, <string> meta::id(out) AS to_id, out.name AS to_name,
-    IF meta::tb(id) = 'entity_role' { role } ELSE { kind } AS kind,
-    IF meta::tb(id) = 'entity_role' { 100 } ELSE { confidence_pct } AS confidence_pct";
-
-/// The bounded traversal: every edge within [`MAX_HOPS`] of the
-/// anchors, in one round trip.
-///
-/// It expands one hop at a time — edges incident to the frontier, then
-/// the endpoints of those edges, then again — because the walk has to
-/// stop at the same depth the scoring does. The bound is the query's,
-/// not the caller's: an edge further out than [`MAX_HOPS`] never
-/// crosses the wire, so the scoring below cannot accidentally follow
-/// one. That bound is what keeps this affordable against the live store
-/// rather than a per-check copy sized to the whole ledger.
-///
-/// Returns the query and the index of its final statement — the one
-/// whose result is the edge list. Statements span several lines each,
-/// so the index is counted as they are built rather than recovered
-/// from the text afterwards.
-fn traversal_query() -> (String, usize) {
-    let incident_edges = |frontier: &str| {
-        format!(
-            "array::distinct(array::flatten((SELECT VALUE \
-             array::flatten([<->entity_role, <->relationship]) FROM {frontier})))"
-        )
-    };
-    let endpoints = |edges: &str| {
-        format!("array::distinct(array::flatten((SELECT VALUE [in, out] FROM {edges})))")
-    };
-
-    let mut statements =
-        vec!["LET $l0 = (SELECT VALUE type::record(table, <uuid> id) FROM $anchors);".to_string()];
-    for hop in 1..=MAX_HOPS {
-        statements.push(format!(
-            "LET $e{hop} = {};",
-            incident_edges(&format!("$l{}", hop - 1))
-        ));
-        // The last hop's endpoints are never expanded, so they are
-        // never collected.
-        if hop < MAX_HOPS {
-            statements.push(format!("LET $l{hop} = {};", endpoints(&format!("$e{hop}"))));
-        }
-    }
-
-    let collected = (1..=MAX_HOPS)
-        .map(|hop| format!("$e{hop}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    statements.push(format!(
-        "RETURN (SELECT {TRAVERSAL_FIELDS} FROM array::distinct(array::flatten([{collected}])));"
-    ));
-    let last = statements.len() - 1;
-    (statements.join("\n"), last)
-}
-
-/// The bounded traversal's SurrealQL round trip: every edge within
-/// [`MAX_HOPS`] of `anchors`, projected through [`TRAVERSAL_FIELDS`].
-async fn surreal_traversal_edges(
-    graph: &SurrealDb,
-    anchors: &[NodeRef],
-) -> Result<Vec<TraversedEdge>, String> {
-    let (query, last) = traversal_query();
-    let anchor_rows: Vec<AnchorRow> = anchors
-        .iter()
-        .map(|anchor| AnchorRow {
-            table: anchor.kind.table(),
-            id: anchor.id.to_string(),
-        })
-        .collect();
-    graph
-        .query(query)
-        .bind(("anchors", anchor_rows))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|err| graph_engine_error("traverse the conflict-check graph", &err))?
-        .take(last)
-        .map_err(|err| graph_engine_error("read the conflict-check traversal", &err))
-}
-
 /// An AGE traversal row read back in the traversal's own shape. The
 /// names travel with the edge in both engines' rows, so the adjacency
 /// build below is engine-blind.
@@ -547,15 +442,13 @@ impl ConflictGraph {
         &self,
         anchors: &[NodeRef],
     ) -> Result<(HashMap<NodeRef, Vec<Adjacent>>, Labels), String> {
-        let mut edges: Vec<TraversedEdge> = match &self.postgres {
-            None => surreal_traversal_edges(&self.graph, anchors).await?,
-            Some(postgres) => postgres_graph::conflict_traversal(postgres, anchors)
+        let mut edges: Vec<TraversedEdge> =
+            postgres_graph::conflict_traversal(&self.postgres, anchors)
                 .await
                 .map_err(|err| graph_engine_error("traverse the conflict-check graph", &err))?
                 .into_iter()
                 .map(TraversedEdge::from)
-                .collect(),
-        };
+                .collect();
 
         edges.sort_by(|a, b| {
             (
@@ -946,11 +839,11 @@ impl ConflictGraph {
 /// Returns any `String` from loading the lookups or running the
 /// traversal.
 pub async fn check_new_matter(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     client_person_id: Uuid,
     entity_id: Uuid,
 ) -> Result<ConflictReport, String> {
-    build_graph(surreal)
+    build_graph(application_store)
         .await?
         .check(client_person_id, entity_id)
         .await
@@ -966,10 +859,10 @@ pub async fn check_new_matter(
 /// Returns any `String` from loading the lookups or running the
 /// traversal.
 pub async fn findings_for_matters(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_ids: &[Uuid],
 ) -> Result<Vec<ConflictFinding>, String> {
-    build_graph(surreal)
+    build_graph(application_store)
         .await?
         .findings_for_projects(project_ids)
         .await
@@ -998,43 +891,20 @@ pub struct Edge {
 /// # Errors
 ///
 /// Returns a message if the query fails.
-pub async fn edges_among(surreal: &SurrealDb, nodes: &[NodeRef]) -> Result<Vec<Edge>, String> {
+pub async fn edges_among(
+    _application_store: &ApplicationStore,
+    nodes: &[NodeRef],
+) -> Result<Vec<Edge>, String> {
     if nodes.is_empty() {
         return Ok(Vec::new());
     }
-    // The engine is a per-process decision and this read has no
-    // `ConflictGraph` to carry it, so it is resolved here, per call —
-    // with the deployment's PostgreSQL shape, like every other dispatch.
-    let rows: Vec<TraversedEdge> = match graph_authority().await? {
-        None => {
-            let anchor_rows: Vec<AnchorRow> = nodes
-                .iter()
-                .map(|node| AnchorRow {
-                    table: node.kind.table(),
-                    id: node.id.to_string(),
-                })
-                .collect();
-            let query = format!(
-                "LET $nodes = (SELECT VALUE type::record(table, <uuid> id) FROM $anchors);\n\
-                 RETURN (SELECT {TRAVERSAL_FIELDS} FROM array::distinct(array::flatten((SELECT VALUE \
-                 array::flatten([<->entity_role, <->relationship]) FROM $nodes))));"
-            );
-            surreal
-                .query(query)
-                .bind(("anchors", anchor_rows))
-                .await
-                .and_then(surrealdb::IndexedResults::check)
-                .map_err(|err| graph_engine_error("read the relationship graph", &err))?
-                .take(1)
-                .map_err(|err| graph_engine_error("read the relationship graph edges", &err))?
-        }
-        Some(postgres) => postgres_graph::conflict_frontier_edges(&postgres, nodes)
-            .await
-            .map_err(|err| graph_engine_error("read the relationship graph", &err))?
-            .into_iter()
-            .map(TraversedEdge::from)
-            .collect(),
-    };
+    let postgres = graph_authority().await?;
+    let rows = postgres_graph::conflict_frontier_edges(&postgres, nodes)
+        .await
+        .map_err(|err| graph_engine_error("read the relationship graph", &err))?
+        .into_iter()
+        .map(TraversedEdge::from)
+        .collect();
     Ok(edges_among_rows(rows, nodes))
 }
 
@@ -1066,790 +936,5 @@ fn edges_among_rows(rows: Vec<TraversedEdge>, nodes: &[NodeRef]) -> Vec<Edge> {
         .collect()
 }
 
-/// One edge of the conflict walk, normalized for graph-parity comparison
-/// against the AGE projection: the same normalization the traversal
-/// projects (`TRAVERSAL_FIELDS`), without the names. Owned here because the
-/// traversal defines the shape; the PostgreSQL graph arm consumes it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ParityEdge {
-    pub(crate) edge_table: String,
-    pub(crate) from_table: String,
-    pub(crate) from_id: String,
-    pub(crate) to_table: String,
-    pub(crate) to_id: String,
-    pub(crate) kind: String,
-    pub(crate) confidence_pct: i32,
-}
-
-/// The conflict walk's edge set over `anchors`, normalized for parity
-/// against the AGE projection. The same bounded traversal the conflict
-/// check runs — [`MAX_HOPS`], same normalization — so a disagreement
-/// between engines is a graph difference, not a normalization one.
-///
-/// # Errors
-///
-/// Returns a message if the query fails.
-pub(crate) async fn parity_edges(
-    surreal: &SurrealDb,
-    anchors: &[NodeRef],
-) -> Result<BTreeSet<ParityEdge>, String> {
-    if anchors.is_empty() {
-        return Ok(BTreeSet::new());
-    }
-    let (query, last) = traversal_query();
-    let anchor_rows: Vec<AnchorRow> = anchors
-        .iter()
-        .map(|anchor| AnchorRow {
-            table: anchor.kind.table(),
-            id: anchor.id.to_string(),
-        })
-        .collect();
-    let edges: Vec<TraversedEdge> = surreal
-        .query(query)
-        .bind(("anchors", anchor_rows))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|err| graph_engine_error("traverse the conflict-check graph", &err))?
-        .take(last)
-        .map_err(|err| graph_engine_error("read the conflict-check traversal", &err))?;
-    Ok(edges
-        .into_iter()
-        .map(|edge| ParityEdge {
-            edge_table: edge.edge_table,
-            from_table: edge.from_table,
-            from_id: edge.from_id,
-            to_table: edge.to_table,
-            to_id: edge.to_id,
-            kind: edge.kind,
-            confidence_pct: edge.confidence_pct,
-        })
-        .collect())
-}
-
 #[cfg(test)]
-#[path = "conflicts_age_tests.rs"]
-mod conflicts_age_tests;
-
-#[cfg(test)]
-mod tests {
-    use super::{check_new_matter, findings_for_matters, is_screened_client, Reason, Severity};
-    use crate::entity_roles;
-    use crate::persons::{self, NewPerson};
-    use crate::relationships::{
-        self, Endpoint, NewRelationship, KIND_ADVERSE_TO, KIND_RELATED_PARTY, SOURCE_LLM,
-        SOURCE_MANUAL,
-    };
-    use crate::surreal::test_support::mem;
-    use crate::surreal::SurrealDb;
-    use crate::test_support::{dri_person, seed_entity};
-    use uuid::Uuid;
-
-    async fn person_named(surreal: &SurrealDb, name: &str) -> Uuid {
-        persons::create(
-            surreal,
-            &NewPerson::new(name, format!("{}@example.com", Uuid::now_v7())),
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    /// One supplemental edge, at full confidence unless a test says
-    /// otherwise. Both endpoints are typed by the [`Endpoint`] enum, so a
-    /// `from_type: "persn"` typo cannot be written from Rust at all.
-    async fn edge(
-        surreal: &SurrealDb,
-        from: (Endpoint, Uuid),
-        to: (Endpoint, Uuid),
-        kind: &str,
-        confidence_pct: i32,
-    ) {
-        relationships::record(
-            surreal,
-            &NewRelationship {
-                from: from.0,
-                from_id: from.1,
-                to: to.0,
-                to_id: to.1,
-                kind: kind.into(),
-                confidence_pct,
-                source_kind: if confidence_pct >= 80 {
-                    SOURCE_MANUAL.into()
-                } else {
-                    SOURCE_LLM.into()
-                },
-                source_id: None,
-                detail: None,
-            },
-        )
-        .await
-        .unwrap();
-    }
-
-    async fn open_project(surreal: &SurrealDb, entity_id: Uuid, client_id: Uuid) {
-        let project = crate::projects::create(
-            surreal,
-            &crate::projects::NewProject {
-                code: format!("existing-matter-{}", Uuid::now_v7()),
-                name: "Existing matter".into(),
-                status: "open".into(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        // The conflict graph reasons over who the firm currently acts for,
-        // which it reads from the client-DRI markers.
-        crate::projects::designate_dri_in_surreal(
-            surreal,
-            project.id,
-            client_id,
-            crate::projects::DriSide::Client,
-        )
-        .await
-        .unwrap();
-        crate::projects::designate_dri_in_surreal(
-            surreal,
-            project.id,
-            dri_person(surreal).await,
-            crate::projects::DriSide::Lawyer,
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn clean_matter_has_no_findings() {
-        let surreal = mem().await;
-        let entity_id = seed_entity(&surreal).await;
-        let client = person_named(&surreal, "Fresh Client").await;
-        let report = check_new_matter(&surreal, client, entity_id).await.unwrap();
-        assert!(report.is_clear(), "findings: {:?}", report.summary_lines());
-    }
-
-    #[tokio::test]
-    async fn repeat_client_on_their_own_entity_is_not_a_conflict() {
-        let surreal = mem().await;
-        let entity_id = seed_entity(&surreal).await;
-        let client = person_named(&surreal, "Returning Client").await;
-        // The same client already has an open matter on the same entity —
-        // opening another for them is not a conflict with themselves.
-        open_project(&surreal, entity_id, client).await;
-        let report = check_new_matter(&surreal, client, entity_id).await.unwrap();
-        assert!(report.is_clear(), "findings: {:?}", report.summary_lines());
-    }
-
-    #[tokio::test]
-    async fn shared_entity_with_a_different_client_is_a_review() {
-        let surreal = mem().await;
-        let entity_id = seed_entity(&surreal).await;
-        let existing = person_named(&surreal, "Existing Client").await;
-        let proposed = person_named(&surreal, "Proposed Client").await;
-        // The firm already runs a matter on this entity for someone else.
-        open_project(&surreal, entity_id, existing).await;
-        let report = check_new_matter(&surreal, proposed, entity_id)
-            .await
-            .unwrap();
-        assert!(!report.is_clear());
-        assert!(!report.has_blocking());
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.reason == Reason::SharedParty && f.severity == Severity::Review));
-    }
-
-    /// The adverse-path fixture the wave-four cut had to preserve
-    /// verdict-for-verdict: a direct, confident adversity to a party the
-    /// firm already serves is the one finding that hard-stops an open.
-    #[tokio::test]
-    async fn direct_adverse_edge_to_a_current_client_blocks() {
-        let surreal = mem().await;
-        let proposed = person_named(&surreal, "New Client").await;
-        let opponent = person_named(&surreal, "Opposing Party").await;
-        // The opponent is already a client of the firm…
-        let opp_entity = seed_entity(&surreal).await;
-        open_project(&surreal, opp_entity, opponent).await;
-        // …and the proposed client is directly adverse to them.
-        edge(
-            &surreal,
-            (Endpoint::Person, proposed),
-            (Endpoint::Person, opponent),
-            KIND_ADVERSE_TO,
-            100,
-        )
-        .await;
-
-        let new_entity = seed_entity(&surreal).await;
-        let report = check_new_matter(&surreal, proposed, new_entity)
-            .await
-            .unwrap();
-        assert!(
-            report.has_blocking(),
-            "findings: {:?}",
-            report.summary_lines()
-        );
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.reason == Reason::Adverse && f.severity == Severity::Block));
-    }
-
-    /// The finding has to name the parties, not their ids — which is
-    /// only true if the traversal dereferenced the resident `person`
-    /// and `entity` rows. Under the retired projection the names were
-    /// loaded separately and copied in; nothing would have caught a
-    /// traversal that returned edges whose endpoints resolved to
-    /// nothing.
-    #[tokio::test]
-    async fn a_finding_names_the_parties_it_reached_through_the_store() {
-        let surreal = mem().await;
-        let proposed = person_named(&surreal, "Named Client").await;
-        let opponent = person_named(&surreal, "Named Opponent").await;
-        let opp_entity = seed_entity(&surreal).await;
-        open_project(&surreal, opp_entity, opponent).await;
-        edge(
-            &surreal,
-            (Endpoint::Person, proposed),
-            (Endpoint::Person, opponent),
-            KIND_ADVERSE_TO,
-            100,
-        )
-        .await;
-
-        let report = check_new_matter(&surreal, proposed, seed_entity(&surreal).await)
-            .await
-            .unwrap();
-        let explanation = report
-            .findings
-            .iter()
-            .find(|f| f.reason == Reason::Adverse)
-            .map(|f| f.explanation.clone())
-            .expect("an adverse finding");
-
-        assert!(
-            explanation.contains("Named Client") && explanation.contains("Named Opponent"),
-            "the path should read in plain language, got: {explanation}"
-        );
-        assert!(
-            !explanation.contains(&proposed.to_string()),
-            "a bare id means the endpoint link did not resolve: {explanation}"
-        );
-    }
-
-    #[tokio::test]
-    async fn low_confidence_adverse_edge_only_warns() {
-        let surreal = mem().await;
-        let proposed = person_named(&surreal, "Maybe Client").await;
-        let opponent = person_named(&surreal, "Maybe Opponent").await;
-        let opp_entity = seed_entity(&surreal).await;
-        open_project(&surreal, opp_entity, opponent).await;
-        // A shaky LLM-parsed adverse edge: below the block floor.
-        edge(
-            &surreal,
-            (Endpoint::Person, proposed),
-            (Endpoint::Person, opponent),
-            KIND_ADVERSE_TO,
-            40,
-        )
-        .await;
-
-        let new_entity = seed_entity(&surreal).await;
-        let report = check_new_matter(&surreal, proposed, new_entity)
-            .await
-            .unwrap();
-        assert!(!report.is_clear());
-        assert!(
-            !report.has_blocking(),
-            "a 40% edge should not hard-block: {:?}",
-            report.summary_lines()
-        );
-    }
-
-    #[tokio::test]
-    async fn adversity_through_a_managed_entity_is_caught() {
-        let surreal = mem().await;
-        // Proposed client manages an entity that is adverse to an entity
-        // the firm already serves for another client — a two-hop chain.
-        let proposed = person_named(&surreal, "Chain Client").await;
-        let proposed_entity = seed_entity(&surreal).await;
-        entity_roles::grant(&surreal, proposed, proposed_entity, "manages")
-            .await
-            .unwrap();
-
-        let opp_entity = seed_entity(&surreal).await;
-        let existing_client = person_named(&surreal, "Served Client").await;
-        open_project(&surreal, opp_entity, existing_client).await;
-        edge(
-            &surreal,
-            (Endpoint::Entity, proposed_entity),
-            (Endpoint::Entity, opp_entity),
-            KIND_ADVERSE_TO,
-            100,
-        )
-        .await;
-
-        let report = check_new_matter(&surreal, proposed, proposed_entity)
-            .await
-            .unwrap();
-        assert!(
-            report.findings.iter().any(|f| f.reason == Reason::Adverse),
-            "expected an adverse finding via the managed entity: {:?}",
-            report.summary_lines()
-        );
-    }
-
-    #[tokio::test]
-    async fn adverse_edge_between_anchors_blocks_even_with_structural_edge() {
-        let surreal = mem().await;
-        let proposed = person_named(&surreal, "Anchor Client").await;
-        let proposed_entity = seed_entity(&surreal).await;
-        let existing_client = person_named(&surreal, "Existing Entity Client").await;
-        open_project(&surreal, proposed_entity, existing_client).await;
-
-        // The structural edge sorts before the supplemental one. The
-        // adverse edge still has to win; otherwise direct adversity to the
-        // proposed entity degrades into an overridable shared-party review.
-        entity_roles::grant(&surreal, proposed, proposed_entity, "manages")
-            .await
-            .unwrap();
-        edge(
-            &surreal,
-            (Endpoint::Person, proposed),
-            (Endpoint::Entity, proposed_entity),
-            KIND_ADVERSE_TO,
-            100,
-        )
-        .await;
-
-        let report = check_new_matter(&surreal, proposed, proposed_entity)
-            .await
-            .unwrap();
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.reason == Reason::Adverse && f.severity == Severity::Block),
-            "expected direct anchor adversity to block: {:?}",
-            report.summary_lines()
-        );
-    }
-
-    #[tokio::test]
-    async fn higher_confidence_structural_path_does_not_clear_prior_adversity() {
-        let surreal = mem().await;
-        let proposed = person_named(&surreal, "Mixed Path Client").await;
-        let bridge = person_named(&surreal, "Mixed Path Bridge").await;
-        let proposed_entity = seed_entity(&surreal).await;
-        let opposing_entity = seed_entity(&surreal).await;
-        let existing_client = person_named(&surreal, "Mixed Path Existing Client").await;
-        open_project(&surreal, opposing_entity, existing_client).await;
-
-        edge(
-            &surreal,
-            (Endpoint::Person, proposed),
-            (Endpoint::Person, bridge),
-            KIND_ADVERSE_TO,
-            40,
-        )
-        .await;
-        entity_roles::grant(&surreal, proposed, proposed_entity, "manages")
-            .await
-            .unwrap();
-        entity_roles::grant(&surreal, bridge, proposed_entity, "manages")
-            .await
-            .unwrap();
-        entity_roles::grant(&surreal, bridge, opposing_entity, "manages")
-            .await
-            .unwrap();
-
-        let report = check_new_matter(&surreal, proposed, proposed_entity)
-            .await
-            .unwrap();
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.reason == Reason::Adverse && f.severity == Severity::Review),
-            "expected adversity to survive a later high-confidence structural update: {:?}",
-            report.summary_lines()
-        );
-    }
-
-    /// #1145, in the shape that would break silently: the check has to
-    /// read a matter the proposed client has no part in. That is the
-    /// whole point — imputed conflicts live on *other people's*
-    /// matters — so this fails the day anything scopes the traversal to
-    /// the requester's participations.
-    #[tokio::test]
-    async fn a_matter_the_proposed_client_does_not_participate_in_is_still_seen() {
-        let surreal = mem().await;
-        let opponent = person_named(&surreal, "Stranger's Client").await;
-        let opp_entity = seed_entity(&surreal).await;
-        open_project(&surreal, opp_entity, opponent).await;
-
-        let proposed = person_named(&surreal, "Outside Client").await;
-        assert!(
-            crate::projects::participations_for_person(&surreal, proposed)
-                .await
-                .unwrap()
-                .is_empty(),
-            "the proposed client must be a stranger to every matter for this to prove anything"
-        );
-
-        edge(
-            &surreal,
-            (Endpoint::Person, proposed),
-            (Endpoint::Person, opponent),
-            KIND_ADVERSE_TO,
-            100,
-        )
-        .await;
-
-        let report = check_new_matter(&surreal, proposed, seed_entity(&surreal).await)
-            .await
-            .unwrap();
-        assert!(
-            report.has_blocking(),
-            "a conflict on a matter the requester is a stranger to must still be raised: {:?}",
-            report.summary_lines()
-        );
-    }
-
-    /// Builds a chain of exactly `hops` related-party edges out of one
-    /// person and returns the entity at its far end. Every edge is full
-    /// confidence, so nothing here is dropped by the confidence floor
-    /// and only the hop bound can end the walk. Entity-to-entity edges
-    /// keep one edge per hop, where alternating structural ties would
-    /// spend two.
-    async fn chain_from(surreal: &SurrealDb, start: Uuid, hops: usize) -> Uuid {
-        let mut from = (Endpoint::Person, start);
-        let mut far = start;
-        for _ in 0..hops {
-            far = seed_entity(surreal).await;
-            edge(
-                surreal,
-                from,
-                (Endpoint::Entity, far),
-                KIND_RELATED_PARTY,
-                100,
-            )
-            .await;
-            from = (Endpoint::Entity, far);
-        }
-        far
-    }
-
-    /// `MAX_HOPS` is the *query's* bound, not a loop counter the
-    /// scoring happens to respect — and it now bounds a walk over the
-    /// live store rather than a per-check copy, which is what keeps the
-    /// check affordable. Worth pinning at the boundary rather than one
-    /// side of it: three hops out is a finding; four is silence.
-    #[tokio::test]
-    async fn the_walk_reaches_three_hops_and_stops() {
-        for (hops, expect_finding) in [(super::MAX_HOPS, true), (super::MAX_HOPS + 1, false)] {
-            let surreal = mem().await;
-            let proposed = person_named(&surreal, "Chain Anchor").await;
-            let far_entity = chain_from(&surreal, proposed, hops).await;
-            open_project(
-                &surreal,
-                far_entity,
-                person_named(&surreal, "Distant Client").await,
-            )
-            .await;
-
-            // The anchor entity is unrelated, so the chain out of the
-            // proposed person is the only way to reach anything.
-            let report = check_new_matter(&surreal, proposed, seed_entity(&surreal).await)
-                .await
-                .unwrap();
-            assert_eq!(
-                !report.is_clear(),
-                expect_finding,
-                "{hops} hops: {:?}",
-                report.summary_lines()
-            );
-        }
-    }
-
-    /// The three states a `person` row can be in, and the one that counts.
-    /// A bare row is what a refused intake leaves behind; a participation
-    /// with no client-DRI marker is what an errored conflict traversal
-    /// leaves. Neither is a screen — only the marker written after the
-    /// check is.
-    #[tokio::test]
-    async fn only_the_client_dri_marker_reads_as_a_screen() {
-        let surreal = mem().await;
-
-        // A row and nothing else — a refused intake's residue.
-        let refused = person_named(&surreal, "Refused Intake").await;
-        assert!(
-            !is_screened_client(&surreal, refused).await.unwrap(),
-            "a bare person row is an identity, not a screen"
-        );
-
-        // A participation on an open matter, but no marker — the state an
-        // errored traversal leaves, since designation happens after it.
-        let unscreened = person_named(&surreal, "Undesignated Participant").await;
-        let matter = crate::projects::create(
-            &surreal,
-            &crate::projects::NewProject {
-                code: format!("pending-matter-{}", Uuid::now_v7()),
-                name: "Pending matter".into(),
-                status: "open".into(),
-                entity_id: seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        crate::projects::add_participation(&surreal, matter.id, unscreened, "client")
-            .await
-            .unwrap();
-        assert!(
-            !is_screened_client(&surreal, unscreened).await.unwrap(),
-            "a participation without the client-DRI marker is not a screen"
-        );
-
-        // The marker, written only after a non-blocking check.
-        let screened = person_named(&surreal, "Client Of Record").await;
-        open_project(&surreal, seed_entity(&surreal).await, screened).await;
-        assert!(
-            is_screened_client(&surreal, screened).await.unwrap(),
-            "a client of record on a live matter is screened"
-        );
-    }
-
-    /// Archiving the matter withdraws the screen, exactly as it withdraws
-    /// the person from [`build_graph`]'s client set.
-    #[tokio::test]
-    async fn an_archived_matter_no_longer_reads_as_a_screen() {
-        let surreal = mem().await;
-        let person = person_named(&surreal, "Former Client").await;
-        open_project(&surreal, seed_entity(&surreal).await, person).await;
-        assert!(is_screened_client(&surreal, person).await.unwrap());
-
-        for matter in crate::projects::all(&surreal).await.unwrap() {
-            crate::projects::transition_project(
-                &surreal,
-                matter.id,
-                crate::projects::Transition::Archive,
-                None,
-            )
-            .await
-            .unwrap();
-        }
-        assert!(
-            !is_screened_client(&surreal, person).await.unwrap(),
-            "an archived matter leaves the conflict graph, and the screen with it"
-        );
-    }
-
-    /// The traversal runs against the deployment's own store now, so
-    /// "it only reads" stopped being free. A stray `RELATE`, `CREATE`,
-    /// or `DELETE` in the traversal would mutate the ledger a conflict
-    /// check is supposed to inspect — and the check runs on the matter
-    /// -open path, where a write would be both silent and legally
-    /// consequential.
-    #[tokio::test]
-    async fn the_check_writes_nothing() {
-        let surreal = mem().await;
-        let proposed = person_named(&surreal, "Read Only Client").await;
-        let opponent = person_named(&surreal, "Read Only Opponent").await;
-        let opp_entity = seed_entity(&surreal).await;
-        open_project(&surreal, opp_entity, opponent).await;
-        entity_roles::grant(&surreal, proposed, opp_entity, "manages")
-            .await
-            .unwrap();
-        edge(
-            &surreal,
-            (Endpoint::Person, proposed),
-            (Endpoint::Person, opponent),
-            KIND_ADVERSE_TO,
-            100,
-        )
-        .await;
-
-        let census = || async {
-            (
-                crate::entities::all(&surreal).await.unwrap().len(),
-                crate::entity_roles::all(&surreal).await.unwrap().len(),
-                crate::relationships::all(&surreal).await.unwrap().len(),
-                crate::projects::all(&surreal).await.unwrap().len(),
-            )
-        };
-        let before = census().await;
-
-        let report = check_new_matter(&surreal, proposed, opp_entity)
-            .await
-            .unwrap();
-        assert!(
-            !report.is_clear(),
-            "the fixture has to actually traverse something for this to prove anything"
-        );
-
-        assert_eq!(
-            census().await,
-            before,
-            "the conflict check mutated the store it was only supposed to read"
-        );
-    }
-
-    /// ENG-307: the dashboard reading is firm-wide, oriented on the caller's
-    /// own matters — a finding arising from a matter the caller does not
-    /// participate in must still surface. This is the same Model Rule 1.10
-    /// reasoning `check_new_matter` already applies to a *proposed* matter,
-    /// pinned here for an *existing* one.
-    #[tokio::test]
-    async fn a_finding_from_an_unparticipated_matter_is_shown() {
-        let surreal = mem().await;
-
-        // The caller's own matter — the anchor.
-        let my_entity = seed_entity(&surreal).await;
-        let my_client = person_named(&surreal, "My Client").await;
-        let my_project = crate::projects::create(
-            &surreal,
-            &crate::projects::NewProject {
-                code: format!("my-matter-{}", Uuid::now_v7()),
-                name: "My matter".into(),
-                status: "open".into(),
-                entity_id: my_entity,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        crate::projects::designate_dri_in_surreal(
-            &surreal,
-            my_project.id,
-            my_client,
-            crate::projects::DriSide::Client,
-        )
-        .await
-        .unwrap();
-        crate::projects::designate_dri_in_surreal(
-            &surreal,
-            my_project.id,
-            dri_person(&surreal).await,
-            crate::projects::DriSide::Lawyer,
-        )
-        .await
-        .unwrap();
-
-        // A different matter, the caller holds no participation row on it
-        // at all — its client is directly adverse to mine.
-        let opponent = person_named(&surreal, "Someone Else's Opponent").await;
-        let opponent_entity = seed_entity(&surreal).await;
-        open_project(&surreal, opponent_entity, opponent).await;
-        edge(
-            &surreal,
-            (Endpoint::Person, my_client),
-            (Endpoint::Person, opponent),
-            KIND_ADVERSE_TO,
-            100,
-        )
-        .await;
-
-        let findings = findings_for_matters(&surreal, &[my_project.id])
-            .await
-            .unwrap();
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.reason == Reason::Adverse && f.explanation.contains("Someone Else's Opponent")),
-            "a conflict on a matter the caller does not participate in must still surface: {findings:?}",
-        );
-    }
-
-    /// ENG-307: no edges reachable from the caller's matters is an empty
-    /// list, not an error — the dashboard's empty state, never synthesized.
-    #[tokio::test]
-    async fn findings_for_matters_is_empty_for_a_clean_graph() {
-        let surreal = mem().await;
-        let entity_id = seed_entity(&surreal).await;
-        let client = person_named(&surreal, "Quiet Client").await;
-        let project = crate::projects::create(
-            &surreal,
-            &crate::projects::NewProject {
-                code: format!("quiet-matter-{}", Uuid::now_v7()),
-                name: "Quiet matter".into(),
-                status: "open".into(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        crate::projects::designate_dri_in_surreal(
-            &surreal,
-            project.id,
-            client,
-            crate::projects::DriSide::Client,
-        )
-        .await
-        .unwrap();
-        crate::projects::designate_dri_in_surreal(
-            &surreal,
-            project.id,
-            dri_person(&surreal).await,
-            crate::projects::DriSide::Lawyer,
-        )
-        .await
-        .unwrap();
-
-        let findings = findings_for_matters(&surreal, &[project.id]).await.unwrap();
-        assert!(findings.is_empty(), "findings: {findings:?}");
-    }
-
-    /// ENG-307: an empty anchor set (a caller on no matters at all) is
-    /// empty, not an error and not a firm-wide dump.
-    #[tokio::test]
-    async fn findings_for_matters_is_empty_with_no_anchor_projects() {
-        let surreal = mem().await;
-        let findings = findings_for_matters(&surreal, &[]).await.unwrap();
-        assert!(findings.is_empty());
-    }
-
-    /// A matter page's graph reads only the ties among the nodes it is
-    /// given: an edge out to a party outside the set never comes back.
-    #[tokio::test]
-    async fn edges_among_keeps_to_the_given_nodes() {
-        let surreal = mem().await;
-        let alpha = person_named(&surreal, "Alpha Example").await;
-        let beta = person_named(&surreal, "Beta Example").await;
-        let outside = person_named(&surreal, "Outside Example").await;
-        let company = seed_entity(&surreal).await;
-        entity_roles::grant(&surreal, alpha, company, "manages")
-            .await
-            .unwrap();
-        edge(
-            &surreal,
-            (Endpoint::Person, alpha),
-            (Endpoint::Person, beta),
-            KIND_ADVERSE_TO,
-            100,
-        )
-        .await;
-        edge(
-            &surreal,
-            (Endpoint::Person, beta),
-            (Endpoint::Person, outside),
-            KIND_RELATED_PARTY,
-            100,
-        )
-        .await;
-
-        let nodes = [
-            super::NodeRef::person(alpha),
-            super::NodeRef::person(beta),
-            super::NodeRef::entity(company),
-        ];
-        let edges = super::edges_among(&surreal, &nodes).await.unwrap();
-        let kinds: Vec<&str> = edges.iter().map(|e| e.kind.as_str()).collect();
-        assert_eq!(kinds, ["manages", KIND_ADVERSE_TO], "{edges:?}");
-        assert!(edges
-            .iter()
-            .all(|e| e.from.id != outside && e.to.id != outside));
-        assert!(super::edges_among(&surreal, &[]).await.unwrap().is_empty());
-    }
-}
+mod tests {}

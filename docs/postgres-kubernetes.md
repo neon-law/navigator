@@ -135,7 +135,7 @@ Set `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` to run the Archives schedule on t
 DBOS opt-in above. `ops ship` adds `examples/deploy/k8s/gke/postgres/web/web-archives.yaml` and the reviewed
 `navigator-archive-coverage` ConfigMap, then deletes the Restate `archives-trigger` CronJob. Each 05:55 and 17:55 UTC
 run exports the whole `navigator` and `forgejo` databases to Iceberg as `navigator_archive`. See [Iceberg
-archive](iceberg-archive.md#where-it-runs).
+archive](iceberg-archive.md#exporting-a-generation).
 
 Provision the login before the first ship with the switch on. On a row rolled from its published record:
 
@@ -176,7 +176,7 @@ mirror-recovery CronJob and monitoring Rule.
 Captured Source transfer remains an explicit operator phase. Establish writer quiescence, obtain the strict capture and
 receipt pair, and complete global and scoped enrollment before starting the guarded application. Persisted ownership
 prevents later Source import or reconciliation from overwriting or resurrecting native rows. The [mirror tooling
-guide](postgres-tooling.md#scoped-family-enrollment) describes dependency, parity, and activation checks.
+guide](postgres-tooling.md#application-admission) describes dependency, parity, and activation checks.
 
 ```bash
 hudson ops postgres mirror parity [--json]              # explicit read-only diagnostics
@@ -334,7 +334,7 @@ rehydration before calling PostgreSQL or Forgejo Iceberg exports recoverable.
 Scheduled Iceberg exports default to PostgreSQL and require completed application storage handoff before publication.
 `NAVIGATOR_ARCHIVE_SOURCE=all` includes SurrealDB for migration or recovery; it does not certify that handoff. Physical
 base backups, WAL archiving, the restore drill, and raw PostgreSQL export helpers do not require application admission
-or a reachable SurrealDB server. See [archive source selection](iceberg-archive.md#postgresql-coverage-generations).
+or a reachable SurrealDB server. See [archive source selection](iceberg-archive.md#exporting-a-generation).
 
 ## Rollout runbook
 

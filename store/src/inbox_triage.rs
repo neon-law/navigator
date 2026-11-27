@@ -10,19 +10,12 @@
 //! the row itself.
 
 use serde::{Deserialize, Serialize};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::inbox::InboxError;
-use crate::postgres_mirror::{after_write, MirrorKey};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const TABLE: &str = "inbox_triage";
-const MESSAGE: &str = "message";
-
-const SELECT: &str = "id, message_id, firm_id, suggested_project_id, project_confidence, \
-    privilege, privilege_confidence, rationale, model_id, prompt_version, raw_output, \
-    disposition, labeled_example, inserted_at, updated_at";
 
 /// Whether one inbound Message is privileged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,16 +95,6 @@ impl TriageDisposition {
             Self::NeedsHuman => "needs_human",
         }
     }
-
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "suggested" => Some(Self::Suggested),
-            "confirmed" => Some(Self::Confirmed),
-            "overridden" => Some(Self::Overridden),
-            "needs_human" => Some(Self::NeedsHuman),
-            _ => None,
-        }
-    }
 }
 
 /// One Message's triage row as it is stored.
@@ -165,47 +148,6 @@ pub struct NewInboxTriage {
     pub labeled_example: bool,
 }
 
-#[derive(SurrealValue)]
-struct TriageRow {
-    id: surrealdb::types::RecordId,
-    message_id: surrealdb::types::RecordId,
-    firm_id: surrealdb::types::RecordId,
-    suggested_project_id: Option<surrealdb::types::RecordId>,
-    project_confidence: Option<f64>,
-    privilege: String,
-    privilege_confidence: Option<f64>,
-    rationale: Option<String>,
-    model_id: Option<String>,
-    prompt_version: String,
-    raw_output: Option<String>,
-    disposition: String,
-    labeled_example: bool,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl TriageRow {
-    fn into_triage(self) -> Option<InboxTriage> {
-        Some(InboxTriage {
-            id: record_uuid(&self.id)?,
-            message_id: record_uuid(&self.message_id)?,
-            firm_id: record_uuid(&self.firm_id)?,
-            suggested_project_id: self.suggested_project_id.as_ref().and_then(record_uuid),
-            project_confidence: self.project_confidence,
-            privilege: PrivilegeLabel::parse(&self.privilege)?,
-            privilege_confidence: self.privilege_confidence,
-            rationale: self.rationale,
-            model_id: self.model_id,
-            prompt_version: self.prompt_version,
-            raw_output: self.raw_output,
-            disposition: TriageDisposition::parse(&self.disposition)?,
-            labeled_example: self.labeled_example,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
 /// Write the triage row for one Message. One Message has one triage row: a
 /// second write for the same Message is refused, so a replayed workflow step
 /// cannot overwrite the first decision. A suggested Project must belong to
@@ -216,7 +158,10 @@ impl TriageRow {
 ///
 /// Returns a database error, `NotFound` when the suggested Project does not
 /// exist, or `CrossFirm` when it belongs to another Firm.
-pub async fn record(db: &SurrealDb, triage: &NewInboxTriage) -> Result<InboxTriage, InboxError> {
+pub async fn record(
+    db: &ApplicationStore,
+    triage: &NewInboxTriage,
+) -> Result<InboxTriage, InboxError> {
     let conversation = conversation_for_message(db, triage.message_id).await?;
     if conversation.firm_id != triage.firm_id {
         return Err(InboxError::CrossFirm);
@@ -247,58 +192,18 @@ pub async fn record(db: &SurrealDb, triage: &NewInboxTriage) -> Result<InboxTria
             return Err(InboxError::CrossFirm);
         }
     }
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+    let pg = crate::postgres::matter::authority_for(TABLE)
         .await
-        .map_err(triage_pg_error)?
-    {
-        let now = chrono::Utc::now();
-        return crate::postgres::matter::upsert(&pg, TABLE, &serde_json::json!({
+        .map_err(triage_pg_error)?;
+    let now = chrono::Utc::now();
+    crate::postgres::matter::upsert(&pg, TABLE, &serde_json::json!({
             "id": Uuid::now_v7(), "message_id": triage.message_id, "firm_id": triage.firm_id,
             "suggested_project_id": triage.suggested_project_id, "project_confidence": triage.project_confidence,
             "privilege": triage.privilege.as_str(), "privilege_confidence": triage.privilege_confidence,
             "rationale": triage.rationale,"model_id": triage.model_id,"prompt_version": triage.prompt_version,
             "raw_output": triage.raw_output,"disposition": triage.disposition.as_str(),
             "labeled_example": triage.labeled_example,"inserted_at": now,"updated_at": now,
-        })).await.map_err(triage_pg_error);
-    }
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET message_id = $message, firm_id = $firm, \
-             suggested_project_id = $suggested, project_confidence = $project_confidence, \
-             privilege = $privilege, privilege_confidence = $privilege_confidence, \
-             rationale = $rationale, model_id = $model, prompt_version = $prompt_version, \
-             raw_output = $raw, disposition = $disposition, \
-             labeled_example = $labeled_example, \
-             inserted_at = time::now(), updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("message", record_id(MESSAGE, triage.message_id)))
-        .bind(("firm", record_id(crate::firms::TABLE, triage.firm_id)))
-        .bind((
-            "suggested",
-            triage
-                .suggested_project_id
-                .map(|id| record_id(crate::projects::PROJECT_TABLE, id)),
-        ))
-        .bind(("project_confidence", triage.project_confidence))
-        .bind(("privilege", triage.privilege.as_str().to_string()))
-        .bind(("privilege_confidence", triage.privilege_confidence))
-        .bind(("rationale", triage.rationale.clone()))
-        .bind(("model", triage.model_id.clone()))
-        .bind(("prompt_version", triage.prompt_version.clone()))
-        .bind(("raw", triage.raw_output.clone()))
-        .bind(("disposition", triage.disposition.as_str().to_string()))
-        .bind(("labeled_example", triage.labeled_example))
-        .await?
-        .check()?;
-    let rows: Vec<TriageRow> = response.take(0)?;
-    let row = rows
-        .into_iter()
-        .find_map(TriageRow::into_triage)
-        .ok_or(InboxError::NotFound)?;
-    after_write(db, MirrorKey::InboxTriage(row.id)).await;
-    Ok(row)
+        })).await.map_err(triage_pg_error)
 }
 
 /// The triage row for one Message, when one exists. A caller that finds a
@@ -308,31 +213,15 @@ pub async fn record(db: &SurrealDb, triage: &NewInboxTriage) -> Result<InboxTria
 ///
 /// Returns a database error.
 pub async fn find_for_message(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     message_id: Uuid,
 ) -> Result<Option<InboxTriage>, InboxError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+    let pg = crate::postgres::matter::authority_for(TABLE)
         .await
-        .map_err(triage_pg_error)?
-    {
-        return crate::postgres::matter::find(
-            &pg,
-            TABLE,
-            serde_json::json!({"message_id": message_id}),
-        )
+        .map_err(triage_pg_error)?;
+    crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"message_id": message_id}))
         .await
-        .map_err(triage_pg_error);
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE message_id = $message LIMIT 1"
-        ))
-        .bind(("message", record_id(MESSAGE, message_id)))
-        .await?
-        .check()?;
-    let rows: Vec<TriageRow> = response.take(0)?;
-    Ok(rows.into_iter().find_map(TriageRow::into_triage))
+        .map_err(triage_pg_error)
 }
 
 /// The prompt version recorded on rows the rule layer decided without a
@@ -450,7 +339,7 @@ fn awaits_a_person(disposition: TriageDisposition) -> bool {
 ///
 /// [`InboxError::Denied`] for a Client; database errors otherwise.
 pub async fn list_for_review(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
 ) -> Result<Vec<TriageReviewRow>, InboxError> {
     let actor = crate::persons::find_by_id(db, actor_id)
@@ -473,10 +362,10 @@ pub async fn list_for_review(
     } else {
         return Err(InboxError::Denied);
     };
-    let rows: Vec<InboxTriage> = if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
-        .await
-        .map_err(triage_pg_error)?
-    {
+    let rows: Vec<InboxTriage> = {
+        let pg = crate::postgres::matter::authority_for(TABLE)
+            .await
+            .map_err(triage_pg_error)?;
         let rows: Vec<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(r) FROM inbox_triage r WHERE disposition IN ('needs_human','suggested') ORDER BY updated_at DESC,id DESC")
             .fetch_all(pg.pool()).await.map_err(crate::postgres::matter::MatterAuthorityError::from).map_err(triage_pg_error)?;
         rows.into_iter()
@@ -486,13 +375,6 @@ pub async fn list_for_review(
                     .map_err(triage_pg_error)
             })
             .collect::<Result<_, _>>()?
-    } else {
-        let mut response = db.query(format!("SELECT {SELECT} FROM {TABLE} WHERE disposition = 'needs_human' OR disposition = 'suggested' ORDER BY updated_at DESC"))
-            .await?.check()?;
-        let rows: Vec<TriageRow> = response.take(0)?;
-        rows.into_iter()
-            .filter_map(TriageRow::into_triage)
-            .collect()
     };
     let mut review_rows = Vec::new();
     for triage in rows {
@@ -512,7 +394,7 @@ pub async fn list_for_review(
 /// The review context for one triage row: the conversation its message
 /// landed in and the suggested Project's name.
 async fn review_row(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor: &crate::persons::Person,
     mut triage: InboxTriage,
 ) -> Result<Option<TriageReviewRow>, InboxError> {
@@ -553,7 +435,7 @@ async fn review_row(
 /// The conversation one triaged Message landed in — the row's channel and
 /// sender live there, not on the triage record.
 async fn conversation_for_message(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     message_id: Uuid,
 ) -> Result<crate::inbox::Conversation, InboxError> {
     let message = crate::inbox::message_by_id(db, message_id)
@@ -570,25 +452,15 @@ async fn conversation_for_message(
 ///
 /// Returns a database error.
 pub async fn find_by_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     triage_id: Uuid,
 ) -> Result<Option<InboxTriage>, InboxError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+    let pg = crate::postgres::matter::authority_for(TABLE)
         .await
-        .map_err(triage_pg_error)?
-    {
-        return crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": triage_id}))
-            .await
-            .map_err(triage_pg_error);
-    }
-
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM $id"))
-        .bind(("id", record_id(TABLE, triage_id)))
-        .await?
-        .check()?;
-    let rows: Vec<TriageRow> = response.take(0)?;
-    Ok(rows.into_iter().find_map(TriageRow::into_triage))
+        .map_err(triage_pg_error)?;
+    crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": triage_id}))
+        .await
+        .map_err(triage_pg_error)
 }
 
 /// Identity carried by one lawyer-approved Message filing. The workflow
@@ -604,7 +476,7 @@ pub struct FilingApproval {
 }
 
 async fn latest_assignment_id(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     conversation_id: Uuid,
 ) -> Result<Option<Uuid>, InboxError> {
     Ok(crate::inbox::assignments(db, conversation_id)
@@ -621,7 +493,7 @@ async fn latest_assignment_id(
 ///
 /// Propagates store errors. Returns no action for an inaccessible or stale proposal.
 pub async fn filing_action_for_review(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     row: &TriageReviewRow,
 ) -> Result<Option<FilingApproval>, InboxError> {
@@ -644,7 +516,7 @@ pub async fn filing_action_for_review(
 }
 
 async fn approved_filing_context(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     approval: &FilingApproval,
 ) -> Result<(crate::inbox::Conversation, crate::inbox::Message), InboxError> {
     let actor = crate::inbox::load_person(db, approval.approved_by).await?;
@@ -727,7 +599,7 @@ fn filing_source_is_reviewable(
 ///
 /// Returns a denial, a stale-proposal error or a store error.
 pub async fn verify_filing_approval(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     approval: &FilingApproval,
 ) -> Result<(), InboxError> {
     approved_filing_context(db, approval).await.map(|_| ())
@@ -758,7 +630,7 @@ pub struct ApprovedAttachment {
 ///
 /// Denies stale approvals, unrelated assets, and unsupported document kinds.
 pub async fn approved_attachment(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     approval: &AttachmentFilingApproval,
 ) -> Result<ApprovedAttachment, InboxError> {
     if !rules::kind::Kind::parse(&approval.kind)
@@ -789,14 +661,12 @@ pub async fn approved_attachment(
 ///
 /// Returns an error for stale approvals, missing PostgreSQL authority or storage errors.
 pub async fn queue_attachment_filing(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     approval: &AttachmentFilingApproval,
     retry: bool,
 ) -> Result<Uuid, InboxError> {
     approved_attachment(db, approval).await?;
-    let pg = crate::inbox::inbox_authority()
-        .await?
-        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    let pg = crate::inbox::inbox_authority().await?;
     sqlx::query_scalar(
         "INSERT INTO inbox_attachment_filing (id, message_id, project_id, attachment_asset_id, approval)
          VALUES ($1, $2, $3, $4, $5)
@@ -835,13 +705,11 @@ pub struct AttachmentFilingStatus {
 ///
 /// Returns an error if the approval scope has changed or the database is unavailable.
 pub async fn attachment_filing_statuses(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     filing: &FilingApproval,
 ) -> Result<Vec<AttachmentFilingStatus>, InboxError> {
     verify_filing_approval(db, filing).await?;
-    let pg = crate::inbox::inbox_authority()
-        .await?
-        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    let pg = crate::inbox::inbox_authority().await?;
     let rows: Vec<(Uuid, String, String, Option<String>)> = sqlx::query_as(
         "SELECT DISTINCT ON (attachment_asset_id) attachment_asset_id AS asset_id,
                 approval->>'kind' AS kind, state, failure_code
@@ -883,9 +751,7 @@ pub struct AttachmentFilingAttempt {
 pub async fn pending_attachment_filings(
     limit: i64,
 ) -> Result<Vec<AttachmentFilingAttempt>, InboxError> {
-    let pg = crate::inbox::inbox_authority()
-        .await?
-        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    let pg = crate::inbox::inbox_authority().await?;
     let rows: Vec<(Uuid, i32)> = sqlx::query_as(
         "SELECT id, attempt FROM inbox_attachment_filing
          WHERE state = 'pending' ORDER BY inserted_at, id LIMIT $1",
@@ -908,9 +774,7 @@ pub async fn pending_attachment_filings(
 pub async fn pending_attachment_filing(
     job: AttachmentFilingAttempt,
 ) -> Result<Option<AttachmentFilingApproval>, InboxError> {
-    let pg = crate::inbox::inbox_authority()
-        .await?
-        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    let pg = crate::inbox::inbox_authority().await?;
     let row: Option<sqlx::types::Json<AttachmentFilingApproval>> = sqlx::query_scalar(
         "SELECT approval FROM inbox_attachment_filing WHERE id = $1 AND attempt = $2 AND state = 'pending'",
     )
@@ -931,9 +795,7 @@ pub async fn finish_attachment_filing(
     job: AttachmentFilingAttempt,
     result: Result<Uuid, &'static str>,
 ) -> Result<(), InboxError> {
-    let pg = crate::inbox::inbox_authority()
-        .await?
-        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    let pg = crate::inbox::inbox_authority().await?;
     let (state, asset, failure) = match result {
         Ok(asset) => ("filed", Some(asset), None),
         Err(code) => ("failed", None, Some(code)),
@@ -963,7 +825,7 @@ pub async fn finish_attachment_filing(
 /// Denies an approver who lost access, or a stale approval. Propagates store
 /// failures and source references that already belong to another Project.
 pub async fn file_approved_message(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     approval: &FilingApproval,
 ) -> Result<Uuid, InboxError> {
     let (conversation, message) = approved_filing_context(db, approval).await?;
@@ -1006,53 +868,19 @@ struct ReviewDecision {
 /// the row itself: the new disposition, the decision's rationale, and — for
 /// a correction — the labeled-example flag.
 async fn write_review_decision(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     triage_id: Uuid,
     decision: ReviewDecision,
 ) -> Result<InboxTriage, InboxError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+    let pg = crate::postgres::matter::authority_for(TABLE)
         .await
-        .map_err(triage_pg_error)?
-    {
-        return crate::postgres::matter::update(&pg, TABLE, serde_json::json!({"id": triage_id}), serde_json::json!({
+        .map_err(triage_pg_error)?;
+    crate::postgres::matter::update(&pg, TABLE, serde_json::json!({"id": triage_id}), serde_json::json!({
             "privilege": decision.privilege.as_str(),"privilege_confidence": decision.privilege_confidence,
             "suggested_project_id": decision.suggested_project_id,"project_confidence": decision.project_confidence,
             "rationale": decision.rationale,"disposition": decision.disposition.as_str(),
             "labeled_example": decision.labeled_example,"updated_at": chrono::Utc::now(),
-        })).await.map_err(triage_pg_error)?.into_iter().next().ok_or(InboxError::NotFound);
-    }
-
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET privilege = $privilege, \
-             privilege_confidence = $privilege_confidence, \
-             suggested_project_id = $suggested, \
-             project_confidence = $project_confidence, rationale = $rationale, \
-             disposition = $disposition, labeled_example = $labeled_example, \
-             updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, triage_id)))
-        .bind(("privilege", decision.privilege.as_str().to_string()))
-        .bind(("privilege_confidence", decision.privilege_confidence))
-        .bind((
-            "suggested",
-            decision
-                .suggested_project_id
-                .map(|id| record_id(crate::projects::PROJECT_TABLE, id)),
-        ))
-        .bind(("project_confidence", decision.project_confidence))
-        .bind(("rationale", decision.rationale.clone()))
-        .bind(("disposition", decision.disposition.as_str().to_string()))
-        .bind(("labeled_example", decision.labeled_example))
-        .await?
-        .check()?;
-    let rows: Vec<TriageRow> = response.take(0)?;
-    let row = rows
-        .into_iter()
-        .find_map(TriageRow::into_triage)
-        .ok_or(InboxError::NotFound)?;
-    after_write(db, MirrorKey::InboxTriage(row.id)).await;
-    Ok(row)
+        })).await.map_err(triage_pg_error)?.into_iter().next().ok_or(InboxError::NotFound)
 }
 
 /// A row a person may still decide: never one whose decision is recorded.
@@ -1073,7 +901,7 @@ fn require_open(row: &InboxTriage) -> Result<(), InboxError> {
 ///
 /// Returns an error when the review or Project is out of scope, stale, or invalid.
 pub async fn review_queue_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     triage_id: Uuid,
     project_id: Uuid,
@@ -1097,7 +925,7 @@ pub async fn review_queue_project(
 }
 
 async fn review_email_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     row: &InboxTriage,
     conversation: &crate::inbox::Conversation,
@@ -1167,7 +995,7 @@ async fn review_email_project(
 /// [`InboxError::Denied`] when the actor fails the review authority, and
 /// [`InboxError::CrossFirm`] when the suggestion crosses Firms.
 pub async fn confirm_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     triage_id: Uuid,
     project_id: Uuid,
@@ -1233,7 +1061,7 @@ pub async fn confirm_project(
 /// blank, [`InboxError::Denied`] when the actor fails the review authority,
 /// and [`InboxError::CrossFirm`] when the correction crosses Firms.
 pub async fn override_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     triage_id: Uuid,
     project_id: Uuid,
@@ -1299,7 +1127,7 @@ pub async fn override_project(
 /// resolution, or the rationale is blank, and [`InboxError::Denied`] when
 /// the actor fails the review authority.
 pub async fn resolve_privilege(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     triage_id: Uuid,
     requested: PrivilegeLabel,
@@ -1390,7 +1218,7 @@ pub async fn resolve_privilege(
 /// [`InboxError::NotFound`] when the row does not exist and
 /// [`InboxError::Denied`] when the actor fails the review authority.
 pub async fn rerun(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     triage_id: Uuid,
 ) -> Result<InboxTriage, InboxError> {
@@ -1435,7 +1263,7 @@ pub async fn rerun(
 }
 
 /// The conversation id behind a triage row — the assignment doors need it.
-async fn row_conversation_id(db: &SurrealDb, row: &InboxTriage) -> Result<Uuid, InboxError> {
+async fn row_conversation_id(db: &ApplicationStore, row: &InboxTriage) -> Result<Uuid, InboxError> {
     Ok(conversation_for_message(db, row.message_id).await?.id)
 }
 
@@ -1567,7 +1395,7 @@ mod tests {
     }
 
     async fn inbound(
-        db: &crate::surreal::SurrealDb,
+        db: &crate::application_store::ApplicationStore,
         firm_id: Uuid,
         channel: &'static str,
         provider_message_id: &'static str,
@@ -1642,7 +1470,7 @@ mod tests {
                 #[allow(unused_variables)]
                 let $pg = pg.clone();
                 crate::postgres::PostgresDb::with_application_db(pg, async move {
-                    let $db = crate::surreal::SurrealDb::uninitialized();
+                    let $db = crate::application_store::ApplicationStore::uninitialized();
                     $body
                 })
                 .await
@@ -1825,7 +1653,11 @@ let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
     use crate::firms::{FirmMembership, NewPersonFirmRole};
     use crate::persons::{self, NewPerson, Role};
 
-    async fn person(db: &crate::surreal::SurrealDb, name: &str, role: Role) -> Uuid {
+    async fn person(
+        db: &crate::application_store::ApplicationStore,
+        name: &str,
+        role: Role,
+    ) -> Uuid {
         persons::create(
             db,
             &NewPerson::with_role(
@@ -1844,7 +1676,7 @@ let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
     }
 
     async fn member(
-        db: &crate::surreal::SurrealDb,
+        db: &crate::application_store::ApplicationStore,
         person_id: Uuid,
         firm_id: Uuid,
         membership: FirmMembership,
@@ -1864,7 +1696,11 @@ let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
 
     /// Give the lawyer a firm-side participation row on the Project — the
     /// row `can_see_project` resolves for the participation check.
-    async fn participate(db: &crate::surreal::SurrealDb, person_id: Uuid, project_id: Uuid) {
+    async fn participate(
+        db: &crate::application_store::ApplicationStore,
+        person_id: Uuid,
+        project_id: Uuid,
+    ) {
         let role = crate::persons::find_by_id(db, person_id)
             .await
             .unwrap()
@@ -1882,7 +1718,7 @@ let firm = crate::test_support::seed_firm_with_new_brand(&db, "neon").await.0;
 
     /// A NeedsHuman email row whose classifier suggested `project`.
     async fn needs_human_with_suggestion(
-        db: &crate::surreal::SurrealDb,
+        db: &crate::application_store::ApplicationStore,
         firm: Uuid,
         tag: &'static str,
         project: Option<Uuid>,

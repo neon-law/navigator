@@ -126,7 +126,7 @@ fn inbox_error(error: &store::inbox::InboxError) -> ApiError {
 /// The caller's practice Firm: exactly one membership, or name the
 /// ambiguity and ask for a matter code.
 async fn resolve_firm(state: &ApiState, person_id: Uuid) -> Result<Uuid, Response> {
-    let memberships = store::firms::memberships_for_person(&state.surreal, person_id)
+    let memberships = store::firms::memberships_for_person(&state.application_store, person_id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()).into_response())?;
     let mut firms = memberships
@@ -155,7 +155,7 @@ async fn resolve_named_firm(
     person_id: Uuid,
     firm_id: Uuid,
 ) -> Result<Uuid, Response> {
-    let memberships = store::firms::memberships_for_person(&state.surreal, person_id)
+    let memberships = store::firms::memberships_for_person(&state.application_store, person_id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()).into_response())?;
     if memberships
@@ -188,14 +188,14 @@ async fn gmail_import_firm(
     mailbox: &str,
 ) -> Result<(Uuid, String), ApiError> {
     let config = crate::lawyer_mailbox::Config::from_env().ok_or(ApiError::Forbidden)?;
-    let person = store::persons::find_by_any_email(&state.surreal, mailbox)
+    let person = store::persons::find_by_any_email(&state.application_store, mailbox)
         .await
         .map_err(ApiError::Person)?
         .filter(|person| {
             person.id == actor_id && person.email_confirmed && person.role.is_lawyer_tier()
         })
         .ok_or(ApiError::Forbidden)?;
-    let memberships = store::firms::memberships_for_person(&state.surreal, person.id)
+    let memberships = store::firms::memberships_for_person(&state.application_store, person.id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     if !config.provider_account().eq_ignore_ascii_case(mailbox)
@@ -225,7 +225,7 @@ async fn resolve_firm_and_project(
         };
         return Ok((firm_id, None));
     };
-    let Some(project) = store::projects::find_by_code(&state.surreal, code)
+    let Some(project) = store::projects::find_by_code(&state.application_store, code)
         .await
         .map_err(|error| ApiError::Db(error.to_string()).into_response())?
     else {
@@ -235,7 +235,7 @@ async fn resolve_firm_and_project(
         ));
     };
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         Some(person_id),
         lawyer.0.role,
         project.id,
@@ -346,7 +346,7 @@ async fn ensure_gmail_review(
 ) -> Result<(), ApiError> {
     use store::inbox_triage::{self, NewInboxTriage, PrivilegeLabel, TriageDisposition};
 
-    let existing = || inbox_triage::find_for_message(&state.surreal, message_id);
+    let existing = || inbox_triage::find_for_message(&state.application_store, message_id);
     if existing()
         .await
         .map_err(|error| inbox_error(&error))?
@@ -368,7 +368,7 @@ async fn ensure_gmail_review(
         disposition: TriageDisposition::NeedsHuman,
         labeled_example: false,
     };
-    if let Err(error) = inbox_triage::record(&state.surreal, &review).await {
+    if let Err(error) = inbox_triage::record(&state.application_store, &review).await {
         // The Message index settles concurrent imports. Only a committed
         // review makes a failed create equivalent to success.
         if existing()
@@ -438,7 +438,7 @@ async fn import_all(
         for (index, attachment) in message.attachments.iter().enumerate() {
             let link = if mailbox.gmail {
                 store::inbox::ingest_attachment(
-                    &state.surreal,
+                    &state.application_store,
                     &state.storage,
                     firm_id,
                     None,
@@ -474,9 +474,14 @@ async fn import_all(
             });
             links.push(link);
         }
-        store::inbox::link_message_assets(&state.surreal, firm_id, ingested.message_id, &links)
-            .await
-            .map_err(|error| inbox_error(&error))?;
+        store::inbox::link_message_assets(
+            &state.application_store,
+            firm_id,
+            ingested.message_id,
+            &links,
+        )
+        .await
+        .map_err(|error| inbox_error(&error))?;
 
         if mailbox.gmail {
             ensure_gmail_review(state, firm_id, ingested.message_id).await?;
@@ -662,9 +667,14 @@ async fn attribute_imports(
     conversations.sort_unstable();
     conversations.dedup();
     for conversation_id in conversations {
-        store::inbox::assign(&state.surreal, person_id, conversation_id, project_id)
-            .await
-            .map_err(|error| inbox_error(&error))?;
+        store::inbox::assign(
+            &state.application_store,
+            person_id,
+            conversation_id,
+            project_id,
+        )
+        .await
+        .map_err(|error| inbox_error(&error))?;
     }
     Ok(())
 }
@@ -731,7 +741,7 @@ async fn file_import_attachment(
         subject: message.subject.as_deref().unwrap_or_default(),
     };
     let filed = store::assets::file_revision_with_provenance(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         &args,
         &identity,
@@ -789,15 +799,20 @@ pub(crate) async fn fi_import_door(
             Err(response) => return Ok(response),
         };
     if let Some(project_id) = project {
-        store::inbox::require_assignment_authorization(&state.surreal, actor, firm, project_id)
-            .await
-            .map_err(|error| inbox_error(&error))?;
+        store::inbox::require_assignment_authorization(
+            &state.application_store,
+            actor,
+            firm,
+            project_id,
+        )
+        .await
+        .map_err(|error| inbox_error(&error))?;
     }
-    let brand = store::brands::find_by_key(&state.surreal, input.brand.trim())
+    let brand = store::brands::find_by_key(&state.application_store, input.brand.trim())
         .await
         .map_err(|_| ApiError::NotFound)?
         .ok_or(ApiError::NotFound)?;
-    if store::firms::firm_id_for_brand_key(&state.surreal, &brand.key)
+    if store::firms::firm_id_for_brand_key(&state.application_store, &brand.key)
         .await
         .map_err(|_| ApiError::NotFound)?
         != Some(firm)
@@ -863,21 +878,6 @@ pub(crate) async fn fi_import_door(
         )
             .into_response());
     }
-    // Only after complete parse, scope and conflict validation: required
-    // source-authoritative parents, with no raw-payload archive or provider call.
-    let mut parents = vec![
-        store::postgres_mirror::MirrorKey::Firm(firm),
-        store::postgres_mirror::MirrorKey::Person(actor),
-        store::postgres_mirror::MirrorKey::Brand(brand.id),
-    ];
-    if let Some(project) = project {
-        parents.push(store::postgres_mirror::MirrorKey::Project(project));
-    }
-    for key in parents {
-        store::postgres_mirror::mirror(&state.surreal, &pg, &key)
-            .await
-            .map_err(|_| ApiError::Db("Fi import dependency projection failed".into()))?;
-    }
     let mut imported = Vec::new();
     for row in &rows {
         let saved = match fi_import::ingest_on(&pg, &scope, row).await {
@@ -900,9 +900,14 @@ pub(crate) async fn fi_import_door(
             "conversation_id":saved.conversation_id,"deduped":saved.deduped}),
         );
         if let Some(project) = project {
-            if store::inbox::assign(&state.surreal, actor, saved.conversation_id, project)
-                .await
-                .is_err()
+            if store::inbox::assign(
+                &state.application_store,
+                actor,
+                saved.conversation_id,
+                project,
+            )
+            .await
+            .is_err()
             {
                 return Ok((
                     StatusCode::SERVICE_UNAVAILABLE,

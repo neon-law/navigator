@@ -49,13 +49,17 @@ pub fn open_matters_message(brands: &[BrandOpenPitch]) -> String {
 /// # Errors
 /// The Firm lookup or the count read failed.
 pub async fn slack_firm_open_pitch_counts(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     firm: DeploymentSlackFirm,
 ) -> Result<Vec<BrandOpenPitch>, String> {
-    let Some(firm_id) = firm.resolve(surreal).await.map_err(|e| e.to_string())? else {
+    let Some(firm_id) = firm
+        .resolve(application_store)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
         return Ok(Vec::new());
     };
-    store::projects::matter_open_pitch_counts(surreal, firm_id)
+    store::projects::matter_open_pitch_counts(application_store, firm_id)
         .await
         .map_err(|e| e.to_string())
 }

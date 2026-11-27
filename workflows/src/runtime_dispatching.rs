@@ -42,7 +42,7 @@ pub struct DispatchingRuntime {
     /// while a store is not, so the email/document unit tests stay
     /// store-free. Set via [`DispatchingRuntime::with_store`]; a step
     /// reached without one errors clearly.
-    surreal: Option<store::surreal::SurrealDb>,
+    application_store: Option<store::application_store::ApplicationStore>,
 }
 
 impl DispatchingRuntime {
@@ -56,7 +56,7 @@ impl DispatchingRuntime {
             inner,
             email,
             storage,
-            surreal: None,
+            application_store: None,
         }
     }
 
@@ -66,8 +66,11 @@ impl DispatchingRuntime {
     /// `certified_mail` / `e_filing` / `filing__*` step, or that closes a
     /// matter.
     #[must_use]
-    pub fn with_store(mut self, surreal: store::surreal::SurrealDb) -> Self {
-        self.surreal = Some(surreal);
+    pub fn with_store(
+        mut self,
+        application_store: store::application_store::ApplicationStore,
+    ) -> Self {
+        self.application_store = Some(application_store);
         self
     }
 
@@ -94,8 +97,8 @@ impl DispatchingRuntime {
         // `generate_pdf` reads the pinned template's kind through this
         // handle. Absent for the DB-free email/document unit tests, which
         // never reach either step.
-        if let Some(surreal) = self.surreal.clone() {
-            deps = deps.with_surreal(surreal);
+        if let Some(application_store) = self.application_store.clone() {
+            deps = deps.with_application_store(application_store);
         }
         // The step may return a journal payload (a `generate_pdf` blob
         // ref); the in-process runtime's inner journal has already
@@ -144,14 +147,14 @@ impl StateMachineRuntime for DispatchingRuntime {
         // flips `projects.status` too.
         if matches!(kind, MachineKind::Workflow) {
             if let Some(from) = from.as_ref().filter(|s| crate::closes_matter(s)) {
-                let surreal = self.surreal.as_ref().ok_or_else(|| {
+                let application_store = self.application_store.as_ref().ok_or_else(|| {
                     WorkflowRuntimeError::Transport(format!(
                         "closing a matter (leaving {}) requires a store \
                          (DispatchingRuntime::with_store)",
                         from.as_str()
                     ))
                 })?;
-                crate::close_matter(surreal, notation_id)
+                crate::close_matter(application_store, notation_id)
                     .await
                     .map_err(|e| WorkflowRuntimeError::Transport(format!("close matter: {e}")))?;
             }
@@ -175,14 +178,14 @@ impl StateMachineRuntime for DispatchingRuntime {
         self.maybe_dispatch(notation_id, &next, payload).await?;
         if matches!(kind, MachineKind::Workflow) {
             if let Some(from) = from.as_ref().filter(|s| crate::closes_matter(s)) {
-                let surreal = self.surreal.as_ref().ok_or_else(|| {
+                let application_store = self.application_store.as_ref().ok_or_else(|| {
                     WorkflowRuntimeError::Transport(format!(
                         "closing a matter (leaving {}) requires a store \
                          (DispatchingRuntime::with_store)",
                         from.as_str()
                     ))
                 })?;
-                crate::close_matter(surreal, notation_id)
+                crate::close_matter(application_store, notation_id)
                     .await
                     .map_err(|e| WorkflowRuntimeError::Transport(format!("close matter: {e}")))?;
             }

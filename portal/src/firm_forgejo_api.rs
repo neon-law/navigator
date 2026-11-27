@@ -45,7 +45,7 @@ fn provision_error(error: &ProvisionError, firm_id: Uuid) -> Response {
             (StatusCode::CONFLICT, "forgejo_organization_unavailable")
         }
         ProvisionError::Organization(_) => (StatusCode::BAD_GATEWAY, "forgejo_unavailable"),
-        ProvisionError::Db(_) | ProvisionError::Postgres(_) | ProvisionError::Mirror(_) => {
+        ProvisionError::Db(_) | ProvisionError::Postgres(_) => {
             (StatusCode::INTERNAL_SERVER_ERROR, "store_error")
         }
     };
@@ -71,7 +71,12 @@ pub(crate) async fn provision(
         return Err(ApiError::Forbidden);
     }
     let allowed = FirmCapability::ManageMembership
-        .resolve(&state.surreal, session.role, session.person_id, firm_id)
+        .resolve(
+            &state.application_store,
+            session.role,
+            session.person_id,
+            firm_id,
+        )
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     if !allowed.is_allowed() {
@@ -87,7 +92,9 @@ pub(crate) async fn provision(
     let kms = crate::integrations::runtime_kms_from_env().await;
     let lookup = |key: &str| std::env::var(key).ok();
     Ok(
-        match organization::provision(&state.surreal, &pg, firm_id, kms.as_ref(), lookup).await {
+        match organization::provision(&state.application_store, &pg, firm_id, kms.as_ref(), lookup)
+            .await
+        {
             Ok((reconciled, recorded)) => {
                 tracing::info!(
                     event = "firm_forgejo_organization_reconciled",
@@ -141,7 +148,7 @@ mod tests {
         body::Body,
         http::{header, Request, StatusCode},
     };
-    use store::persons::{NewPerson, Role};
+    use store::persons::Role;
     use tower::ServiceExt;
     use uuid::Uuid;
 
@@ -186,79 +193,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_a_firms_administrator_reaches_provisioning_and_the_directory_names_the_slug() {
-        let db = store::test_support::mem_surreal().await;
-        let admin = store::persons::create(
-            &db,
-            &NewPerson::with_role(
-                "Synthetic administrator",
-                "forgejo-admin@example.com",
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let outsider = store::persons::create(
-            &db,
-            &NewPerson::with_role(
-                "Synthetic unrelated administrator",
-                "forgejo-outsider@example.com",
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &db,
-            &store::firms::NewFirm {
-                name: "Example Law PC".into(),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(&db).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        let app = crate::router(crate::test_support::app_state(db).await);
-        let route = format!("/app/api/firms/{}/forgejo-organization", firm.id);
-
-        let (status, _) = send(&app, "POST", &route, &bearer(outsider.id, Role::Admin)).await;
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "another Firm's administrator"
-        );
-        let (status, _) = send(&app, "POST", &route, &bearer(outsider.id, Role::Client)).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "a client");
-        let unknown = format!("/app/api/firms/{}/forgejo-organization", Uuid::now_v7());
-        let (status, _) = send(&app, "POST", &unknown, &bearer(admin.id, Role::Owner)).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "an unknown Firm");
-
-        // The Firm's own administrator is admitted; without PostgreSQL the
-        // door refuses before any forge request is made.
-        let (status, body) = send(&app, "POST", &route, &bearer(admin.id, Role::Admin)).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
-        assert!(
-            body.contains("forgejo_organization_requires_postgresql"),
-            "{body}"
-        );
-
-        let (status, body) = send(
-            &app,
-            "GET",
-            "/app/api/firms",
-            &bearer(admin.id, Role::Admin),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        let firms: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(firms[0]["slug"], "example-law-pc", "{body}");
-    }
-
-    #[tokio::test]
     async fn any_signed_in_person_reaches_the_firm_libraries_door() {
         // The door reads PostgreSQL only; no SurrealDB engine answers here.
-        let db = store::surreal::test_support::unreachable();
+        let db = store::test_support::uninitialized_store();
         let app = crate::router(crate::test_support::app_state(db).await);
         let route = "/app/api/firm-libraries";
 

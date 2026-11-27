@@ -10,13 +10,8 @@
 use sqlx::{postgres::PgRow, Row};
 use uuid::Uuid;
 
-use super::{
-    MeterDecision, SandboxUsage, SandboxUsageError, SandboxUsageRow, MONTHLY_GRANT_CENTS, SELECT,
-    TABLE,
-};
+use super::{MeterDecision, SandboxUsage, SandboxUsageError, MONTHLY_GRANT_CENTS, SELECT, TABLE};
 use crate::postgres::PostgresDb;
-use crate::postgres_backfill::Copied;
-use crate::surreal::SurrealDb;
 
 fn usage(row: &PgRow) -> Result<SandboxUsage, sqlx::Error> {
     Ok(SandboxUsage {
@@ -117,42 +112,4 @@ pub(super) async fn overage_rows(
     .iter()
     .map(usage)
     .collect::<Result<_, _>>()?)
-}
-
-/// Copy every SurrealDB period row PostgreSQL does not hold. A period
-/// PostgreSQL already holds keeps its own balance.
-pub(crate) async fn copy_from_surreal(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-) -> Result<Copied, surrealdb::Error> {
-    let rows: Vec<SandboxUsageRow> = surreal
-        .query(format!("SELECT {SELECT} FROM {TABLE}"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?
-        .take(0)?;
-    let mut copied = Copied::default();
-    for row in rows {
-        let Some(usage) = row.into_usage() else {
-            copied.unrepresentable(TABLE);
-            continue;
-        };
-        let result = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO {TABLE} (id, person_id, period, granted_cents, spent_cents, overage, \
-             inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (person_id, period) DO NOTHING"
-        )))
-        .bind(Uuid::now_v7())
-        .bind(usage.person_id)
-        .bind(&usage.period)
-        .bind(usage.granted_cents)
-        .bind(usage.spent_cents)
-        .bind(usage.overage)
-        .bind(usage.inserted_at)
-        .bind(usage.updated_at)
-        .execute(&pg.0)
-        .await
-        .map(|done| done.rows_affected());
-        copied.record(TABLE, Some(usage.person_id), result);
-    }
-    Ok(copied)
 }

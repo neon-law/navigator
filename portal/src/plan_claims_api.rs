@@ -88,7 +88,7 @@ pub(super) async fn worklist(
     } else {
         legal_plans_api::authorize(&state, &session, firm, FirmCapability::ViewDirectory).await?;
         let projects = store::access::visible_projects_as_lawyer(
-            &state.surreal,
+            &state.application_store,
             session.person_id,
             session.role,
         )

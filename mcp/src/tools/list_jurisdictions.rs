@@ -8,7 +8,7 @@
 //! call. Sorted by `name` for stable output.
 
 use serde_json::{json, Value};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 
 use super::ToolError;
 
@@ -32,8 +32,11 @@ pub fn descriptor() -> Value {
 }
 
 /// Read every jurisdiction and return the MCP `result` payload.
-pub async fn call(surreal: &SurrealDb, _arguments: &Value) -> Result<Value, ToolError> {
-    let rows = store::jurisdictions::list_all(surreal).await?;
+pub async fn call(
+    application_store: &ApplicationStore,
+    _arguments: &Value,
+) -> Result<Value, ToolError> {
+    let rows = store::jurisdictions::list_all(application_store).await?;
 
     let jurisdictions: Vec<Value> = rows
         .iter()
@@ -71,9 +74,13 @@ mod tests {
     use super::{call, descriptor};
     use serde_json::json;
 
-    async fn seed(surreal: &store::surreal::SurrealDb, name: &str, code: &str) {
+    async fn seed(
+        application_store: &store::application_store::ApplicationStore,
+        name: &str,
+        code: &str,
+    ) {
         store::jurisdictions::create(
-            surreal,
+            application_store,
             &store::jurisdictions::NewJurisdiction::new(name, code, "state"),
         )
         .await
@@ -93,8 +100,8 @@ mod tests {
     #[tokio::test]
     async fn empty_database_returns_zero_count_not_an_error() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let result = call(&surreal, &json!({})).await.unwrap();
+            let application_store = crate::test_fixtures::handle();
+            let result = call(&application_store, &json!({})).await.unwrap();
             assert_eq!(result["structuredContent"]["count"], 0);
             assert_eq!(
                 result["structuredContent"]["jurisdictions"]
@@ -112,13 +119,13 @@ mod tests {
     #[tokio::test]
     async fn returns_every_seeded_jurisdiction_sorted_by_name() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             // Insert out of alphabetical order so we can prove the sort.
-            seed(&surreal, "Nevada", "NV").await;
-            seed(&surreal, "California", "CA").await;
-            seed(&surreal, "Alabama", "AL").await;
+            seed(&application_store, "Nevada", "NV").await;
+            seed(&application_store, "California", "CA").await;
+            seed(&application_store, "Alabama", "AL").await;
 
-            let result = call(&surreal, &json!({})).await.unwrap();
+            let result = call(&application_store, &json!({})).await.unwrap();
             assert_eq!(result["structuredContent"]["count"], 3);
             let names: Vec<&str> = result["structuredContent"]["jurisdictions"]
                 .as_array()
@@ -134,9 +141,9 @@ mod tests {
     #[tokio::test]
     async fn each_row_carries_id_name_and_code() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Nevada", "NV").await;
-            let result = call(&surreal, &json!({})).await.unwrap();
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Nevada", "NV").await;
+            let result = call(&application_store, &json!({})).await.unwrap();
             let row = &result["structuredContent"]["jurisdictions"][0];
             assert_eq!(row["name"], "Nevada");
             assert_eq!(row["code"], "NV");
@@ -150,9 +157,11 @@ mod tests {
     #[tokio::test]
     async fn ignores_arguments_silently() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Nevada", "NV").await;
-            let result = call(&surreal, &json!({ "garbage": 42 })).await.unwrap();
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Nevada", "NV").await;
+            let result = call(&application_store, &json!({ "garbage": 42 }))
+                .await
+                .unwrap();
             assert_eq!(result["structuredContent"]["count"], 1);
         })
         .await;
@@ -161,10 +170,10 @@ mod tests {
     #[tokio::test]
     async fn summary_lists_name_and_code_pairs() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed(&surreal, "Nevada", "NV").await;
-            seed(&surreal, "California", "CA").await;
-            let result = call(&surreal, &json!({})).await.unwrap();
+            let application_store = crate::test_fixtures::handle();
+            seed(&application_store, "Nevada", "NV").await;
+            seed(&application_store, "California", "CA").await;
+            let result = call(&application_store, &json!({})).await.unwrap();
             let text = result["content"][0]["text"].as_str().unwrap();
             assert!(text.contains("2 jurisdictions:"), "got: {text}");
             assert!(text.contains("Nevada (NV)"));

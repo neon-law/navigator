@@ -13,10 +13,9 @@ use uuid::Uuid;
 
 use cloud::contacts::{ContactBooks, ContactPhone, ContactsError, ManagedContact};
 
-use crate::persons::{self, Person, Role};
+use crate::application_store::ApplicationStore;
+use crate::persons::{Person, Role};
 use crate::postgres::{participation, projects as pg_projects, PostgresDb};
-use crate::projects;
-use crate::surreal::SurrealDb;
 
 /// What one sync changed, in counts only: names and numbers stay inside it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -55,30 +54,12 @@ fn db(error: impl std::fmt::Display) -> ContactSyncError {
 /// # Errors
 /// A store or provider failure; members already synced stay synced.
 pub async fn sync_project_members(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     books: &dyn ContactBooks,
 ) -> Result<ContactSyncReport, ContactSyncError> {
-    if let Some(pg) = crate::persons::postgres_authority().await.map_err(db)? {
-        return sync_project_members_postgres(&pg, project_id, books).await;
-    }
-    let mut report = ContactSyncReport::default();
-    for row in projects::participations_for_project(surreal, project_id)
-        .await
-        .map_err(db)?
-    {
-        let Some(member) = persons::find_by_id(surreal, row.person_id)
-            .await
-            .map_err(db)?
-        else {
-            continue;
-        };
-        if member.role == Role::Client || member.email.trim().is_empty() {
-            continue;
-        }
-        report += sync_member(surreal, &member, books).await?;
-    }
-    Ok(report)
+    let pg = crate::persons::postgres_authority().await.map_err(db)?;
+    sync_project_members_postgres(&pg, project_id, books).await
 }
 
 /// Reconcile one Project using an explicit PostgreSQL authority.
@@ -119,15 +100,12 @@ async fn sync_project_members_postgres(
 /// # Errors
 /// A store or provider failure.
 pub async fn sync_member(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     member: &Person,
     books: &dyn ContactBooks,
 ) -> Result<ContactSyncReport, ContactSyncError> {
-    if let Some(pg) = crate::persons::postgres_authority().await.map_err(db)? {
-        return sync_member_postgres(&pg, member, books).await;
-    }
-    let wanted = wanted_contacts(surreal, member.id).await?;
-    reconcile(member, wanted, books).await
+    let pg = crate::persons::postgres_authority().await.map_err(db)?;
+    sync_member_postgres(&pg, member, books).await
 }
 
 fn map_contacts(error: ContactsError) -> ContactSyncError {
@@ -277,73 +255,4 @@ fn same(left: &ManagedContact, right: &ManagedContact) -> bool {
     let emails = |contact: &ManagedContact| contact.emails.iter().cloned().collect::<BTreeSet<_>>();
     let phones = |contact: &ManagedContact| contact.phones.iter().cloned().collect::<BTreeSet<_>>();
     left.name == right.name && emails(left) == emails(right) && phones(left) == phones(right)
-}
-
-/// Every other participant on the member's open matters, by Person id.
-async fn wanted_contacts(
-    surreal: &SurrealDb,
-    member_id: Uuid,
-) -> Result<BTreeMap<String, ManagedContact>, ContactSyncError> {
-    let mut people = BTreeSet::new();
-    for own in projects::participations_for_person(surreal, member_id)
-        .await
-        .map_err(db)?
-    {
-        let open = projects::find_by_id(surreal, own.project_id)
-            .await
-            .map_err(db)?
-            .is_some_and(|project| project.status == "open");
-        if !open {
-            continue;
-        }
-        for row in projects::participations_for_project(surreal, own.project_id)
-            .await
-            .map_err(db)?
-        {
-            if row.person_id != member_id {
-                people.insert(row.person_id);
-            }
-        }
-    }
-    let mut wanted = BTreeMap::new();
-    for person_id in people {
-        let Some(person) = persons::find_by_id(surreal, person_id).await.map_err(db)? else {
-            continue;
-        };
-        crate::person_phones::seed_from_legacy_phone(surreal, person_id)
-            .await
-            .map_err(db)?;
-        let phones = crate::person_phones::list_phones(surreal, person_id)
-            .await
-            .map_err(db)?
-            .into_iter()
-            .map(|phone| ContactPhone {
-                value: phone.e164,
-                label: phone.label.as_str().to_string(),
-            })
-            .collect();
-        let mut emails = BTreeSet::new();
-        let primary_email = person.email.trim().to_lowercase();
-        if !primary_email.is_empty() {
-            emails.insert(primary_email);
-        }
-        emails.extend(
-            persons::aliases(surreal, person_id)
-                .await
-                .map_err(db)?
-                .into_iter()
-                .map(|email| email.trim().to_lowercase())
-                .filter(|email| !email.is_empty()),
-        );
-        wanted.insert(
-            person_id.to_string(),
-            ManagedContact {
-                person_id: person_id.to_string(),
-                name: person.name,
-                emails: emails.into_iter().collect(),
-                phones,
-            },
-        );
-    }
-    Ok(wanted)
 }

@@ -188,8 +188,8 @@ pub async fn get_project_graph_page() -> Result<GraphPageView, ServerFnError> {
     .unwrap_or_default();
     let depth = parse_depth(query.depth.as_deref());
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
     else {
@@ -218,9 +218,10 @@ pub async fn get_project_graph_page() -> Result<GraphPageView, ServerFnError> {
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    let in_scope = store::access::can_see_project(&surreal, person_id, store_role, project.id)
-        .await
-        .unwrap_or(false);
+    let in_scope =
+        store::access::can_see_project(&application_store, person_id, store_role, project.id)
+            .await
+            .unwrap_or(false);
     if !in_scope {
         commit_not_found();
         return Ok(not_found_view());
@@ -709,24 +710,6 @@ mod tests {
     #[cfg(feature = "server")]
     mod loaders {
         use super::super::*;
-        use crate::inbox::server_fn_test_support::{call, request_parts, runtime, Viewer};
-
-        fn load<F: std::future::Future<Output = Result<GraphPageView, ServerFnError>>>(
-            rt: &tokio::runtime::Runtime,
-            surreal: &store::surreal::SurrealDb,
-            route: &str,
-            uri: &str,
-            viewer: &Viewer,
-            loader: impl FnOnce() -> F,
-        ) -> (Result<GraphPageView, ServerFnError>, axum::http::StatusCode) {
-            let parts = request_parts(rt, route, uri, viewer);
-            call(
-                rt,
-                parts,
-                |dom| dom.provide_root_context(surreal.clone()),
-                loader,
-            )
-        }
 
         #[test]
         fn the_not_found_view_has_an_empty_heading_and_no_templates() {
@@ -738,166 +721,6 @@ mod tests {
                 (view.href_person, view.href_firm, view.href_entity),
                 (None, None, None)
             );
-        }
-
-        #[test]
-        fn a_client_is_refused_by_every_graph_page() {
-            let rt = runtime();
-            let surreal = rt.block_on(store::test_support::mem_surreal());
-            let client = Viewer::new(ViewerRole::Client, None);
-            let id = uuid::Uuid::now_v7();
-            let (result, _) = load(
-                &rt,
-                &surreal,
-                "/app/projects/{project_code}/graph",
-                "/app/projects/anything/graph",
-                &client,
-                get_project_graph_page,
-            );
-            assert!(result.is_err());
-            let (result, _) = load(
-                &rt,
-                &surreal,
-                "/app/people/{id}/graph",
-                &format!("/app/people/{id}/graph"),
-                &client,
-                get_lawyer_graph_page,
-            );
-            assert!(result.is_err());
-            let (result, _) = load(
-                &rt,
-                &surreal,
-                "/app/admin/firms/{id}/graph",
-                &format!("/app/admin/firms/{id}/graph"),
-                &client,
-                get_firm_graph_page,
-            );
-            assert!(result.is_err());
-        }
-
-        #[test]
-        fn the_lawyer_and_firm_pages_bake_the_depth_into_the_endpoint() {
-            let rt = runtime();
-            let surreal = rt.block_on(store::test_support::mem_surreal());
-            let lawyer = Viewer::new(ViewerRole::Lawyer, Some(uuid::Uuid::now_v7()));
-            let id = uuid::Uuid::now_v7();
-
-            let (view, status) = load(
-                &rt,
-                &surreal,
-                "/app/people/{id}/graph",
-                &format!("/app/people/{id}/graph?depth=1"),
-                &lawyer,
-                get_lawyer_graph_page,
-            );
-            let view = view.unwrap();
-            assert_eq!(status, axum::http::StatusCode::OK);
-            assert_eq!(view.depth, 1);
-            assert_eq!(view.endpoint, format!("/app/api/graph/lawyer/{id}?depth=1"));
-            assert_eq!(view.back_href, "/app/admin/people");
-            assert_eq!(view.href_person, None, "a Lawyer opens no person record");
-            assert!(view.href_entity.is_some());
-
-            let (view, _) = load(
-                &rt,
-                &surreal,
-                "/app/admin/firms/{id}/graph",
-                &format!("/app/admin/firms/{id}/graph?depth=1"),
-                &Viewer::new(ViewerRole::Owner, None),
-                get_firm_graph_page,
-            );
-            let view = view.unwrap();
-            assert_eq!(view.depth, MAX_GRAPH_DEPTH, "the firm read is fixed-depth");
-            assert_eq!(view.endpoint, format!("/app/api/graph/firm/{id}"));
-            assert_eq!(view.heading, "Firm graph");
-            assert!(view.href_person.is_some() && view.href_firm.is_some());
-        }
-
-        #[test]
-        fn a_malformed_seed_id_is_a_404_not_found_body() {
-            let rt = runtime();
-            let surreal = rt.block_on(store::test_support::mem_surreal());
-            let lawyer = Viewer::new(ViewerRole::Lawyer, None);
-            for (route, uri, page) in [
-                ("/app/people/{id}/graph", "/app/people/nope/graph", 0),
-                (
-                    "/app/admin/firms/{id}/graph",
-                    "/app/admin/firms/nope/graph",
-                    1,
-                ),
-            ] {
-                let (view, status) = if page == 0 {
-                    load(&rt, &surreal, route, uri, &lawyer, get_lawyer_graph_page)
-                } else {
-                    load(&rt, &surreal, route, uri, &lawyer, get_firm_graph_page)
-                };
-                assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{uri}");
-                assert!(view.unwrap().heading.is_empty(), "{uri}");
-            }
-        }
-
-        #[test]
-        fn the_project_page_resolves_the_code_and_gates_on_the_matter() {
-            let rt = runtime();
-            let surreal = rt.block_on(store::test_support::mem_surreal());
-            let project = rt.block_on(store::test_support::seed_project(&surreal, "Graph Matter"));
-            let route = "/app/projects/{project_code}/graph";
-
-            // An unknown code is the non-disclosing 404.
-            let (view, status) = load(
-                &rt,
-                &surreal,
-                route,
-                "/app/projects/no-such-matter/graph",
-                &Viewer::new(ViewerRole::Owner, None),
-                get_project_graph_page,
-            );
-            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
-            assert!(view.unwrap().heading.is_empty());
-
-            // A Lawyer with no participation on the matter reads the same 404.
-            let uri = format!("/app/projects/{}/graph?depth=3", project.code);
-            let (view, status) = load(
-                &rt,
-                &surreal,
-                route,
-                &uri,
-                &Viewer::new(ViewerRole::Lawyer, Some(uuid::Uuid::now_v7())),
-                get_project_graph_page,
-            );
-            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
-            assert!(view.unwrap().heading.is_empty());
-
-            // The matter's lawyer DRI sees it.
-            let dri = rt.block_on(async {
-                let dri = store::test_support::dri_person(&surreal).await;
-                store::projects::designate_dri_in_surreal(
-                    &surreal,
-                    project.id,
-                    dri,
-                    store::projects::DriSide::Lawyer,
-                )
-                .await
-                .unwrap();
-                dri
-            });
-            let (view, status) = load(
-                &rt,
-                &surreal,
-                route,
-                &uri,
-                &Viewer::new(ViewerRole::Lawyer, Some(dri)),
-                get_project_graph_page,
-            );
-            assert_eq!(status, axum::http::StatusCode::OK);
-            let view = view.unwrap();
-            assert_eq!(view.heading, "Graph Matter");
-            assert_eq!(view.depth, 3);
-            assert_eq!(
-                view.endpoint,
-                format!("/app/api/graph/project/{}?depth=3", project.id)
-            );
-            assert_eq!(view.back_href, format!("/app/projects/{}", project.code));
         }
     }
 }

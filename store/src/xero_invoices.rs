@@ -13,12 +13,11 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::{AlreadyExistsError, ErrorDetails, RecordId, SurrealValue};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::accounting as authority;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// How a Xero `Reference` names the Project an invoice bills.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,7 +51,7 @@ pub fn project_scope_from_reference(reference: &str) -> Option<ProjectScopeRef> 
 ///
 /// [`XeroInvoiceError::Projects`] when the lookup itself fails.
 pub async fn resolve_project_scope(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     reference: &str,
 ) -> Result<Option<Uuid>, XeroInvoiceError> {
     match project_scope_from_reference(reference) {
@@ -65,11 +64,6 @@ pub async fn resolve_project_scope(
         None => Ok(None),
     }
 }
-
-/// The SurrealDB table holding the local Xero invoice mirror.
-pub(crate) const TABLE: &str = "xero_invoice";
-const SELECT: &str = "project_id, xero_invoice_id, reference, status, amount_cents, \
-                     amount_paid_cents, currency, issued_at, due_at, inserted_at, updated_at";
 
 /// One local mirror of a Xero invoice.
 ///
@@ -101,43 +95,6 @@ pub struct XeroInvoice {
     pub due_at: Option<DateTime<Utc>>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct XeroInvoiceRow {
-    project_id: RecordId,
-    xero_invoice_id: String,
-    reference: String,
-    status: String,
-    amount_cents: i64,
-    amount_paid_cents: i64,
-    currency: String,
-    issued_at: surrealdb::types::Datetime,
-    due_at: Option<surrealdb::types::Datetime>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl XeroInvoiceRow {
-    /// `None` when `project_id` is not a native UUID key. Navigator only
-    /// writes native UUID ids through [`record_id`], so reporting another
-    /// shape would invent an id this module cannot faithfully represent.
-    fn into_invoice(self) -> Option<XeroInvoice> {
-        Some(XeroInvoice {
-            project_id: record_uuid(&self.project_id)?,
-            xero_invoice_id: self.xero_invoice_id,
-            reference: self.reference,
-            status: self.status,
-            amount_cents: self.amount_cents,
-            amount_paid_cents: self.amount_paid_cents,
-            currency: self.currency,
-            issued_at: self.issued_at.into(),
-            due_at: self.due_at.map(Into::into),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
 }
 
 /// The invoice mirror row as PostgreSQL's `to_jsonb` serves it. The row's
@@ -183,8 +140,6 @@ impl From<PgXeroInvoiceRow> for XeroInvoice {
 #[derive(Debug, Error)]
 pub enum XeroInvoiceError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// Reading the Projects a Firm owns, or their DRIs, failed —
     /// [`for_firm_since`] only.
     #[error(transparent)]
@@ -207,41 +162,6 @@ pub enum XeroInvoiceError {
     Postgres(#[from] crate::postgres::accounting::AccountingAuthorityError),
 }
 
-/// Whether `error` is a second `CREATE` colliding with the mirror row this
-/// Xero invoice already has.
-///
-/// The collision is **typed**: `CREATE` onto a taken record id reports
-/// [`AlreadyExistsError::Record`] carrying that id, so the discriminator is
-/// a structured value rather than prose — unlike the UNIQUE-index violation
-/// [`crate::surreal::retry::unique_violation`] has to read the message for.
-/// The `project_id` index is a plain lookup index now (ENG-588), not a
-/// backstop against this write; it is not what this classifier checks.
-fn classify_write(error: surrealdb::Error) -> XeroInvoiceError {
-    match error.details() {
-        ErrorDetails::AlreadyExists(Some(AlreadyExistsError::Record { id }))
-            if id.starts_with(TABLE) =>
-        {
-            XeroInvoiceError::InvoiceTaken
-        }
-        _ => XeroInvoiceError::Db(error),
-    }
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, XeroInvoiceError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(classify_write)
-}
-
 /// The fields captured when a Xero invoice is mirrored locally. `currency`
 /// defaults to `USD` at the call site; amounts are minor units (cents).
 #[derive(Clone, Debug)]
@@ -259,106 +179,21 @@ pub struct UpsertXeroInvoice {
     pub due_at: Option<DateTime<Utc>>,
 }
 
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<XeroInvoice>, XeroInvoiceError> {
-    let row: Option<XeroInvoiceRow> = response.take(0)?;
-    Ok(row.and_then(XeroInvoiceRow::into_invoice))
-}
-
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<XeroInvoice>, XeroInvoiceError> {
-    let rows: Vec<XeroInvoiceRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(XeroInvoiceRow::into_invoice)
-        .collect())
-}
-
 /// The mirror row for one Xero invoice, addressed by the record id its own
 /// Xero invoice id doubles as.
 async fn for_xero_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     xero_invoice_id: &str,
 ) -> Result<Option<XeroInvoice>, XeroInvoiceError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
-             WHERE xero_invoice_id = $1 LIMIT 1",
-        )
-        .bind(xero_invoice_id);
-        return Ok(authority::maybe::<PgXeroInvoiceRow>(&pg, query)
-            .await?
-            .map(Into::into));
-    }
-    let response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id"))
-        .bind(("id", RecordId::new(TABLE, xero_invoice_id.to_string())))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
-}
-
-/// `input.xero_invoice_id` doubles as the mirror row's own id — see the
-/// module docs for why that, not a UNIQUE index, is what makes a racing
-/// second `CREATE` collide reliably.
-async fn create(
-    db: &SurrealDb,
-    input: &UpsertXeroInvoice,
-) -> Result<XeroInvoice, XeroInvoiceError> {
-    let response = writing(|| {
-        db.query(format!(
-            "CREATE $id SET project_id = $project_id, xero_invoice_id = $xero_invoice_id, \
-             reference = $reference, status = $status, amount_cents = $amount_cents, \
-             currency = $currency, issued_at = $issued_at, due_at = $due_at \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", RecordId::new(TABLE, input.xero_invoice_id.clone())))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, input.project_id),
-        ))
-        .bind(("xero_invoice_id", input.xero_invoice_id.clone()))
-        .bind(("reference", input.reference.clone()))
-        .bind(("status", input.status.clone()))
-        .bind(("amount_cents", input.amount_cents))
-        .bind(("currency", input.currency.clone()))
-        .bind((
-            "issued_at",
-            surrealdb::types::Datetime::from(input.issued_at),
-        ))
-        .bind(("due_at", input.due_at.map(surrealdb::types::Datetime::from)))
-    })
-    .await?;
-    one(response)?.ok_or(XeroInvoiceError::WriteReturnedNothing)
-}
-
-async fn update_from_upsert(
-    db: &SurrealDb,
-    xero_invoice_id: &str,
-    input: &UpsertXeroInvoice,
-) -> Result<XeroInvoice, XeroInvoiceError> {
-    let response = writing(|| {
-        db.query(format!(
-            "UPDATE $id SET project_id = $project_id, reference = $reference, \
-             status = $status, amount_cents = $amount_cents, currency = $currency, \
-             issued_at = $issued_at, due_at = $due_at, updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", RecordId::new(TABLE, xero_invoice_id.to_string())))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, input.project_id),
-        ))
-        .bind(("reference", input.reference.clone()))
-        .bind(("status", input.status.clone()))
-        .bind(("amount_cents", input.amount_cents))
-        .bind(("currency", input.currency.clone()))
-        .bind((
-            "issued_at",
-            surrealdb::types::Datetime::from(input.issued_at),
-        ))
-        .bind(("due_at", input.due_at.map(surrealdb::types::Datetime::from)))
-    })
-    .await?;
-    one(response)?.ok_or(XeroInvoiceError::WriteReturnedNothing)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
+         WHERE xero_invoice_id = $1 LIMIT 1",
+    )
+    .bind(xero_invoice_id);
+    Ok(authority::maybe::<PgXeroInvoiceRow>(&pg, query)
+        .await?
+        .map(Into::into))
 }
 
 /// Idempotently mirror a raised Xero invoice, keyed on its own Xero invoice
@@ -377,47 +212,35 @@ async fn update_from_upsert(
 ///
 /// [`XeroInvoiceError::Db`] when SurrealDB cannot read or write the mirror.
 pub async fn upsert(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     input: &UpsertXeroInvoice,
 ) -> Result<XeroInvoice, XeroInvoiceError> {
-    if let Some(pg) = authority::authority().await? {
-        // `amount_paid_cents` is deliberately absent from the DO UPDATE set:
-        // the reconcile workflow owns that field, exactly as the SurrealDB
-        // update path below preserves it.
-        let row = serde_json::json!({
-            "id": input.xero_invoice_id, "project_id": input.project_id,
-            "xero_invoice_id": input.xero_invoice_id, "reference": input.reference,
-            "status": input.status, "amount_cents": input.amount_cents,
-            "amount_paid_cents": 0, "currency": input.currency,
-            "issued_at": input.issued_at, "due_at": input.due_at,
-        });
-        let query = sqlx::query(
-            "INSERT INTO xero_invoice SELECT * FROM \
-             jsonb_populate_record(NULL::xero_invoice, \
-             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-             ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, \
-             reference = EXCLUDED.reference, status = EXCLUDED.status, \
-             amount_cents = EXCLUDED.amount_cents, currency = EXCLUDED.currency, \
-             issued_at = EXCLUDED.issued_at, due_at = EXCLUDED.due_at, \
-             updated_at = now() RETURNING to_jsonb(xero_invoice) AS row",
-        )
-        .bind(row);
-        return authority::maybe::<PgXeroInvoiceRow>(&pg, query)
-            .await?
-            .map(Into::into)
-            .ok_or(XeroInvoiceError::WriteReturnedNothing);
-    }
-    if for_xero_id(db, &input.xero_invoice_id).await?.is_some() {
-        return update_from_upsert(db, &input.xero_invoice_id, input).await;
-    }
-
-    match create(db, input).await {
-        Ok(created) => Ok(created),
-        Err(XeroInvoiceError::InvoiceTaken) => {
-            update_from_upsert(db, &input.xero_invoice_id, input).await
-        }
-        Err(error) => Err(error),
-    }
+    let pg = authority::authority().await?;
+    // `amount_paid_cents` is deliberately absent from the DO UPDATE set:
+    // the reconcile workflow owns that field, exactly as the SurrealDB
+    // update path below preserves it.
+    let row = serde_json::json!({
+        "id": input.xero_invoice_id, "project_id": input.project_id,
+        "xero_invoice_id": input.xero_invoice_id, "reference": input.reference,
+        "status": input.status, "amount_cents": input.amount_cents,
+        "amount_paid_cents": 0, "currency": input.currency,
+        "issued_at": input.issued_at, "due_at": input.due_at,
+    });
+    let query = sqlx::query(
+        "INSERT INTO xero_invoice SELECT * FROM \
+         jsonb_populate_record(NULL::xero_invoice, \
+         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+         ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, \
+         reference = EXCLUDED.reference, status = EXCLUDED.status, \
+         amount_cents = EXCLUDED.amount_cents, currency = EXCLUDED.currency, \
+         issued_at = EXCLUDED.issued_at, due_at = EXCLUDED.due_at, \
+         updated_at = now() RETURNING to_jsonb(xero_invoice) AS row",
+    )
+    .bind(row);
+    authority::maybe::<PgXeroInvoiceRow>(&pg, query)
+        .await?
+        .map(Into::into)
+        .ok_or(XeroInvoiceError::WriteReturnedNothing)
 }
 
 /// Fold a reconcile result (Xero `Status` + `AmountPaid`) onto one invoice's
@@ -428,35 +251,23 @@ pub async fn upsert(
 ///
 /// [`XeroInvoiceError::Db`] when SurrealDB cannot update the mirror.
 pub async fn record_reconcile(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     xero_invoice_id: &str,
     status: &str,
     amount_paid_cents: i64,
 ) -> Result<Option<XeroInvoice>, XeroInvoiceError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "UPDATE xero_invoice SET status = $1, amount_paid_cents = $2, \
-             updated_at = now() WHERE xero_invoice_id = $3 \
-             RETURNING to_jsonb(xero_invoice) AS row",
-        )
-        .bind(status)
-        .bind(amount_paid_cents)
-        .bind(xero_invoice_id);
-        return Ok(authority::maybe::<PgXeroInvoiceRow>(&pg, query)
-            .await?
-            .map(Into::into));
-    }
-    let response = writing(|| {
-        db.query(format!(
-            "UPDATE {TABLE} SET status = $status, amount_paid_cents = $amount_paid_cents, \
-             updated_at = time::now() WHERE xero_invoice_id = $xero_invoice_id RETURN {SELECT}"
-        ))
-        .bind(("status", status.to_string()))
-        .bind(("amount_paid_cents", amount_paid_cents))
-        .bind(("xero_invoice_id", xero_invoice_id.to_string()))
-    })
-    .await?;
-    one(response)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "UPDATE xero_invoice SET status = $1, amount_paid_cents = $2, \
+         updated_at = now() WHERE xero_invoice_id = $3 \
+         RETURNING to_jsonb(xero_invoice) AS row",
+    )
+    .bind(status)
+    .bind(amount_paid_cents)
+    .bind(xero_invoice_id);
+    Ok(authority::maybe::<PgXeroInvoiceRow>(&pg, query)
+        .await?
+        .map(Into::into))
 }
 
 /// Resolve the invoice an IOLTA withdrawal line names.
@@ -474,37 +285,24 @@ pub async fn record_reconcile(
 ///
 /// [`XeroInvoiceError::Db`] when a lookup fails.
 pub async fn find_for_allocation(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     reference: &str,
 ) -> Result<Option<XeroInvoice>, XeroInvoiceError> {
     if let Some(by_id) = for_xero_id(db, reference).await? {
         return Ok(Some(by_id));
     }
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
-             WHERE reference = $1 LIMIT 2",
-        )
-        .bind(reference);
-        let mut matches = authority::rows::<PgXeroInvoiceRow>(&pg, query).await?;
-        return if matches.len() == 1 {
-            Ok(Some(matches.remove(0).into()))
-        } else {
-            Ok(None)
-        };
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE reference = $reference LIMIT 2"
-        ))
-        .bind(("reference", reference.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let mut matches = many(response)?;
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
+         WHERE reference = $1 LIMIT 2",
+    )
+    .bind(reference);
+    let mut matches = authority::rows::<PgXeroInvoiceRow>(&pg, query).await?;
     if matches.len() == 1 {
-        return Ok(Some(matches.remove(0)));
+        Ok(Some(matches.remove(0).into()))
+    } else {
+        Ok(None)
     }
-    Ok(None)
 }
 
 /// Fetch every invoice mirrored for a set of matters, newest first, for the
@@ -515,36 +313,23 @@ pub async fn find_for_allocation(
 ///
 /// [`XeroInvoiceError::Db`] if the lookup fails.
 pub async fn for_projects(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_ids: &[Uuid],
 ) -> Result<Vec<XeroInvoice>, XeroInvoiceError> {
     if project_ids.is_empty() {
         return Ok(Vec::new());
     }
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
-             WHERE project_id = ANY($1) ORDER BY issued_at DESC",
-        )
-        .bind(project_ids.to_vec());
-        return Ok(authority::rows::<PgXeroInvoiceRow>(&pg, query)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect());
-    }
-    let projects: Vec<RecordId> = project_ids
-        .iter()
-        .map(|id| record_id(crate::projects::PROJECT_TABLE, *id))
-        .collect();
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id IN $projects ORDER BY issued_at DESC"
-        ))
-        .bind(("projects", projects))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
+         WHERE project_id = ANY($1) ORDER BY issued_at DESC",
+    )
+    .bind(project_ids.to_vec());
+    Ok(authority::rows::<PgXeroInvoiceRow>(&pg, query)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect())
 }
 
 /// One invoice as the Firm-wide invoice graphs (ENG-591) consume it: the
@@ -576,7 +361,7 @@ pub struct FirmInvoice {
 /// [`XeroInvoiceError::Db`] if the lookup fails; [`XeroInvoiceError::Projects`]
 /// if reading the Firm's Projects or their lawyer DRIs fails.
 pub async fn for_firm_since(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     firm_id: Uuid,
     since: DateTime<Utc>,
 ) -> Result<Vec<FirmInvoice>, XeroInvoiceError> {
@@ -687,7 +472,7 @@ fn totals_into_groups(totals: GroupTotals) -> Vec<InvoiceGroupTotal> {
 /// underlying read fails ([`for_firm_since`]); [`XeroInvoiceError::Brands`]
 /// if resolving the Firm's brand names fails.
 pub async fn firm_thirty_day_rollup(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     firm_id: Uuid,
     now: DateTime<Utc>,
 ) -> Result<FirmInvoiceRollup, XeroInvoiceError> {
@@ -772,25 +557,19 @@ pub async fn firm_thirty_day_rollup(
 /// # Errors
 ///
 /// [`XeroInvoiceError::Db`] if the lookup fails.
-pub async fn needing_reconcile(db: &SurrealDb) -> Result<Vec<XeroInvoice>, XeroInvoiceError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
-             WHERE status NOT IN ('PAID', 'VOIDED')",
-        );
-        return Ok(authority::rows::<PgXeroInvoiceRow>(&pg, query)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect());
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE status NOT IN ['PAID', 'VOIDED']"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn needing_reconcile(
+    _db: &ApplicationStore,
+) -> Result<Vec<XeroInvoice>, XeroInvoiceError> {
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
+         WHERE status NOT IN ('PAID', 'VOIDED')",
+    );
+    Ok(authority::rows::<PgXeroInvoiceRow>(&pg, query)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect())
 }
 
 #[cfg(test)]
@@ -799,12 +578,12 @@ mod tests {
         firm_thirty_day_rollup, for_firm_since, for_projects, needing_reconcile,
         project_scope_from_reference, record_reconcile, upsert, ProjectScopeRef, UpsertXeroInvoice,
     };
-    use crate::surreal::SurrealDb;
+    use crate::application_store::ApplicationStore;
     use chrono::{Duration, TimeZone, Utc};
 
-    async fn seed_project(surreal: &SurrealDb, name: &str) -> uuid::Uuid {
-        crate::test_support::seed_compiled_brands_postgres(surreal).await;
-        crate::test_support::seed_project_surreal(surreal, name).await
+    async fn seed_project(application_store: &ApplicationStore, name: &str) -> uuid::Uuid {
+        crate::test_support::seed_compiled_brands_postgres(application_store).await;
+        crate::test_support::seed_project_id(application_store, name).await
     }
 
     fn input(project_id: uuid::Uuid, xero_id: &str, cents: i64) -> UpsertXeroInvoice {
@@ -844,10 +623,10 @@ mod tests {
     #[tokio::test]
     async fn upsert_inserts_one_row() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let project_id = seed_project(&surreal, "sample-matter").await;
+            let application_store = ApplicationStore::uninitialized();
+            let project_id = seed_project(&application_store, "sample-matter").await;
 
-            let row = upsert(&surreal, &input(project_id, "xero-1", 333_300))
+            let row = upsert(&application_store, &input(project_id, "xero-1", 333_300))
                 .await
                 .unwrap();
             assert_eq!(row.project_id, project_id);
@@ -856,7 +635,10 @@ mod tests {
             assert_eq!(row.amount_paid_cents, 0);
 
             assert_eq!(
-                for_projects(&surreal, &[project_id]).await.unwrap().len(),
+                for_projects(&application_store, &[project_id])
+                    .await
+                    .unwrap()
+                    .len(),
                 1
             );
         })
@@ -868,17 +650,19 @@ mod tests {
     #[tokio::test]
     async fn two_different_invoices_for_one_matter_are_two_rows() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let project_id = seed_project(&surreal, "sample-matter").await;
+            let application_store = ApplicationStore::uninitialized();
+            let project_id = seed_project(&application_store, "sample-matter").await;
 
-            upsert(&surreal, &input(project_id, "xero-1", 10_000))
+            upsert(&application_store, &input(project_id, "xero-1", 10_000))
                 .await
                 .unwrap();
-            upsert(&surreal, &input(project_id, "xero-2", 20_000))
+            upsert(&application_store, &input(project_id, "xero-2", 20_000))
                 .await
                 .unwrap();
 
-            let rows = for_projects(&surreal, &[project_id]).await.unwrap();
+            let rows = for_projects(&application_store, &[project_id])
+                .await
+                .unwrap();
             assert_eq!(rows.len(), 2, "two Xero ids must mirror as two rows");
             let ids: std::collections::BTreeSet<&str> =
                 rows.iter().map(|r| r.xero_invoice_id.as_str()).collect();
@@ -890,9 +674,9 @@ mod tests {
     #[tokio::test]
     async fn invoice_id_index_refuses_a_second_row_for_the_same_invoice() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let project_id = seed_project(&surreal, "sample-matter").await;
-            upsert(&surreal, &input(project_id, "xero-1", 333_300))
+            let application_store = ApplicationStore::uninitialized();
+            let project_id = seed_project(&application_store, "sample-matter").await;
+            upsert(&application_store, &input(project_id, "xero-1", 333_300))
                 .await
                 .unwrap();
 
@@ -920,19 +704,22 @@ mod tests {
     #[tokio::test]
     async fn upsert_is_idempotent_on_xero_invoice_id() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let project_id = seed_project(&surreal, "sample-matter").await;
+            let application_store = ApplicationStore::uninitialized();
+            let project_id = seed_project(&application_store, "sample-matter").await;
 
-            upsert(&surreal, &input(project_id, "xero-1", 333_300))
+            upsert(&application_store, &input(project_id, "xero-1", 333_300))
                 .await
                 .unwrap();
-            let updated = upsert(&surreal, &input(project_id, "xero-1", 444_400))
+            let updated = upsert(&application_store, &input(project_id, "xero-1", 444_400))
                 .await
                 .unwrap();
             assert_eq!(updated.amount_cents, 444_400, "the repeat updates the row");
 
             assert_eq!(
-                for_projects(&surreal, &[project_id]).await.unwrap().len(),
+                for_projects(&application_store, &[project_id])
+                    .await
+                    .unwrap()
+                    .len(),
                 1,
                 "a repeated Xero id must update in place, not insert a second row"
             );
@@ -947,18 +734,18 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_upserts_for_one_invoice_settle_on_one_row() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let project_id = seed_project(&surreal, "sample-matter").await;
+            let application_store = ApplicationStore::uninitialized();
+            let project_id = seed_project(&application_store, "sample-matter").await;
             let input = input(project_id, "xero-1", 333_300);
             let pg = crate::postgres::PostgresDb::application().await.unwrap();
 
             let racers: Vec<_> = (0..8)
                 .map(|_| {
-                    let surreal = surreal.clone();
+                    let application_store = application_store.clone();
                     let input = input.clone();
                     let pg = pg.clone();
                     tokio::spawn(crate::postgres::PostgresDb::with_test_db(pg, async move {
-                        upsert(&surreal, &input).await
+                        upsert(&application_store, &input).await
                     }))
                 })
                 .collect();
@@ -973,7 +760,10 @@ mod tests {
 
             assert_eq!(ids.len(), 1, "the racers disagreed about which row won");
             assert_eq!(
-                for_projects(&surreal, &[project_id]).await.unwrap().len(),
+                for_projects(&application_store, &[project_id])
+                    .await
+                    .unwrap()
+                    .len(),
                 1,
                 "a race must not leave a second mirror row behind",
             );
@@ -984,16 +774,16 @@ mod tests {
     #[tokio::test]
     async fn upsert_preserves_reconciled_amount_paid() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let project_id = seed_project(&surreal, "sample-matter").await;
+            let application_store = ApplicationStore::uninitialized();
+            let project_id = seed_project(&application_store, "sample-matter").await;
 
-            upsert(&surreal, &input(project_id, "xero-1", 333_300))
+            upsert(&application_store, &input(project_id, "xero-1", 333_300))
                 .await
                 .unwrap();
-            record_reconcile(&surreal, "xero-1", "PAID", 333_300)
+            record_reconcile(&application_store, "xero-1", "PAID", 333_300)
                 .await
                 .unwrap();
-            let row = upsert(&surreal, &input(project_id, "xero-1", 333_300))
+            let row = upsert(&application_store, &input(project_id, "xero-1", 333_300))
                 .await
                 .unwrap();
             assert_eq!(row.amount_paid_cents, 333_300);
@@ -1005,13 +795,13 @@ mod tests {
     #[tokio::test]
     async fn record_reconcile_updates_status_and_paid() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let project_id = seed_project(&surreal, "sample-matter").await;
-            upsert(&surreal, &input(project_id, "xero-1", 333_300))
+            let application_store = ApplicationStore::uninitialized();
+            let project_id = seed_project(&application_store, "sample-matter").await;
+            upsert(&application_store, &input(project_id, "xero-1", 333_300))
                 .await
                 .unwrap();
 
-            let row = record_reconcile(&surreal, "xero-1", "PAID", 333_300)
+            let row = record_reconcile(&application_store, "xero-1", "PAID", 333_300)
                 .await
                 .unwrap()
                 .unwrap();
@@ -1026,20 +816,22 @@ mod tests {
     #[tokio::test]
     async fn record_reconcile_only_touches_its_own_invoice() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let project_id = seed_project(&surreal, "sample-matter").await;
-            upsert(&surreal, &input(project_id, "xero-1", 10_000))
+            let application_store = ApplicationStore::uninitialized();
+            let project_id = seed_project(&application_store, "sample-matter").await;
+            upsert(&application_store, &input(project_id, "xero-1", 10_000))
                 .await
                 .unwrap();
-            upsert(&surreal, &input(project_id, "xero-2", 20_000))
-                .await
-                .unwrap();
-
-            record_reconcile(&surreal, "xero-1", "PAID", 10_000)
+            upsert(&application_store, &input(project_id, "xero-2", 20_000))
                 .await
                 .unwrap();
 
-            let rows = for_projects(&surreal, &[project_id]).await.unwrap();
+            record_reconcile(&application_store, "xero-1", "PAID", 10_000)
+                .await
+                .unwrap();
+
+            let rows = for_projects(&application_store, &[project_id])
+                .await
+                .unwrap();
             let one = rows.iter().find(|r| r.xero_invoice_id == "xero-1").unwrap();
             let two = rows.iter().find(|r| r.xero_invoice_id == "xero-2").unwrap();
             assert_eq!(one.status, "PAID");
@@ -1052,11 +844,13 @@ mod tests {
     #[tokio::test]
     async fn record_reconcile_is_noop_without_a_row() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            assert!(record_reconcile(&surreal, "no-such-invoice", "PAID", 100)
-                .await
-                .unwrap()
-                .is_none());
+            let application_store = ApplicationStore::uninitialized();
+            assert!(
+                record_reconcile(&application_store, "no-such-invoice", "PAID", 100)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
         })
         .await;
     }
@@ -1064,21 +858,27 @@ mod tests {
     #[tokio::test]
     async fn needing_reconcile_excludes_settled_invoices() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let open = seed_project(&surreal, "open").await;
-            let paid = seed_project(&surreal, "paid").await;
-            let void = seed_project(&surreal, "void").await;
-            upsert(&surreal, &input(open, "x-open", 100)).await.unwrap();
-            upsert(&surreal, &input(paid, "x-paid", 200)).await.unwrap();
-            upsert(&surreal, &input(void, "x-void", 300)).await.unwrap();
-            record_reconcile(&surreal, "x-paid", "PAID", 200)
+            let application_store = ApplicationStore::uninitialized();
+            let open = seed_project(&application_store, "open").await;
+            let paid = seed_project(&application_store, "paid").await;
+            let void = seed_project(&application_store, "void").await;
+            upsert(&application_store, &input(open, "x-open", 100))
                 .await
                 .unwrap();
-            record_reconcile(&surreal, "x-void", "VOIDED", 0)
+            upsert(&application_store, &input(paid, "x-paid", 200))
+                .await
+                .unwrap();
+            upsert(&application_store, &input(void, "x-void", 300))
+                .await
+                .unwrap();
+            record_reconcile(&application_store, "x-paid", "PAID", 200)
+                .await
+                .unwrap();
+            record_reconcile(&application_store, "x-void", "VOIDED", 0)
                 .await
                 .unwrap();
 
-            let rows = needing_reconcile(&surreal).await.unwrap();
+            let rows = needing_reconcile(&application_store).await.unwrap();
             assert_eq!(rows.len(), 1, "only the AUTHORISED invoice is re-checked");
             assert_eq!(rows[0].project_id, open);
         })
@@ -1088,20 +888,24 @@ mod tests {
     #[tokio::test]
     async fn for_projects_filters_to_the_requested_matters_and_orders_newest_first() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let a = seed_project(&surreal, "a").await;
-            let b = seed_project(&surreal, "b").await;
-            let c = seed_project(&surreal, "c").await;
+            let application_store = ApplicationStore::uninitialized();
+            let a = seed_project(&application_store, "a").await;
+            let b = seed_project(&application_store, "b").await;
+            let c = seed_project(&application_store, "c").await;
             let mut older = input(a, "xero-a-older", 100);
             older.issued_at = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
             let mut newer = input(a, "xero-a-newer", 150);
             newer.issued_at = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
-            upsert(&surreal, &older).await.unwrap();
-            upsert(&surreal, &newer).await.unwrap();
-            upsert(&surreal, &input(b, "xero-b", 200)).await.unwrap();
-            upsert(&surreal, &input(c, "xero-c", 300)).await.unwrap();
+            upsert(&application_store, &older).await.unwrap();
+            upsert(&application_store, &newer).await.unwrap();
+            upsert(&application_store, &input(b, "xero-b", 200))
+                .await
+                .unwrap();
+            upsert(&application_store, &input(c, "xero-c", 300))
+                .await
+                .unwrap();
 
-            let rows = for_projects(&surreal, &[a, c]).await.unwrap();
+            let rows = for_projects(&application_store, &[a, c]).await.unwrap();
             assert_eq!(rows.len(), 3);
             assert!(rows
                 .iter()
@@ -1110,7 +914,10 @@ mod tests {
                 rows[0].xero_invoice_id, "xero-a-newer",
                 "newest issued invoice sorts first"
             );
-            assert!(for_projects(&surreal, &[]).await.unwrap().is_empty());
+            assert!(for_projects(&application_store, &[])
+                .await
+                .unwrap()
+                .is_empty());
         })
         .await;
     }
@@ -1121,10 +928,10 @@ mod tests {
     #[tokio::test]
     async fn for_firm_since_scopes_to_the_firm_and_the_window() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            crate::test_support::seed_compiled_brands_postgres(&surreal).await;
+            let application_store = ApplicationStore::uninitialized();
+            crate::test_support::seed_compiled_brands_postgres(&application_store).await;
             let admin = crate::test_support::ensure_person(
-                &surreal,
+                &application_store,
                 &crate::persons::NewPerson::with_role(
                     "Firm Admin",
                     "firm-admin@example.com",
@@ -1133,19 +940,19 @@ mod tests {
             )
             .await;
             let firm = crate::firms::create(
-                &surreal,
+                &application_store,
                 &crate::firms::NewFirm {
                     name: "Invoice Firm".to_string(),
                     status: "active".to_string(),
-                    entity_id: crate::test_support::seed_entity(&surreal).await,
+                    entity_id: crate::test_support::seed_entity(&application_store).await,
                     admin_dri_person_id: admin.id,
                 },
             )
             .await
             .unwrap();
-            let entity_id = crate::test_support::seed_entity(&surreal).await;
+            let entity_id = crate::test_support::seed_entity(&application_store).await;
             let owned = crate::projects::create(
-                &surreal,
+                &application_store,
                 &crate::projects::NewProject {
                     code: "firm-owned-matter".to_string(),
                     name: "Firm Owned Matter".to_string(),
@@ -1157,9 +964,9 @@ mod tests {
             )
             .await
             .unwrap();
-            let other_entity = crate::test_support::seed_entity(&surreal).await;
+            let other_entity = crate::test_support::seed_entity(&application_store).await;
             let unowned = crate::projects::create(
-                &surreal,
+                &application_store,
                 &crate::projects::NewProject {
                     code: "other-firm-matter".to_string(),
                     name: "Other Firm Matter".to_string(),
@@ -1170,8 +977,8 @@ mod tests {
             )
             .await
             .unwrap();
-            crate::projects::designate_dri_in_surreal(
-                &surreal,
+            crate::projects::designate_dri(
+                &application_store,
                 owned.id,
                 admin.id,
                 crate::projects::DriSide::Lawyer,
@@ -1184,13 +991,18 @@ mod tests {
             too_old.issued_at = since - Duration::days(1);
             let mut in_window = input(owned.id, "xero-in-window", 200);
             in_window.issued_at = since + Duration::days(1);
-            upsert(&surreal, &too_old).await.unwrap();
-            upsert(&surreal, &in_window).await.unwrap();
-            upsert(&surreal, &input(unowned.id, "xero-other-firm", 300))
+            upsert(&application_store, &too_old).await.unwrap();
+            upsert(&application_store, &in_window).await.unwrap();
+            upsert(
+                &application_store,
+                &input(unowned.id, "xero-other-firm", 300),
+            )
+            .await
+            .unwrap();
+
+            let rows = for_firm_since(&application_store, firm.id, since)
                 .await
                 .unwrap();
-
-            let rows = for_firm_since(&surreal, firm.id, since).await.unwrap();
             assert_eq!(rows.len(), 1, "only the in-window, firm-owned invoice");
             assert_eq!(rows[0].xero_invoice_id, "xero-in-window");
             assert_eq!(rows[0].brand, owned.brand);
@@ -1202,10 +1014,10 @@ mod tests {
 
     /// One Firm, one entity, ready for a Project. Shared by the
     /// [`firm_thirty_day_rollup`] tests below.
-    async fn seed_firm(surreal: &SurrealDb) -> (crate::firms::Firm, uuid::Uuid) {
-        crate::test_support::seed_compiled_brands_postgres(surreal).await;
+    async fn seed_firm(application_store: &ApplicationStore) -> (crate::firms::Firm, uuid::Uuid) {
+        crate::test_support::seed_compiled_brands_postgres(application_store).await;
         let admin = crate::test_support::ensure_person(
-            surreal,
+            application_store,
             &crate::persons::NewPerson::with_role(
                 "Firm Admin",
                 "firm-admin@example.com",
@@ -1214,11 +1026,11 @@ mod tests {
         )
         .await;
         let firm = crate::firms::create(
-            surreal,
+            application_store,
             &crate::firms::NewFirm {
                 name: format!("Rollup Firm {}", uuid::Uuid::now_v7()),
                 status: "active".to_string(),
-                entity_id: crate::test_support::seed_entity(surreal).await,
+                entity_id: crate::test_support::seed_entity(application_store).await,
                 admin_dri_person_id: admin.id,
             },
         )
@@ -1228,14 +1040,14 @@ mod tests {
     }
 
     async fn seed_project_on_firm(
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         firm_id: uuid::Uuid,
         code: &str,
         brand: &str,
     ) -> crate::projects::Project {
-        let entity_id = crate::test_support::seed_entity(surreal).await;
+        let entity_id = crate::test_support::seed_entity(application_store).await;
         crate::projects::create(
-            surreal,
+            application_store,
             &crate::projects::NewProject {
                 code: code.to_string(),
                 name: code.to_string(),
@@ -1255,14 +1067,19 @@ mod tests {
     #[tokio::test]
     async fn firm_thirty_day_rollup_groups_by_brand_and_lawyer_dri() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let (firm, _) = seed_firm(&surreal).await;
-            let neon_matter = seed_project_on_firm(&surreal, firm.id, "neon-matter", "neon").await;
-            let other_matter =
-                seed_project_on_firm(&surreal, firm.id, "other-brand-matter", "delete-your-data")
-                    .await;
+            let application_store = ApplicationStore::uninitialized();
+            let (firm, _) = seed_firm(&application_store).await;
+            let neon_matter =
+                seed_project_on_firm(&application_store, firm.id, "neon-matter", "neon").await;
+            let other_matter = seed_project_on_firm(
+                &application_store,
+                firm.id,
+                "other-brand-matter",
+                "delete-your-data",
+            )
+            .await;
             let lawyer_one = crate::test_support::ensure_person(
-                &surreal,
+                &application_store,
                 &crate::persons::NewPerson::with_role(
                     "Lawyer One",
                     "lawyer-one@example.com",
@@ -1271,7 +1088,7 @@ mod tests {
             )
             .await;
             let lawyer_two = crate::test_support::ensure_person(
-                &surreal,
+                &application_store,
                 &crate::persons::NewPerson::with_role(
                     "Lawyer Two",
                     "lawyer-two@example.com",
@@ -1279,16 +1096,16 @@ mod tests {
                 ),
             )
             .await;
-            crate::projects::designate_dri_in_surreal(
-                &surreal,
+            crate::projects::designate_dri(
+                &application_store,
                 neon_matter.id,
                 lawyer_one.id,
                 crate::projects::DriSide::Lawyer,
             )
             .await
             .unwrap();
-            crate::projects::designate_dri_in_surreal(
-                &surreal,
+            crate::projects::designate_dri(
+                &application_store,
                 other_matter.id,
                 lawyer_two.id,
                 crate::projects::DriSide::Lawyer,
@@ -1301,13 +1118,13 @@ mod tests {
             neon_invoice.issued_at = now - Duration::days(1);
             let mut other_invoice = input(other_matter.id, "xero-other", 5_000);
             other_invoice.issued_at = now - Duration::days(2);
-            upsert(&surreal, &neon_invoice).await.unwrap();
-            upsert(&surreal, &other_invoice).await.unwrap();
-            record_reconcile(&surreal, "xero-neon", "PAID", 10_000)
+            upsert(&application_store, &neon_invoice).await.unwrap();
+            upsert(&application_store, &other_invoice).await.unwrap();
+            record_reconcile(&application_store, "xero-neon", "PAID", 10_000)
                 .await
                 .unwrap();
 
-            let rollup = firm_thirty_day_rollup(&surreal, firm.id, now)
+            let rollup = firm_thirty_day_rollup(&application_store, firm.id, now)
                 .await
                 .unwrap();
             assert_eq!(rollup.currencies.len(), 1, "one currency, USD");
@@ -1350,15 +1167,17 @@ mod tests {
     #[tokio::test]
     async fn firm_thirty_day_rollup_groups_unassigned_dri_when_no_lawyer_dri() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let (firm, _) = seed_firm(&surreal).await;
-            let matter = seed_project_on_firm(&surreal, firm.id, "unassigned-matter", "neon").await;
+            let application_store = ApplicationStore::uninitialized();
+            let (firm, _) = seed_firm(&application_store).await;
+            let matter =
+                seed_project_on_firm(&application_store, firm.id, "unassigned-matter", "neon")
+                    .await;
             let now = Utc.with_ymd_and_hms(2026, 6, 15, 0, 0, 0).unwrap();
             let mut invoice = input(matter.id, "xero-unassigned", 7_500);
             invoice.issued_at = now - Duration::days(1);
-            upsert(&surreal, &invoice).await.unwrap();
+            upsert(&application_store, &invoice).await.unwrap();
 
-            let rollup = firm_thirty_day_rollup(&surreal, firm.id, now)
+            let rollup = firm_thirty_day_rollup(&application_store, firm.id, now)
                 .await
                 .unwrap();
             let usd = &rollup.currencies[0];
@@ -1376,18 +1195,19 @@ mod tests {
     #[tokio::test]
     async fn firm_thirty_day_rollup_computes_the_window_from_now() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let (firm, _) = seed_firm(&surreal).await;
-            let matter = seed_project_on_firm(&surreal, firm.id, "window-matter", "neon").await;
+            let application_store = ApplicationStore::uninitialized();
+            let (firm, _) = seed_firm(&application_store).await;
+            let matter =
+                seed_project_on_firm(&application_store, firm.id, "window-matter", "neon").await;
             let now = Utc.with_ymd_and_hms(2026, 6, 15, 0, 0, 0).unwrap();
             let mut too_old = input(matter.id, "xero-too-old", 100);
             too_old.issued_at = now - Duration::days(31);
             let mut in_window = input(matter.id, "xero-in-window", 200);
             in_window.issued_at = now - Duration::days(29);
-            upsert(&surreal, &too_old).await.unwrap();
-            upsert(&surreal, &in_window).await.unwrap();
+            upsert(&application_store, &too_old).await.unwrap();
+            upsert(&application_store, &in_window).await.unwrap();
 
-            let rollup = firm_thirty_day_rollup(&surreal, firm.id, now)
+            let rollup = firm_thirty_day_rollup(&application_store, firm.id, now)
                 .await
                 .unwrap();
             let usd = &rollup.currencies[0];
@@ -1404,22 +1224,27 @@ mod tests {
     #[tokio::test]
     async fn firm_thirty_day_rollup_isolates_two_firms() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let (firm_a, _) = seed_firm(&surreal).await;
-            let (firm_b, _) = seed_firm(&surreal).await;
-            let matter_a = seed_project_on_firm(&surreal, firm_a.id, "firm-a-matter", "neon").await;
-            let matter_b =
-                seed_project_on_firm(&surreal, firm_b.id, "firm-b-matter", "delete-your-data")
-                    .await;
+            let application_store = ApplicationStore::uninitialized();
+            let (firm_a, _) = seed_firm(&application_store).await;
+            let (firm_b, _) = seed_firm(&application_store).await;
+            let matter_a =
+                seed_project_on_firm(&application_store, firm_a.id, "firm-a-matter", "neon").await;
+            let matter_b = seed_project_on_firm(
+                &application_store,
+                firm_b.id,
+                "firm-b-matter",
+                "delete-your-data",
+            )
+            .await;
             let now = Utc.with_ymd_and_hms(2026, 6, 15, 0, 0, 0).unwrap();
             let mut invoice_a = input(matter_a.id, "xero-firm-a", 1_000);
             invoice_a.issued_at = now - Duration::days(1);
             let mut invoice_b = input(matter_b.id, "xero-firm-b", 2_000);
             invoice_b.issued_at = now - Duration::days(1);
-            upsert(&surreal, &invoice_a).await.unwrap();
-            upsert(&surreal, &invoice_b).await.unwrap();
+            upsert(&application_store, &invoice_a).await.unwrap();
+            upsert(&application_store, &invoice_b).await.unwrap();
 
-            let rollup_a = firm_thirty_day_rollup(&surreal, firm_a.id, now)
+            let rollup_a = firm_thirty_day_rollup(&application_store, firm_a.id, now)
                 .await
                 .unwrap();
             assert_eq!(rollup_a.currencies[0].total_invoiced_cents, 1_000);
@@ -1433,20 +1258,21 @@ mod tests {
     #[tokio::test]
     async fn firm_thirty_day_rollup_keeps_currencies_separate() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let (firm, _) = seed_firm(&surreal).await;
+            let application_store = ApplicationStore::uninitialized();
+            let (firm, _) = seed_firm(&application_store).await;
             let matter =
-                seed_project_on_firm(&surreal, firm.id, "mixed-currency-matter", "neon").await;
+                seed_project_on_firm(&application_store, firm.id, "mixed-currency-matter", "neon")
+                    .await;
             let now = Utc.with_ymd_and_hms(2026, 6, 15, 0, 0, 0).unwrap();
             let mut usd_invoice = input(matter.id, "xero-usd", 1_000);
             usd_invoice.issued_at = now - Duration::days(1);
             let mut eur_invoice = input(matter.id, "xero-eur", 2_000);
             eur_invoice.issued_at = now - Duration::days(1);
             eur_invoice.currency = "EUR".to_string();
-            upsert(&surreal, &usd_invoice).await.unwrap();
-            upsert(&surreal, &eur_invoice).await.unwrap();
+            upsert(&application_store, &usd_invoice).await.unwrap();
+            upsert(&application_store, &eur_invoice).await.unwrap();
 
-            let rollup = firm_thirty_day_rollup(&surreal, firm.id, now)
+            let rollup = firm_thirty_day_rollup(&application_store, firm.id, now)
                 .await
                 .unwrap();
             assert_eq!(rollup.currencies.len(), 2, "USD and EUR stay separate");
@@ -1472,12 +1298,12 @@ mod tests {
     #[tokio::test]
     async fn firm_thirty_day_rollup_is_empty_without_in_window_invoices() {
         crate::test_support::with_required_postgres(async {
-            let surreal = SurrealDb::uninitialized();
-            let (firm, _) = seed_firm(&surreal).await;
-            seed_project_on_firm(&surreal, firm.id, "no-invoices-matter", "neon").await;
+            let application_store = ApplicationStore::uninitialized();
+            let (firm, _) = seed_firm(&application_store).await;
+            seed_project_on_firm(&application_store, firm.id, "no-invoices-matter", "neon").await;
 
             let now = Utc.with_ymd_and_hms(2026, 6, 15, 0, 0, 0).unwrap();
-            let rollup = firm_thirty_day_rollup(&surreal, firm.id, now)
+            let rollup = firm_thirty_day_rollup(&application_store, firm.id, now)
                 .await
                 .unwrap();
             assert!(rollup.currencies.is_empty());
@@ -1485,7 +1311,3 @@ mod tests {
         .await;
     }
 }
-
-#[cfg(test)]
-#[path = "xero_invoices/surreal_compatibility_tests.rs"]
-mod surreal_compatibility_tests;

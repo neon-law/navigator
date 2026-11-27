@@ -282,11 +282,6 @@ jobs:
     # ready (`ready_for_review`) runs the suite; a skipped `rust` reads as
     # success in the `ci` job below, and a draft cannot merge anyway.
     if: needs.changes.outputs.rust == 'true' && github.event.pull_request.draft == false
-    # One runner, no SurrealDB. `hudson ops surreal-free-tests` leaves out
-    # every test that starts a SurrealDB engine — about 96% of the suite's run
-    # time — so the four-way shard that kept the SurrealDB 4 suite under the
-    # job ceiling only multiplied the build by four. The application may still
-    # talk to SurrealDB; CI no longer tests it (ENG-1356..1358).
     # `neon-law-medium` does not exist in the `neon-law-source-code` org. That
     # label was a GitHub-hosted larger runner on the previous org, and a label
     # with no runner behind it does not fail the job — it queues it forever, so
@@ -318,14 +313,7 @@ jobs:
       # while 40 GB of disk was still free, so this is memory, not space. lld
       # holds far less resident per link and is substantially faster on inputs
       # this size.
-      # `strip=symbols` is the load-bearing half. `cargo test --workspace`
-      # builds 209 integration-test binaries across 28 crates, and each one
-      # statically links the whole dependency graph — surrealdb-core alone is a
-      # 590 MB rlib. Even with debuginfo already off, their symbol tables filled
-      # a 46 GB disk to 100% ("/dev/root 72G 72G 26M 100% /") and took the
-      # Actions runner down with it. Stripping symbols is what makes the set fit;
-      # libtest still names the failing test and prints its assertion, so a red
-      # build stays readable.
+      # Strip symbols from the integration binaries to keep their linked size bounded.
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C strip=symbols"
     steps:
       # Run 38068387566 finished this job at
@@ -590,10 +578,6 @@ jobs:
         run: cargo build -p cli --bin navigator --quiet
       - name: build Hudson operator CLI
         run: cargo build -p hudson --quiet
-      # Before the clean below deletes this binary: every test that starts no
-      # SurrealDB engine, the coverage regex, and the `features` targets.
-      - name: select the SurrealDB-free tests
-        run: '"${CARGO_TARGET_DIR:-target}/debug/hudson" ops surreal-free-tests --out /tmp/surreal-free'
       - name: verify generated SendGrid adapter
         run: "${CARGO_TARGET_DIR:-target}/debug/hudson dev sendgrid-openapi --verify"
       # One content validator over the whole tree: lint every `.md` against the
@@ -837,10 +821,6 @@ jobs:
           PYTHON
       - name: cargo test with coverage
         env:
-          # A test that starts SurrealDB fails here instead of running: the
-          # selection below should have left it out. The native fixture is
-          # required here. The browser gate requires its own harness.
-          NAVIGATOR_FORBID_SURREAL: "1"
           NAVIGATOR_TEST_POSTGRES_PORT: "25432"
           RUST_BACKTRACE: full
           # Coverage-instrumented routes run deep on a test thread; 8 MiB has
@@ -887,86 +867,14 @@ jobs:
           # Tee the suite so a red run still has the panic after the log
           # stream is gone; the step after this one uploads the JUnit on every
           # outcome and the tee file on failure.
-          # Keep the primary selection and add six verified native Fi boundaries.
-          # Their original module retains legacy fixtures and its coverage exclusion.
-          native_fi='binary(=store) & test(/^postgres::inbox_tests::('
-          native_fi+='fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch|'
-          native_fi+='raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the_winner|'
-          native_fi+='identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it|'
-          native_fi+='fi_import_lock_prevents_assignment_until_destination_verification_finishes|'
-          native_fi+='fi_project_destination_is_reserved_before_any_history_commit|'
-          native_fi+='native_call_and_fi_triage_preserve_roles_billing_and_attribution'
-          native_fi+=')$/)'
-          # These cases share source files with compatibility tests but run with PostgreSQL or in memory only.
-          calendar='(package(workflows-service) & test(/::(calendar_failure_still_posts_the_open_project_notice|the_daily_trigger_runs_at_0333_utc)$/))'
           cargo nextest run --workspace --no-fail-fast --profile ci \
-              -E "($(cat /tmp/surreal-free/nextest-filter)) | ($native_fi) | ($calendar)" \
               2>&1 | tee /tmp/navigator-workspace-tests.log
-          # The two lanes nextest does not run, kept so this gate stays exactly
-          # as wide as the `cargo test --workspace` it replaces — and so the
-          # coverage number keeps measuring the same test set.
-          #
-          #   * `features`. The cucumber suites are `harness = false` binaries
-          #     that do not speak nextest's `--list` protocol, so
-          #     `.config/nextest.toml` excludes the package and a workspace run
-          #     would otherwise abort on them. Run alone rather than alongside
-          #     the line above: these suites carry their own fixed
-          #     `max_concurrent_scenarios: Some(64)`, which is the same
-          #     concurrency they get today inside `cargo test --workspace`.
-          #   * DOCTESTS. nextest does not run them at all. They are part of
-          #     what the floor below measures — see the note there on why the
-          #     local `cargo llvm-cov --workspace` lane reads lower than this
-          #     job — so dropping them would both narrow the gate and move the
-          #     percentage it is compared against.
-          #
-          # The `features` binaries run straight out of the workspace build
-          # above, NOT through `cargo test -p features`. `-p` resolves features
-          # for that one package, which differs from the workspace's unified
-          # set, so it recompiled the dependency graph — surrealdb-core
-          # included — for 17.5 minutes (run 44371787937). `cargo test
-          # --workspace --no-run` matches the nextest build's fingerprints, so
-          # it compiles nothing and only reports where each binary is. Each is
-          # run from `features/`, the directory `cargo test` would use.
-          cargo test --workspace --no-run --message-format=json > /tmp/test-artifacts.json
-          features_bin() {
-              jq -r --arg kind "$1" --arg name "$2" '
-                  select(.reason == "compiler-artifact" and .executable != null
-                      and (.manifest_path | endswith("/features/Cargo.toml"))
-                      and (.target.kind | index($kind))
-                      and ($name == "" or .target.name == $name))
-                  | .executable' /tmp/test-artifacts.json
-          }
-          # `|| [ -n ]`: the file has no trailing newline, and a bare `read`
-          # would silently drop its last target.
-          while read -r arg || [ -n "${arg}" ]; do
-              case "${arg}" in
-                  --lib) bin="$(features_bin lib "")" ;;
-                  --test=*) bin="$(features_bin test "${arg#--test=}")" ;;
-                  "") continue ;;
-                  *) echo "::error::unknown features argument ${arg}"; exit 1 ;;
-              esac
-              if [ "$(printf '%s\n' "${bin}" | grep -c .)" -ne 1 ]; then
-                  echo "::error::features ${arg} did not resolve to exactly one binary: ${bin:-<none>}"
-                  exit 1
-              fi
-              echo "features ${arg}: ${bin}"
-              (cd features && "${bin}")
-          done < /tmp/surreal-free/features-args
+          # The workspace run excludes the custom Cucumber harnesses.
+          # Keep the active fixture and workflow-document checks alongside the browser gate.
+          cargo test -p features --lib --test=acroform_fill \
+              --test=compliance_filings_workflow_shapes --test=legal_workflow_shapes \
+              --test=nonprofit_workflow_shapes --test=template_validate
           cargo test --workspace --doc
-          # This pure source ratchet contains engine-call examples as strings,
-          # so the conservative primary selector omits it. Run its already-built
-          # instrumented binary explicitly without resolving another Cargo graph.
-          ratchet_bin="$(jq -r '
-              select(.reason == "compiler-artifact" and .executable != null
-                  and (.manifest_path | endswith("/cli/Cargo.toml"))
-                  and (.target.kind | index("test"))
-                  and .target.name == "embedded_surreal_ratchet")
-              | .executable' /tmp/test-artifacts.json)"
-          if [ "$(printf '%s\n' "${ratchet_bin}" | grep -c .)" -ne 1 ]; then
-              echo "::error::embedded SurrealDB source ratchet did not resolve to exactly one binary"
-              exit 1
-          fi
-          NAVIGATOR_FORBID_SURREAL=1 "${ratchet_bin}" --nocapture
           # THE COVERAGE GATE. `--fail-under-lines` exits non-zero when total
           # workspace line coverage is under the floor, which fails this job and
           # therefore the `ci` merge gate. There is no upload, no separate
@@ -1044,7 +952,7 @@ jobs:
           # The floor is 92.0% (ENG-1375 raises it to 95.0%). The per-file
           # table this prints is the diagnostic when it trips.
           cargo llvm-cov report --fail-under-lines 92.0 \
-              --ignore-filename-regex "(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\\.rs\$|$(cat /tmp/surreal-free/coverage-ignore)"
+              --ignore-filename-regex "(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\\.rs\$"
       - name: stop covered PostgreSQL fixture
         if: always()
         run: docker rm -f test-postgres

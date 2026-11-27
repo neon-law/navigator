@@ -22,9 +22,9 @@ use uuid::Uuid;
 
 use cloud::calendar::{CalendarError, CalendarRole, CalendarService};
 
+use crate::application_store::ApplicationStore;
 use crate::persons::Role;
 use crate::projects::{self, Project, ProjectCommandError};
-use crate::surreal::SurrealDb;
 
 /// What one calendar pass did, as a closed slug a door reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,9 +96,7 @@ pub async fn lock_writes(
     project_id: Uuid,
 ) -> Result<Option<CalendarWriteLock>, crate::postgres::PostgresError> {
     use crate::postgres::{PostgresDb, PostgresError};
-    let Some(db) = PostgresDb::configured().await? else {
-        return Ok(None);
-    };
+    let db = PostgresDb::application().await?;
     let mut transaction = db
         .pool()
         .begin()
@@ -124,15 +122,15 @@ pub async fn lock_writes(
 /// # Errors
 /// A store or provider failure.
 pub async fn ensure(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     calendar: &dyn CalendarService,
 ) -> Result<CalendarReport, ProjectCalendarError> {
-    let project = find(surreal, project_id).await?;
+    let project = find(application_store, project_id).await?;
     if project.status != "open" {
-        return close(surreal, project_id, calendar).await;
+        return close(application_store, project_id, calendar).await;
     }
-    let timezone = projects::calendar_timezone(surreal, &project)
+    let timezone = projects::calendar_timezone(application_store, &project)
         .await
         .map_err(|error| ProjectCalendarError::Db(error.to_string()))?;
     let (id, outcome) = if let Some(recorded) = configured(&project) {
@@ -160,7 +158,7 @@ pub async fn ensure(
         });
     }
     if outcome != CalendarOutcome::Present {
-        projects::set_calendar_id(surreal, project_id, &id)
+        projects::set_calendar_id(application_store, project_id, &id)
             .await?
             .ok_or(ProjectCalendarError::NotFound)?;
     }
@@ -213,11 +211,11 @@ async fn verify_private_calendar(
 
 /// Preserve every observed event revision on the verified private calendar.
 pub async fn backup_events(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     calendar: &dyn CalendarService,
 ) -> Result<u64, ProjectCalendarError> {
-    let project = find(surreal, project_id).await?;
+    let project = find(application_store, project_id).await?;
     let firm_id = project
         .firm_id
         .ok_or_else(|| ProjectCalendarError::Db("Project Firm is missing".into()))?;
@@ -292,15 +290,14 @@ pub struct ParticipantSync {
 /// Returns an error if the owning Firm, calendar, membership authority, or
 /// provider readback cannot be verified.
 pub async fn sync_membership(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     calendar: &dyn CalendarService,
 ) -> Result<Vec<ParticipantSync>, ProjectCalendarError> {
-    let db = crate::postgres::PostgresDb::configured()
+    let db = crate::postgres::PostgresDb::application()
         .await
-        .map_err(sync_db)?
-        .ok_or_else(|| ProjectCalendarError::Db("PostgreSQL not configured".into()))?;
-    let project = find(surreal, project_id).await?;
+        .map_err(sync_db)?;
+    let project = find(application_store, project_id).await?;
     let firm_id = project
         .firm_id
         .ok_or_else(|| ProjectCalendarError::Db("Project Firm is missing".into()))?;
@@ -313,8 +310,8 @@ pub async fn sync_membership(
     let calendar_id = match configured(&project) {
         Some(id) => id,
         None if project.status == "open" => {
-            ensure(surreal, project_id, calendar).await?;
-            configured(&find(surreal, project_id).await?)
+            ensure(application_store, project_id, calendar).await?;
+            configured(&find(application_store, project_id).await?)
                 .ok_or_else(|| ProjectCalendarError::Db("Project calendar is missing".into()))?
         }
         None => return Ok(Vec::new()),
@@ -344,7 +341,7 @@ pub async fn sync_membership(
     let members = desired.values().map(String::as_str).collect();
     let open_project_code = (project.status == "open").then_some(project.code.as_str());
     let brand_policy = if open_project_code.is_some() {
-        let brands = crate::brands::for_firm(surreal, firm_id)
+        let brands = crate::brands::for_firm(application_store, firm_id)
             .await
             .map_err(sync_db)?;
         crate::brand_domains::DomainPolicy::from_brands(&brands)
@@ -637,13 +634,13 @@ fn sync_db(error: impl std::fmt::Display) -> ProjectCalendarError {
 /// # Errors
 /// A store or provider failure.
 pub async fn close(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     calendar: &dyn CalendarService,
 ) -> Result<CalendarReport, ProjectCalendarError> {
-    let project = find(surreal, project_id).await?;
+    let project = find(application_store, project_id).await?;
     if project.booking_url.is_some() {
-        projects::clear_booking_url(surreal, project_id).await?;
+        projects::clear_booking_url(application_store, project_id).await?;
     }
     let Some(calendar_id) = configured(&project) else {
         return Ok(CalendarReport {
@@ -675,8 +672,11 @@ pub async fn close(
     })
 }
 
-async fn find(surreal: &SurrealDb, project_id: Uuid) -> Result<Project, ProjectCalendarError> {
-    projects::find_by_id(surreal, project_id)
+async fn find(
+    application_store: &ApplicationStore,
+    project_id: Uuid,
+) -> Result<Project, ProjectCalendarError> {
+    projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| ProjectCalendarError::Db(error.to_string()))?
         .ok_or(ProjectCalendarError::NotFound)
@@ -706,7 +706,7 @@ mod tests {
         use cloud::calendar::CalendarEventBackup;
 
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project, firm) = seed_calendar_project().await;
             crate::firms::set_calendar_owner(&db, Role::Owner, None, firm, FAKE_CALENDAR_OWNER).await.unwrap();
             let calendar = FakeCalendar::default();
@@ -733,7 +733,7 @@ mod tests {
     async fn a_closed_calendar_waits_for_an_archive_covering_its_latest_events() {
         use cloud::calendar::CalendarEventBackup;
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let pg = crate::postgres::PostgresDb::application().await.unwrap();
             let (project, firm) = seed_calendar_project().await;
             crate::firms::set_calendar_owner(&db, Role::Owner, None, firm, FAKE_CALENDAR_OWNER).await.unwrap();
@@ -774,7 +774,7 @@ mod tests {
         use crate::firms::set_calendar_owner;
 
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project, firm) = seed_calendar_project().await;
             set_calendar_owner(&db, Role::Owner, None, firm, FAKE_CALENDAR_OWNER)
                 .await
@@ -805,7 +805,7 @@ mod tests {
     #[tokio::test]
     async fn a_recorded_calendar_for_another_project_is_never_used_for_cleanup() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project, _) = seed_calendar_project().await;
             let calendar = FakeCalendar::default();
             let other = calendar
@@ -880,7 +880,7 @@ mod tests {
         };
 
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project_id, firm_id) = seed_calendar_project().await;
             firms::set_calendar_owner(&db, Role::Owner, None, firm_id, FAKE_CALENDAR_OWNER)
                 .await
@@ -993,7 +993,7 @@ mod tests {
     #[tokio::test]
     async fn setup_creates_and_records_a_private_calendar() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project, _) = seed_calendar_project().await;
             let calendar = FakeCalendar::default();
             for (email, role) in [
@@ -1040,7 +1040,7 @@ mod tests {
     #[tokio::test]
     async fn setup_is_idempotent() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project, _) = seed_calendar_project().await;
             let calendar = FakeCalendar::default();
 
@@ -1081,7 +1081,7 @@ mod tests {
     #[tokio::test]
     async fn an_unrecorded_calendar_named_for_the_project_is_adopted() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project, _) = seed_calendar_project().await;
             let calendar = FakeCalendar::default();
             projects::update_project(
@@ -1116,7 +1116,7 @@ mod tests {
     #[tokio::test]
     async fn a_deleted_recorded_calendar_is_reported_not_replaced() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project, _) = seed_calendar_project().await;
             let calendar = FakeCalendar::default();
             ensure(&db, project, &calendar).await.unwrap();
@@ -1134,7 +1134,7 @@ mod tests {
     #[tokio::test]
     async fn close_makes_writers_readers_keeps_the_owner_and_clears_the_booking_link() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project, _) = seed_calendar_project().await;
             let calendar = FakeCalendar::default();
             ensure(&db, project, &calendar).await.unwrap();
@@ -1174,7 +1174,7 @@ mod tests {
     #[tokio::test]
     async fn setup_on_a_closed_matter_stays_read_only() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let (project, _) = seed_calendar_project().await;
             let calendar = FakeCalendar::default();
             ensure(&db, project, &calendar).await.unwrap();

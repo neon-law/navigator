@@ -67,10 +67,11 @@ pub async fn get_review() -> Result<ReviewView, ServerFnError> {
     .and_then(|axum::Extension(pid)| pid.0)
     .and_then(|raw| raw.parse::<uuid::Uuid>().ok());
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     // The draft's link names its matter by code. A code naming no matter is the
     // same refusal a non-participant gets, so neither reveals the other's case.
-    let Some(project_id) = store::projects::id_for_code(&surreal, &project_code).await else {
+    let Some(project_id) = store::projects::id_for_code(&application_store, &project_code).await
+    else {
         dioxus_fullstack_core::FullstackContext::commit_http_status(
             axum::http::StatusCode::NOT_FOUND,
             None,
@@ -97,20 +98,20 @@ pub async fn get_review() -> Result<ReviewView, ServerFnError> {
         })
     };
 
-    let Some(doc) = store::review_documents::by_id(&surreal, doc_id)
+    let Some(doc) = store::review_documents::by_id(&application_store, doc_id)
         .await
         .map_err(server_error)?
     else {
         return not_found(project_id, doc_id);
     };
-    let Some(notation) = store::notations::find_by_id(&surreal, doc.notation_id)
+    let Some(notation) = store::notations::find_by_id(&application_store, doc.notation_id)
         .await
         .map_err(server_error)?
     else {
         return not_found(project_id, doc_id);
     };
     if notation.project_id != project_id
-        || !store::access::can_see_project_as_client(&surreal, person_id, project_id)
+        || !store::access::can_see_project_as_client(&application_store, person_id, project_id)
             .await
             .map_err(server_error)?
         || doc.status == store::review_documents::STATUS_DRAFT
@@ -118,11 +119,11 @@ pub async fn get_review() -> Result<ReviewView, ServerFnError> {
         return not_found(project_id, doc_id);
     }
 
-    let comments = store::document_comments::for_review_document(&surreal, doc.id)
+    let comments = store::document_comments::for_review_document(&application_store, doc.id)
         .await
         .map_err(server_error)?;
     let comments_json = serde_json::to_string(&comments).unwrap_or_else(|_| "[]".to_string());
-    let Some(project) = store::projects::find_by_id(&surreal, project_id)
+    let Some(project) = store::projects::find_by_id(&application_store, project_id)
         .await
         .map_err(server_error)?
     else {

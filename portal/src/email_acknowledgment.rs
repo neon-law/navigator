@@ -71,7 +71,7 @@ fn receipt_allowed(email: &InboundEmail) -> bool {
 /// Reservation is at most once: uncertain sends remain visible in the inbox.
 /// Plan-provider mail follows the lawyer's review path, without an automatic receipt.
 pub(crate) async fn receive(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     service: &dyn crate::email::EmailService,
     email: &InboundEmail,
@@ -105,7 +105,7 @@ pub(crate) async fn receive(
 }
 
 async fn acknowledge(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     service: &dyn crate::email::EmailService,
     email: &InboundEmail,
     mailbox: &str,
@@ -219,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn plan_assignment_mail_stages_once_and_never_takes_a_generic_receipt() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "neon").await;
             let service = crate::email::CapturingEmail::new();
             let storage = crate::test_support::fs_storage().await;
@@ -252,7 +252,7 @@ mod tests {
     }
 
     async fn inbound_message_id(
-        db: &store::surreal::SurrealDb,
+        db: &store::application_store::ApplicationStore,
         email: &InboundEmail,
     ) -> uuid::Uuid {
         let storage = crate::test_support::fs_storage().await;
@@ -266,7 +266,7 @@ mod tests {
     #[tokio::test]
     async fn unparseable_plan_mail_skips_the_generic_receipt_and_stays_in_triage() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "neon").await;
             let service = crate::email::CapturingEmail::new();
             let storage = crate::test_support::fs_storage().await;
@@ -283,7 +283,7 @@ mod tests {
     #[tokio::test]
     async fn support_email_is_saved_before_one_branded_receipt_across_retries() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "neon").await;
             let service = crate::email::CapturingEmail::new();
             let storage = crate::test_support::fs_storage().await;
@@ -325,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn suppressed_automatic_mail_is_still_saved() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "neon").await;
             let service = crate::email::CapturingEmail::new();
             let storage = crate::test_support::fs_storage().await;
@@ -348,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn public_support_mail_from_a_lawyer_is_saved_and_acknowledged() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "neon").await;
             store::persons::create(
                 &db,
@@ -380,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_receipts_reserve_one_send() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "neon").await;
             let service = crate::email::CapturingEmail::new();
             let storage = crate::test_support::fs_storage().await;
@@ -404,7 +404,7 @@ mod tests {
     #[tokio::test]
     async fn messages_without_ids_dedupe_by_content_instead_of_subject() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "neon").await;
             let service = crate::email::CapturingEmail::new();
             let storage = crate::test_support::fs_storage().await;
@@ -422,7 +422,7 @@ mod tests {
     #[tokio::test]
     async fn messages_without_ids_keep_distinct_attachments() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "neon").await;
             let service = crate::email::CapturingEmail::new();
             let storage = crate::test_support::fs_storage().await;
@@ -459,7 +459,7 @@ mod tests {
     #[tokio::test]
     async fn uncertain_send_is_saved_and_never_resent() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "neon").await;
             let service = UncertainEmail(std::sync::atomic::AtomicUsize::new(0));
             let storage = crate::test_support::fs_storage().await;
@@ -484,7 +484,7 @@ mod tests {
     #[tokio::test]
     async fn missing_firm_never_sends_a_receipt() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let service = crate::email::CapturingEmail::new();
             let storage = crate::test_support::fs_storage().await;
             let mut email = sample_email();

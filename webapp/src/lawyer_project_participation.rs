@@ -70,14 +70,15 @@ pub(crate) fn to_participation_rows(
 /// once each resolves that its own caller may.
 #[cfg(feature = "server")]
 pub(crate) async fn participation_rows_for(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
 ) -> Result<Vec<ParticipationRow>, ServerFnError> {
-    let participation_rows = store::projects::participations_for_project(surreal, project_id)
-        .await
-        .map_err(server_error)?;
+    let participation_rows =
+        store::projects::participations_for_project(application_store, project_id)
+            .await
+            .map_err(server_error)?;
     let people = store::persons::find_by_ids(
-        surreal,
+        application_store,
         &participation_rows
             .iter()
             .map(|r| r.person_id)

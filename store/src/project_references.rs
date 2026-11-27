@@ -34,20 +34,18 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::Row;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
 use crate::postgres_graph::graph_authority;
 use crate::relationships::{Endpoint, NewRelationship, Relationship};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 pub use model::project_references::{is_reason, REASONS};
 pub use model::project_references::{
     REASON_ADVERSE_PARTY, REASON_COUNTERPARTY_ENTITY, REASON_COUNTERPARTY_OFFICER,
     REASON_GOVERNMENT_OFFICIAL, REASON_REGISTERED_AGENT, REASON_SIGNATORY,
 };
 
-const TABLE: &str = "project_reference";
 const PROJECT_TABLE: &str = "project";
 
 /// The action a [`record_adversity`] write appends to the Relationship Log.
@@ -77,10 +75,6 @@ impl Party {
         }
     }
 
-    fn record(self) -> surrealdb::types::RecordId {
-        record_id(self.kind.table(), self.id)
-    }
-
     /// The PostgreSQL column that names this party. A literal, never input.
     const fn column(self) -> &'static str {
         match self.kind {
@@ -100,31 +94,6 @@ pub struct ProjectReference {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct ProjectReferenceRow {
-    r#in: surrealdb::types::RecordId,
-    out: surrealdb::types::RecordId,
-    reason: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl ProjectReferenceRow {
-    fn into_reference(self) -> Option<ProjectReference> {
-        Some(ProjectReference {
-            project_id: record_uuid(&self.r#in)?,
-            party: Party {
-                kind: Endpoint::from_table(self.out.table.as_str())?,
-                id: record_uuid(&self.out)?,
-            },
-            reason: self.reason,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const SELECT: &str = "in, out, reason, inserted_at, updated_at";
 const PG_SELECT: &str = "project_id, person_id, entity_id, reason, inserted_at, updated_at";
 
 fn from_pg(row: &sqlx::postgres::PgRow) -> Result<ProjectReference, ProjectReferenceError> {
@@ -145,7 +114,7 @@ fn from_pg(row: &sqlx::postgres::PgRow) -> Result<ProjectReference, ProjectRefer
     })
 }
 
-async fn authority() -> Result<Option<PostgresDb>, ProjectReferenceError> {
+async fn authority() -> Result<PostgresDb, ProjectReferenceError> {
     graph_authority()
         .await
         .map_err(ProjectReferenceError::Engine)
@@ -153,8 +122,6 @@ async fn authority() -> Result<Option<PostgresDb>, ProjectReferenceError> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectReferenceError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A reason outside [`REASONS`]. Refused here so the caller reads a
     /// named error rather than the engine's ASSERT text.
     #[error("unknown project reference reason {reason:?}; expected one of {expected}", reason = .0, expected = REASONS.join(", "))]
@@ -171,16 +138,6 @@ pub enum ProjectReferenceError {
     Engine(String),
 }
 
-fn many(
-    mut response: surrealdb::IndexedResults,
-) -> Result<Vec<ProjectReference>, ProjectReferenceError> {
-    let rows: Vec<ProjectReferenceRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(ProjectReferenceRow::into_reference)
-        .collect())
-}
-
 /// Record that `project_id` references `party` for `reason`, returning the
 /// reference whether this call created it or found it already there.
 ///
@@ -192,7 +149,7 @@ fn many(
 /// [`REASONS`]; [`ProjectReferenceError::Db`] if the lookup or the write
 /// fails, including a `project_id` or party with no row behind it.
 pub async fn reference(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     party: Party,
     reason: &str,
@@ -201,11 +158,7 @@ pub async fn reference(
     if !is_reason(reason) {
         return Err(ProjectReferenceError::UnknownReason(reason.to_string()));
     }
-    let postgres = authority().await?.ok_or_else(|| {
-        ProjectReferenceError::Engine(
-            "Project Reference writes require PostgreSQL authority".into(),
-        )
-    })?;
+    let postgres = authority().await?;
     // A concurrent writer's row wins the partial unique index; either
     // way the one row is read back.
     sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -229,29 +182,13 @@ pub async fn reference(
 ///
 /// [`ProjectReferenceError::Db`] if the lookup fails.
 pub async fn find(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     party: Party,
     reason: &str,
 ) -> Result<Option<ProjectReference>, ProjectReferenceError> {
-    if let Some(postgres) = authority().await? {
-        return find_in_postgres(&postgres, project_id, party, reason).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE in = $project AND out = $party AND reason = $reason LIMIT 1"
-        ))
-        .bind(("project", record_id(PROJECT_TABLE, project_id)))
-        .bind(("party", party.record()))
-        .bind(("reason", reason.trim().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ProjectReferenceRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .next()
-        .and_then(ProjectReferenceRow::into_reference))
+    let postgres = authority().await?;
+    find_in_postgres(&postgres, project_id, party, reason).await
 }
 
 async fn find_in_postgres(
@@ -281,31 +218,20 @@ async fn find_in_postgres(
 ///
 /// [`ProjectReferenceError::Db`] if the lookup fails.
 pub async fn is_referenced(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     party: Party,
 ) -> Result<bool, ProjectReferenceError> {
-    if let Some(postgres) = authority().await? {
-        let found = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT 1 FROM project_reference WHERE project_id = $1 AND {} = $2 LIMIT 1",
-            party.column()
-        )))
-        .bind(project_id)
-        .bind(party.id)
-        .fetch_optional(&postgres.0)
-        .await?;
-        return Ok(found.is_some());
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM ONLY {TABLE} WHERE in = $project AND out = $party LIMIT 1"
-        ))
-        .bind(("project", record_id(PROJECT_TABLE, project_id)))
-        .bind(("party", party.record()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(row.is_some())
+    let postgres = authority().await?;
+    let found = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT 1 FROM project_reference WHERE project_id = $1 AND {} = $2 LIMIT 1",
+        party.column()
+    )))
+    .bind(project_id)
+    .bind(party.id)
+    .fetch_optional(&postgres.0)
+    .await?;
+    Ok(found.is_some())
 }
 
 /// Every party one Project references, oldest first.
@@ -314,29 +240,20 @@ pub async fn is_referenced(
 ///
 /// [`ProjectReferenceError::Db`] if the lookup fails.
 pub async fn for_project(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<ProjectReference>, ProjectReferenceError> {
-    if let Some(postgres) = authority().await? {
-        return sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {PG_SELECT} FROM project_reference WHERE project_id = $1 \
-             ORDER BY inserted_at ASC, id ASC"
-        )))
-        .bind(project_id)
-        .fetch_all(&postgres.0)
-        .await?
-        .iter()
-        .map(from_pg)
-        .collect();
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE in = $project ORDER BY inserted_at ASC"
-        ))
-        .bind(("project", record_id(PROJECT_TABLE, project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let postgres = authority().await?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {PG_SELECT} FROM project_reference WHERE project_id = $1 \
+         ORDER BY inserted_at ASC, id ASC"
+    )))
+    .bind(project_id)
+    .fetch_all(&postgres.0)
+    .await?
+    .iter()
+    .map(from_pg)
+    .collect()
 }
 
 /// Which side of the client an adversity edge starts from.
@@ -401,7 +318,7 @@ pub enum AdversityError {
 /// or [`AdversityError::NoClientDri`] for a command the caller can correct;
 /// the wrapped store errors if a read or write fails.
 pub async fn record_adversity(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     command: &RecordAdversityCommand,
 ) -> Result<Relationship, AdversityError> {
     let project = crate::projects::find_by_id(db, command.project_id)
@@ -444,16 +361,12 @@ pub async fn record_adversity(
         source_id: None,
         detail: Some(format!("recorded on project {}", project.code)),
     };
-    if let Some(postgres) = authority().await? {
-        return record_adversity_on(db, &postgres, &log_input, &mut input).await;
-    }
-    let log = crate::relationship_logs::record(db, &log_input).await?;
-    input.source_id = Some(log.id);
-    Ok(crate::relationships::record(db, &input).await?)
+    let postgres = authority().await?;
+    record_adversity_on(db, &postgres, &log_input, &mut input).await
 }
 
 async fn record_adversity_on(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     postgres: &PostgresDb,
     log_input: &crate::relationship_logs::NewRelationshipLog,
     input: &mut NewRelationship,
@@ -490,9 +403,11 @@ mod tests {
     use crate::relationships::{Endpoint, KIND_ADVERSE_TO, SOURCE_MANUAL};
     use crate::test_support::{self, seed_entity, seed_project};
 
-    async fn counterparty(surreal: &crate::surreal::SurrealDb) -> uuid::Uuid {
+    async fn counterparty(
+        application_store: &crate::application_store::ApplicationStore,
+    ) -> uuid::Uuid {
         crate::persons::create(
-            surreal,
+            application_store,
             &NewPerson::with_role("Agent Example", "agent@example.com", Role::Client),
         )
         .await
@@ -503,13 +418,13 @@ mod tests {
     #[tokio::test]
     async fn a_reference_is_idempotent_and_grants_no_participation() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            test_support::seed_compiled_brands_postgres(&surreal).await;
-            let project = seed_project(&surreal, "Widget matter").await;
-            let agent = counterparty(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            test_support::seed_compiled_brands_postgres(&application_store).await;
+            let project = seed_project(&application_store, "Widget matter").await;
+            let agent = counterparty(&application_store).await;
 
             let first = reference(
-                &surreal,
+                &application_store,
                 project.id,
                 Party::person(agent),
                 REASON_REGISTERED_AGENT,
@@ -517,7 +432,7 @@ mod tests {
             .await
             .unwrap();
             let again = reference(
-                &surreal,
+                &application_store,
                 project.id,
                 Party::person(agent),
                 REASON_REGISTERED_AGENT,
@@ -525,13 +440,21 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(first, again, "the second write finds the first row");
-            assert_eq!(for_project(&surreal, project.id).await.unwrap().len(), 1);
-            assert!(is_referenced(&surreal, project.id, Party::person(agent))
-                .await
-                .unwrap());
+            assert_eq!(
+                for_project(&application_store, project.id)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert!(
+                is_referenced(&application_store, project.id, Party::person(agent))
+                    .await
+                    .unwrap()
+            );
             assert!(
                 find(
-                    &surreal,
+                    &application_store,
                     project.id,
                     Party::person(agent),
                     REASON_ADVERSE_PARTY
@@ -542,7 +465,7 @@ mod tests {
                 "a reference is keyed by its reason too"
             );
             assert!(
-                crate::projects::participation_for_person(&surreal, agent, project.id)
+                crate::projects::participation_for_person(&application_store, agent, project.id)
                     .await
                     .unwrap()
                     .is_none(),
@@ -555,16 +478,16 @@ mod tests {
     #[tokio::test]
     async fn every_schema_reason_is_writable_and_an_unknown_one_is_refused() {
         test_support::with_required_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
-        test_support::seed_compiled_brands_postgres(&surreal).await;
-        let project = seed_project(&surreal, "Widget matter").await;
-        let party = Party::entity(seed_entity(&surreal).await);
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
+        test_support::seed_compiled_brands_postgres(&application_store).await;
+        let project = seed_project(&application_store, "Widget matter").await;
+        let party = Party::entity(seed_entity(&application_store).await);
         for reason in REASONS {
-            reference(&surreal, project.id, party, reason)
+            reference(&application_store, project.id, party, reason)
                 .await
                 .unwrap_or_else(|error| panic!("{reason}: {error}"));
         }
-        let refused = reference(&surreal, project.id, party, "co_counsel")
+        let refused = reference(&application_store, project.id, party, "co_counsel")
             .await
             .expect_err("a participation-shaped word is not a reference reason");
         assert!(
@@ -576,10 +499,10 @@ mod tests {
     #[tokio::test]
     async fn adversity_requires_a_reference_and_then_lands_a_sourced_manual_edge() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            test_support::seed_compiled_brands_postgres(&surreal).await;
-            let project = seed_project(&surreal, "Widget matter").await;
-            let opponent = Party::entity(seed_entity(&surreal).await);
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            test_support::seed_compiled_brands_postgres(&application_store).await;
+            let project = seed_project(&application_store, "Widget matter").await;
+            let opponent = Party::entity(seed_entity(&application_store).await);
             let command = RecordAdversityCommand {
                 project_id: project.id,
                 party: opponent,
@@ -587,15 +510,22 @@ mod tests {
                 actor_person_id: None,
             };
 
-            let refused = record_adversity(&surreal, &command)
+            let refused = record_adversity(&application_store, &command)
                 .await
                 .expect_err("adversity is asserted against a referenced party only");
             assert!(matches!(refused, AdversityError::PartyNotReferenced));
 
-            reference(&surreal, project.id, opponent, REASON_COUNTERPARTY_ENTITY)
+            reference(
+                &application_store,
+                project.id,
+                opponent,
+                REASON_COUNTERPARTY_ENTITY,
+            )
+            .await
+            .unwrap();
+            let edge = record_adversity(&application_store, &command)
                 .await
                 .unwrap();
-            let edge = record_adversity(&surreal, &command).await.unwrap();
             assert_eq!(edge.from, Endpoint::Entity);
             assert_eq!(edge.from_id, project.entity_id);
             assert_eq!(edge.to_id, opponent.id);
@@ -603,7 +533,7 @@ mod tests {
             assert_eq!(edge.confidence_pct, 100);
             assert_eq!(edge.source_kind, SOURCE_MANUAL);
 
-            let log = crate::relationship_logs::for_project(&surreal, project.id)
+            let log = crate::relationship_logs::for_project(&application_store, project.id)
                 .await
                 .unwrap()
                 .into_iter()
@@ -622,40 +552,47 @@ mod tests {
     #[tokio::test]
     async fn adversity_from_the_client_dri_needs_one_designated() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            test_support::seed_compiled_brands_postgres(&surreal).await;
-            let project = seed_project(&surreal, "Widget matter").await;
-            let opponent = Party::person(counterparty(&surreal).await);
-            reference(&surreal, project.id, opponent, REASON_ADVERSE_PARTY)
-                .await
-                .unwrap();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            test_support::seed_compiled_brands_postgres(&application_store).await;
+            let project = seed_project(&application_store, "Widget matter").await;
+            let opponent = Party::person(counterparty(&application_store).await);
+            reference(
+                &application_store,
+                project.id,
+                opponent,
+                REASON_ADVERSE_PARTY,
+            )
+            .await
+            .unwrap();
             let command = RecordAdversityCommand {
                 project_id: project.id,
                 party: opponent,
                 subject: AdversitySubject::ClientDri,
                 actor_person_id: None,
             };
-            let refused = record_adversity(&surreal, &command)
+            let refused = record_adversity(&application_store, &command)
                 .await
                 .expect_err("no client DRI yet");
             assert!(matches!(refused, AdversityError::NoClientDri));
 
             let client = crate::persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::with_role("Client Example", "client@example.com", Role::Client),
             )
             .await
             .unwrap()
             .id;
-            crate::projects::designate_dri_in_surreal(
-                &surreal,
+            crate::projects::designate_dri(
+                &application_store,
                 project.id,
                 client,
                 crate::projects::DriSide::Client,
             )
             .await
             .unwrap();
-            let edge = record_adversity(&surreal, &command).await.unwrap();
+            let edge = record_adversity(&application_store, &command)
+                .await
+                .unwrap();
             assert_eq!(edge.from, Endpoint::Person);
             assert_eq!(edge.from_id, client);
         })
@@ -665,9 +602,9 @@ mod tests {
     #[tokio::test]
     async fn adversity_on_an_unknown_project_is_refused() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let refused = record_adversity(
-                &surreal,
+                &application_store,
                 &RecordAdversityCommand {
                     project_id: uuid::Uuid::now_v7(),
                     party: Party::person(uuid::Uuid::now_v7()),

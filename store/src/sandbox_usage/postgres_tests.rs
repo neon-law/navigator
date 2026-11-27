@@ -1,7 +1,7 @@
 use super::postgres;
 use super::*;
 use crate::assistant_turns::postgres_tests::person;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 
 async fn database() -> Option<PostgresDb> {
     let (options, database) = fresh_schema().await?;
@@ -77,43 +77,5 @@ async fn parallel_debits_apply_exactly_once() {
         .unwrap()
         .unwrap();
     assert_eq!((row.spent_cents, row.overage), (600, true));
-    pg.0.close().await;
-}
-
-#[tokio::test]
-async fn surreal_periods_copy_once_and_never_overwrite_a_postgres_balance() {
-    let Some(pg) = database().await else { return };
-    let surreal = crate::test_support::mem_surreal().await;
-    let carried = person(&pg).await;
-    let current = person(&pg).await;
-    debit(&surreal, carried, PERIOD, 120).await.unwrap();
-    debit(&surreal, current, PERIOD, 300).await.unwrap();
-    postgres::debit(&pg, current, PERIOD, 10).await.unwrap();
-
-    let copied = postgres::copy_from_surreal(&surreal, &pg).await.unwrap();
-    assert_eq!((copied.applied, copied.failures.len()), (1, 0));
-    assert_eq!(
-        postgres::find(&pg, carried, PERIOD)
-            .await
-            .unwrap()
-            .unwrap()
-            .spent_cents,
-        120
-    );
-    assert_eq!(
-        postgres::find(&pg, current, PERIOD)
-            .await
-            .unwrap()
-            .unwrap()
-            .spent_cents,
-        10
-    );
-    assert_eq!(
-        postgres::copy_from_surreal(&surreal, &pg)
-            .await
-            .unwrap()
-            .applied,
-        0
-    );
     pg.0.close().await;
 }

@@ -1,8 +1,8 @@
 use super::*;
 
-async fn postgres_fixture() -> Option<(crate::postgres::PostgresDb, SurrealDb, Uuid, Uuid)> {
+async fn postgres_fixture() -> Option<(crate::postgres::PostgresDb, ApplicationStore, Uuid, Uuid)> {
     use crate::postgres::fixtures::{activate_application, firm_for_notation, workflow_fixture};
-    use crate::postgres_mirror::tests::{connect, fresh_schema};
+    use crate::postgres::fixtures::{connect, fresh_schema};
 
     let (options, database) = fresh_schema().await?;
     let pg = connect(&options, &database).await;
@@ -21,7 +21,7 @@ async fn postgres_fixture() -> Option<(crate::postgres::PostgresDb, SurrealDb, U
         .unwrap();
     Some((
         pg,
-        crate::surreal::SurrealDb::uninitialized(),
+        crate::application_store::ApplicationStore::uninitialized(),
         person,
         project,
     ))
@@ -44,7 +44,7 @@ async fn with_postgres<T>(
 
 #[tokio::test]
 async fn published_reads_require_consent_and_publication() {
-    let Some((pg, surreal, person, project)) = postgres_fixture().await else {
+    let Some((pg, application_store, person, project)) = postgres_fixture().await else {
         return;
     };
     with_postgres(pg.clone(), async {
@@ -53,7 +53,7 @@ async fn published_reads_require_consent_and_publication() {
             ("Draft quote.", None, 0),
         ] {
             find_or_create(
-                &surreal,
+                &application_store,
                 &NewTestimonial {
                     project_id: project,
                     person_id: person,
@@ -67,21 +67,25 @@ async fn published_reads_require_consent_and_publication() {
             .await
             .unwrap();
         }
-        let rows = published_for_home(&surreal, 10).await.unwrap();
+        let rows = published_for_home(&application_store, 10).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].quote, "Published quote.");
         assert_eq!(
-            published_for_brand(&surreal, "neon", Some(10))
+            published_for_brand(&application_store, "neon", Some(10))
                 .await
                 .unwrap(),
             rows
         );
-        assert!(published_for_brand(&surreal, "delete-your-data", Some(10))
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            published_for_brand(&application_store, "delete-your-data", Some(10))
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
-            published_for_brand(&surreal, "neon", None).await.unwrap(),
+            published_for_brand(&application_store, "neon", None)
+                .await
+                .unwrap(),
             rows
         );
         let public = format!("{:?}", rows[0]);
@@ -109,7 +113,7 @@ async fn published_reads_require_consent_and_publication() {
 
 #[tokio::test]
 async fn public_projection_uses_chosen_attribution_and_omits_blank_identity() {
-    let Some((pg, surreal, person, project)) = postgres_fixture().await else {
+    let Some((pg, application_store, person, project)) = postgres_fixture().await else {
         return;
     };
     sqlx::query("UPDATE person SET name = 'Stored Identity', title = 'Stored Title', profile_image_url = '/images/stored-identity.webp' WHERE id = $1")
@@ -119,7 +123,7 @@ async fn public_projection_uses_chosen_attribution_and_omits_blank_identity() {
         .unwrap();
     with_postgres(pg.clone(), async {
         find_or_create(
-            &surreal,
+            &application_store,
             &NewTestimonial {
                 project_id: project,
                 person_id: person,
@@ -133,7 +137,7 @@ async fn public_projection_uses_chosen_attribution_and_omits_blank_identity() {
         .await
         .unwrap();
         find_or_create(
-            &surreal,
+            &application_store,
             &NewTestimonial {
                 project_id: project,
                 person_id: person,
@@ -146,7 +150,7 @@ async fn public_projection_uses_chosen_attribution_and_omits_blank_identity() {
         )
         .await
         .unwrap();
-        let rows = published_for_home(&surreal, 10).await.unwrap();
+        let rows = published_for_home(&application_store, 10).await.unwrap();
         assert_eq!(rows.len(), 2);
         let chosen = rows
             .iter()

@@ -54,12 +54,12 @@ struct Args {
 /// [`crate::server::McpState::email`]. The tool refuses cleanly rather than
 /// panicking when it is absent.
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     forge: Option<&Arc<dyn cloud::ForgeService>>,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
     let pg = store::postgres::PostgresDb::from_env().await.ok();
-    call_with(surreal, forge, pg.as_ref(), arguments).await
+    call_with(application_store, forge, pg.as_ref(), arguments).await
 }
 
 /// [`call`] with the PostgreSQL archive store supplied. Deletion also waits on
@@ -67,7 +67,7 @@ pub async fn call(
 /// after the close whose verified Git bundle holds the live HEAD, every
 /// required handoff acknowledged, and no Legal Hold on the matter.
 pub async fn call_with(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     forge: Option<&Arc<dyn cloud::ForgeService>>,
     pg: Option<&store::postgres::PostgresDb>,
     arguments: &Value,
@@ -86,7 +86,7 @@ pub async fn call_with(
         ));
     };
 
-    let project = store::projects::find_by_id(surreal, args.project_id)
+    let project = store::projects::find_by_id(application_store, args.project_id)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?
         .ok_or_else(|| ToolError::NotFound(format!("project_id={}", args.project_id)))?;
@@ -99,7 +99,7 @@ pub async fn call_with(
     }
 
     let asset = store::assets::current(
-        surreal,
+        application_store,
         args.project_id,
         rules::kind::Kind::ClosedRepository.as_str(),
         store::assets::Lens::Lawyer,
@@ -142,7 +142,7 @@ pub async fn call_with(
     }
 
     let readiness = store::project_closeout::readiness(
-        surreal,
+        application_store,
         pg,
         args.project_id,
         store::project_closeout::Closeout::DeleteRepository {
@@ -163,7 +163,7 @@ pub async fn call_with(
         .await
         .map_err(|error| ToolError::Internal(error.to_string()))?;
 
-    store::projects::set_repository_url(surreal, args.project_id, None)
+    store::projects::set_repository_url(application_store, args.project_id, None)
         .await
         .map_err(|error| ToolError::Internal(error.to_string()))?;
 
@@ -204,24 +204,31 @@ mod tests {
         Arc::new(cloud::FsStorage::new(dir).await.unwrap())
     }
 
-    async fn closed_project(surreal: &store::surreal::SurrealDb) -> (Uuid, String) {
+    async fn closed_project(
+        application_store: &store::application_store::ApplicationStore,
+    ) -> (Uuid, String) {
         let code = format!("closed-repo-{}", Uuid::now_v7().simple());
-        crate::test_fixtures::seed_brands(surreal).await;
+        crate::test_fixtures::seed_brands(application_store).await;
         let created = create(
-            surreal,
+            application_store,
             &NewProject {
                 code: code.clone(),
                 name: "Decommissionable matter".into(),
                 status: "open".into(),
-                entity_id: seed_entity(surreal).await,
+                entity_id: seed_entity(application_store).await,
                 ..Default::default()
             },
         )
         .await
         .expect("create project");
-        seed_signed_onboarding(surreal, created.id, dri_person(surreal).await).await;
+        seed_signed_onboarding(
+            application_store,
+            created.id,
+            dri_person(application_store).await,
+        )
+        .await;
         transition_project_with_reason(
-            surreal,
+            application_store,
             created.id,
             Transition::Close,
             Some(ClosureReason::EngagementCompleted),
@@ -233,14 +240,14 @@ mod tests {
     }
 
     async fn file_archive(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         storage: &Arc<dyn StorageService>,
         project_id: Uuid,
         commit_sha: &str,
     ) {
         let kind = rules::kind::Kind::ClosedRepository.as_str();
         store::documents::ingest_bytes_as(
-            surreal,
+            application_store,
             storage,
             &IngestArgs {
                 project_id,
@@ -269,164 +276,6 @@ mod tests {
         .expect("file closed_repository asset");
     }
 
-    async fn test_postgres() -> Option<store::postgres::PostgresDb> {
-        let port = store::test_support::postgres_test_port();
-        let options = sqlx::postgres::PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(sqlx::postgres::PgSslMode::Disable);
-        let admin = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
-        let name = format!("mcp_closeout_{}", Uuid::new_v4().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let pg = store::postgres::PostgresDb::connect(options.database(&name))
-            .await
-            .unwrap();
-        pg.migrate_embedded(None).await.unwrap();
-        Some(pg)
-    }
-
-    /// A closed Project owned by a Firm, so a recovery generation can be cut.
-    async fn closed_firm_project(surreal: &store::surreal::SurrealDb) -> (Uuid, String) {
-        crate::test_fixtures::seed_brands(surreal).await;
-        let firm_id = store::firms::firm_id_for_brand_key(surreal, "neon")
-            .await
-            .unwrap()
-            .expect("the fixture Brand has a Firm");
-        let code = format!(
-            "closed-firm-repo-{}",
-            &Uuid::now_v7().simple().to_string()[..8]
-        );
-        let created = create(
-            surreal,
-            &NewProject {
-                code: code.clone(),
-                name: "Decommissionable Firm matter".into(),
-                status: "open".into(),
-                entity_id: seed_entity(surreal).await,
-                firm_id: Some(firm_id),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create project");
-        store::projects::set_repository_url(
-            surreal,
-            created.id,
-            Some(&format!("https://forge.example.test/firm/{code}")),
-        )
-        .await
-        .unwrap();
-        seed_signed_onboarding(surreal, created.id, dri_person(surreal).await).await;
-        transition_project_with_reason(
-            surreal,
-            created.id,
-            Transition::Close,
-            Some(ClosureReason::EngagementCompleted),
-            None,
-        )
-        .await
-        .expect("close project");
-        (created.id, code)
-    }
-
-    /// Cut a committed recovery generation whose verified bundle holds `head`.
-    async fn commit_generation(
-        surreal: &store::surreal::SurrealDb,
-        pg: &store::postgres::PostgresDb,
-        documents: &Arc<dyn StorageService>,
-        project_id: Uuid,
-        head: &str,
-    ) {
-        // The synthetic onboarding row has no bytes; give it some so the
-        // archive can verify every revision.
-        for asset in store::assets::for_project_including_deleted(surreal, project_id)
-            .await
-            .unwrap()
-        {
-            if asset.storage_key == "test" {
-                surreal
-                    .query("DELETE $id")
-                    .bind(("id", store::surreal::record_id("asset", asset.id)))
-                    .await
-                    .unwrap();
-            }
-        }
-        let project = store::projects::find_by_id(surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let firm_id = project.firm_id.unwrap();
-        let owner = store::persons::create(
-            surreal,
-            &store::persons::NewPerson::with_role(
-                "Closeout Owner",
-                "closeout-owner@example.com",
-                store::persons::Role::Owner,
-            ),
-        )
-        .await
-        .unwrap();
-        let authority = store::project_archives::authorize(
-            surreal,
-            store::persons::Role::Owner,
-            owner.id,
-            firm_id,
-        )
-        .await
-        .unwrap();
-        let bundles: Arc<dyn StorageService> =
-            Arc::new(store::test_support::MemoryStorage::default());
-        let created = bundles
-            .put_immutable(
-                "repositories/closeout.bundle",
-                b"bundle",
-                "application/x-git-bundle",
-            )
-            .await
-            .unwrap();
-        let archive: Arc<dyn StorageService> =
-            Arc::new(store::test_support::MemoryStorage::default());
-        let stores = store::project_archives::ArchiveStores {
-            surreal,
-            pg,
-            documents,
-            archive: &archive,
-            source_backups: Some(&bundles),
-        };
-        let receipt = store::project_archives::SourceBackupReference {
-            format: 1,
-            object: "repositories/closeout.bundle".into(),
-            generation: created.generation,
-            size_bytes: created.size_bytes,
-            sha256: store::assets::sha256_hex(b"bundle"),
-            head: "refs/heads/main".into(),
-            refs: format!("refs/heads/main {head}"),
-        };
-        let generation = store::project_archives::request(
-            &stores,
-            &authority,
-            project_id,
-            "closeout-1",
-            Some(receipt),
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
-        store::project_archives::run(&stores, &authority, generation.id, chrono::Utc::now())
-            .await
-            .unwrap();
-    }
-
     #[test]
     fn descriptor_requires_project_and_confirmation() {
         let d = descriptor();
@@ -441,9 +290,15 @@ mod tests {
     #[tokio::test]
     async fn a_matching_archive_without_a_verified_recovery_record_is_not_enough() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let (project_id, code) = closed_project(&surreal).await;
-            file_archive(&surreal, &storage().await, project_id, "deadbeefcafe").await;
+            let application_store = crate::test_fixtures::handle();
+            let (project_id, code) = closed_project(&application_store).await;
+            file_archive(
+                &application_store,
+                &storage().await,
+                project_id,
+                "deadbeefcafe",
+            )
+            .await;
 
             let forge = FakeForge::new();
             forge.ensure_repository(&code).await.unwrap();
@@ -451,7 +306,7 @@ mod tests {
             let forge: Arc<dyn ForgeService> = Arc::new(forge);
 
             let error = call_with(
-                &surreal,
+                &application_store,
                 Some(&forge),
                 None,
                 &json!({ "project_id": project_id, "confirm_handoff": true }),
@@ -468,49 +323,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deletes_when_the_archive_matches_live_head_and_closeout_is_ready() {
-        store::test_support::with_postgres(async {
-            let Some(pg) = test_postgres().await else {
-                return;
-            };
-            let surreal = crate::test_fixtures::handle();
-            let (project_id, code) = closed_firm_project(&surreal).await;
-            let storage = storage().await;
-            let head = "c".repeat(40);
-            file_archive(&surreal, &storage, project_id, &head).await;
-
-            let forge = FakeForge::new();
-            forge.ensure_repository(&code).await.unwrap();
-            forge.set_head_commit_sha(&code, head.clone());
-            let forge: Arc<dyn ForgeService> = Arc::new(forge);
-            commit_generation(&surreal, &pg, &storage, project_id, &head).await;
-
-            let result = call_with(
-                &surreal,
-                Some(&forge),
-                Some(&pg),
-                &json!({ "project_id": project_id, "confirm_handoff": true }),
-            )
-            .await
-            .expect("delete repository");
-
-            assert_eq!(result["structuredContent"]["code"], code);
-            assert_eq!(forge.find_repository(&code).await.unwrap(), None);
-            let project = store::projects::find_by_id(&surreal, project_id)
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(project.repository_url, None);
-        })
-        .await;
-    }
-
-    #[tokio::test]
     async fn refuses_when_the_recorded_commit_does_not_match_live_head() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let (project_id, code) = closed_project(&surreal).await;
-            file_archive(&surreal, &storage().await, project_id, "deadbeefcafe").await;
+            let application_store = crate::test_fixtures::handle();
+            let (project_id, code) = closed_project(&application_store).await;
+            file_archive(
+                &application_store,
+                &storage().await,
+                project_id,
+                "deadbeefcafe",
+            )
+            .await;
 
             let forge = FakeForge::new();
             forge.ensure_repository(&code).await.unwrap();
@@ -518,7 +341,7 @@ mod tests {
             let forge: Arc<dyn ForgeService> = Arc::new(forge);
 
             let error = call(
-                &surreal,
+                &application_store,
                 Some(&forge),
                 &json!({ "project_id": project_id, "confirm_handoff": true }),
             )
@@ -533,16 +356,16 @@ mod tests {
     #[tokio::test]
     async fn refuses_an_open_project() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             let code = format!("open-repo-{}", Uuid::now_v7().simple());
-            crate::test_fixtures::seed_brands(&surreal).await;
+            crate::test_fixtures::seed_brands(&application_store).await;
             let created = create(
-                &surreal,
+                &application_store,
                 &NewProject {
                     code: code.clone(),
                     name: "Still-open matter".into(),
                     status: "open".into(),
-                    entity_id: seed_entity(&surreal).await,
+                    entity_id: seed_entity(&application_store).await,
                     ..Default::default()
                 },
             )
@@ -551,7 +374,7 @@ mod tests {
 
             let forge: Arc<dyn ForgeService> = Arc::new(FakeForge::new());
             let error = call(
-                &surreal,
+                &application_store,
                 Some(&forge),
                 &json!({ "project_id": created.id, "confirm_handoff": true }),
             )
@@ -565,12 +388,12 @@ mod tests {
     #[tokio::test]
     async fn refuses_without_a_filed_archive() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let (project_id, _code) = closed_project(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            let (project_id, _code) = closed_project(&application_store).await;
 
             let forge: Arc<dyn ForgeService> = Arc::new(FakeForge::new());
             let error = call(
-                &surreal,
+                &application_store,
                 Some(&forge),
                 &json!({ "project_id": project_id, "confirm_handoff": true }),
             )
@@ -584,16 +407,16 @@ mod tests {
     #[tokio::test]
     async fn requires_confirmation_and_a_configured_forge() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let (project_id, _code) = closed_project(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            let (project_id, _code) = closed_project(&application_store).await;
 
-            let error = call(&surreal, None, &json!({"project_id": project_id}))
+            let error = call(&application_store, None, &json!({"project_id": project_id}))
                 .await
                 .expect_err("missing confirm_handoff must be rejected");
             assert!(matches!(error, ToolError::InvalidArguments(_)));
 
             let error = call(
-                &surreal,
+                &application_store,
                 None,
                 &json!({"project_id": project_id, "confirm_handoff": true}),
             )

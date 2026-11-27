@@ -332,9 +332,9 @@ pub async fn home_page_view() -> Result<HomePageView, ServerFnError> {
 async fn home_page_data() -> Result<HomePageView, ServerFnError> {
     let injected =
         crate::public_chrome::copy_from_request_or_context(consume_context::<InjectedHome>).await;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let testimonials = match store::testimonials::published_for_brand(
-        &surreal,
+        &application_store,
         &injected.brand_key,
         if injected.brand_key == "vesta" {
             None
@@ -350,12 +350,15 @@ async fn home_page_data() -> Result<HomePageView, ServerFnError> {
         Err(_) => Vec::new(),
     };
     let video_posts = if injected.content.estate.is_some() {
-        let posts =
-            store::posts::published_for_brand(&surreal, &injected.brand_key, chrono::Utc::now())
-                .await
-                .map_err(|error| ServerFnError::new(error.to_string()))?;
+        let posts = store::posts::published_for_brand(
+            &application_store,
+            &injected.brand_key,
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?;
         let publications = store::social_publications::for_posts(
-            &surreal,
+            &application_store,
             &posts.iter().map(|post| post.id).collect::<Vec<_>>(),
         )
         .await
@@ -387,11 +390,6 @@ pub struct HomeVideoPost {
     pub post: crate::blog_index::BlogPostSummary,
     pub video_url: Option<String>,
     pub social_links: Vec<crate::blog_post::SocialLinkContent>,
-}
-
-#[cfg(all(feature = "server", test))]
-fn home_video_post(post: store::posts::Post) -> Option<HomeVideoPost> {
-    home_video_post_with_publications(post, &[])
 }
 
 #[cfg(feature = "server")]

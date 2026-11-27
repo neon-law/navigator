@@ -34,7 +34,7 @@ pub(super) async fn read(
         Ok(found) => found,
         Err(refusal) => return Ok(refusal),
     };
-    let db = &state.surreal;
+    let db = &state.application_store;
     let notation = match store::signatures::by_provider(
         db,
         store::signatures::SignatureProvider::DocuSign,
@@ -141,7 +141,7 @@ async fn locate(
     envelope_id: Uuid,
 ) -> Result<Result<(Uuid, DocuSignSignatureProvider, ExternalEnvelope), Response>, ApiError> {
     use crate::signature::SignatureProvider as _;
-    let db = &state.surreal;
+    let db = &state.application_store;
     let firms = store::firm_capability::allowed_firm_ids(
         db,
         lawyer.0.role,

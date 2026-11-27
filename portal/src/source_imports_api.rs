@@ -83,7 +83,7 @@ pub(crate) async fn request(
         return Ok(unavailable("source_import_store_unavailable"));
     };
     match imports::request(
-        &state.surreal,
+        &state.application_store,
         &pg,
         project_id,
         (person, lawyer.0.role),
@@ -105,7 +105,7 @@ pub(crate) async fn status(
     Path((project_id, import_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     if !store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         project_id,

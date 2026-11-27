@@ -389,7 +389,7 @@ pub mod derive {
     /// collection. A store that cannot answer marks the card unavailable
     /// rather than failing the workbench.
     pub async fn load_pipeline(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         viewer: Option<uuid::Uuid>,
         projects: &[store::projects::Project],
     ) -> PipelineCardView {
@@ -404,7 +404,15 @@ pub mod derive {
             return unavailable;
         };
         let today = chrono::Utc::now().date_naive();
-        match store::projected_cash::lawyer_pipeline(surreal, &pg, viewer, projects, today).await {
+        match store::projected_cash::lawyer_pipeline(
+            application_store,
+            &pg,
+            viewer,
+            projects,
+            today,
+        )
+        .await
+        {
             Ok(found) => pipeline(&found),
             Err(error) => {
                 tracing::warn!(error = %error, "workbench: contingency pipeline failed");
@@ -462,7 +470,7 @@ pub mod derive {
     /// The Firm's projected cash, read as `viewer`. A store that cannot
     /// answer marks the section unavailable rather than failing the page.
     pub async fn load_firm(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         viewer: Option<uuid::Uuid>,
         firm_id: uuid::Uuid,
     ) -> FirmProjectedCashView {
@@ -477,7 +485,9 @@ pub mod derive {
             return unavailable;
         };
         let today = chrono::Utc::now().date_naive();
-        match store::projected_cash::firm_rollup(surreal, &pg, viewer, firm_id, today).await {
+        match store::projected_cash::firm_rollup(application_store, &pg, viewer, firm_id, today)
+            .await
+        {
             Ok(rollup) => firm(&rollup),
             Err(error) => {
                 tracing::warn!(error = %error, "firm page: projected cash failed");

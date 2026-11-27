@@ -56,7 +56,7 @@ fn canonical_category(raw: &str) -> Option<&'static str> {
 /// expunge and whose `storage_key` is the object-storage key to delete.
 /// `None` if the row is missing.
 async fn load_doc(state: &AdminState, doc_id: Uuid) -> Option<store::assets::Asset> {
-    store::assets::find_by_id(&state.surreal, doc_id)
+    store::assets::find_by_id(&state.application_store, doc_id)
         .await
         .ok()
         .flatten()
@@ -114,7 +114,7 @@ pub async fn run(
     let note = (!note.is_empty()).then_some(note);
 
     match crate::expunge::expunge(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         crate::expunge::ExpungeRequest {
             project_id,

@@ -12,8 +12,8 @@ use base64::Engine as _;
 use cloud::{StorageError, StorageService, StoredObject};
 use portal::api::ApiState;
 use serde_json::{json, Value};
+use store::application_store::ApplicationStore;
 use store::persons::Role;
-use store::surreal::SurrealDb;
 use tower::ServiceExt;
 
 /// A storage backend that always fails. Standing in for `ApiState::storage`
@@ -74,11 +74,11 @@ async fn fresh_assets_bucket() -> Arc<dyn StorageService> {
 async fn fixture_on(documents_storage: Option<Arc<dyn StorageService>>) -> Fixture {
     // The door authorizes from the session alone and writes only object
     // storage, so it is driven without any database behind the handle.
-    let state = portal::test_support::app_state(SurrealDb::uninitialized()).await;
+    let state = portal::test_support::app_state(ApplicationStore::uninitialized()).await;
     let assets_storage = fresh_assets_bucket().await;
     let api_state = ApiState {
         jev: None,
-        surreal: state.surreal.clone(),
+        application_store: state.application_store.clone(),
         email: state.email.clone(),
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),
         bootstrap_company: "Synthetic Firm".into(),

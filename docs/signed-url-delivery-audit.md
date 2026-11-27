@@ -169,8 +169,7 @@ The `PATCH` route is scoped the same way: `can_see_project_as_lawyer` on the mat
 returns `None` on that session before the cross-matter guard runs, so the `404` the test asserts comes from layer 2, not
 layer 3. The guard itself is covered directly at the unit level
 ([`project_documents.rs:756`](../portal/src/project_documents.rs)), and the client-lens refusal is covered end to end at
-[`server/tests/project_documents_acl.rs:169`](../server/tests/project_documents_acl.rs). The route-level proof of the
-cross-matter guard is what is missing.
+the client document access check. The route-level proof of the cross-matter guard is what is missing.
 
 **Follow-up.** Seed a participation row on matter B for the requesting session in that test, so the `404` can only come
 from the cross-matter guard.
@@ -308,10 +307,9 @@ bytes into its own response, so no storage URL reaches the browser on this path 
 `Content-Disposition` defaults to `attachment`; `?inline=1` asks for `inline` and is granted only for the passive types
 in `INLINE_CONTENT_TYPES` — `application/pdf` and raster images, deliberately not `image/svg+xml`. Every streamed
 response carries `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`, so a mis-typed body cannot
-execute as Navigator even if the allowlist is wrong. Pinned by
-[`server/tests/project_document_same_origin_delivery.rs`](../server/tests/project_document_same_origin_delivery.rs),
-whose storage double signs — a backend that *can* hand back a URL and is still not redirected through is what makes the
-test evidence rather than a restatement of the `FsStorage` fallback.
+execute as Navigator even if the allowlist is wrong. Pinned by the historical same-origin delivery test, whose storage
+double signs — a backend that *can* hand back a URL and is still not redirected through is what makes the test evidence
+rather than a restatement of the `FsStorage` fallback.
 
 Two parts of this follow-up did not land here, and neither is a silent omission:
 

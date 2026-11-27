@@ -22,16 +22,6 @@ use sqlx::Row;
 
 use crate::postgres::PostgresDb;
 
-/// The tables PostgreSQL holds authoritatively under this module. The mirror
-/// refuses to repair them from SurrealDB outside the first Mirror Backfill.
-pub(crate) const TABLES: &[&str] = &[
-    "case",
-    "case_docket_entry",
-    "discovery_item",
-    "discovery_request",
-    "filing",
-];
-
 #[cfg(test)]
 tokio::task_local! {
     static TEST_CASES_DB: PostgresDb;
@@ -55,13 +45,13 @@ pub(crate) type Op<'a, T> =
 type Query<'q> = sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>;
 
 /// The pool to serve from, or `None` when no PostgreSQL host is configured.
-pub(crate) fn authority() -> Op<'static, Option<PostgresDb>> {
+pub(crate) fn authority() -> Op<'static, PostgresDb> {
     Box::pin(async {
         #[cfg(test)]
         if let Ok(pg) = TEST_CASES_DB.try_with(Clone::clone) {
-            return Ok(Some(pg));
+            return Ok(pg);
         }
-        PostgresDb::configured()
+        PostgresDb::application()
             .await
             .map_err(|_| CasesAuthorityError::Unavailable)
     })

@@ -1,8 +1,8 @@
 use super::*;
 use crate::expunge_records::{self, NewExpunge, CATEGORY_PRIVILEGE};
 use crate::postgres::fixtures::{activate_family, firm_for_notation, workflow_fixture};
-use crate::postgres_backfill::family::Family;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
+use crate::postgres::history::Family;
 
 #[tokio::test]
 async fn expunge_audit_uses_postgres_without_starting_an_engine() {
@@ -11,7 +11,7 @@ async fn expunge_audit_uses_postgres_without_starting_an_engine() {
     };
     let pg = connect(&options, &database).await;
     activate_family(&pg, Family::Satellites).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let project_id = Uuid::new_v4();
     let actor = Uuid::new_v4();
     with_test_db(pg.clone(), async {
@@ -71,7 +71,7 @@ async fn a_closed_postgres_pool_does_not_fall_back_to_the_other_client() {
     );
     pool.close().await;
     let pg = PostgresDb(pool);
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg, async {
         let error = expunge_records::for_project(&unavailable, Uuid::new_v4())
             .await
@@ -79,7 +79,7 @@ async fn a_closed_postgres_pool_does_not_fall_back_to_the_other_client() {
         assert!(matches!(
             error,
             expunge_records::ExpungeRecordError::Postgres(MatterAuthorityError::Family(
-                crate::postgres_backfill::family::FamilyError::NativeOrigin(
+                crate::postgres::history::FamilyError::NativeOrigin(
                     crate::postgres::native_origin::OriginError::Storage
                 )
             ))
@@ -96,7 +96,7 @@ async fn expunge_resolution_is_atomic_and_keeps_the_other_project_pending() {
     };
     let pg = connect(&options, &database).await;
     activate_family(&pg, Family::Satellites).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let project = Uuid::new_v4();
     let other = Uuid::new_v4();
     let actor = Uuid::new_v4();
@@ -158,7 +158,7 @@ async fn playbook_updates_are_scoped_and_duplicate_names_are_refused() {
     };
     let pg = connect(&options, &database).await;
     activate_family(&pg, Family::Satellites).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let (_, notation, _) = workflow_fixture(&pg).await;
         let entity: Uuid = sqlx::query_scalar("SELECT p.entity_id FROM project p JOIN notation n ON n.project_id = p.id WHERE n.id = $1")
@@ -221,7 +221,7 @@ async fn git_tokens_store_hashes_and_refuse_expiry_and_revocation() {
     };
     let pg = connect(&options, &database).await;
     activate_family(&pg, Family::Satellites).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let now = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
         let expires = now + chrono::Duration::minutes(10);
@@ -285,7 +285,7 @@ async fn citation_pins_and_nullable_patches_preserve_other_fields() {
     };
     let pg = connect(&options, &database).await;
     activate_family(&pg, Family::Satellites).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let use_id = Uuid::new_v4();
         let pin = json!({"page": 3, "rect": [0.1, 0.2, 0.3, 0.4], "extra": null});
@@ -353,7 +353,10 @@ async fn citation_pins_and_nullable_patches_preserve_other_fields() {
     pg.pool().close().await;
 }
 
-async fn assert_verification_staleness(unavailable: &crate::surreal::SurrealDb, citation: Uuid) {
+async fn assert_verification_staleness(
+    unavailable: &crate::application_store::ApplicationStore,
+    citation: Uuid,
+) {
     use crate::verifications;
     use rules::citation::{Axis, AxisStatus};
     let verification = verifications::record(unavailable, citation, "revision-one", Uuid::new_v4())
@@ -406,7 +409,7 @@ async fn assert_verification_staleness(unavailable: &crate::surreal::SurrealDb, 
 }
 
 async fn assert_authority_deletion(
-    unavailable: &crate::surreal::SurrealDb,
+    unavailable: &crate::application_store::ApplicationStore,
     project: Uuid,
     other: Uuid,
     untouched: crate::authorities::AuthorityUse,
@@ -447,7 +450,7 @@ async fn authority_visibility_verification_staleness_and_deletion_stay_project_s
     };
     let pg = connect(&options, &database).await;
     activate_family(&pg, Family::Satellites).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     Box::pin(crate::postgres::signatures::with_test_db(
         pg.clone(),
         with_test_db(pg.clone(), async {
@@ -540,7 +543,7 @@ async fn attestation_preserves_replay_identity_and_chain_outcomes() {
     let pg = connect(&options, &database).await;
     activate_family(&pg, Family::Satellites).await;
     let (_, notation, _) = workflow_fixture(&pg).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let pending = attestations::NewAttestation {
             notation_id: notation,
@@ -582,7 +585,7 @@ async fn attestation_preserves_replay_identity_and_chain_outcomes() {
 
 async fn assert_module_audits(
     pg: &PostgresDb,
-    unavailable: &crate::surreal::SurrealDb,
+    unavailable: &crate::application_store::ApplicationStore,
     project: Uuid,
     other: Uuid,
     person: Uuid,
@@ -650,7 +653,7 @@ async fn captions_and_module_toggles_preserve_tenancy_and_atomic_audits() {
     let (_, project) = firm_for_notation(&pg, notation).await;
     let (_, other_notation, _) = workflow_fixture(&pg).await;
     let (other_firm, other) = firm_for_notation(&pg, other_notation).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let matter = word::matter::Matter {
             case_number: "SYNTHETIC-1".into(),
@@ -738,7 +741,7 @@ async fn social_oauth_enforces_firm_authority_and_consumes_once_without_retainin
         .execute(pg.pool())
         .await
         .unwrap();
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     crate::postgres::tenancy::with_test_authority(pg.clone(), true, with_test_db(pg.clone(), async {
         let now = chrono::Utc::now();
         assert!(matches!(oauth::begin(&unavailable, Role::Admin, other_actor, "synthetic-social", "facebook", now).await, Err(oauth::SocialOAuthAttemptError::Denied)));
@@ -778,7 +781,7 @@ async fn efiling_reports_keep_court_decisions_and_reject_cross_project_documents
     let asset = Uuid::new_v4();
     sqlx::query("INSERT INTO asset(id, storage_key, content_type, byte_size, sha256_hex, project_id) VALUES ($1, 'synthetic', 'application/pdf', 0, 'synthetic', $2)")
         .bind(asset).bind(other).execute(pg.pool()).await.unwrap();
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let report = EfilingReport {
             project_id: project,
@@ -838,7 +841,7 @@ async fn contract_review_patches_keep_findings_and_do_not_touch_another_review()
     };
     let pg = connect(&options, &database).await;
     activate_family(&pg, Family::Satellites).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let new = NewContractReview {
             notation_id: Uuid::new_v4(),
@@ -920,7 +923,7 @@ async fn testimonial_consent_requires_client_dri_and_publication_requires_matter
         .execute(pg.pool())
         .await
         .unwrap();
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(
         pg.clone(),
         crate::postgres::tenancy::with_test_authority(
@@ -1007,7 +1010,7 @@ async fn person_merge_rewires_authoritative_orphan_links_and_deduplicates_collis
         .fetch_one(pg.pool())
         .await
         .unwrap();
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let audit = expunge_records::record(&unavailable, &NewExpunge { project_id: Uuid::new_v4(), path: "synthetic", category: CATEGORY_PRIVILEGE,
             authorized_by_person_id: drop_person, head_before: None, head_after: None, note: None }).await.unwrap();
@@ -1035,110 +1038,6 @@ async fn person_merge_rewires_authoritative_orphan_links_and_deduplicates_collis
         let respondent: Uuid = sqlx::query_scalar("SELECT person_id FROM notation WHERE id = $1").bind(notation).fetch_one(pg.pool()).await.unwrap();
         assert_eq!(respondent, keep_person);
     }).await;
-    pg.pool().close().await;
-}
-
-#[tokio::test]
-async fn completed_family_receipt_fences_global_first_copy_and_runtime_replay() {
-    use crate::postgres_mirror::{self as mirror, MirrorError, MirrorKey};
-    use serde_json::json;
-    let Some((options, database)) = fresh_schema().await else {
-        return;
-    };
-    let pg = connect(&options, &database).await;
-    activate_family(&pg, Family::Satellites).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
-    with_test_db(pg.clone(), async {
-        let row = crate::expunge_records::record(
-            &unavailable,
-            &NewExpunge {
-                project_id: Uuid::new_v4(),
-                path: "current",
-                category: CATEGORY_PRIVILEGE,
-                authorized_by_person_id: Uuid::new_v4(),
-                head_before: None,
-                head_after: None,
-                note: None,
-            },
-        )
-        .await
-        .unwrap();
-        let original = crate::expunge_records::by_id(&unavailable, row)
-            .await
-            .unwrap()
-            .unwrap();
-        let mut source = serde_json::to_value(&original).unwrap();
-        source["path"] = json!("older source");
-        assert!(matches!(
-            mirror::records::copy_record(&pg, "expunge_record", source.clone()).await,
-            Err(MirrorError::MatterAuthority)
-        ));
-        assert!(
-            !mirror::backfilled(&pg).await.unwrap(),
-            "a family receipt is not global completion"
-        );
-        assert!(matches!(
-            mirror::during_initial_copy(mirror::records::copy_record(
-                &pg,
-                "expunge_record",
-                source.clone()
-            ))
-            .await,
-            Err(MirrorError::MatterAuthority)
-        ));
-        assert_eq!(
-            crate::expunge_records::by_id(&unavailable, row)
-                .await
-                .unwrap(),
-            Some(original)
-        );
-        sqlx::query("DELETE FROM expunge_record WHERE id = $1")
-            .bind(row)
-            .execute(pg.pool())
-            .await
-            .unwrap();
-        assert!(matches!(
-            mirror::during_initial_copy(mirror::records::copy_record(
-                &pg,
-                "expunge_record",
-                source.clone()
-            ))
-            .await,
-            Err(MirrorError::MatterAuthority)
-        ));
-        assert!(crate::expunge_records::by_id(&unavailable, row)
-            .await
-            .unwrap()
-            .is_none());
-        let imported = Uuid::new_v4();
-        source["id"] = json!(imported);
-        assert!(matches!(
-            mirror::during_initial_copy(mirror::records::copy_record(
-                &pg,
-                "expunge_record",
-                source
-            ))
-            .await,
-            Err(MirrorError::MatterAuthority)
-        ));
-        assert!(crate::expunge_records::by_id(&unavailable, imported)
-            .await
-            .unwrap()
-            .is_none());
-        for key in [
-            MirrorKey::Attestation(Uuid::new_v4()),
-            MirrorKey::MatterCaption(Uuid::new_v4()),
-        ] {
-            assert!(
-                matches!(
-                    mirror::mirror(&unavailable, &pg, &key).await,
-                    Ok(mirror::Mirrored::Unchanged)
-                ),
-                "completed ownership holds replay before the unavailable Source"
-            );
-        }
-    })
-    .await;
     pg.pool().close().await;
 }
 
@@ -1175,7 +1074,7 @@ async fn provider_callbacks_are_idempotent_and_patch_only_their_request() {
     };
     let pg = connect(&options, &database).await;
     activate_family(&pg, Family::Satellites).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     crate::postgres::signatures::with_test_db(
         pg.clone(),
         with_test_db(pg.clone(), async {

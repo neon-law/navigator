@@ -98,7 +98,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     store::durable_object_handover::verify_runtime_ownership(&postgres)
         .await
         .context("verify durable object ownership")?;
-    let surreal = store::surreal::SurrealDb::uninitialized();
+    let application_store = store::application_store::ApplicationStore::from(postgres.clone());
 
     // Object storage is created before the seed because template bodies
     // are now seeded into blob storage (not an inline column).
@@ -132,7 +132,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     // seeds — both reach production. A `dev` boot additionally applies the
     // sample-matter fixture, which never does.
     let seed_report =
-        store::seed::seed_environment(&surreal, &storage, cfg.environment, brand_seed)
+        store::seed::seed_environment(&application_store, &storage, cfg.environment, brand_seed)
             .await
             .context("seeding environment fixtures")?;
     tracing::info!(
@@ -146,14 +146,14 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     // loader: the six canonical stages and the anchor Firm's sample plans and
     // fee schedules (ENG-1269). A no-op when PostgreSQL is not configured;
     // idempotent on every later boot.
-    store::plan_seeds::seed_quickstart(&surreal)
+    store::plan_seeds::seed_quickstart(&application_store)
         .await
         .context("seeding plan panel fixtures")?;
 
     // Startup convergence has a finite budget; nightly reconciliation retries unfinished slots.
     match tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        store::project_folder_reconcile::backfill_from_env(&surreal),
+        store::project_folder_reconcile::backfill_from_env(&application_store),
     )
     .await
     {
@@ -417,7 +417,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
             // attached the brand, so a miss here is a real gap, not a race.
             let firm_id = match config.firm_id {
                 Some(id) => id,
-                None => store::firms::firm_id_for_brand_key(&surreal, "neon")
+                None => store::firms::firm_id_for_brand_key(&application_store, "neon")
                     .await
                     .context("resolve the summary lane's Firm from the neon brand")?
                     .context(
@@ -504,7 +504,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
             Some(journal) => std::sync::Arc::new(
                 crate::forgejo_push_pipeline::JjPushPipeline::for_deployment(
                     journal.clone(),
-                    surreal.clone(),
+                    application_store.clone(),
                     runtime_kms.clone(),
                 ),
             ),
@@ -513,7 +513,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
 
     let state = crate::AppState {
         brand_bundle,
-        surreal,
+        application_store,
         workshops,
         auth,
         google_oauth,
@@ -782,7 +782,7 @@ async fn boot(brand: Site) -> anyhow::Result<()> {
     // demote any stale `Owner` row from an old value right away, not on
     // whatever schedule the two people involved happen to log back in.
     if let Err(error) = crate::oauth::reconcile_bootstrap_owner(
-        &rt.state.surreal,
+        &rt.state.application_store,
         rt.state.bootstrap_owner_email.as_deref(),
     )
     .await
@@ -912,7 +912,7 @@ fn deployment_slack(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> anyhow::Result<(Arc<dyn workflows::SlackBot>, bool)> {
     workflows::firm_slack::deployment_bot_or_capture(
-        rt.state.surreal.clone(),
+        rt.state.application_store.clone(),
         rt.state.runtime_kms.clone(),
         lookup,
     )
@@ -956,7 +956,7 @@ async fn dbos_schedules(
             Arc::new(crate::purchases::StoreActivationSource::new(
                 pg,
                 rt.state.billing_provider.clone(),
-                rt.state.surreal.clone(),
+                rt.state.application_store.clone(),
             )),
         ))
     } else {
@@ -980,7 +980,7 @@ async fn dbos_schedules(
         }),
         project_calendar: Some({
             Arc::new(crate::calendar_mirror::MembershipSource {
-                surreal: rt.state.surreal.clone(),
+                application_store: rt.state.application_store.clone(),
                 providers: Arc::clone(&rt.state.integration_providers),
             }) as Arc<dyn dbos_engine::project_calendar::Source>
         }),
@@ -1005,7 +1005,7 @@ async fn source_imports_schedule(
     Ok(Some(workflows::dbos_engine::source_imports::Context::new(
         Arc::new(
             workflows::dbos_engine::source_imports::StoreImportSource::new(
-                rt.state.surreal.clone(),
+                rt.state.application_store.clone(),
                 pg,
                 cloud::runtime_kms_from_env().await,
             ),
@@ -1061,7 +1061,7 @@ async fn retention_purge_context(
         .context("open the archived-projects lane")?;
     Ok(workflows::dbos_engine::retention_purge::Context::new(
         Arc::new(crate::expunge::purge::ScheduledPurge {
-            surreal: rt.state.surreal.clone(),
+            application_store: rt.state.application_store.clone(),
             storage: Arc::clone(&rt.state.storage),
             pg: Some(pg),
             archive: Some(archive),
@@ -1081,7 +1081,7 @@ fn should_host_deadline_mirror(lookup: impl Fn(&str) -> Option<String>) -> anyho
 fn deadline_mirror_context(rt: &HostRuntime) -> workflows::dbos_engine::deadline_mirror::Context {
     workflows::dbos_engine::deadline_mirror::Context::new(Arc::new(
         crate::calendar_mirror::ScheduledMirror {
-            surreal: rt.state.surreal.clone(),
+            application_store: rt.state.application_store.clone(),
             providers: Arc::clone(&rt.state.integration_providers),
             base_url: rt.state.canonical_host.host().map(str::to_string),
         },
@@ -1130,7 +1130,7 @@ async fn project_recovery_context(
     Ok(workflows::dbos_engine::project_recovery::Context::new(
         Arc::new(
             workflows::dbos_engine::project_recovery::StoreRecoverySource::new(
-                rt.state.surreal.clone(),
+                rt.state.application_store.clone(),
                 pg,
                 Arc::clone(&rt.state.storage),
                 archive,
@@ -1153,7 +1153,7 @@ async fn ceo_digest_context(
         .context("connect PostgreSQL for the CEO digest")?;
     workflows::dbos_engine::ceo_digest::Context::from_lookup(
         Arc::new(workflows::dbos_engine::ceo_digest::StoreDigestSource::new(
-            rt.state.surreal.clone(),
+            rt.state.application_store.clone(),
             pg,
         )),
         Arc::new(prose),

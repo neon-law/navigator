@@ -43,40 +43,41 @@ impl ProjectNotationRow {
 /// runs, transition journal, respondents, and signature records.
 #[cfg(feature = "server")]
 pub async fn project_notation_board(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     project_id: uuid::Uuid,
 ) -> Result<Vec<ProjectNotationRow>, String> {
-    let templates = store::templates::list_for_project(surreal, project_id)
+    let templates = store::templates::list_for_project(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?;
-    let notations = store::notations::list_by_project(surreal, project_id)
+    let notations = store::notations::list_by_project(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?;
-    let repository_templates = project_repository_templates(surreal, project_id).await?;
+    let repository_templates = project_repository_templates(application_store, project_id).await?;
     let mut rows =
         Vec::with_capacity(templates.len() + notations.len() + repository_templates.len());
     let mut started_sources = std::collections::BTreeSet::new();
     let mut started = std::collections::BTreeSet::new();
 
     for notation in notations {
-        let template = store::templates::find_by_id(surreal, notation.template_id)
+        let template = store::templates::find_by_id(application_store, notation.template_id)
             .await
             .map_err(|error| error.to_string())?;
         let Some(template) = template else { continue };
         if let Some(hash) = &template.body_sha256 {
             started_sources.insert((template.code.clone(), hash.clone()));
         }
-        let workflow_states = match store::templates::body(surreal, storage, &template).await {
-            Ok(markdown) => template_workflow_states(&markdown, &template.code),
-            // Template registrations can exist before their source body is
-            // attached. Keep the matter board readable while the workflow
-            // definition is incomplete; other storage and integrity errors
-            // still fail the read.
-            Err(store::templates::TemplateBodyError::MissingBody(_)) => Vec::new(),
-            Err(error) => return Err(error.to_string()),
-        };
-        let events = store::notation_events::for_notation(surreal, notation.id)
+        let workflow_states =
+            match store::templates::body(application_store, storage, &template).await {
+                Ok(markdown) => template_workflow_states(&markdown, &template.code),
+                // Template registrations can exist before their source body is
+                // attached. Keep the matter board readable while the workflow
+                // definition is incomplete; other storage and integrity errors
+                // still fail the read.
+                Err(store::templates::TemplateBodyError::MissingBody(_)) => Vec::new(),
+                Err(error) => return Err(error.to_string()),
+            };
+        let events = store::notation_events::for_notation(application_store, notation.id)
             .await
             .map_err(|error| error.to_string())?;
         let mut state_entered_at = std::collections::BTreeMap::new();
@@ -91,12 +92,13 @@ pub async fn project_notation_board(
                 .entry("BEGIN".to_string())
                 .or_insert_with(|| notation.inserted_at.to_rfc3339());
         }
-        let respondent = store::persons::find_by_id(surreal, notation.person_id)
+        let respondent = store::persons::find_by_id(application_store, notation.person_id)
             .await
             .map_err(|error| error.to_string())?;
-        let signature_request_id = store::signatures::request_id_for_notation(surreal, notation.id)
-            .await
-            .map_err(|error| error.to_string())?;
+        let signature_request_id =
+            store::signatures::request_id_for_notation(application_store, notation.id)
+                .await
+                .map_err(|error| error.to_string())?;
         let last_transition_at = state_entered_at
             .get(&notation.state)
             .cloned()
@@ -120,11 +122,12 @@ pub async fn project_notation_board(
         if started.contains(&template.id) || repository_templates.contains_key(&template.code) {
             continue;
         }
-        let workflow_states = match store::templates::body(surreal, storage, &template).await {
-            Ok(markdown) => template_workflow_states(&markdown, &template.code),
-            Err(store::templates::TemplateBodyError::MissingBody(_)) => Vec::new(),
-            Err(error) => return Err(error.to_string()),
-        };
+        let workflow_states =
+            match store::templates::body(application_store, storage, &template).await {
+                Ok(markdown) => template_workflow_states(&markdown, &template.code),
+                Err(store::templates::TemplateBodyError::MissingBody(_)) => Vec::new(),
+                Err(error) => return Err(error.to_string()),
+            };
         rows.push(ProjectNotationRow {
             template_code: template.code,
             workflow_states,
@@ -213,10 +216,10 @@ fn notation_run_is_stale(
 /// Read current blueprint definitions without importing versions or opening runs.
 #[cfg(feature = "server")]
 async fn project_repository_templates(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
 ) -> Result<std::collections::BTreeMap<String, RepositoryTemplate>, String> {
-    let project = store::projects::find_by_id(surreal, project_id)
+    let project = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Project not found".to_string())?;

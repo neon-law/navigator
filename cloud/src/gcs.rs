@@ -52,12 +52,6 @@ impl GcsStorageConfig {
         Self::exports_from_lookup(|k| std::env::var(k).ok())
     }
 
-    /// Operational-Surreal-archive variant. Every deployment names the
-    /// firm-controlled retention bucket explicitly.
-    pub fn surreal_archives_from_env() -> Result<Self, StorageError> {
-        Self::surreal_archives_from_lookup(|k| std::env::var(k).ok())
-    }
-
     /// Iceberg-archive variant. Every deployment names the dedicated
     /// analytical archive bucket explicitly, with no fallback to
     /// `NAVIGATOR_STORAGE_BUCKET` on either backend: KIND provisions its
@@ -136,20 +130,6 @@ impl GcsStorageConfig {
     ) -> Result<Self, StorageError> {
         let bucket = get("NAVIGATOR_STORAGE_BUCKET")
             .ok_or(StorageError::MissingEnv("NAVIGATOR_STORAGE_BUCKET"))?;
-        Ok(Self {
-            bucket,
-            endpoint: Self::endpoint(&get),
-        })
-    }
-
-    pub fn surreal_archives_from_lookup<F: Fn(&str) -> Option<String>>(
-        get: F,
-    ) -> Result<Self, StorageError> {
-        let bucket = get("NAVIGATOR_SURREAL_ARCHIVES_BUCKET")
-            .filter(|value| !value.is_empty())
-            .ok_or(StorageError::MissingEnv(
-                "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
-            ))?;
         Ok(Self {
             bucket,
             endpoint: Self::endpoint(&get),
@@ -1067,37 +1047,6 @@ mod tests {
         assert_eq!(exports.bucket, "proj-exports");
         let documents = GcsStorageConfig::from_lookup(lookup).unwrap();
         assert_eq!(documents.bucket, "proj-documents");
-    }
-
-    #[test]
-    fn surreal_archive_lane_prefers_the_firm_retention_bucket() {
-        use std::collections::HashMap;
-        let map: HashMap<&str, &str> = HashMap::from([
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "example-archives"),
-            ("NAVIGATOR_STORAGE_BUCKET", "worktree-exports"),
-        ]);
-        let cfg = GcsStorageConfig::surreal_archives_from_lookup(|key| {
-            map.get(key).map(|value| (*value).to_string())
-        })
-        .unwrap();
-        assert_eq!(cfg.bucket, "example-archives");
-    }
-
-    #[test]
-    fn surreal_archive_lane_requires_its_dedicated_bucket() {
-        use std::collections::HashMap;
-        let map: HashMap<&str, &str> = HashMap::from([
-            ("NAVIGATOR_DOCUMENTS_BUCKET", "proj-documents"),
-            ("NAVIGATOR_STORAGE_BUCKET", "worktree-exports"),
-        ]);
-        let error = GcsStorageConfig::surreal_archives_from_lookup(|key| {
-            map.get(key).map(|value| (*value).to_string())
-        })
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            StorageError::MissingEnv("NAVIGATOR_SURREAL_ARCHIVES_BUCKET")
-        ));
     }
 
     /// A minimal but fully decodable `storage#object` resource — every

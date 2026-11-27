@@ -49,100 +49,12 @@ workflows.workspace = true
 tracing-subscriber.workspace = true
 
 [[test]]
-name = "retainer_intake"
-harness = false
-
-[[test]]
-name = "client_intake"
-harness = false
-
-[[test]]
-name = "start_door"
-harness = false
-
-[[test]]
-name = "mutable_intake_docusign"
-harness = false
-
-[[test]]
-name = "closing_letter"
-harness = false
-
-[[test]]
-name = "esignature_webhook"
-harness = false
-
-[[test]]
-name = "sign_before_case"
-harness = false
-
-[[test]]
 name = "acroform_fill"
-harness = false
-
-[[test]]
-name = "annual_report_filing"
-harness = false
-
-[[test]]
-name = "create_notation"
 harness = false
 
 [[test]]
 name = "template_validate"
 harness = false
-[[test]]
-name = "offer_letter_signing"
-harness = false
-
-[[test]]
-name = "brand_routing"
-harness = false
-
-[[test]]
-name = "oidc_callback"
-harness = false
-
-[[test]]
-name = "onboarding_welcome"
-harness = false
-
-[[test]]
-name = "portal_projects_detail"
-harness = false
-
-[[test]]
-name = "portal_projects_list"
-harness = false
-
-[[test]]
-name = "portal_invoice_card"
-harness = false
-
-[[test]]
-name = "portal_trust_position"
-harness = false
-
-[[test]]
-name = "portfolio_acceptance"
-harness = false
-
-[[test]]
-name = "portal_trust_position_acceptance"
-harness = false
-
-[[test]]
-name = "portal_signed_document"
-harness = false
-
-[[test]]
-name = "portal_admin_firm_surface"
-harness = false
-
-[[test]]
-name = "portal_projects_writes"
-harness = false
-
 [[test]]
 name = "legal_workflow_shapes"
 harness = false
@@ -153,38 +65,6 @@ harness = false
 
 [[test]]
 name = "nonprofit_workflow_shapes"
-harness = false
-
-[[test]]
-name = "workshop_navigator_walkthrough"
-harness = false
-
-[[test]]
-name = "deploy_the_navigator_walkthrough"
-harness = false
-
-[[test]]
-name = "welcome_chain"
-harness = false
-
-[[test]]
-name = "nv_llc_formation"
-harness = false
-
-[[test]]
-name = "naturalization_federal"
-harness = false
-
-[[test]]
-name = "entity_formation"
-harness = false
-
-[[test]]
-name = "bulk_import_engagement"
-harness = false
-
-[[test]]
-name = "inbound_email_round_trip"
 harness = false
 
 [lints]

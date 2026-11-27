@@ -33,12 +33,11 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
 use crate::signatures::SignatureProvider;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 pub(crate) mod postgres;
 #[cfg(test)]
@@ -46,11 +45,6 @@ mod postgres_tests;
 
 /// The table these rows live in.
 pub(crate) const TABLE: &str = "esignature_webhook_journal";
-
-/// The receipt's own unique index: one row per provider event. The
-/// provider's redelivery of the same event resolves here instead of
-/// double-journaling, and the replay sweep never sees a duplicate.
-pub(crate) const EVENT_INDEX: &str = "esignature_webhook_journal_event";
 
 /// One verified e-signature webhook receipt: what the provider said, and
 /// whether it has been consumed.
@@ -85,40 +79,6 @@ pub struct WebhookReceipt {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct ReceiptRow {
-    id: surrealdb::types::RecordId,
-    provider: String,
-    provider_id: String,
-    status: String,
-    payload: String,
-    consumed_at: Option<surrealdb::types::Datetime>,
-    attempts: Option<i64>,
-    last_error: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl ReceiptRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_receipt(self) -> Option<WebhookReceipt> {
-        Some(WebhookReceipt {
-            id: record_uuid(&self.id)?,
-            provider: self.provider,
-            provider_id: self.provider_id,
-            status: self.status,
-            payload: self.payload,
-            consumed_at: self.consumed_at.map(Into::into),
-            attempts: self.attempts.unwrap_or(0),
-            last_error: self.last_error,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
 /// The projection every read shares, so one field list describes the row
 /// and a new column cannot reach [`ReceiptRow`] from only one query.
 const SELECT: &str = "id, provider, provider_id, status, payload, consumed_at, attempts, \
@@ -127,8 +87,6 @@ const SELECT: &str = "id, provider, provider_id, status, payload, consumed_at, a
 /// Errors reading or writing a webhook receipt.
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiptError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// The configured PostgreSQL server could not be reached.
     #[error("PostgreSQL: {0}")]
     Postgres(#[from] crate::postgres::PostgresError),
@@ -141,30 +99,6 @@ pub enum ReceiptError {
     WriteReturnedNothing,
 }
 
-/// `True` when the engine refused the insert on the receipt's event index
-/// — the provider redelivered an event that is already journaled.
-fn is_event_conflict(error: &surrealdb::Error) -> bool {
-    retry::unique_violation(error) == Some(EVENT_INDEX)
-}
-
-/// Run a write under the shared retry policy ([`crate::surreal::retry`]),
-/// mapping whatever finally comes back to this module's error. Only the
-/// mapping lives here; the retry budget is one policy for the whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, surrealdb::Error>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await
-}
-
-fn one(
-    mut response: surrealdb::IndexedResults,
-) -> Result<Option<WebhookReceipt>, surrealdb::Error> {
-    let row: Option<ReceiptRow> = response.take(0)?;
-    Ok(row.and_then(ReceiptRow::into_receipt))
-}
-
 /// The receipt for one provider event, if any — the journal's canonical
 /// event lookup. The unique index enforces at most one row per key
 /// (provider, envelope, status), so a caller holding a returned receipt
@@ -174,25 +108,13 @@ fn one(
 ///
 /// [`ReceiptError::Db`] if the lookup fails.
 pub async fn by_event(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
     status: &str,
 ) -> Result<Option<WebhookReceipt>, ReceiptError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(postgres::by_event(&pg, provider, provider_id, status)).await;
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE provider = $provider AND provider_id = $provider_id \
-             AND status = $status LIMIT 1"
-        ))
-        .bind(("provider", provider.as_str().to_string()))
-        .bind(("provider_id", provider_id.to_string()))
-        .bind(("status", status.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?)
+    let pg = PostgresDb::application().await?;
+    Box::pin(postgres::by_event(&pg, provider, provider_id, status)).await
 }
 
 /// Journal a verified, parseable webhook receipt **before** it is
@@ -209,48 +131,21 @@ pub async fn by_event(
 /// [`ReceiptError::WriteReturnedNothing`] if the write cannot be read
 /// back.
 pub async fn journal_verified_receipt(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
     status: &str,
     payload: &str,
 ) -> Result<WebhookReceipt, ReceiptError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(postgres::journal_verified_receipt(
-            &pg,
-            provider,
-            provider_id,
-            status,
-            payload,
-        ))
-        .await;
-    }
-    let id = Uuid::now_v7();
-    match writing(|| {
-        db.query(format!(
-            "CREATE $id SET \
-             provider = $provider, provider_id = $provider_id, status = $status, \
-             payload = $payload, attempts = 1 \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("provider", provider.as_str().to_string()))
-        .bind(("provider_id", provider_id.to_string()))
-        .bind(("status", status.to_string()))
-        .bind(("payload", payload.to_string()))
-    })
+    let pg = PostgresDb::application().await?;
+    Box::pin(postgres::journal_verified_receipt(
+        &pg,
+        provider,
+        provider_id,
+        status,
+        payload,
+    ))
     .await
-    {
-        Ok(mut response) => {
-            let row: Option<ReceiptRow> = response.take(0)?;
-            row.and_then(ReceiptRow::into_receipt)
-                .ok_or(ReceiptError::WriteReturnedNothing)
-        }
-        Err(error) if is_event_conflict(&error) => by_event(db, provider, provider_id, status)
-            .await?
-            .ok_or(ReceiptError::WriteReturnedNothing),
-        Err(error) => Err(ReceiptError::Db(error)),
-    }
 }
 
 /// The journal's pending receipts, oldest first — the replay sweep's
@@ -261,25 +156,11 @@ pub async fn journal_verified_receipt(
 ///
 /// [`ReceiptError::Db`] if the read fails.
 pub async fn pending_receipts(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     limit: i64,
 ) -> Result<Vec<WebhookReceipt>, ReceiptError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(postgres::pending_receipts(&pg, limit)).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE consumed_at IS NONE \
-             ORDER BY inserted_at ASC LIMIT $limit"
-        ))
-        .bind(("limit", limit))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ReceiptRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(ReceiptRow::into_receipt)
-        .collect())
+    let pg = PostgresDb::application().await?;
+    Box::pin(postgres::pending_receipts(&pg, limit)).await
 }
 
 /// Mark a receipt consumed: the workflow advanced, the signature row is
@@ -290,20 +171,9 @@ pub async fn pending_receipts(
 /// # Errors
 ///
 /// [`ReceiptError::Db`] if the write fails.
-pub async fn mark_consumed(db: &SurrealDb, receipt_id: Uuid) -> Result<(), ReceiptError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(postgres::mark_consumed(&pg, receipt_id)).await;
-    }
-    writing(|| {
-        db.query(format!(
-            "UPDATE $id SET consumed_at = time::now(), updated_at = time::now(), \
-             last_error = NONE RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, receipt_id)))
-    })
-    .await
-    .and_then(surrealdb::IndexedResults::check)?;
-    Ok(())
+pub async fn mark_consumed(_db: &ApplicationStore, receipt_id: Uuid) -> Result<(), ReceiptError> {
+    let pg = PostgresDb::application().await?;
+    Box::pin(postgres::mark_consumed(&pg, receipt_id)).await
 }
 
 /// Record a failed consumption attempt on a pending receipt: the attempt
@@ -315,82 +185,13 @@ pub async fn mark_consumed(db: &SurrealDb, receipt_id: Uuid) -> Result<(), Recei
 ///
 /// [`ReceiptError::Db`] if the write fails.
 pub async fn record_attempt_failure(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     receipt_id: Uuid,
     error: &str,
 ) -> Result<(), ReceiptError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(postgres::record_attempt_failure(&pg, receipt_id, error)).await;
-    }
-    writing(|| {
-        db.query(format!(
-            "UPDATE $id SET attempts += 1, last_error = $error, updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, receipt_id)))
-        .bind(("error", error.to_string()))
-    })
-    .await
-    .and_then(surrealdb::IndexedResults::check)?;
-    Ok(())
+    let pg = PostgresDb::application().await?;
+    Box::pin(postgres::record_attempt_failure(&pg, receipt_id, error)).await
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_redelivery_conflict_names_the_receipt_event_index() {
-        let error = surrealdb::Error::internal(format!(
-            "Database index `{EVENT_INDEX}` already contains this value"
-        ));
-
-        assert!(is_event_conflict(&error));
-    }
-
-    #[test]
-    fn a_conflict_on_another_index_is_not_a_redelivery() {
-        let error = surrealdb::Error::internal(
-            "Database index `person_email_lower` already contains this value".to_string(),
-        );
-
-        assert!(!is_event_conflict(&error));
-    }
-
-    #[test]
-    fn an_unrelated_write_failure_is_not_a_redelivery() {
-        let error = surrealdb::Error::internal("connection closed".to_string());
-
-        assert!(!is_event_conflict(&error));
-    }
-
-    #[tokio::test]
-    async fn a_consumed_receipt_stops_being_pending() {
-        let db = crate::surreal::test_support::mem().await;
-        let receipt = journal_verified_receipt(
-            &db,
-            SignatureProvider::DocuSign,
-            "fake-envelope-1",
-            "completed",
-            "{\"event\":\"envelope-completed\"}",
-        )
-        .await
-        .expect("journal the receipt");
-
-        let pending = pending_receipts(&db, 10).await.expect("read the journal");
-        assert_eq!(pending.len(), 1, "a fresh receipt is pending");
-        assert_eq!(
-            pending[0].id, receipt.id,
-            "the pending row hands back the journal's id"
-        );
-
-        // Mark through the row the sweep fetched — the same id
-        // `pending_receipts` returns — as `replay_one` does.
-        mark_consumed(&db, pending[0].id)
-            .await
-            .expect("mark the receipt consumed");
-
-        let pending = pending_receipts(&db, 10).await.expect("read the journal");
-        assert!(pending.is_empty(), "a consumed receipt stops being pending");
-    }
-}
+mod tests {}

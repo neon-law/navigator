@@ -295,15 +295,15 @@ pub(crate) async fn person_id() -> Option<uuid::Uuid> {
 /// mounted endpoints, which run outside the page's Dioxus runtime, else the
 /// render's context provider.
 #[cfg(feature = "server")]
-async fn surreal() -> store::surreal::SurrealDb {
+async fn application_store() -> store::application_store::ApplicationStore {
     match dioxus_fullstack_core::FullstackContext::extract::<
-        axum::Extension<store::surreal::SurrealDb>,
+        axum::Extension<store::application_store::ApplicationStore>,
         _,
     >()
     .await
     {
-        Ok(axum::Extension(surreal)) => surreal,
-        Err(_) => consume_context::<store::surreal::SurrealDb>(),
+        Ok(axum::Extension(application_store)) => application_store,
+        Err(_) => consume_context::<store::application_store::ApplicationStore>(),
     }
 }
 
@@ -665,10 +665,13 @@ fn inbox_brands(rows: &[store::inbox::IntakeRow]) -> Vec<String> {
 /// Each Brand key as a switcher option, named from its Brand row and falling
 /// back to the key itself when the row cannot be read.
 #[cfg(feature = "server")]
-async fn brand_options(surreal: &store::surreal::SurrealDb, keys: Vec<String>) -> Vec<BrandOption> {
+async fn brand_options(
+    application_store: &store::application_store::ApplicationStore,
+    keys: Vec<String>,
+) -> Vec<BrandOption> {
     let mut options = Vec::with_capacity(keys.len());
     for key in keys {
-        let name = store::brands::find_by_key(surreal, &key)
+        let name = store::brands::find_by_key(application_store, &key)
             .await
             .ok()
             .flatten()
@@ -877,7 +880,7 @@ fn attachment_views(
 /// failed lookup keeps the readable transcript.
 #[cfg(feature = "server")]
 async fn firm_messages_with_attachments(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     firm_id: uuid::Uuid,
     conversation_id: uuid::Uuid,
     messages: &[store::inbox::Message],
@@ -886,12 +889,12 @@ async fn firm_messages_with_attachments(
     for message in messages {
         let mut view = message_view(message);
         let primary = match message.attachment_asset_id {
-            Some(asset_id) => store::assets::find_by_id(surreal, asset_id)
+            Some(asset_id) => store::assets::find_by_id(application_store, asset_id)
                 .await
                 .unwrap_or_default(),
             None => None,
         };
-        let linked = store::inbox::message_assets(surreal, firm_id, message.id)
+        let linked = store::inbox::message_assets(application_store, firm_id, message.id)
             .await
             .unwrap_or_default();
         let message_id = message.id;
@@ -908,7 +911,7 @@ async fn firm_messages_with_attachments(
 /// whatever attachment sources remain available.
 #[cfg(feature = "server")]
 async fn thread_messages_with_attachments(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     code: &str,
     project_id: uuid::Uuid,
     firm_id: uuid::Uuid,
@@ -918,11 +921,11 @@ async fn thread_messages_with_attachments(
     let mut views = Vec::with_capacity(messages.len());
     for message in messages {
         let mut view = message_view(message);
-        let linked = store::inbox::message_assets(surreal, firm_id, message.id)
+        let linked = store::inbox::message_assets(application_store, firm_id, message.id)
             .await
             .unwrap_or_default();
         let assets = store::assets::project_inbox_attachments(
-            surreal,
+            application_store,
             project_id,
             message.id,
             message.attachment_asset_id,
@@ -1001,7 +1004,7 @@ async fn compose_action(role: ViewerRole) -> Option<String> {
 #[server]
 pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let role = crate::admin_listing::require_firm_person().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let actor = person_id()
         .await
         .ok_or_else(|| ServerFnError::new("owner access required"))?;
@@ -1012,14 +1015,14 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let attachments_only = attachments_only().await;
     let sent_only = sent_only().await;
     let trash_only = trash_only().await;
-    let brands = store::inbox::intake_brands(&surreal, actor)
+    let brands = store::inbox::intake_brands(&application_store, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
-    let brands = brand_options(&surreal, brands).await;
+    let brands = brand_options(&application_store, brands).await;
     let scoped_rows = match brand_filter.as_deref() {
-        Some(brand) => store::inbox::list_intake_in_brand(&surreal, actor, brand).await,
-        None => store::inbox::list_intake(&surreal, actor).await,
+        Some(brand) => store::inbox::list_intake_in_brand(&application_store, actor, brand).await,
+        None => store::inbox::list_intake(&application_store, actor).await,
     }
     .map_err(|error| ServerFnError::new(error.to_string()))?;
     let mut rows = scoped_rows
@@ -1127,16 +1130,16 @@ fn assigned_confirmation(projects: &[store::inbox::ProjectChoice], code: String)
 #[cfg(feature = "server")]
 async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage, ServerFnError> {
     let role = crate::admin_listing::require_firm_person().await?;
-    let surreal = surreal().await;
+    let application_store = application_store().await;
     let actor = person_id()
         .await
         .ok_or_else(|| ServerFnError::new("owner access required"))?;
-    let detail = store::inbox::intake_detail(&surreal, actor, conversation_id)
+    let detail = store::inbox::intake_detail(&application_store, actor, conversation_id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let (logo, tokens_href, firm_name) = chrome().await;
     let messages = firm_messages_with_attachments(
-        &surreal,
+        &application_store,
         detail.conversation.firm_id,
         conversation_id,
         &detail.messages,
@@ -1145,7 +1148,7 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
     // The picker is open-only, but the conversation's current Project still
     // names itself in the assignee chip even when it is closed or archived.
     let assigned_project = match detail.conversation.project_id {
-        Some(project_id) => store::projects::find_by_id(&surreal, project_id)
+        Some(project_id) => store::projects::find_by_id(&application_store, project_id)
             .await
             .ok()
             .flatten(),
@@ -1225,8 +1228,8 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
 
 #[cfg(feature = "server")]
 async fn project_for_code(code: &str) -> Result<store::projects::Project, ServerFnError> {
-    let surreal = surreal().await;
-    store::projects::find_by_code(&surreal, code)
+    let application_store = application_store().await;
+    store::projects::find_by_code(&application_store, code)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
         .ok_or_else(|| ServerFnError::new("project was not found"))
@@ -1234,7 +1237,7 @@ async fn project_for_code(code: &str) -> Result<store::projects::Project, Server
 
 #[cfg(feature = "server")]
 async fn project_inbox_metadata(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     actor: uuid::Uuid,
     role: ViewerRole,
     project: &store::projects::Project,
@@ -1251,18 +1254,21 @@ async fn project_inbox_metadata(
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    let viewer = store::access::matter_viewer(surreal, Some(actor), store_role, project.id)
-        .await
-        .ok()
-        .flatten()
-        .filter(|viewer| viewer.is_firm_side() || *viewer == store::access::MatterViewer::Clerk);
+    let viewer =
+        store::access::matter_viewer(application_store, Some(actor), store_role, project.id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|viewer| {
+                viewer.is_firm_side() || *viewer == store::access::MatterViewer::Clerk
+            });
     if let Some(viewer) = viewer {
-        let client = store::entities::find_by_id(surreal, project.entity_id)
+        let client = store::entities::find_by_id(application_store, project.entity_id)
             .await
             .ok()
             .flatten()
             .map(|entity| entity.name);
-        let entries = store::matter_pages::inbox_entries(surreal, project.id)
+        let entries = store::matter_pages::inbox_entries(application_store, project.id)
             .await
             .unwrap_or_default();
         let tabs = crate::sections::page::matter_tabs(project_code, &entries, viewer);
@@ -1282,7 +1288,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
         .await
         .map(|axum::Extension(role)| role)
         .unwrap_or_default();
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let actor = person_id()
         .await
         .ok_or_else(|| ServerFnError::new("not allowed"))?;
@@ -1298,14 +1304,14 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let attachments_only = attachments_only().await;
     let sent_only = sent_only().await;
     let trash_only = trash_only().await;
-    let all_rows = store::inbox::list_project(&surreal, actor, project.id)
+    let all_rows = store::inbox::list_project(&application_store, actor, project.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let (project_client, project_tabs, logged_communications_href) =
-        project_inbox_metadata(&surreal, actor, role, &project, &project_code).await;
+        project_inbox_metadata(&application_store, actor, role, &project, &project_code).await;
     let brands = inbox_brands(&all_rows);
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
-    let brands = brand_options(&surreal, brands).await;
+    let brands = brand_options(&application_store, brands).await;
     let mut rows = all_rows
         .into_iter()
         .filter(|row| {
@@ -1397,18 +1403,19 @@ async fn project_thread_page(
         .await
         .map(|axum::Extension(role)| role)
         .unwrap_or_default();
-    let surreal = surreal().await;
+    let application_store = application_store().await;
     let actor = person_id()
         .await
         .ok_or_else(|| ServerFnError::new("not allowed"))?;
     let project = project_for_code(&project_code).await?;
-    let thread = store::inbox::project_thread(&surreal, actor, project.id, conversation_id)
-        .await
-        .map_err(|error| ServerFnError::new(error.to_string()))?;
+    let thread =
+        store::inbox::project_thread(&application_store, actor, project.id, conversation_id)
+            .await
+            .map_err(|error| ServerFnError::new(error.to_string()))?;
     let (logo, tokens_href, firm_name) = chrome().await;
     let trashed = thread.conversation.trashed_at.is_some();
     let messages = thread_messages_with_attachments(
-        &surreal,
+        &application_store,
         &project_code,
         project.id,
         thread.conversation.firm_id,
@@ -3674,464 +3681,6 @@ mod tests {
     #[cfg(feature = "server")]
     mod loaders {
         use super::super::*;
-        use crate::inbox::server_fn_test_support::{call, request_parts, runtime, Viewer};
-        use store::persons::{NewPerson, Role};
-
-        struct World {
-            surreal: store::surreal::SurrealDb,
-            owner: uuid::Uuid,
-            lawyer: uuid::Uuid,
-            project_code: String,
-            assigned: uuid::Uuid,
-            intake: uuid::Uuid,
-        }
-
-        async fn person(db: &store::surreal::SurrealDb, label: &str, role: Role) -> uuid::Uuid {
-            store::persons::create(
-                db,
-                &NewPerson::with_role(
-                    format!("{label} Person"),
-                    format!("{label}-{}@example.com", uuid::Uuid::now_v7()),
-                    role,
-                ),
-            )
-            .await
-            .unwrap()
-            .id
-        }
-
-        fn inbound<'a>(
-            firm: uuid::Uuid,
-            channel: &'a str,
-            provider_message_id: &'a str,
-            address: &'a str,
-            subject: Option<&'a str>,
-        ) -> store::inbox::IngestInbound<'a> {
-            store::inbox::IngestInbound {
-                project_id: None,
-                firm_id: firm,
-                brand_key: Some("neon"),
-                interaction_type: None,
-                provider_post_id: None,
-                parent_provider_message_id: None,
-                visibility: None,
-                channel,
-                provider_account: "support@example.com",
-                provider_message_id,
-                provider_thread_ref: None,
-                external_address: address,
-                external_name: Some("Sender Name"),
-                subject,
-                body: "Hello from outside.",
-                source_page: Some("/contact"),
-                source_channel: Some(channel),
-                matter_consent: true,
-                promotional_opt_in: false,
-                email_conversation_id: None,
-                attachments: Vec::new(),
-                occurred_at: "2026-09-27T00:00:00Z",
-                raw_storage_key: None,
-            }
-        }
-
-        /// A Firm with an Owner and a participating Lawyer, one Project, an
-        /// email conversation assigned to that Project (carrying two linked
-        /// attachments), and a text conversation still in intake.
-        async fn world() -> World {
-            let surreal = store::test_support::mem_surreal().await;
-            let owner = person(&surreal, "owner", Role::Owner).await;
-            let admin = person(&surreal, "admin", Role::Admin).await;
-            let lawyer = person(&surreal, "lawyer", Role::Lawyer).await;
-            let firm = store::firms::create(
-                &surreal,
-                &store::firms::NewFirm {
-                    name: "Inbox Loader Practice".into(),
-                    status: "active".into(),
-                    entity_id: store::test_support::seed_entity(&surreal).await,
-                    admin_dri_person_id: admin,
-                },
-            )
-            .await
-            .unwrap()
-            .id;
-            store::firms::ensure_membership(
-                &surreal,
-                &store::firms::NewPersonFirmRole {
-                    person_id: lawyer,
-                    firm_id: firm,
-                    membership: store::firms::FirmMembership::Lawyer,
-                    is_dri: false,
-                },
-            )
-            .await
-            .unwrap();
-            let project_code = "inbox-loader-matter".to_string();
-            let project = store::projects::create(
-                &surreal,
-                &store::projects::NewProject {
-                    code: project_code.clone(),
-                    name: "Inbox Loader Matter".into(),
-                    status: "open".into(),
-                    entity_id: store::test_support::seed_entity(&surreal).await,
-                    firm_id: Some(firm),
-                    ..store::projects::NewProject::default()
-                },
-            )
-            .await
-            .unwrap()
-            .id;
-            store::projects::designate_dri_in_surreal(
-                &surreal,
-                project,
-                lawyer,
-                store::projects::DriSide::Lawyer,
-            )
-            .await
-            .unwrap();
-
-            let mut email = inbound(
-                firm,
-                store::inbox::channel::EMAIL,
-                "loader-email-1",
-                "client@example.com",
-                Some("Notice of hearing"),
-            );
-            email.attachments = vec![
-                store::inbox::IngestAttachment {
-                    asset_id: uuid::Uuid::now_v7(),
-                    filename: "notice.pdf".into(),
-                    sha256: "sha-notice".into(),
-                },
-                store::inbox::IngestAttachment {
-                    asset_id: uuid::Uuid::now_v7(),
-                    filename: "exhibit.pdf".into(),
-                    sha256: "sha-exhibit".into(),
-                },
-            ];
-            let assigned = store::inbox::ingest_inbound(&surreal, &email)
-                .await
-                .unwrap()
-                .conversation_id;
-            store::inbox::assign(&surreal, owner, assigned, project)
-                .await
-                .unwrap();
-            let intake = store::inbox::ingest_inbound(
-                &surreal,
-                &inbound(
-                    firm,
-                    store::inbox::channel::SMS,
-                    "loader-sms-1",
-                    "+15555550123",
-                    None,
-                ),
-            )
-            .await
-            .unwrap()
-            .conversation_id;
-            World {
-                surreal,
-                owner,
-                lawyer,
-                project_code,
-                assigned,
-                intake,
-            }
-        }
-
-        fn load<T, F: std::future::Future<Output = Result<T, ServerFnError>>>(
-            rt: &tokio::runtime::Runtime,
-            world: &World,
-            route: &str,
-            uri: &str,
-            viewer: &Viewer,
-            loader: impl FnOnce() -> F,
-        ) -> Result<T, ServerFnError> {
-            let parts = request_parts(rt, route, uri, viewer);
-            call(
-                rt,
-                parts,
-                |dom| dom.provide_root_context(world.surreal.clone()),
-                loader,
-            )
-            .0
-        }
-
-        #[test]
-        fn the_firm_list_reads_every_conversation_and_honors_its_filters() {
-            let rt = runtime();
-            let world = rt.block_on(world());
-            let owner = Viewer::new(ViewerRole::Owner, Some(world.owner));
-
-            let page = load(
-                &rt,
-                &world,
-                INBOX_PATH,
-                INBOX_PATH,
-                &owner,
-                owner_inbox_page,
-            )
-            .unwrap();
-            assert_eq!(page.title, "Inbox");
-            assert_eq!(page.base_href, INBOX_PATH);
-            assert_eq!(
-                page.rows.len(),
-                2,
-                "both conversations are in the Firm list"
-            );
-            assert_eq!(
-                page.brands
-                    .iter()
-                    .map(|b| b.key.as_str())
-                    .collect::<Vec<_>>(),
-                vec!["neon"]
-            );
-            assert_eq!(page.channels, inbox_channels());
-            assert_eq!(page.csrf_token, "CSRF");
-            let text = page
-                .rows
-                .iter()
-                .find(|row| row.id == world.intake.to_string())
-                .unwrap();
-            assert_eq!(text.subject, "(no subject)");
-            assert_eq!(text.sender, "Sender Name");
-            assert_eq!(text.href, format!("/app/inbox/{}", world.intake));
-            assert!(!text.updated_iso.is_empty());
-
-            let uri = format!(
-                "{INBOX_PATH}?channel=email&brand=neon&unread=true&direction=inbound&attachments=true&error=Choose%20a%20project"
-            );
-            let page = load(&rt, &world, INBOX_PATH, &uri, &owner, owner_inbox_page).unwrap();
-            assert_eq!(page.channel_filter.as_deref(), Some("email"));
-            assert_eq!(page.brand_filter.as_deref(), Some("neon"));
-            assert_eq!(page.direction_filter.as_deref(), Some("inbound"));
-            assert!(page.unread_only && page.attachments_only);
-            assert_eq!(page.error.as_deref(), Some("Choose a project"));
-            assert_eq!(page.rows.len(), 1);
-            assert_eq!(page.rows[0].id, world.assigned.to_string());
-            assert!(page.rows[0].has_attachments);
-
-            // Values the filter strip never offers are dropped, not applied.
-            let uri = format!("{INBOX_PATH}?channel=fax&brand=vesta&direction=sideways&brand=%20");
-            let page = load(&rt, &world, INBOX_PATH, &uri, &owner, owner_inbox_page).unwrap();
-            assert_eq!(page.channel_filter, None);
-            assert_eq!(page.brand_filter, None);
-            assert_eq!(page.direction_filter, None);
-            assert_eq!(page.rows.len(), 2);
-        }
-
-        #[test]
-        fn the_firm_list_refuses_a_client_and_an_unlinked_session() {
-            let rt = runtime();
-            let world = rt.block_on(world());
-            for viewer in [
-                Viewer::new(ViewerRole::Client, Some(world.owner)),
-                Viewer::new(ViewerRole::Owner, None),
-            ] {
-                assert!(load(
-                    &rt,
-                    &world,
-                    INBOX_PATH,
-                    INBOX_PATH,
-                    &viewer,
-                    owner_inbox_page
-                )
-                .is_err());
-            }
-        }
-
-        #[test]
-        fn the_firm_thread_shows_the_transcript_and_the_assign_control() {
-            let rt = runtime();
-            let world = rt.block_on(world());
-            let owner = Viewer::new(ViewerRole::Owner, Some(world.owner));
-
-            let page = load(
-                &rt,
-                &world,
-                INBOX_THREAD_PATH,
-                &format!("/app/inbox/{}", world.assigned),
-                &owner,
-                owner_inbox_thread,
-            )
-            .unwrap();
-            assert_eq!(page.title, "Notice of hearing");
-            assert_eq!(page.assignee, "Inbox Loader Matter");
-            assert_eq!(page.brand_key.as_deref(), Some("neon"));
-            assert_eq!(page.provider_account, "support@example.com");
-            // Ingest creates a client-tier Person for an unknown sender.
-            // The label preserves their identity without inferring client status.
-            assert_eq!(page.sender, "Sender Name");
-            assert_eq!(page.channel, "email");
-            assert_eq!(page.delivery, store::inbox::delivery::RECEIVED);
-            assert_eq!(
-                page.assign_action,
-                Some(format!("/app/inbox/{}/assign", world.assigned))
-            );
-            assert!(
-                !page.can_attribute,
-                "an Owner assigns rather than attributes"
-            );
-            assert!(page
-                .projects
-                .iter()
-                .any(|project| project.label == "Inbox Loader Matter (inbox-loader-matter)"));
-            if page.bodies_visible {
-                assert_eq!(page.messages.len(), 1);
-                assert_eq!(page.messages[0].body, "Hello from outside.");
-                assert_eq!(
-                    page.messages[0].provider_message_id.as_deref(),
-                    Some("loader-email-1")
-                );
-                assert!(!page.messages[0].internal);
-            }
-
-            let page = load(
-                &rt,
-                &world,
-                INBOX_THREAD_PATH,
-                &format!("/app/inbox/{}", world.intake),
-                &owner,
-                owner_inbox_thread,
-            )
-            .unwrap();
-            assert_eq!(
-                page.title, "+15555550123",
-                "no subject falls back to the address"
-            );
-            assert_eq!(page.assignee, "Unassigned");
-
-            assert!(load(
-                &rt,
-                &world,
-                INBOX_THREAD_PATH,
-                "/app/inbox/not-a-conversation",
-                &owner,
-                owner_inbox_thread,
-            )
-            .is_err());
-        }
-
-        #[test]
-        fn the_project_list_and_thread_read_the_assigned_conversation() {
-            let rt = runtime();
-            let world = rt.block_on(world());
-            let lawyer = Viewer::new(ViewerRole::Lawyer, Some(world.lawyer));
-            let code = &world.project_code;
-
-            let page = load(
-                &rt,
-                &world,
-                PROJECT_INBOX_PATH,
-                &format!("/app/projects/{code}/inbox?brand=neon"),
-                &lawyer,
-                project_inbox_page,
-            )
-            .unwrap();
-            assert_eq!(page.title, "Inbox Loader Matter inbox");
-            assert_eq!(page.base_href, format!("/app/projects/{code}/inbox"));
-            assert_eq!(
-                page.brands
-                    .iter()
-                    .map(|b| b.key.as_str())
-                    .collect::<Vec<_>>(),
-                vec!["neon"]
-            );
-            assert_eq!(page.brand_filter.as_deref(), Some("neon"));
-            assert_eq!(page.compose_action, None);
-            assert!(page.project_client.is_some(), "the Project's client Entity");
-            assert!(page
-                .project_tabs
-                .iter()
-                .any(|tab| tab.label == "Communications" && tab.href == page.base_href));
-            assert_eq!(
-                page.logged_communications_href,
-                Some(format!("/app/projects/{code}/communications"))
-            );
-            assert_eq!(page.rows.len(), 1, "only the assigned conversation");
-            assert_eq!(page.rows[0].sender, "Sender Name");
-            let html = super::list_html(&page);
-            assert!(html.contains("Client: "));
-            assert!(html.contains(">From</th>"));
-            assert!(html.contains("Sender Name"));
-            assert!(html.contains("Logged communications"));
-            assert_eq!(
-                page.rows[0].href,
-                format!("/app/projects/{code}/inbox/{}", world.assigned)
-            );
-
-            let page = load(
-                &rt,
-                &world,
-                PROJECT_INBOX_THREAD_PATH,
-                &format!("/app/projects/{code}/inbox/{}", world.assigned),
-                &lawyer,
-                project_inbox_thread,
-            )
-            .unwrap();
-            assert_eq!(page.title, "Notice of hearing");
-            assert!(super::thread(&page).contains(&format!("href=\"/app/projects/{code}/inbox\"")));
-            assert!(page.bodies_visible);
-            assert_eq!(page.sender, "Sender Name");
-            assert_eq!(page.messages.len(), 1);
-            let attachments = &page.messages[0].attachments;
-            assert_eq!(attachments.len(), 2, "{:?}", attachments.len());
-            assert_eq!(attachments[0].filename.as_deref(), Some("notice.pdf"));
-            assert_eq!(attachments[1].filename.as_deref(), Some("exhibit.pdf"));
-            assert!(
-                attachments[0].href.starts_with("/app/api/projects/"),
-                "{}",
-                attachments[0].href
-            );
-            if let Some(note) = page.note_action.as_deref() {
-                assert_eq!(
-                    note,
-                    format!("/app/projects/{code}/inbox/{}/notes", world.assigned)
-                );
-            }
-        }
-
-        #[test]
-        fn the_project_pages_refuse_an_unknown_matter_and_a_bad_path() {
-            let rt = runtime();
-            let world = rt.block_on(world());
-            let lawyer = Viewer::new(ViewerRole::Lawyer, Some(world.lawyer));
-            assert!(load(
-                &rt,
-                &world,
-                PROJECT_INBOX_PATH,
-                "/app/projects/no-such-matter/inbox",
-                &lawyer,
-                project_inbox_page,
-            )
-            .is_err());
-            assert!(load(
-                &rt,
-                &world,
-                PROJECT_INBOX_THREAD_PATH,
-                &format!("/app/projects/{}/inbox/not-a-uuid", world.project_code),
-                &lawyer,
-                project_inbox_thread,
-            )
-            .is_err());
-            assert!(load(
-                &rt,
-                &world,
-                PROJECT_INBOX_THREAD_PATH,
-                &format!("/app/projects/no-such-matter/inbox/{}", world.assigned),
-                &lawyer,
-                project_inbox_thread,
-            )
-            .is_err());
-            assert!(load(
-                &rt,
-                &world,
-                PROJECT_INBOX_PATH,
-                &format!("/app/projects/{}/inbox", world.project_code),
-                &Viewer::new(ViewerRole::Lawyer, None),
-                project_inbox_page,
-            )
-            .is_err());
-        }
 
         #[test]
         fn intake_brands_are_sorted_and_deduplicated() {
@@ -4173,118 +3722,5 @@ mod tests {
             assert_eq!(view.sender, "a@example.com");
             assert_eq!(view.subject, "(no subject)");
         }
-    }
-}
-
-/// Drives a `#[server]` loader the way the portal router does, without a
-/// router-mounted render: the request parts carry the extensions the auth
-/// layer injects (viewer role, person id, CSRF token) and the path parameters
-/// a matched route records, and the loader runs inside a Dioxus scope that
-/// provides the store handles the portal's `ServeConfig` would.
-#[cfg(all(test, feature = "server"))]
-pub(crate) mod server_fn_test_support {
-    use std::future::Future;
-    use std::sync::{Arc, Mutex};
-
-    use dioxus::prelude::*;
-    use dioxus_fullstack_core::FullstackContext;
-
-    use crate::people::ViewerRole;
-
-    /// Who the request is from, as the auth layer would inject it.
-    #[derive(Clone, Default)]
-    pub(crate) struct Viewer {
-        pub role: Option<ViewerRole>,
-        pub person_id: Option<uuid::Uuid>,
-        pub csrf_token: Option<String>,
-    }
-
-    impl Viewer {
-        pub(crate) fn new(role: ViewerRole, person_id: Option<uuid::Uuid>) -> Self {
-            Self {
-                role: Some(role),
-                person_id,
-                csrf_token: Some("CSRF".to_string()),
-            }
-        }
-    }
-
-    /// A multi-threaded runtime, so the embedded store's own tasks keep
-    /// running while a loader is polled on the test thread.
-    pub(crate) fn runtime() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("test runtime")
-    }
-
-    /// The request parts a router hands its handler for `uri` matched against
-    /// `route`, so `axum::extract::Path` resolves inside the loader.
-    pub(crate) fn request_parts(
-        rt: &tokio::runtime::Runtime,
-        route: &str,
-        uri: &str,
-        viewer: &Viewer,
-    ) -> axum::http::request::Parts {
-        let slot: Arc<Mutex<Option<axum::http::request::Parts>>> = Arc::default();
-        let captured = slot.clone();
-        let router = axum::Router::new().route(
-            route,
-            axum::routing::get(move |request: axum::extract::Request| {
-                let captured = captured.clone();
-                async move {
-                    *captured.lock().expect("slot") = Some(request.into_parts().0);
-                    axum::http::StatusCode::OK
-                }
-            }),
-        );
-        let mut request = axum::http::Request::builder()
-            .uri(uri)
-            .body(axum::body::Body::empty())
-            .expect("request");
-        let extensions = request.extensions_mut();
-        if let Some(role) = viewer.role {
-            extensions.insert(role);
-        }
-        extensions.insert(crate::portal_project_list::PersonId(
-            viewer.person_id.map(|id| id.to_string()),
-        ));
-        if let Some(token) = viewer.csrf_token.clone() {
-            extensions.insert(crate::csrf::CsrfToken(token));
-        }
-        let response = rt.block_on(axum::handler::Handler::call(
-            axum::routing::any_service(router),
-            request,
-            (),
-        ));
-        assert_eq!(
-            response.status(),
-            axum::http::StatusCode::OK,
-            "`{uri}` does not match `{route}`"
-        );
-        let parts = slot.lock().expect("slot").take();
-        parts.expect("the route captured its request")
-    }
-
-    /// Run `loader` inside a Dioxus scope whose root context `provide` fills,
-    /// under a request context built from `parts`. Returns the loader's
-    /// result and the HTTP status the loader committed.
-    pub(crate) fn call<T, F>(
-        rt: &tokio::runtime::Runtime,
-        parts: axum::http::request::Parts,
-        provide: impl FnOnce(&VirtualDom),
-        loader: impl FnOnce() -> F,
-    ) -> (T, axum::http::StatusCode)
-    where
-        F: Future<Output = T>,
-    {
-        let dom = VirtualDom::new(|| rsx! {});
-        provide(&dom);
-        let context = FullstackContext::new(parts);
-        let result = dom.in_scope(ScopeId::ROOT, || {
-            rt.block_on(context.clone().scope(loader()))
-        });
-        (result, context.current_http_status().status)
     }
 }

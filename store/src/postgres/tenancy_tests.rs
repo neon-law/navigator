@@ -1,7 +1,7 @@
 use super::tenancy;
 use crate::brands::{BrandEdit, BrandError, NewBrand};
 use crate::firms::{FirmError, FirmMembership, NewFirm, NewPersonFirmRole};
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 use uuid::Uuid;
 
 #[tokio::test]

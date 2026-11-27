@@ -1,7 +1,7 @@
 //! Firm-owned immutable double-entry Journal Entries, exact asset quantities,
 //! bounded source references, and auditable reconciliation evidence.
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -12,8 +12,6 @@ pub enum JournalError {
     Invalid(String),
     #[error("journal idempotency key already has different content")]
     Conflict,
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error("PostgreSQL journal command failed")]
     Postgres(#[from] sqlx::Error),
     #[error("journal encoding: {0}")]
@@ -38,13 +36,17 @@ impl JournalStore {
         entries(&self.0, firm).await
     }
     /// See [`post`]. Retrying an identical key returns its identity.
-    pub async fn post(&self, db: &SurrealDb, entry: &JournalEntry) -> Result<Uuid, JournalError> {
+    pub async fn post(
+        &self,
+        db: &ApplicationStore,
+        entry: &JournalEntry,
+    ) -> Result<Uuid, JournalError> {
         post(db, &self.0, entry).await
     }
     /// See [`preview`]. Nothing is persisted.
     pub async fn preview(
         &self,
-        db: &SurrealDb,
+        db: &ApplicationStore,
         entry: &JournalEntry,
     ) -> Result<Uuid, JournalError> {
         preview(db, &self.0, entry).await
@@ -469,7 +471,7 @@ fn digest(bytes: &[u8]) -> String {
 /// Atomic journal command under the owning Firm's PostgreSQL row lock.
 /// A retry after commit returns the original identity; altered content conflicts.
 pub async fn post(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     pg: &PostgresDb,
     entry: &JournalEntry,
 ) -> Result<Uuid, JournalError> {
@@ -477,7 +479,7 @@ pub async fn post(
 }
 /// Run the same evidence, tenancy, allocation and database checks without persisting a command.
 pub async fn preview(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     pg: &PostgresDb,
     entry: &JournalEntry,
 ) -> Result<Uuid, JournalError> {
@@ -485,7 +487,7 @@ pub async fn preview(
 }
 /// Store-independent command checks: shape, balance, ownership, and the owning Firm.
 async fn check_command(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     entry: &JournalEntry,
 ) -> Result<crate::firms::Firm, JournalError> {
     entry.validate()?;
@@ -536,7 +538,7 @@ pub(crate) async fn ensure_firm_row(
     Ok(())
 }
 async fn execute_post(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     pg: &PostgresDb,
     entry: &JournalEntry,
     commit: bool,
@@ -599,7 +601,7 @@ async fn execute_post(
 }
 
 async fn validate_posting_evidence(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     entry: &JournalEntry,
 ) -> Result<(), JournalError> {
     for link in &entry.links {
@@ -1320,7 +1322,7 @@ pub fn entry_digest(entry: &JournalEntry) -> Result<String, JournalError> {
     reason = "ordered evidence, approval, repair and revalidation phases form one audit"
 )]
 pub async fn reconcile(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     pg: &PostgresDb,
     request: &ReconciliationRequest,
 ) -> Result<ReconciliationAudit, JournalError> {
@@ -1700,7 +1702,7 @@ async fn persist_audit(pg: &PostgresDb, a: &ReconciliationAudit) -> Result<(), J
     Ok(())
 }
 async fn evidence_firm(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     document: Uuid,
     firm: Uuid,
 ) -> Result<crate::assets::Asset, JournalError> {
@@ -1784,10 +1786,10 @@ mod tests {
     #[tokio::test]
     async fn journal_environment_requires_activated_postgres_without_source() {
         use crate::postgres::{PostgresDb, PostgresError};
-        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+        let Some((options, database)) = crate::postgres::fixtures::fresh_schema().await else {
             return;
         };
-        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let pg = crate::postgres::fixtures::connect(&options, &database).await;
         PostgresDb::with_test_db(pg.clone(), async {
             assert!(matches!(
                 super::JournalStore::from_env().await,

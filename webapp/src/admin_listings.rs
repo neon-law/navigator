@@ -42,8 +42,8 @@ pub async fn list_jurisdictions() -> Result<AdminListingView, ServerFnError> {
     // triggers it.
     let role = crate::admin_listing::require_lawyer().await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let mut rows = store::jurisdictions::list_all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let mut rows = store::jurisdictions::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     rows.sort_by(|a, b| a.code.cmp(&b.code));
@@ -73,8 +73,8 @@ pub async fn list_git_repositories() -> Result<AdminListingView, ServerFnError> 
     // triggers it.
     let role = crate::admin_listing::require_lawyer().await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let rows = store::git_repositories::list_all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let rows = store::git_repositories::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -118,8 +118,8 @@ pub async fn list_person_entity_roles() -> Result<AdminListingView, ServerFnErro
     // triggers it.
     let role = crate::admin_listing::require_lawyer().await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let rows = store::entity_roles::all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let rows = store::entity_roles::all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -155,8 +155,8 @@ pub async fn list_notations() -> Result<AdminListingView, ServerFnError> {
     // triggers it.
     let role = crate::admin_listing::require_lawyer().await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let rows = store::notations::list_all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let rows = store::notations::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -197,10 +197,10 @@ pub async fn list_answers() -> Result<AdminListingView, ServerFnError> {
     // Resolve the handle first, because the gate needs it to read the
     // participation ledger — but the gate still runs before the listing's own
     // query, so a non-lawyer caller never triggers it.
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&surreal).await?;
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&application_store).await?;
 
-    let mut rows = store::answers::list_all(&surreal)
+    let mut rows = store::answers::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -212,7 +212,7 @@ pub async fn list_answers() -> Result<AdminListingView, ServerFnError> {
     if let crate::admin_listing::MatterScope::Participating(visible) = &scope {
         let project_ids: Vec<uuid::Uuid> = visible.iter().copied().collect();
         let project_of_notation: std::collections::HashMap<uuid::Uuid, uuid::Uuid> =
-            store::notations::list_by_projects(&surreal, &project_ids)
+            store::notations::list_by_projects(&application_store, &project_ids)
                 .await
                 .map_err(|e| ServerFnError::new(e.to_string()))?
                 .into_iter()
@@ -258,8 +258,8 @@ pub async fn list_addresses() -> Result<AdminListingView, ServerFnError> {
     // triggers it.
     let role = crate::admin_listing::require_lawyer().await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let rows = store::addresses::list_all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let rows = store::addresses::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -299,10 +299,10 @@ pub async fn list_assets() -> Result<AdminListingView, ServerFnError> {
     // Resolve the handle first, because the gate needs it to read the
     // participation ledger — but the gate still runs before the listing's own
     // query, so a non-lawyer caller never triggers it.
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&surreal).await?;
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&application_store).await?;
 
-    let mut rows = store::assets::list_all(&surreal)
+    let mut rows = store::assets::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     // `asset.project_id` is `option<record<project>>`: a bare content asset
@@ -349,8 +349,8 @@ pub fn LawyerAssets() -> Element {
 #[server]
 pub async fn list_person_project_roles() -> Result<AdminListingView, ServerFnError> {
     let role = crate::admin_listing::require_lawyer().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let rows = store::projects::all_participations(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let rows = store::projects::all_participations(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     Ok(crate::admin_listing::view(
@@ -392,9 +392,9 @@ pub fn LawyerPersonProjectRoles() -> Element {
 /// `conflict_graph_listings_stay_firm_wide_for_an_unparticipating_lawyer`.
 #[server]
 pub async fn list_disclosures() -> Result<AdminListingView, ServerFnError> {
-    crate::admin_listing::load_surreal(
-        |surreal| async move {
-            store::disclosures::all(&surreal)
+    crate::admin_listing::load_store(
+        |application_store| async move {
+            store::disclosures::all(&application_store)
                 .await
                 .map_err(|e| ServerFnError::new(e.to_string()))
         },
@@ -445,10 +445,10 @@ pub async fn list_relationship_logs() -> Result<AdminListingView, ServerFnError>
     // Resolve the handle first, because the gate needs it to read the
     // participation ledger — but the gate still runs before the listing's own
     // query, so a non-lawyer caller never triggers it.
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&surreal).await?;
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&application_store).await?;
 
-    let mut rows = store::relationship_logs::all(&surreal)
+    let mut rows = store::relationship_logs::all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     scope.retain(&mut rows, |log| {
@@ -489,13 +489,13 @@ pub fn LawyerRelationshipLogs() -> Element {
 #[server]
 pub async fn list_mailrooms() -> Result<AdminListingView, ServerFnError> {
     let role = crate::admin_listing::require_lawyer().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let mailrooms = store::mailrooms::list_all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let mailrooms = store::mailrooms::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     // Both tables are single-engine now, so the in-memory join is one
     // engine's data rather than two.
-    let addresses = store::addresses::list_all(&surreal)
+    let addresses = store::addresses::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let by_address = |id| {
@@ -542,16 +542,16 @@ pub async fn list_letters() -> Result<AdminListingView, ServerFnError> {
     // Resolve the handle first, because the gate needs it to read the
     // participation ledger — but the gate still runs before the listing's own
     // query, so a non-lawyer caller never triggers it.
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&surreal).await?;
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&application_store).await?;
 
-    let mut letters = store::letters::list_all(&surreal)
+    let mut letters = store::letters::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     scope.retain(&mut letters, |letter| letter.project_id);
     // Both tables are single-engine now, so the in-memory join is one
     // engine's data rather than two.
-    let mailrooms = store::mailrooms::list_all(&surreal)
+    let mailrooms = store::mailrooms::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let by_mailroom = |id| {
@@ -615,7 +615,7 @@ pub async fn list_email_log() -> Result<AdminListingView, ServerFnError> {
     // Resolve the handle first, because the gate needs it to read the
     // participation ledger — but the gate still runs before the listing's own
     // query, so a non-lawyer caller never triggers it.
-    let db = consume_context::<store::surreal::SurrealDb>();
+    let db = consume_context::<store::application_store::ApplicationStore>();
     let (role, scope) = crate::admin_listing::require_lawyer_in_matters(&db).await?;
     let axum::extract::Query(query) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<EmailLogQuery>, _>(
@@ -703,11 +703,11 @@ pub async fn list_templates() -> Result<AdminListingView, ServerFnError> {
     let role = crate::admin_listing::require_lawyer().await?;
     let sort = requested_sort().await;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     // `list_current` is already the shared catalog plus every Project's own
     // current rows; the filter below drops the scoped ones, which is what
     // the `project_id IS NULL` predicate did.
-    let rows = store::templates::list_current(&surreal)
+    let rows = store::templates::list_current(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -750,8 +750,8 @@ pub async fn list_questions() -> Result<AdminListingView, ServerFnError> {
     let role = crate::admin_listing::require_lawyer().await?;
     let sort = requested_sort().await;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let rows = store::questions::list_all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let rows = store::questions::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 

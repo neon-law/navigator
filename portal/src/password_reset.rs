@@ -244,7 +244,7 @@ async fn try_send_reset(
         tracing::warn!("password-reset: no Identity Platform admin config; cannot send a link");
         return Ok((ResetOutcome::NoAdminConfig, None));
     };
-    let Some(person) = find_person_by_email(&s.surreal, email).await? else {
+    let Some(person) = find_person_by_email(&s.application_store, email).await? else {
         return Ok((ResetOutcome::NoPerson, None));
     };
     let person_id = Some(person.id);
@@ -272,7 +272,7 @@ async fn try_send_reset(
     // Throttle: a live link minted in the last THROTTLE_SECS suppresses a
     // second send.
     if store::email_tokens::has_live_token_since(
-        &s.surreal,
+        &s.application_store,
         person.id,
         PURPOSE_PASSWORD_RESET,
         now - Duration::seconds(THROTTLE_SECS),
@@ -285,7 +285,7 @@ async fn try_send_reset(
 
     let plaintext = random_token_32();
     store::email_tokens::mint(
-        &s.surreal,
+        &s.application_store,
         person.id,
         &person.email,
         PURPOSE_PASSWORD_RESET,
@@ -322,12 +322,13 @@ async fn send_recovery_email(
         )
     };
 
-    let brand = store::brands::find_by_key(&s.surreal, views::brand::brand_key().as_str())
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "using compiled brand for account recovery email");
-            None
-        });
+    let brand =
+        store::brands::find_by_key(&s.application_store, views::brand::brand_key().as_str())
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "using compiled brand for account recovery email");
+                None
+            });
     let html = layout::render_branded_email_html(&body, base_url, brand.as_ref());
     let mut msg = crate::email::OutboundEmail::new(person.email.clone(), subject, body)
         .with_html(html)
@@ -354,7 +355,9 @@ async fn new_form(
     Query(q): Query<TokenQuery>,
 ) -> Response {
     let now = Utc::now();
-    match store::email_tokens::validate(&s.surreal, &q.token, PURPOSE_PASSWORD_RESET, now).await {
+    match store::email_tokens::validate(&s.application_store, &q.token, PURPOSE_PASSWORD_RESET, now)
+        .await
+    {
         Ok(Some(_)) => {
             let csrf = mint_csrf(&s, &cookies);
             webapp::auth_pages::password_reset_new(&q.token, &csrf, None).into_response()
@@ -392,21 +395,25 @@ async fn new_submit(
     cookies.add(expired_cookie(ACCOUNT_CSRF_COOKIE_NAME));
 
     let now = Utc::now();
-    let token_row =
-        match store::email_tokens::validate(&s.surreal, &form.token, PURPOSE_PASSWORD_RESET, now)
-            .await
-        {
-            Ok(Some(row)) => row,
-            Ok(None) => return webapp::auth_pages::invalid_link().into_response(),
-            Err(e) => {
-                tracing::warn!(error = %e, "password-reset: confirm validate failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    webapp::error_pages::server_error(),
-                )
-                    .into_response();
-            }
-        };
+    let token_row = match store::email_tokens::validate(
+        &s.application_store,
+        &form.token,
+        PURPOSE_PASSWORD_RESET,
+        now,
+    )
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return webapp::auth_pages::invalid_link().into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "password-reset: confirm validate failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response();
+        }
+    };
 
     // Password policy. On failure, re-render the form (with a fresh CSRF)
     // carrying the token so the user can correct it.
@@ -483,7 +490,7 @@ async fn finish_reset(
     token_row: &store::email_tokens::EmailToken,
     now: chrono::DateTime<Utc>,
 ) {
-    if let Err(e) = store::email_tokens::consume(&s.surreal, token_row.id, now).await {
+    if let Err(e) = store::email_tokens::consume(&s.application_store, token_row.id, now).await {
         tracing::warn!(error = %e, "password-reset: token consume failed (password was set)");
     }
 }
@@ -518,10 +525,10 @@ fn password_policy_error(password: &str, confirm: &str) -> Option<&'static str> 
 /// Case-insensitive person lookup by email, so a reset request with
 /// different casing still finds the row.
 pub(crate) async fn find_person_by_email(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     email: &str,
 ) -> Result<Option<store::persons::Person>, store::persons::PersonError> {
-    store::persons::find_by_email_ci(surreal, email).await
+    store::persons::find_by_email_ci(application_store, email).await
 }
 
 #[cfg(test)]

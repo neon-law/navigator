@@ -150,7 +150,7 @@ impl ReconcileRunner for Runner {
 
 struct ActualReconcileRunner {
     provider: Arc<StubBillingProvider>,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 }
 
 struct HoldAfterMirror {
@@ -174,7 +174,7 @@ impl ReconcileRunner for HoldAfterMirror {
 #[async_trait::async_trait]
 impl ReconcileRunner for ActualReconcileRunner {
     async fn run(&self) -> Result<ReconcileReport, ReconcileDbosError> {
-        billing_workflows::reconcile_once(self.provider.as_ref(), &self.surreal)
+        billing_workflows::reconcile_once(self.provider.as_ref(), &self.application_store)
             .await
             .map_err(|_| ReconcileDbosError::Reconcile)
     }
@@ -201,21 +201,23 @@ async fn result(dbos: &dbos::DBOS, id: &str) -> ReconcileReport {
     .expect("ReconcileInvoices succeeds")
 }
 
-async fn seed_trust_deposit(surreal: &store::surreal::SurrealDb) -> uuid::Uuid {
+async fn seed_trust_deposit(
+    application_store: &store::application_store::ApplicationStore,
+) -> uuid::Uuid {
     let nevada = store::jurisdictions::create(
-        surreal,
+        application_store,
         &store::jurisdictions::NewJurisdiction::new("Nevada", "NV", "state"),
     )
     .await
     .expect("seed synthetic jurisdiction")
     .id;
-    let notation = store::test_support::seed_notation(surreal).await;
-    let project_id = store::notations::find_by_id(surreal, notation)
+    let notation = store::test_support::seed_notation(application_store).await;
+    let project_id = store::notations::find_by_id(application_store, notation)
         .await
         .expect("load synthetic notation")
         .expect("seeded notation")
         .project_id;
-    store::projects::set_jurisdiction(surreal, project_id, Some(nevada))
+    store::projects::set_jurisdiction(application_store, project_id, Some(nevada))
         .await
         .expect("assign synthetic jurisdiction");
     project_id
@@ -356,8 +358,8 @@ async fn executor_restart_reuses_reconcile_checkpoint_and_finance_receipt() {
 #[tokio::test]
 async fn executor_restart_does_not_repeat_provider_mirror_writes() {
     let Some(db) = database().await else { return };
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let (project, _) = crate::support::native_project::matter(&surreal).await;
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    let (project, _) = crate::support::native_project::matter(&application_store).await;
     let provider = Arc::new(StubBillingProvider::new());
     provider.set_listed_invoices(vec![ReceivableInvoice {
         invoice_id: "synthetic-xero-invoice-1".into(),
@@ -371,7 +373,7 @@ async fn executor_restart_does_not_repeat_provider_mirror_writes() {
     }]);
     let runner = Arc::new(ActualReconcileRunner {
         provider: provider.clone(),
-        surreal: surreal.clone(),
+        application_store: application_store.clone(),
     });
     let slack = Arc::new(AcceptThenHold::default());
     let context = || {
@@ -409,7 +411,7 @@ async fn executor_restart_does_not_repeat_provider_mirror_writes() {
     let report = result(&recovered, &id).await;
     recovered.shutdown().await;
 
-    let invoices = store::xero_invoices::for_projects(&surreal, &[project.id])
+    let invoices = store::xero_invoices::for_projects(&application_store, &[project.id])
         .await
         .expect("read mirrored invoices");
     assert_eq!(report.ingested, 1);
@@ -430,8 +432,8 @@ async fn executor_restart_does_not_repeat_provider_mirror_writes() {
 #[tokio::test]
 async fn mid_step_restart_reuses_natural_trust_transaction_identity() {
     let Some(db) = database().await else { return };
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let project_id = seed_trust_deposit(&surreal).await;
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    let project_id = seed_trust_deposit(&application_store).await;
 
     let provider = Arc::new(StubBillingProvider::new());
     provider.set_listed_bank_accounts(vec![TrustBankAccount {
@@ -454,7 +456,7 @@ async fn mid_step_restart_reuses_natural_trust_transaction_identity() {
     let runner = Arc::new(HoldAfterMirror {
         actual: ActualReconcileRunner {
             provider: provider.clone(),
-            surreal: surreal.clone(),
+            application_store: application_store.clone(),
         },
         calls: AtomicUsize::new(0),
         wrote: Notify::new(),
@@ -483,7 +485,7 @@ async fn mid_step_restart_reuses_natural_trust_transaction_identity() {
         .await
         .expect("mirror writes completed before the step was interrupted");
     first.shutdown().await;
-    let position = store::trust::position_for_project(&surreal, project_id)
+    let position = store::trust::position_for_project(&application_store, project_id)
         .await
         .expect("read trust position before recovery");
     assert_eq!(position.deposited_cents, 12500);
@@ -498,7 +500,7 @@ async fn mid_step_restart_reuses_natural_trust_transaction_identity() {
     let _report = result(&recovered, &id).await;
     recovered.shutdown().await;
 
-    let movements = store::trust::movements_for_project(&surreal, project_id)
+    let movements = store::trust::movements_for_project(&application_store, project_id)
         .await
         .expect("read trust ledger");
     assert_eq!(
@@ -511,7 +513,7 @@ async fn mid_step_restart_reuses_natural_trust_transaction_identity() {
         "natural provider transaction identity deduplicates the replayed write"
     );
     assert_eq!(
-        store::trust::position_for_project(&surreal, project_id)
+        store::trust::position_for_project(&application_store, project_id)
             .await
             .expect("read final trust position")
             .deposited_cents,

@@ -15,7 +15,7 @@ pub(crate) fn eligible(project: &Project) -> bool {
 #[async_trait::async_trait]
 impl Source for PlanRetainers {
     async fn projects(&self) -> anyhow::Result<Vec<Uuid>> {
-        let db = &self.0.surreal;
+        let db = &self.0.application_store;
         let firm = store::firms::anchor_firm(db).await?.ok_or_else(|| {
             anyhow::anyhow!("retainer reconciliation requires the installation's Firm")
         })?;
@@ -29,7 +29,7 @@ impl Source for PlanRetainers {
 
     async fn reconcile(&self, id: Uuid) -> anyhow::Result<Outcome> {
         let state = &self.0;
-        let db = &state.surreal;
+        let db = &state.application_store;
         let pg = store::postgres::PostgresDb::application().await?;
         let lane = store::notation_machine_state::acquire_lane(&pg, id).await?;
         let Some(project) = store::projects::find_by_id(db, id).await?.filter(eligible) else {
@@ -101,7 +101,7 @@ impl Source for PlanRetainers {
                     return Ok(Outcome::NeedsDocuSign);
                 };
                 let ctx = crate::signature_flow::SendFlowContext {
-                    surreal: db,
+                    application_store: db,
                     runtime: state.workflow_runtime.as_ref(),
                     storage: &state.storage,
                     acting: None,
@@ -129,7 +129,7 @@ impl Source for PlanRetainers {
 }
 
 async fn engagement_notations(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     id: Uuid,
 ) -> anyhow::Result<Vec<store::notations::Notation>> {
     let mut existing = Vec::new();

@@ -105,8 +105,8 @@ pub async fn get_entity_edit_form() -> Result<EntityEditView, ServerFnError> {
     >()
     .await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let entity = store::entities::find_by_id(&surreal, id)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let entity = store::entities::find_by_id(&application_store, id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let fields = entity.map(|e| EntityFields {
@@ -139,7 +139,7 @@ pub async fn get_entity_edit_form() -> Result<EntityEditView, ServerFnError> {
 
     // Both reference tables live in SurrealDB (ENG-20); ordered by name
     // so the pickers read alphabetically.
-    let types = store::entity_types::list(&surreal, &[])
+    let types = store::entity_types::list(&application_store, &[])
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -148,7 +148,7 @@ pub async fn get_entity_edit_form() -> Result<EntityEditView, ServerFnError> {
             label: t.name,
         })
         .collect();
-    let jurisdictions = store::jurisdictions::list_all(&surreal)
+    let jurisdictions = store::jurisdictions::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()

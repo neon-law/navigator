@@ -18,10 +18,9 @@ the one number a filing or a callback uses first: at most one row per Person car
 (`store::person_phones::set_phone` demotes the others in the same transaction and is the only writer). The first number
 a Person gets is primary whether or not the caller said so.
 
-The accessor is [`store::person_phones`](../../store/src/person_phones.rs) is the only module that reads or writes it.
-Its active write path is documented in [SurrealDB compatibility](../surreal-compatibility.md#people). The legacy
-free-text `person.phone` column on the Person row itself stays what it was for older surfaces; `seed_from_legacy_phone`
-lifts that single value into the structured list — as the primary mobile — the first time a Person's phones are updated,
-guarded so a Person with structured rows or an unnormalizable legacy value is left alone rather than silently migrated.
+Use [`store::person_phones`](../../store/src/person_phones.rs) to read and write phone entries. The legacy free-text
+`person.phone` column on the Person row itself stays what it was for older surfaces; `seed_from_legacy_phone` lifts that
+single value into the structured list — as the primary mobile — the first time a Person's phones are updated, guarded so
+a Person with structured rows or an unnormalizable legacy value is left alone rather than silently migrated.
 
 The table is `person_phone`.

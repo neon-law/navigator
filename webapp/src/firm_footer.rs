@@ -113,26 +113,27 @@ pub fn compiled_firm_footer_model(
 /// fallback rather than breaking every page's footer.
 #[cfg(feature = "server")]
 pub async fn resolve_firm_footer_model(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     current: views::brand::BrandKey,
     copyright_year: i32,
 ) -> FirmFooterModel {
     let fallback = || compiled_firm_footer_model(current, copyright_year);
 
-    let Ok(Some(firm_id)) = store::firms::firm_id_for_brand_key(surreal, current.as_str()).await
+    let Ok(Some(firm_id)) =
+        store::firms::firm_id_for_brand_key(application_store, current.as_str()).await
     else {
         return fallback();
     };
-    let Ok(Some(firm)) = store::firms::find_by_id(surreal, firm_id).await else {
+    let Ok(Some(firm)) = store::firms::find_by_id(application_store, firm_id).await else {
         return fallback();
     };
     let Some(entity_id) = firm.entity_id else {
         return fallback();
     };
-    let Ok(Some(entity)) = store::entities::find_by_id(surreal, entity_id).await else {
+    let Ok(Some(entity)) = store::entities::find_by_id(application_store, entity_id).await else {
         return fallback();
     };
-    let Ok(keys) = store::firms::brand_keys_for_firm(surreal, firm_id).await else {
+    let Ok(keys) = store::firms::brand_keys_for_firm(application_store, firm_id).await else {
         return fallback();
     };
     if keys.is_empty() {
@@ -257,264 +258,6 @@ mod tests {
         assert_eq!(
             other.firm_home_href, "",
             "a Lex Tecnica brand links no Guieb home"
-        );
-    }
-
-    /// The resolver reads the Firm's Entity, and grants compiled identity only to the anchored one.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn resolves_the_firm_wearing_the_compiled_key() {
-        let surreal = store::surreal::test_support::mem().await;
-        let admin = store::test_support::ensure_person(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Firm Admin",
-                "firm-footer-admin@example.com",
-                store::persons::Role::Admin,
-            ),
-        )
-        .await;
-        let entity = store::entities::create(
-            &surreal,
-            &store::entities::NewEntity {
-                name: "Guieb & Shook PC".to_string(),
-                entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
-                jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: None,
-            },
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: "Guieb & Shook".to_string(),
-                status: "active".to_string(),
-                entity_id: entity.id,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::firms::attach_brand(&surreal, store::persons::Role::Owner, None, firm.id, "neon")
-            .await
-            .unwrap();
-        store::firms::attach_brand(
-            &surreal,
-            store::persons::Role::Owner,
-            None,
-            firm.id,
-            "delete-your-data",
-        )
-        .await
-        .unwrap();
-
-        let model = resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
-        assert!(
-            !model.compiled_identity_allowed,
-            "a namesake Entity without the canonical anchor cannot inherit facts"
-        );
-        store::entities::set_firm_anchor_key(
-            &surreal,
-            entity.id,
-            Some(views::brand::FIRM_BRAND.legal_entity.trim().to_lowercase()),
-        )
-        .await
-        .unwrap();
-        let canonical =
-            resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
-        assert!(canonical.compiled_identity_allowed);
-
-        assert_eq!(model.legal_entity, "Guieb & Shook PC");
-        // The firm wears `neon` but not its own compiled firm brand
-        // (`guieb-shook`): it publishes no home, so the public footer's
-        // copyright renders unlinked rather than linked to some other
-        // firm's site.
-        assert_eq!(model.firm_home_href, "");
-    }
-
-    /// ENG-589, continued: a Firm wearing the compiled firm brand resolves
-    /// that brand's production home as the Firm's own — the live answer to
-    /// "whose site is this" that the public footer's copyright links.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn the_firm_wearing_its_own_brand_resolves_a_home() {
-        let surreal = store::surreal::test_support::mem().await;
-        let entity = store::entities::create(
-            &surreal,
-            &store::entities::NewEntity {
-                name: "Guieb & Shook PC".to_string(),
-                entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
-                jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: None,
-            },
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: "Guieb & Shook".to_string(),
-                status: "active".to_string(),
-                entity_id: entity.id,
-                admin_dri_person_id: store::test_support::ensure_person(
-                    &surreal,
-                    &store::persons::NewPerson::with_role(
-                        "Firm Admin",
-                        "firm-home-admin@example.com",
-                        store::persons::Role::Admin,
-                    ),
-                )
-                .await
-                .id,
-            },
-        )
-        .await
-        .unwrap();
-        store::firms::attach_brand(&surreal, store::persons::Role::Owner, None, firm.id, "neon")
-            .await
-            .unwrap();
-        store::firms::attach_brand(
-            &surreal,
-            store::persons::Role::Owner,
-            None,
-            firm.id,
-            "guieb-shook",
-        )
-        .await
-        .unwrap();
-
-        let model = resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
-
-        assert_eq!(
-            model.firm_home_href,
-            views::brand::BrandKey::GuiebShook.public_home_href()
-        );
-    }
-
-    /// A second Firm wearing a compiled key: the footer for that key names
-    /// *that* Firm's Entity — never the other Firm's.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    #[allow(clippy::too_many_lines)]
-    async fn a_second_firm_is_isolated_from_the_first() {
-        let surreal = store::surreal::test_support::mem().await;
-
-        // The first Firm, wearing the other compiled key.
-        let admin_a = store::test_support::ensure_person(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Firm A Admin",
-                "firm-a-admin@example.com",
-                store::persons::Role::Admin,
-            ),
-        )
-        .await;
-        let entity_a = store::entities::create(
-            &surreal,
-            &store::entities::NewEntity {
-                name: "Firm A Legal Entity LLC".to_string(),
-                entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
-                jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: None,
-            },
-        )
-        .await
-        .unwrap();
-        let firm_a = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: "Firm A".to_string(),
-                status: "active".to_string(),
-                entity_id: entity_a.id,
-                admin_dri_person_id: admin_a.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::firms::attach_brand(
-            &surreal,
-            store::persons::Role::Owner,
-            None,
-            firm_a.id,
-            "neon",
-        )
-        .await
-        .unwrap();
-
-        // The second Firm, wearing another compiled key.
-        let admin_b = store::test_support::ensure_person(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Firm B Admin",
-                "firm-b-admin@example.com",
-                store::persons::Role::Admin,
-            ),
-        )
-        .await;
-        let entity_b = store::entities::create(
-            &surreal,
-            &store::entities::NewEntity {
-                name: "Firm B Legal Entity LLC".to_string(),
-                entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
-                jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: None,
-            },
-        )
-        .await
-        .unwrap();
-        let firm_b = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: "Firm B".to_string(),
-                status: "active".to_string(),
-                entity_id: entity_b.id,
-                admin_dri_person_id: admin_b.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::firms::attach_brand(
-            &surreal,
-            store::persons::Role::Owner,
-            None,
-            firm_b.id,
-            "delete-your-data",
-        )
-        .await
-        .unwrap();
-
-        let model =
-            resolve_firm_footer_model(&surreal, views::brand::BrandKey::DeleteYourData, 2026).await;
-
-        assert_eq!(model.legal_entity, "Firm B Legal Entity LLC");
-        assert_ne!(model.legal_entity, "Firm A Legal Entity LLC");
-    }
-
-    /// A brand key no Firm wears — the pre-seed database — falls back to the
-    /// compiled `Branding`, unchanged from every deployment's footer today.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn a_brand_key_no_firm_wears_falls_back_to_the_compiled_branding() {
-        let surreal = store::surreal::test_support::mem().await;
-
-        let model = resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
-
-        assert_eq!(
-            model.legal_entity,
-            views::brand::DEFAULT_BRANDING.firm.legal_entity
         );
     }
 

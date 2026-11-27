@@ -8,55 +8,8 @@ use store::postgres::{PostgresDb, PostgresError};
 async fn normal_archives_refuse_missing_postgres_instead_of_silently_skipping() {
     let dir = tempfile::tempdir().unwrap();
     let storage = cloud::FsStorage::new(dir.path()).await.unwrap();
-    for selected in [None, Some("postgres")] {
-        let result = export_configured(
-            |key| {
-                (key == "NAVIGATOR_ARCHIVE_SOURCE")
-                    .then(|| selected.map(str::to_owned))
-                    .flatten()
-            },
-            &storage,
-            None,
-        )
-        .await;
-        assert!(matches!(result, Some(PostgresExport::Failed { .. })));
-    }
-    assert!(storage.list("").await.unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn an_unknown_archive_source_cannot_skip_the_postgres_generation() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = cloud::FsStorage::new(dir.path()).await.unwrap();
-    for selected in ["", "postgre"] {
-        let result = export_configured(
-            |key| (key == "NAVIGATOR_ARCHIVE_SOURCE").then(|| selected.into()),
-            &storage,
-            None,
-        )
-        .await;
-        assert!(matches!(result, Some(PostgresExport::Failed { .. })));
-    }
-    assert!(storage.list("").await.unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn explicit_compatibility_keeps_postgres_optional_without_source_or_storage_access() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = cloud::FsStorage::new(dir.path()).await.unwrap();
-    for host in [None, Some(" ")] {
-        let result = export_configured(
-            |key| match key {
-                "NAVIGATOR_ARCHIVE_SOURCE" => Some("all".into()),
-                "NAVIGATOR_POSTGRES_HOST" => host.map(str::to_owned),
-                _ => None,
-            },
-            &storage,
-            None,
-        )
-        .await;
-        assert!(result.is_none());
-    }
+    let result = export_configured(|_| None, &storage, None).await;
+    assert!(matches!(result, Some(PostgresExport::Failed { .. })));
     assert!(storage.list("").await.unwrap().is_empty());
 }
 
@@ -102,37 +55,13 @@ async fn with_unactivated_postgres<F: std::future::Future<Output = ()>>(
 }
 
 #[tokio::test]
-async fn normal_publication_requires_handoff_but_raw_postgres_recovery_stays_available() {
+async fn publication_requires_completed_postgres_enrollment() {
     with_unactivated_postgres(|pg| async move {
         let dir = tempfile::tempdir().unwrap();
         let storage = cloud::FsStorage::new(dir.path()).await.unwrap();
         PostgresDb::with_test_db(pg.clone(), async {
-            for selected in [None, Some("postgres")] {
-                let result = export_configured(
-                    |key| match key {
-                        "NAVIGATOR_ARCHIVE_SOURCE" => selected.map(str::to_owned),
-                        "NAVIGATOR_POSTGRES_HOST" => Some("127.0.0.1".into()),
-                        "NAVIGATOR_ARCHIVE_COVERAGE" => Some(
-                            serde_json::json!({
-                                "navigator": {"relations": []},
-                                "forgejo": {"relations": []}
-                            })
-                            .to_string(),
-                        ),
-                        _ => panic!("admission must precede archive credential lookup"),
-                    },
-                    &storage,
-                    None,
-                )
-                .await;
-                let Some(PostgresExport::Failed { error }) = result else {
-                    panic!("unenrolled PostgreSQL must not publish a scheduled generation");
-                };
-                assert_eq!(error, PostgresError::History.to_string());
-            }
             let result = export_configured(
                 |key| match key {
-                    "NAVIGATOR_ARCHIVE_SOURCE" => Some("all".into()),
                     "NAVIGATOR_POSTGRES_HOST" => Some("127.0.0.1".into()),
                     "NAVIGATOR_ARCHIVE_COVERAGE" => Some(
                         serde_json::json!({
@@ -141,19 +70,16 @@ async fn normal_publication_requires_handoff_but_raw_postgres_recovery_stays_ava
                         })
                         .to_string(),
                     ),
-                    _ => None,
+                    _ => panic!("admission must precede archive credential lookup"),
                 },
                 &storage,
                 None,
             )
             .await;
             let Some(PostgresExport::Failed { error }) = result else {
-                panic!("raw compatibility must still require archive credentials");
+                panic!("unenrolled PostgreSQL must not publish a generation");
             };
-            assert_eq!(
-                error,
-                "required archive setting NAVIGATOR_ARCHIVE_FORGEJO_USER is missing"
-            );
+            assert_eq!(error, PostgresError::History.to_string());
         })
         .await;
         assert!(storage.list("").await.unwrap().is_empty());

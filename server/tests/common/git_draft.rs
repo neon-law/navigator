@@ -623,7 +623,7 @@ pub async fn assert_notation_provenance(
 }
 
 pub async fn assert_unrelated_project_has_no_notations(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     project: uuid::Uuid,
 ) {
     assert!(store::notations::list_by_project(db, project)

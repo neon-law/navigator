@@ -20,10 +20,7 @@ roll by hand beside one.
 `NAVIGATOR_STAGING_DEPLOYMENT` is the staging row's directory name under `deployments/`. Export it before starting; if
 it is unset, ask.
 
-Follow [`docs/manual-roll.md`](../../../docs/manual-roll.md) with `ROW=$NAVIGATOR_STAGING_DEPLOYMENT` and
-`ROW_RESTATE_ENV=staging`. It carries the whole sequence, from sessions and grants through verification, rollback, and
-cleanup. Its offline plan renders local manifests only; it does not check live drift, cloud authentication, image
-availability, Secrets, assets, Restate, or public endpoints. What follows is specific to this row.
+Follow [the rollout guide](../../../docs/manual-roll.md) with `ROW=$NAVIGATOR_STAGING_DEPLOYMENT`.
 
 ## Why staging first
 
@@ -63,19 +60,10 @@ Two things that look like regressions are not:
 - **A brief load-balancer warning during the roll**, such as `endpoint count cannot be zero`, is the NEG swapping
   endpoints while pods replace, not a failure.
 
-`workflows-service` runs `maxSurge: 0`, so while the surge web pod comes up it can sit `Pending`. If the autoscaler
-reports `FailedScaleUp: GCE quota exceeded`, read the regional quota before anything else:
-
-```bash
-gcloud compute regions describe us-west4
-```
-
-The worker schedules once the old web pod finishes terminating, well inside `ops ship`'s rollout wait.
-
 Before rolling back, run the same verification against the tag that was running. If the symptom reproduces there, the
 tag is not the cause and a rollback will not fix it.
 
 ## Finishing
 
 Report which row is on which tag, what verified, and anything left outstanding, then remove the
-`$NAVIGATOR_STAGING_DEPLOYMENT` kubectl context as `docs/manual-roll.md` step 10 describes.
+`$NAVIGATOR_STAGING_DEPLOYMENT` kubectl context as `docs/manual-roll.md` step 9 describes.

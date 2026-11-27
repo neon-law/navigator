@@ -190,7 +190,7 @@ pub async fn status(
     let Some(call) = InboundCall::from_params(&params, call_status) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let Ok(saved) = ingest_call(&state.surreal, &resolved, &call).await else {
+    let Ok(saved) = ingest_call(&state.application_store, &resolved, &call).await else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     // Billing rides only the completed event: the tenths are a function of
@@ -223,7 +223,7 @@ pub async fn status(
 }
 
 async fn ingest_call(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     resolved: &crate::twilio_resolution::ResolvedTwilioWebhook,
     call: &InboundCall,
 ) -> Result<store::inbox::IngestedInbound, String> {
@@ -277,7 +277,7 @@ async fn record_billing(
         .with_timezone(&chrono::Utc);
     store::billed_calls::record_for_conversation(
         pg,
-        &state.surreal,
+        &state.application_store,
         &store::billed_calls::NewBilledCall {
             call_sid: call.call_sid.clone(),
             conversation_id,
@@ -457,7 +457,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let number = "+15551234444";
             let (state, firm) =
                 registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
@@ -544,7 +544,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let number = "+15551234444";
             let (state, _) =
                 registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
@@ -640,7 +640,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let number = "+15551234444";
             let (state, firm) =
                 registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
@@ -717,7 +717,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let (state, _) =
                 registry_state(&db, &pg, "neon", "+15551234444", &token, "www.neonlaw.com").await;
             let owner = store::persons::create(
@@ -759,7 +759,7 @@ mod tests {
     async fn an_unconfigured_lane_is_off_and_an_unsigned_callback_is_denied() {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let unconfigured = crate::test_support::app_state(db.clone()).await;
             let fields = params(&[
                 ("CallSid", "CA1"),

@@ -37,21 +37,17 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::types::{Datetime, RecordId, SurrealValue};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::accounting as authority;
-use crate::surreal::retry::writing;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
-
-pub(crate) const TABLE: &str = "finance_aggregate";
 
 /// The `source` the portal requires on a workflow-produced report.
 pub const REPORT_SOURCE: &str = "workflow";
 
 /// The three whole-number percentages a run used.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, SurrealValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Parameters {
     /// Overhead off the top of collected fees.
     pub overhead_pct: i64,
@@ -402,23 +398,11 @@ pub fn report_key(project_code: &str, run_id: &str) -> String {
 /// Errors reading or writing the aggregate table.
 #[derive(Debug, Error)]
 pub enum FinanceAggregateError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error("report document: {0}")]
     Json(#[from] serde_json::Error),
     /// PostgreSQL, under the accounting authority, failed.
     #[error(transparent)]
     Postgres(#[from] crate::postgres::accounting::AccountingAuthorityError),
-}
-
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct Row {
-    project_id: RecordId,
-    run_id: String,
-    computed_at: Datetime,
-    parameters: Parameters,
-    report_json: String,
 }
 
 /// The aggregate row as PostgreSQL's `to_jsonb` serves it. The report's own
@@ -435,47 +419,28 @@ struct PgAggregateRow {
 ///
 /// [`FinanceAggregateError`] when serialising or the write fails.
 pub async fn upsert(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     report: &FinanceReport,
 ) -> Result<(), FinanceAggregateError> {
     let report_json = serde_json::to_string(report)?;
-    if let Some(pg) = authority::authority().await? {
-        let row = serde_json::json!({
-            "id": report.run_id, "project_id": project_id, "run_id": report.run_id,
-            "computed_at": report.computed_at, "parameters": report.parameters,
-            "report_json": report_json,
-        });
-        let query = sqlx::query(
-            "INSERT INTO finance_aggregate SELECT * FROM \
-             jsonb_populate_record(NULL::finance_aggregate, \
-             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-             ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, \
-             run_id = EXCLUDED.run_id, computed_at = EXCLUDED.computed_at, \
-             parameters = EXCLUDED.parameters, report_json = EXCLUDED.report_json, \
-             updated_at = now()",
-        )
-        .bind(row);
-        authority::execute(&pg, query).await?;
-        return Ok(());
-    }
-    writing(|| {
-        db.query(
-            "UPSERT $id SET project_id = $project_id, run_id = $run_id, \
-             computed_at = $computed_at, parameters = $parameters, report_json = $report_json, \
-             updated_at = time::now()",
-        )
-        .bind(("id", RecordId::new(TABLE, report.run_id.clone())))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("run_id", report.run_id.clone()))
-        .bind(("computed_at", Datetime::from(report.computed_at)))
-        .bind(("parameters", report.parameters))
-        .bind(("report_json", report_json.clone()))
-    })
-    .await?;
+    let pg = authority::authority().await?;
+    let row = serde_json::json!({
+        "id": report.run_id, "project_id": project_id, "run_id": report.run_id,
+        "computed_at": report.computed_at, "parameters": report.parameters,
+        "report_json": report_json,
+    });
+    let query = sqlx::query(
+        "INSERT INTO finance_aggregate SELECT * FROM \
+         jsonb_populate_record(NULL::finance_aggregate, \
+         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+         ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, \
+         run_id = EXCLUDED.run_id, computed_at = EXCLUDED.computed_at, \
+         parameters = EXCLUDED.parameters, report_json = EXCLUDED.report_json, \
+         updated_at = now()",
+    )
+    .bind(row);
+    authority::execute(&pg, query).await?;
     Ok(())
 }
 
@@ -485,36 +450,17 @@ pub async fn upsert(
 ///
 /// [`FinanceAggregateError`] when the read or the stored document fails.
 pub async fn latest_for_project(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Option<FinanceReport>, FinanceAggregateError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(finance_aggregate) AS row FROM finance_aggregate \
-             WHERE project_id = $1 ORDER BY computed_at DESC, run_id DESC LIMIT 1",
-        )
-        .bind(project_id);
-        let row = authority::maybe::<PgAggregateRow>(&pg, query).await?;
-        return row
-            .map(|row| serde_json::from_str(&row.report_json).map_err(Into::into))
-            .transpose();
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT project_id, run_id, computed_at, parameters, report_json FROM {TABLE} \
-             WHERE project_id = $project_id ORDER BY computed_at DESC, run_id DESC LIMIT 1"
-        ))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<Row> = response.take(0)?;
-    rows.into_iter()
-        .next()
-        .filter(|row| record_uuid(&row.project_id) == Some(project_id))
-        .map(|row| serde_json::from_str(&row.report_json).map_err(Into::into))
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(finance_aggregate) AS row FROM finance_aggregate \
+         WHERE project_id = $1 ORDER BY computed_at DESC, run_id DESC LIMIT 1",
+    )
+    .bind(project_id);
+    let row = authority::maybe::<PgAggregateRow>(&pg, query).await?;
+    row.map(|row| serde_json::from_str(&row.report_json).map_err(Into::into))
         .transpose()
 }
 
@@ -692,55 +638,5 @@ mod tests {
             report_key("sample-finance", "run-1"),
             "finance/sample-finance/run-1.json"
         );
-    }
-
-    async fn db_and_project() -> (SurrealDb, Uuid) {
-        let db = crate::test_support::mem_surreal().await;
-        let project = crate::test_support::seed_project_surreal(&db, "Finance Sample").await;
-        (db, project)
-    }
-
-    fn report(run_id: &str, minute: u32) -> FinanceReport {
-        let when = Utc.with_ymd_and_hms(2026, 10, 1, 12, minute, 0).unwrap();
-        aggregate(&fixture(), Parameters::default(), run_id, when).unwrap()
-    }
-
-    #[tokio::test]
-    async fn latest_is_none_before_any_run() {
-        let (db, project) = db_and_project().await;
-        assert!(latest_for_project(&db, project).await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn latest_returns_the_newest_run_for_that_project_only() {
-        let (db, project) = db_and_project().await;
-        let other = crate::test_support::seed_project_surreal(&db, "Other Sample").await;
-        upsert(&db, project, &report("run-a", 0)).await.unwrap();
-        upsert(&db, project, &report("run-b", 5)).await.unwrap();
-        upsert(&db, other, &report("run-c", 30)).await.unwrap();
-        let latest = latest_for_project(&db, project).await.unwrap().unwrap();
-        assert_eq!(latest.run_id, "run-b");
-        assert_eq!(latest, report("run-b", 5));
-        assert_eq!(
-            latest_for_project(&db, other)
-                .await
-                .unwrap()
-                .unwrap()
-                .run_id,
-            "run-c"
-        );
-    }
-
-    #[tokio::test]
-    async fn replaying_a_run_rewrites_its_own_row() {
-        let (db, project) = db_and_project().await;
-        upsert(&db, project, &report("run-a", 0)).await.unwrap();
-        upsert(&db, project, &report("run-a", 0)).await.unwrap();
-        let mut count = db
-            .query(format!("SELECT count() FROM {TABLE} GROUP ALL"))
-            .await
-            .unwrap();
-        let rows: Vec<serde_json::Value> = count.take(0).unwrap();
-        assert_eq!(rows[0]["count"], 1);
     }
 }

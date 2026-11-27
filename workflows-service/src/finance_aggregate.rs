@@ -35,8 +35,8 @@ use chrono::Utc;
 use cloud::{StorageError, StorageService};
 
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::finance_aggregate::{self, FinanceInput, Parameters};
-use store::surreal::SurrealDb;
 
 use uuid::Uuid;
 
@@ -111,7 +111,7 @@ pub fn compute(
 /// A retryable error when either write fails.
 pub async fn persist(
     storage: &dyn StorageService,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     key: &str,
     report: &finance_aggregate::FinanceReport,
@@ -122,7 +122,7 @@ pub async fn persist(
         .put(key, &bytes, "application/json")
         .await
         .map_err(WorkflowStepError::retryable)?;
-    finance_aggregate::upsert(surreal, project_id, report)
+    finance_aggregate::upsert(application_store, project_id, report)
         .await
         .map_err(WorkflowStepError::retryable)?;
     Ok(())
@@ -223,31 +223,6 @@ mod tests {
             shown.contains("Terminal") && shown.contains("rejected"),
             "{shown}"
         );
-    }
-
-    #[tokio::test]
-    async fn persist_writes_the_object_and_the_row_and_is_replayable() {
-        let (_dir, fs) = storage().await;
-        let surreal = store::test_support::mem_surreal().await;
-        let project = store::test_support::seed_project_surreal(&surreal, "Finance Sample").await;
-        let input: FinanceInput = serde_json::from_str(INPUT).unwrap();
-        let report = compute(&input, Parameters::default(), "run-1").unwrap();
-        let key = finance_aggregate::report_key("sample-finance", "run-1");
-
-        for _ in 0..2 {
-            persist(&fs, &surreal, project, &key, &report)
-                .await
-                .unwrap();
-        }
-
-        let object = fs.get(&key).await.unwrap();
-        let stored: finance_aggregate::FinanceReport =
-            serde_json::from_slice(&object.bytes).unwrap();
-        assert_eq!(stored, report);
-        let row = finance_aggregate::latest_for_project(&surreal, project)
-            .await
-            .unwrap();
-        assert_eq!(row, Some(report));
     }
 
     #[test]

@@ -15,17 +15,14 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::cases as authority;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// Errors from the filings commands.
 #[derive(Debug, thiserror::Error)]
 pub enum FilingError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// PostgreSQL, under the litigation authority, failed.
     #[error(transparent)]
     Postgres(#[from] authority::CasesAuthorityError),
@@ -36,9 +33,6 @@ pub enum FilingError {
     #[error("writing a filing returned no usable row")]
     WriteReturnedNothing,
 }
-
-/// The table these rows live in.
-const TABLE: &str = "filing";
 
 /// One durable filing record.
 ///
@@ -62,20 +56,6 @@ pub struct Filing {
     pub submitted_at: String,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct FilingRow {
-    id: surrealdb::types::RecordId,
-    notation_id: surrealdb::types::RecordId,
-    kind: String,
-    office: String,
-    reference: Option<String>,
-    summary: String,
-    submitted_at: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
 }
 
 /// The row as PostgreSQL's `to_jsonb` serves it, under the `postgres::cases`
@@ -110,29 +90,6 @@ impl From<PgFilingRow> for Filing {
     }
 }
 
-impl FilingRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_filing(self) -> Option<Filing> {
-        Some(Filing {
-            id: record_uuid(&self.id)?,
-            notation_id: record_uuid(&self.notation_id)?,
-            kind: self.kind,
-            office: self.office,
-            reference: self.reference,
-            summary: self.summary,
-            submitted_at: self.submitted_at,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`FilingRow`] from only one query.
-const SELECT: &str =
-    "id, notation_id, kind, office, reference, summary, submitted_at, inserted_at, updated_at";
-
 /// What to record for one submission. `submitted_at` is stamped by the
 /// caller (the worker stamps it inside the journaled step so a replay
 /// reuses the same timestamp).
@@ -152,51 +109,28 @@ pub struct NewFiling<'a> {
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn record(db: &SurrealDb, new: &NewFiling<'_>) -> Result<Uuid, FilingError> {
-    if let Some(pg) = authority::authority().await? {
-        let submitted_at = DateTime::parse_from_rfc3339(new.submitted_at)
-            .map_err(|_| FilingError::SubmittedAt(new.submitted_at.to_string()))?
-            .with_timezone(&Utc);
-        let row = serde_json::json!({
-            "id": Uuid::now_v7(), "notation_id": new.notation_id,
-            "kind": new.kind, "office": new.office,
-            "reference": new.reference, "summary": new.summary,
-            "submitted_at": submitted_at,
-        });
-        let query = sqlx::query(
-            "INSERT INTO filing SELECT * FROM \
-             jsonb_populate_record(NULL::filing, \
-             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-             RETURNING filing.id",
-        )
-        .bind(row);
-        let id: Uuid = authority::maybe_scalar(&pg, query)
-            .await?
-            .ok_or(FilingError::WriteReturnedNothing)?;
-        return Ok(id);
-    }
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             notation_id = $notation_id, kind = $kind, office = $office, \
-             reference = $reference, summary = $summary, submitted_at = $submitted_at \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "notation_id",
-            record_id(crate::notations::TABLE, new.notation_id),
-        ))
-        .bind(("kind", new.kind.to_string()))
-        .bind(("office", new.office.to_string()))
-        .bind(("reference", new.reference.map(str::to_string)))
-        .bind(("summary", new.summary.to_string()))
-        .bind(("submitted_at", new.submitted_at.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<FilingRow> = response.take(0)?;
-    Ok(row.and_then(FilingRow::into_filing).map_or(id, |f| f.id))
+pub async fn record(_db: &ApplicationStore, new: &NewFiling<'_>) -> Result<Uuid, FilingError> {
+    let pg = authority::authority().await?;
+    let submitted_at = DateTime::parse_from_rfc3339(new.submitted_at)
+        .map_err(|_| FilingError::SubmittedAt(new.submitted_at.to_string()))?
+        .with_timezone(&Utc);
+    let row = serde_json::json!({
+        "id": Uuid::now_v7(), "notation_id": new.notation_id,
+        "kind": new.kind, "office": new.office,
+        "reference": new.reference, "summary": new.summary,
+        "submitted_at": submitted_at,
+    });
+    let query = sqlx::query(
+        "INSERT INTO filing SELECT * FROM \
+         jsonb_populate_record(NULL::filing, \
+         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+         RETURNING filing.id",
+    )
+    .bind(row);
+    let id: Uuid = authority::maybe_scalar(&pg, query)
+        .await?
+        .ok_or(FilingError::WriteReturnedNothing)?;
+    Ok(id)
 }
 
 /// All filings recorded for a notation, oldest first.
@@ -204,62 +138,22 @@ pub async fn record(db: &SurrealDb, new: &NewFiling<'_>) -> Result<Uuid, FilingE
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn for_notation(db: &SurrealDb, notation_id: Uuid) -> Result<Vec<Filing>, FilingError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(filing) AS row FROM filing \
-             WHERE notation_id = $1 ORDER BY id ASC",
-        )
-        .bind(notation_id);
-        return Ok(authority::rows::<PgFilingRow>(&pg, query)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect());
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation ORDER BY id ASC"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<FilingRow> = response.take(0)?;
-    Ok(rows
+pub async fn for_notation(
+    _db: &ApplicationStore,
+    notation_id: Uuid,
+) -> Result<Vec<Filing>, FilingError> {
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(filing) AS row FROM filing \
+         WHERE notation_id = $1 ORDER BY id ASC",
+    )
+    .bind(notation_id);
+    Ok(authority::rows::<PgFilingRow>(&pg, query)
+        .await?
         .into_iter()
-        .filter_map(FilingRow::into_filing)
+        .map(Into::into)
         .collect())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{for_notation, record, NewFiling};
-    use crate::surreal::test_support::mem;
-    use crate::test_support::seed_notation;
-
-    #[tokio::test]
-    async fn record_inserts_a_filing_row_readable_by_notation() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-        let id = record(
-            &surreal,
-            &NewFiling {
-                notation_id,
-                kind: "mailroom_send",
-                office: "Nevada Secretary of State",
-                summary: "Annual report mailed",
-                reference: None,
-                submitted_at: "2026-06-01T00:00:00Z",
-            },
-        )
-        .await
-        .unwrap();
-
-        let rows = for_notation(&surreal, notation_id).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, id);
-        assert_eq!(rows[0].kind, "mailroom_send");
-        assert_eq!(rows[0].office, "Nevada Secretary of State");
-        assert!(rows[0].reference.is_none());
-    }
-}
+mod tests {}

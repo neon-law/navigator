@@ -27,8 +27,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use store::application_store::ApplicationStore;
 use store::sandbox_usage::{self, MeterDecision, SandboxUsage, SandboxUsageError};
-use store::surreal::SurrealDb;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -69,16 +69,16 @@ pub trait UsageLedger: Send + Sync {
 
 /// The production [`UsageLedger`]: every read and write lands in
 /// `store::sandbox_usage`, the table whose single conditional `UPDATE`
-/// is the concurrency boundary. Cloneable — `SurrealDb` is a handle.
+/// is the concurrency boundary. Cloneable — `ApplicationStore` is a handle.
 #[derive(Clone)]
 pub struct StoreLedger {
-    db: SurrealDb,
+    db: ApplicationStore,
 }
 
 impl StoreLedger {
     /// Wrap a store handle.
     #[must_use]
-    pub fn new(db: SurrealDb) -> Self {
+    pub fn new(db: ApplicationStore) -> Self {
         Self { db }
     }
 }

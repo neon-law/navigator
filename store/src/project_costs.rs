@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, Transaction};
 use uuid::Uuid;
 
-use crate::{postgres::PostgresDb, surreal::SurrealDb};
+use crate::{application_store::ApplicationStore, postgres::PostgresDb};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectCostError {
@@ -29,8 +29,6 @@ pub enum ProjectCostError {
     Invoice(#[from] Box<crate::xero_invoices::XeroInvoiceError>),
     #[error("PostgreSQL is unavailable")]
     Postgres(#[from] crate::postgres::PostgresError),
-    #[error("Project cost parent could not be mirrored to PostgreSQL")]
-    Mirror(#[from] crate::postgres_mirror::MirrorError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,17 +218,17 @@ pub fn draft_mercury_cost(
 
 /// Add one Project cost. A repeated identical request returns its original id.
 pub async fn create(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     project_id: Uuid,
     actor_id: Uuid,
     input: &NewProjectCost,
 ) -> Result<ProjectCost, ProjectCostError> {
     validate(input)?;
-    let project = crate::projects::find_by_id(surreal, project_id)
+    crate::projects::find_by_id(application_store, project_id)
         .await?
         .ok_or(ProjectCostError::Invalid("Project not found"))?;
-    let asset = crate::assets::find_by_id(surreal, input.receipt_document_id)
+    let asset = crate::assets::find_by_id(application_store, input.receipt_document_id)
         .await?
         .ok_or(ProjectCostError::Invalid("receipt Document not found"))?;
     if asset.project_id != Some(project_id)
@@ -241,28 +239,6 @@ pub async fn create(
         return Err(ProjectCostError::Invalid(
             "receipt must be a live Document on this Project",
         ));
-    }
-    if let Some(firm_id) = project.firm_id {
-        crate::postgres_mirror::mirror(
-            surreal,
-            pg,
-            &crate::postgres_mirror::MirrorKey::Firm(firm_id),
-        )
-        .await?;
-    }
-    if let Some(jurisdiction_id) = project.jurisdiction_id {
-        crate::postgres_mirror::mirror(
-            surreal,
-            pg,
-            &crate::postgres_mirror::MirrorKey::Jurisdiction(jurisdiction_id),
-        )
-        .await?;
-    }
-    for key in [
-        crate::postgres_mirror::MirrorKey::Project(project_id),
-        crate::postgres_mirror::MirrorKey::Person(actor_id),
-    ] {
-        crate::postgres_mirror::mirror(surreal, pg, &key).await?;
     }
     create_postgres(pg, project_id, actor_id, input).await
 }
@@ -353,7 +329,7 @@ pub async fn confirm_amount(
 
 /// Link the cost to a later invoice already present in the Xero mirror.
 pub async fn link_invoice(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     id: Uuid,
     actor_id: Uuid,
@@ -363,7 +339,7 @@ pub async fn link_invoice(
     let mut tx = pg.0.begin().await?;
     let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1 FOR UPDATE")
         .bind(id).fetch_optional(&mut *tx).await?.as_ref().map(from_row).transpose()?.ok_or(ProjectCostError::NotFound)?;
-    let invoice = crate::xero_invoices::find_for_allocation(surreal, invoice_id)
+    let invoice = crate::xero_invoices::find_for_allocation(application_store, invoice_id)
         .await
         .map_err(Box::new)?
         .ok_or(ProjectCostError::Invalid("Xero invoice not found"))?;
@@ -573,14 +549,16 @@ pub async fn list_events(
 
 /// Client lens: keep a cost visible only while its receipt Document is live and client-visible.
 pub async fn list_client_visible(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     project_id: Uuid,
 ) -> Result<Vec<ProjectCost>, ProjectCostError> {
     let rows = list_for_project(pg, project_id).await?;
     let mut visible = Vec::new();
     for row in rows {
-        if let Some(asset) = crate::assets::find_by_id(surreal, row.receipt_document_id).await? {
+        if let Some(asset) =
+            crate::assets::find_by_id(application_store, row.receipt_document_id).await?
+        {
             if asset.project_id == Some(project_id)
                 && asset.kind.is_some()
                 && asset.visibility == crate::documents::visibility::CLIENT

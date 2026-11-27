@@ -20,11 +20,11 @@ use store::documents::{self, IngestArgs, IngestedDocument};
 /// # Errors
 /// Returns the durable object-storage or database failure.
 pub async fn record_document(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     _author: Author<'_>,
     args: &IngestArgs<'_>,
     bytes: &[u8],
 ) -> Result<IngestedDocument, documents::IngestError> {
-    documents::ingest_bytes(surreal, storage, args, bytes).await
+    documents::ingest_bytes(application_store, storage, args, bytes).await
 }

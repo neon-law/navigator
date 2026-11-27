@@ -4,10 +4,10 @@
 use billing::stripe::{StripeInvoiceClient, Subscription, SubscriptionCheckout};
 use billing::BillingError;
 use chrono::{DateTime, TimeDelta, Utc};
+use store::application_store::ApplicationStore;
 use store::firm_secrets::{IntegrationProvider, IntegrationSecretKind, ResolvedCredential};
 use store::postgres::PostgresDb;
 use store::purchases::{self, Purchase, StripeAdmission, StripeObservation};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 fn refused() -> BillingError {
@@ -23,10 +23,13 @@ pub(crate) fn enabled() -> bool {
         && store::firm_secrets::stripe_billing_enabled(IntegrationSecretKind::StripeOperatingAppKey)
 }
 
-async fn credential(surreal: &SurrealDb, firm: Uuid) -> Result<ResolvedCredential, BillingError> {
+async fn credential(
+    application_store: &ApplicationStore,
+    firm: Uuid,
+) -> Result<ResolvedCredential, BillingError> {
     let kms = crate::integrations::runtime_kms_from_env().await;
     store::firm_secrets::resolve_firm_credential(
-        surreal,
+        application_store,
         firm,
         IntegrationProvider::Stripe,
         IntegrationSecretKind::StripeOperatingAppKey,
@@ -44,8 +47,8 @@ fn client(key: &ResolvedCredential) -> Result<StripeInvoiceClient<'_>, BillingEr
     )
 }
 
-async fn current_firm(surreal: &SurrealDb) -> Result<Uuid, BillingError> {
-    store::firms::firm_id_for_brand_key(surreal, views::brand::brand_key().as_str())
+async fn current_firm(application_store: &ApplicationStore) -> Result<Uuid, BillingError> {
+    store::firms::firm_id_for_brand_key(application_store, views::brand::brand_key().as_str())
         .await
         .map_err(|_| refused())?
         .ok_or_else(refused)
@@ -72,7 +75,7 @@ fn conflicts_with_checkout(purchase: &Purchase, now: DateTime<Utc>) -> bool {
 }
 
 pub(crate) async fn checkout(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     new: &purchases::NewPurchase,
     terms: &str,
@@ -80,8 +83,8 @@ pub(crate) async fn checkout(
     if !enabled() {
         return Err(refused());
     }
-    let firm = current_firm(surreal).await?;
-    let key = credential(surreal, firm).await?;
+    let firm = current_firm(application_store).await?;
+    let key = credential(application_store, firm).await?;
     let stripe = client(&key)?;
     let account = stripe.account_id().await?;
     let now = Utc::now();
@@ -206,12 +209,12 @@ fn confirmed_checkout<'a>(
 }
 
 pub(crate) async fn sync(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     purchase: &Purchase,
 ) -> Result<Purchase, BillingError> {
     let binding = purchase.stripe.as_ref().ok_or_else(refused)?;
-    let key = credential(surreal, binding.firm_id).await?;
+    let key = credential(application_store, binding.firm_id).await?;
     let stripe = client(&key)?;
     if stripe.account_id().await? != binding.account_id {
         return Err(refused());
@@ -265,15 +268,15 @@ fn cancellation_observation<'a>(
 }
 
 pub(crate) async fn cancel(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     purchase: &Purchase,
 ) -> Result<(), BillingError> {
     let binding = purchase.stripe.as_ref().ok_or_else(refused)?;
-    if current_firm(surreal).await? != binding.firm_id {
+    if current_firm(application_store).await? != binding.firm_id {
         return Err(refused());
     }
-    let key = credential(surreal, binding.firm_id).await?;
+    let key = credential(application_store, binding.firm_id).await?;
     let stripe = client(&key)?;
     if stripe.account_id().await? != binding.account_id {
         return Err(refused());

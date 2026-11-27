@@ -33,13 +33,13 @@ async fn configured_authority_fails_closed_when_postgres_is_unavailable() {
 
     // Applying the schema reads the Firm anchor, which this configuration
     // refuses too; the accessors below are refused before any query.
-    let surreal = crate::surreal::SurrealDb::uninitialized();
+    let application_store = crate::application_store::ApplicationStore::uninitialized();
     assert!(matches!(
-        crate::persons::find_by_id(&surreal, Uuid::nil()).await,
+        crate::persons::find_by_id(&application_store, Uuid::nil()).await,
         Err(PersonError::Postgres(_))
     ));
     assert!(matches!(
-        crate::addresses::list_all(&surreal).await,
+        crate::addresses::list_all(&application_store).await,
         Err(crate::addresses::AddressError::Authority(
             crate::postgres::identity::AuthorityError::Unavailable(_)
         ))
@@ -52,17 +52,17 @@ async fn configured_authority_fails_closed_when_postgres_is_unavailable() {
     reason = "one scenario drives every PostgreSQL People helper and its guard rails"
 )]
 async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
-    let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+    let Some((options, database)) = crate::postgres::fixtures::fresh_schema().await else {
         return;
     };
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     crate::postgres::fixtures::activate_application(&pg).await;
     Box::pin(PostgresDb::with_test_db(pg.clone(), async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
 
         let owner = super::create(
             &pg,
-            &surreal,
+            &application_store,
             &NewPerson::new(
                 "Helper Owner",
                 format!("helper-owner-{}@example.test", Uuid::now_v7()),
@@ -72,7 +72,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
         .unwrap();
         let lawyer = super::create(
             &pg,
-            &surreal,
+            &application_store,
             &NewPerson::new(
                 "Helper Lawyer",
                 format!("helper-lawyer-{}@example.test", Uuid::now_v7()),
@@ -82,7 +82,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
         .unwrap();
         let client = super::create(
             &pg,
-            &surreal,
+            &application_store,
             &NewPerson::new(
                 "Helper Client",
                 format!("helper-client-{}@example.test", Uuid::now_v7()),
@@ -91,23 +91,35 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
         .await
         .unwrap();
         assert_eq!(client.role, Role::Client);
-        super::set_role(&pg, &surreal, owner.id, Role::Owner)
+        super::set_role(&pg, &application_store, owner.id, Role::Owner)
             .await
             .unwrap()
             .unwrap();
-        super::set_role(&pg, &surreal, lawyer.id, Role::Lawyer)
+        super::set_role(&pg, &application_store, lawyer.id, Role::Lawyer)
             .await
             .unwrap()
             .unwrap();
         // The client keeps the default role; give the owner and lawyer phones.
-        super::set_text(&pg, &surreal, owner.id, "phone", Some("+15555550001"))
-            .await
-            .unwrap()
-            .unwrap();
-        super::set_text(&pg, &surreal, lawyer.id, "phone", Some("+15555550002"))
-            .await
-            .unwrap()
-            .unwrap();
+        super::set_text(
+            &pg,
+            &application_store,
+            owner.id,
+            "phone",
+            Some("+15555550001"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        super::set_text(
+            &pg,
+            &application_store,
+            lawyer.id,
+            "phone",
+            Some("+15555550002"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
 
         // Reads: case-insensitive email, subject lookup, id batch, phone filter,
         // and role filter all agree with what was written.
@@ -122,7 +134,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
             .is_none());
         super::link_subject(
             &pg,
-            &surreal,
+            &application_store,
             owner.id,
             "oidc_subject",
             "helper-owner-subject",
@@ -171,21 +183,28 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
 
         // Guard rails: unsupported columns and subjects are refused, not written.
         assert!(
-            super::set_text(&pg, &surreal, owner.id, "name", Some("Nope"))
+            super::set_text(&pg, &application_store, owner.id, "name", Some("Nope"))
                 .await
                 .is_err()
         );
-        assert!(super::set_flag(&pg, &surreal, owner.id, "bogus_flag", true)
-            .await
-            .is_err());
         assert!(
-            super::link_subject(&pg, &surreal, owner.id, "bogus_subject", "x", false)
+            super::set_flag(&pg, &application_store, owner.id, "bogus_flag", true)
                 .await
                 .is_err()
         );
+        assert!(super::link_subject(
+            &pg,
+            &application_store,
+            owner.id,
+            "bogus_subject",
+            "x",
+            false
+        )
+        .await
+        .is_err());
 
         // Flag, contact, and edit writes move the authoritative row and project.
-        let flagged = super::set_flag(&pg, &surreal, owner.id, "email_confirmed", true)
+        let flagged = super::set_flag(&pg, &application_store, owner.id, "email_confirmed", true)
             .await
             .unwrap()
             .unwrap();
@@ -198,7 +217,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
                 .email_confirmed
         );
         assert!(
-            crate::persons::find_by_id(&surreal, owner.id)
+            crate::persons::find_by_id(&application_store, owner.id)
                 .await
                 .unwrap()
                 .unwrap()
@@ -206,7 +225,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
         );
         let contacted = super::update_contact(
             &pg,
-            &surreal,
+            &application_store,
             lawyer.id,
             &crate::persons::ContactUpdate {
                 name: "Helper Lawyer Renamed".into(),
@@ -221,7 +240,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
         assert_eq!(contacted.title.as_deref(), Some("Senior Partner"));
         let edited = super::edit(
             &pg,
-            &surreal,
+            &application_store,
             lawyer.id,
             &PersonEdit {
                 given_name: Some(Some("Helper".into())),
@@ -240,7 +259,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
         // column and clears the legacy claim in the same statement.
         let adopted = super::link_subject(
             &pg,
-            &surreal,
+            &application_store,
             owner.id,
             "microsoft_subject",
             "helper-owner-subject",
@@ -258,7 +277,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
         // find_or_create is a no-op on an existing email and creates otherwise.
         let found = super::find_or_create(
             &pg,
-            &surreal,
+            &application_store,
             &NewPerson::new("Helper Owner Again", &owner.email),
         )
         .await
@@ -266,7 +285,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
         assert_eq!(found.id, owner.id);
         let created_again = super::find_or_create(
             &pg,
-            &surreal,
+            &application_store,
             &NewPerson::new(
                 "Helper Second",
                 format!("helper-second-{}@example.test", Uuid::now_v7()),
@@ -277,7 +296,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
         assert_ne!(created_again.id, owner.id);
 
         // Delete removes the row and its mailbox claim; the projection runs.
-        super::delete(&pg, &surreal, created_again.id)
+        super::delete(&pg, &application_store, created_again.id)
             .await
             .unwrap();
         assert!(super::by_id(&pg, created_again.id).await.unwrap().is_none());
@@ -294,21 +313,21 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
 
 #[tokio::test]
 async fn directory_views_join_firm_names_and_scope_to_visible_people() {
-    let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+    let Some((options, database)) = crate::postgres::fixtures::fresh_schema().await else {
         return;
     };
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     crate::postgres::fixtures::activate_application(&pg).await;
     PostgresDb::with_test_db(pg.clone(), async {
-    let surreal = crate::surreal::SurrealDb::uninitialized();
+    let application_store = crate::application_store::ApplicationStore::uninitialized();
     let person = |name: &str| NewPerson::new(name, format!("{}@example.test", Uuid::now_v7()));
-    let member = super::create(&pg, &surreal, &person("Directory Member"))
+    let member = super::create(&pg, &application_store, &person("Directory Member"))
         .await
         .unwrap();
-    let participant = super::create(&pg, &surreal, &person("Directory Participant"))
+    let participant = super::create(&pg, &application_store, &person("Directory Participant"))
         .await
         .unwrap();
-    let stranger = super::create(&pg, &surreal, &person("Directory Stranger"))
+    let stranger = super::create(&pg, &application_store, &person("Directory Stranger"))
         .await
         .unwrap();
 
@@ -371,19 +390,23 @@ async fn directory_views_join_firm_names_and_scope_to_visible_people() {
 /// repeat — through tied names, under each sort direction.
 #[tokio::test]
 async fn directory_pages_walk_every_row_once_in_both_directions() {
-    let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+    let Some((options, database)) = crate::postgres::fixtures::fresh_schema().await else {
         return;
     };
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     crate::postgres::fixtures::activate_application(&pg).await;
     PostgresDb::with_test_db(pg.clone(), async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
         let mut created = Vec::new();
         for name in [
             "Row 1", "Row 2", "Row 2", "Row 2", "Row 3", "Row 4", "Row 5",
         ] {
             let input = NewPerson::new(name, format!("{}@example.test", Uuid::now_v7()));
-            created.push(super::create(&pg, &surreal, &input).await.unwrap());
+            created.push(
+                super::create(&pg, &application_store, &input)
+                    .await
+                    .unwrap(),
+            );
         }
         for sort in ["name", "-name", "email", "name,-email"] {
             let parse = |query: String| {
@@ -434,17 +457,21 @@ async fn directory_pages_walk_every_row_once_in_both_directions() {
 
 #[tokio::test]
 async fn email_is_citext_matching_any_case_and_keeping_the_entered_casing() {
-    let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+    let Some((options, database)) = crate::postgres::fixtures::fresh_schema().await else {
         return;
     };
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     crate::postgres::fixtures::activate_application(&pg).await;
     PostgresDb::with_test_db(pg.clone(), async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
         let entered = format!("Cased.Person-{}@Example.test", Uuid::now_v7());
-        let person = super::create(&pg, &surreal, &NewPerson::new("Cased Person", &entered))
-            .await
-            .unwrap();
+        let person = super::create(
+            &pg,
+            &application_store,
+            &NewPerson::new("Cased Person", &entered),
+        )
+        .await
+        .unwrap();
         assert_eq!(person.email, entered);
 
         // A lookup in any case finds the row and returns the casing entered.
@@ -466,7 +493,7 @@ async fn email_is_citext_matching_any_case_and_keeping_the_entered_casing() {
         assert!(matches!(
             super::create(
                 &pg,
-                &surreal,
+                &application_store,
                 &NewPerson::new("Variant", entered.to_uppercase())
             )
             .await,
@@ -477,7 +504,7 @@ async fn email_is_citext_matching_any_case_and_keeping_the_entered_casing() {
         let recased = entered.to_lowercase();
         let edited = super::edit(
             &pg,
-            &surreal,
+            &application_store,
             person.id,
             &PersonEdit {
                 email: Some(recased.clone()),

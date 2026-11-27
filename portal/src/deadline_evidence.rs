@@ -17,7 +17,7 @@ use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use model::deadline_proposals::{Draft, Evidence, Proposal, Role};
 use serde::Deserialize;
 use store::deadline_proposals::{SourceReceipt, VerifiedForgejo};
-use store::{assets::Asset, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, assets::Asset};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -71,13 +71,19 @@ pub(crate) async fn forgejo_source(
     let saved = receipt.forgejo.ok_or(ApiError::NotFound)?;
     let forge = state
         .integration_providers
-        .forgejo(&state.surreal, project)
+        .forgejo(&state.application_store, project)
         .await
         .map_err(|_| forge_error(store::court_date_forgejo::Error::Unavailable))?;
-    let url =
-        store::court_date_forgejo::reopen(&state.surreal, project, &source, &asset, &saved, &forge)
-            .await
-            .map_err(forge_error)?;
+    let url = store::court_date_forgejo::reopen(
+        &state.application_store,
+        project,
+        &source,
+        &asset,
+        &saved,
+        &forge,
+    )
+    .await
+    .map_err(forge_error)?;
     Ok((
         [
             (header::CACHE_CONTROL, "private, no-store"),
@@ -116,7 +122,7 @@ async fn recorded_source(
             .await
             .map_err(crate::court_dates_api::map_error)?
             .ok_or(ApiError::NotFound)?;
-    let asset = store::assets::find_by_id(&state.surreal, receipt.asset_id)
+    let asset = store::assets::find_by_id(&state.application_store, receipt.asset_id)
         .await
         .map_err(|_| ApiError::Db("could not read archived source".into()))?
         .ok_or(ApiError::NotFound)?;
@@ -145,7 +151,7 @@ async fn verify_originals(
     let mut rendered = BTreeSet::new();
     for evidence in &draft.evidence {
         let asset = source_asset(
-            &state.surreal,
+            &state.application_store,
             project,
             draft,
             evidence,
@@ -171,11 +177,11 @@ pub(crate) async fn verify(
     }
     let forge = state
         .integration_providers
-        .forgejo(&state.surreal, project)
+        .forgejo(&state.application_store, project)
         .await
         .map_err(|_| forge_error(store::court_date_forgejo::Error::Unavailable))?;
     store::court_date_forgejo::verify_with(
-        &state.surreal,
+        &state.application_store,
         project,
         draft,
         can_read_authorities,
@@ -197,7 +203,7 @@ pub(crate) async fn verify_confirmation(
     let pg = crate::court_dates_api::database().await?;
     let forge = state
         .integration_providers
-        .forgejo(&state.surreal, project)
+        .forgejo(&state.application_store, project)
         .await
         .map_err(|_| forge_error(store::court_date_forgejo::Error::Unavailable))?;
     let mut checked = Vec::new();
@@ -223,14 +229,14 @@ pub(crate) async fn verify_confirmation(
         if checked.contains(&saved) {
             continue;
         }
-        let asset = store::assets::find_by_id(&state.surreal, receipt.asset_id)
+        let asset = store::assets::find_by_id(&state.application_store, receipt.asset_id)
             .await
             .map_err(|_| ApiError::Db("could not read filed source".into()))?
             .ok_or(ApiError::NotFound)?;
         tokio::time::timeout_at(
             deadline,
             store::court_date_forgejo::reopen(
-                &state.surreal,
+                &state.application_store,
                 project,
                 source,
                 &asset,
@@ -247,7 +253,7 @@ pub(crate) async fn verify_confirmation(
 }
 
 async fn source_asset(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project: Uuid,
     draft: &Draft,
     evidence: &Evidence,
@@ -623,7 +629,7 @@ mod tests {
     #[tokio::test]
     async fn resolves_only_current_entered_orders_and_permitted_archived_authorities() {
         store::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
             let (project, _) = store::test_support::seed_calendar_project().await;
             let mut draft: Draft = serde_json::from_value(json!({"kind":"signed_order", "title":"Fixture",

@@ -274,7 +274,7 @@ pub async fn call_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
-    let caller = resolve_caller(&state.surreal, principal).await?;
+    let caller = resolve_caller(&state.application_store, principal).await?;
     caller.require_tool_authz(name)?;
     dispatch_tool(state, principal, &caller, name, arguments).await
 }
@@ -293,7 +293,7 @@ pub(super) async fn call_http_tool(
     if !is_side_effecting(name) {
         return call_tool(state, principal, name, arguments).await;
     }
-    let caller = resolve_caller(&state.surreal, principal).await;
+    let caller = resolve_caller(&state.application_store, principal).await;
     let actor = match &caller {
         Ok(Caller::Authenticated { identity, .. }) => *identity,
         _ => None,
@@ -331,21 +331,26 @@ async fn dispatch_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
-    let surreal = &state.surreal;
+    let application_store = &state.application_store;
     let runtime = state.questionnaire_runtime.as_ref();
     let scope = caller.read_scope();
     match name {
         "create_person" => {
             let identity = caller.answer_identity()?;
-            create_person::call_for_actor(surreal, arguments, identity.role, identity.person_id)
-                .await
+            create_person::call_for_actor(
+                application_store,
+                arguments,
+                identity.role,
+                identity.person_id,
+            )
+            .await
         }
-        "show_person" => show_person::call(surreal, &scope, arguments).await,
-        "list_jurisdictions" => list_jurisdictions::call(surreal, arguments).await,
-        "list_entities" => list_entities::call(surreal, arguments).await,
+        "show_person" => show_person::call(application_store, &scope, arguments).await,
+        "list_jurisdictions" => list_jurisdictions::call(application_store, arguments).await,
+        "list_entities" => list_entities::call(application_store, arguments).await,
         "create_notation" => {
             create_notation::call(
-                surreal,
+                application_store,
                 runtime,
                 state.storage.as_ref(),
                 principal,
@@ -356,7 +361,7 @@ async fn dispatch_tool(
         "answer_notation" => {
             let identity = caller.answer_identity()?;
             answer_notation::call(
-                surreal,
+                application_store,
                 runtime,
                 state.storage.as_ref(),
                 state.post_questionnaire.as_deref(),
@@ -366,12 +371,12 @@ async fn dispatch_tool(
             .await
         }
         "validate_notation" => validate_notation::call(arguments).await,
-        "create_project" => create_project::call(surreal, principal, arguments).await,
-        "close_project" => close_project::call(surreal, arguments).await,
+        "create_project" => create_project::call(application_store, principal, arguments).await,
+        "close_project" => close_project::call(application_store, arguments).await,
         "delete_closed_repository" => {
-            delete_closed_repository::call(surreal, state.forge.as_ref(), arguments).await
+            delete_closed_repository::call(application_store, state.forge.as_ref(), arguments).await
         }
-        "list_deadlines" => list_deadlines::call(surreal, &scope, arguments).await,
+        "list_deadlines" => list_deadlines::call(application_store, &scope, arguments).await,
         "list_project_deadlines"
         | "create_deadline"
         | "queue_court_date"
@@ -380,21 +385,22 @@ async fn dispatch_tool(
         | "cancel_deadline"
         | "reopen_deadline" => {
             let (person_id, role) = caller.deadline_actor()?;
-            project_deadlines::dispatch(name, surreal, person_id, role, arguments).await
+            project_deadlines::dispatch(name, application_store, person_id, role, arguments).await
         }
-        "list_projects" => list_projects::call(surreal, &scope, arguments).await,
-        "project_status" => project_status::call(surreal, &scope, arguments).await,
+        "list_projects" => list_projects::call(application_store, &scope, arguments).await,
+        "project_status" => project_status::call(application_store, &scope, arguments).await,
         "link_person_project" => {
             if let Caller::Authenticated {
                 identity: Some(identity),
                 ..
             } = caller
             {
-                link_person_project::require_admin_scope(surreal, *identity, arguments).await?;
+                link_person_project::require_admin_scope(application_store, *identity, arguments)
+                    .await?;
             }
-            link_person_project::call(surreal, arguments).await
+            link_person_project::call(application_store, arguments).await
         }
-        "bulk_import" => bulk_import::call(surreal, principal, arguments).await,
+        "bulk_import" => bulk_import::call(application_store, principal, arguments).await,
         "list_tools" => list_tools::call(arguments).await,
         "spawn_legal_council" => spawn_legal_council::call(arguments).await,
         "send_welcome_email" => send_welcome_email::call(state, arguments).await,
@@ -444,7 +450,7 @@ enum Caller {
 /// Resolve the acting principal into the identity both decisions read
 /// from.
 async fn resolve_caller(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     principal: Option<&Principal>,
 ) -> Result<Caller, ToolError> {
     let Some(email) = principal.map(|p| p.email.trim()).filter(|e| !e.is_empty()) else {
@@ -455,7 +461,7 @@ async fn resolve_caller(
     // presents `attorney@example.com`.
     Ok(Caller::Authenticated {
         email: email.to_string(),
-        identity: store::persons::find_by_email_ci(surreal, email)
+        identity: store::persons::find_by_email_ci(application_store, email)
             .await?
             .map(|person| Identity {
                 person_id: person.id,
@@ -691,9 +697,7 @@ impl From<store::jurisdictions::JurisdictionError> for ToolError {
             // The unique code index is caller-correctable: the model can
             // retry with a different code.
             E::CodeTaken | E::NameTaken => ToolError::Conflict(err.to_string()),
-            E::Db(_) | E::WriteReturnedNothing | E::Postgres(_) => {
-                ToolError::Internal(err.to_string())
-            }
+            E::WriteReturnedNothing | E::Postgres(_) => ToolError::Internal(err.to_string()),
         }
     }
 }
@@ -706,9 +710,7 @@ impl From<store::entities::EntityError> for ToolError {
             // can act on that — it is a caller-correctable conflict, not a
             // fault.
             E::FirmAnchorTaken => ToolError::Conflict(err.to_string()),
-            E::Db(_) | E::WriteReturnedNothing | E::Authority(_) => {
-                ToolError::Internal(err.to_string())
-            }
+            E::WriteReturnedNothing | E::Authority(_) => ToolError::Internal(err.to_string()),
         }
     }
 }
@@ -726,9 +728,7 @@ impl From<store::entity_types::EntityTypeError> for ToolError {
             // The unique name index is caller-correctable: the model can
             // retry with a different name.
             E::NameTaken => ToolError::Conflict(err.to_string()),
-            E::Db(_) | E::WriteReturnedNothing | E::Postgres(_) => {
-                ToolError::Internal(err.to_string())
-            }
+            E::WriteReturnedNothing | E::Postgres(_) => ToolError::Internal(err.to_string()),
         }
     }
 }
@@ -745,9 +745,7 @@ impl From<store::persons::PersonError> for ToolError {
             | E::MicrosoftSubjectTaken
             | E::AppleSubjectTaken => ToolError::Conflict(err.to_string()),
             E::Postgres(_) => ToolError::Internal("PostgreSQL People authority failed".into()),
-            E::Db(_) | E::WriteReturnedNothing | E::Phone(_) => {
-                ToolError::Internal(err.to_string())
-            }
+            E::WriteReturnedNothing | E::Phone(_) => ToolError::Internal(err.to_string()),
         }
     }
 }
@@ -805,19 +803,19 @@ mod tests {
     }
 
     fn state() -> McpState {
-        let surreal = crate::test_fixtures::handle();
+        let application_store = crate::test_fixtures::handle();
         let runtime: Arc<dyn workflows::StateMachineRuntime> = Arc::new(InMemoryRuntime::new());
-        McpState::new(surreal, runtime)
+        McpState::new(application_store, runtime)
     }
 
     /// The write-tier check as a dispatch performs it: resolve the
     /// caller once, then ask.
     async fn authz(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         principal: Option<&Principal>,
         tool_name: &str,
     ) -> Result<(), ToolError> {
-        resolve_caller(surreal, principal)
+        resolve_caller(application_store, principal)
             .await?
             .require_tool_authz(tool_name)
     }
@@ -1099,7 +1097,7 @@ mod tests {
         store::test_support::with_postgres(async {
             let s = state();
             store::persons::create(
-                &s.surreal,
+                &s.application_store,
                 &store::persons::NewPerson::with_role(
                     "Client",
                     "client@example.com",
@@ -1111,21 +1109,23 @@ mod tests {
             let client = Principal::new("client@example.com");
 
             // Anonymous (dev / no auth layer) is allowed even for writes.
-            assert!(authz(&s.surreal, None, "create_project").await.is_ok());
+            assert!(authz(&s.application_store, None, "create_project")
+                .await
+                .is_ok());
             // A read-only tool is never gated on tier.
-            assert!(authz(&s.surreal, Some(&client), "show_person")
+            assert!(authz(&s.application_store, Some(&client), "show_person")
                 .await
                 .is_ok());
             // A side-effecting tool by an authenticated client-tier caller is
             // refused — the core of the fix.
             assert!(matches!(
-                authz(&s.surreal, Some(&client), "create_project").await,
+                authz(&s.application_store, Some(&client), "create_project").await,
                 Err(ToolError::Forbidden(_))
             ));
             // An authenticated caller with no `persons` row is also refused.
             let ghost = Principal::new("ghost@example.com");
             assert!(matches!(
-                authz(&s.surreal, Some(&ghost), "create_project").await,
+                authz(&s.application_store, Some(&ghost), "create_project").await,
                 Err(ToolError::Forbidden(_))
             ));
         })
@@ -1136,14 +1136,16 @@ mod tests {
     async fn answer_notation_requires_a_resolved_person() {
         store::test_support::with_postgres(async {
             let s = state();
-            let anonymous = resolve_caller(&s.surreal, None).await.unwrap();
+            let anonymous = resolve_caller(&s.application_store, None).await.unwrap();
             assert!(matches!(
                 anonymous.answer_identity(),
                 Err(ToolError::Forbidden(_))
             ));
 
             let unlinked = Principal::new("unlinked@example.com");
-            let unlinked = resolve_caller(&s.surreal, Some(&unlinked)).await.unwrap();
+            let unlinked = resolve_caller(&s.application_store, Some(&unlinked))
+                .await
+                .unwrap();
             assert!(matches!(
                 unlinked.answer_identity(),
                 Err(ToolError::Forbidden(_))
@@ -1161,7 +1163,7 @@ mod tests {
             // resolver runs.
             let s = state();
             store::persons::create(
-                &s.surreal,
+                &s.application_store,
                 &store::persons::NewPerson::with_role(
                     "Attorney",
                     "Attorney@Example.com",
@@ -1173,7 +1175,7 @@ mod tests {
 
             let caller = Principal::new("attorney@example.com");
             assert!(
-            authz(&s.surreal, Some(&caller), "create_project")
+            authz(&s.application_store, Some(&caller), "create_project")
                 .await
                 .is_ok(),
             "a mixed-case lawyer row must authorize a lower-case caller through the dispatched gate"
@@ -1205,22 +1207,22 @@ mod tests {
     // -----------------------------------------------------------------
 
     async fn scope_for(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         principal: Option<&Principal>,
     ) -> ReadScope {
-        resolve_caller(surreal, principal)
+        resolve_caller(application_store, principal)
             .await
             .unwrap()
             .read_scope()
     }
 
     async fn seed_at(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         email: &str,
         role: Role,
     ) -> store::persons::Person {
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(email, email, role),
         )
         .await
@@ -1232,12 +1234,15 @@ mod tests {
         store::test_support::with_postgres(async {
             // The KIND / local-dev path and the browser harness: no auth
             // layer ran, so reads stay deployment-wide as they always were.
-            let surreal = crate::test_fixtures::handle();
-            assert_eq!(scope_for(&surreal, None).await, ReadScope::Deployment);
+            let application_store = crate::test_fixtures::handle();
+            assert_eq!(
+                scope_for(&application_store, None).await,
+                ReadScope::Deployment
+            );
             // An empty or whitespace email is not an identity either.
             let blank = Principal::new("   ");
             assert_eq!(
-                scope_for(&surreal, Some(&blank)).await,
+                scope_for(&application_store, Some(&blank)).await,
                 ReadScope::Deployment
             );
         })
@@ -1248,11 +1253,11 @@ mod tests {
     async fn owner_and_admin_resolve_to_the_directory_lens() {
         store::test_support::with_postgres(async {
             for role in [Role::Owner, Role::Admin] {
-                let surreal = crate::test_fixtures::handle();
+                let application_store = crate::test_fixtures::handle();
                 let email = crate::test_fixtures::email();
-                seed_at(&surreal, &email, role).await;
+                seed_at(&application_store, &email, role).await;
                 assert_eq!(
-                    scope_for(&surreal, Some(&Principal::new(&email))).await,
+                    scope_for(&application_store, Some(&Principal::new(&email))).await,
                     ReadScope::Directory { role },
                     "{role:?} is oversight, not membership"
                 );
@@ -1265,11 +1270,11 @@ mod tests {
     async fn the_membership_tiers_resolve_to_their_own_person_and_role() {
         store::test_support::with_postgres(async {
             for role in [Role::Lawyer, Role::Clerk, Role::Client] {
-                let surreal = crate::test_fixtures::handle();
+                let application_store = crate::test_fixtures::handle();
                 let email = crate::test_fixtures::email();
-                let person = seed_at(&surreal, &email, role).await;
+                let person = seed_at(&application_store, &email, role).await;
                 assert_eq!(
-                    scope_for(&surreal, Some(&Principal::new(&email))).await,
+                    scope_for(&application_store, Some(&Principal::new(&email))).await,
                     ReadScope::Membership {
                         person_id: person.id,
                         role
@@ -1286,10 +1291,14 @@ mod tests {
         store::test_support::with_postgres(async {
             // A row stored mixed-case must still scope a caller whose IdP
             // presents the address lowercased.
-            let surreal = crate::test_fixtures::handle();
-            let person = seed_at(&surreal, "Attorney@Example.com", Role::Lawyer).await;
+            let application_store = crate::test_fixtures::handle();
+            let person = seed_at(&application_store, "Attorney@Example.com", Role::Lawyer).await;
             assert_eq!(
-                scope_for(&surreal, Some(&Principal::new("attorney@example.com"))).await,
+                scope_for(
+                    &application_store,
+                    Some(&Principal::new("attorney@example.com"))
+                )
+                .await,
                 ReadScope::Membership {
                     person_id: person.id,
                     role: Role::Lawyer
@@ -1304,9 +1313,13 @@ mod tests {
         store::test_support::with_postgres(async {
             // Sign-in does not create a Person, so an IdP-authenticated
             // stranger is exactly the caller who must reach nothing.
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             assert_eq!(
-                scope_for(&surreal, Some(&Principal::new("stranger@example.com"))).await,
+                scope_for(
+                    &application_store,
+                    Some(&Principal::new("stranger@example.com"))
+                )
+                .await,
                 ReadScope::Unlinked
             );
         })
@@ -1347,7 +1360,7 @@ mod tests {
         store::test_support::with_postgres(async {
             let state = state();
             store::persons::create(
-                &state.surreal,
+                &state.application_store,
                 &store::persons::NewPerson::with_role(
                     "client@example.com",
                     "client@example.com",
@@ -1463,7 +1476,7 @@ mod tests {
         store::test_support::with_postgres(async {
             let state = state();
             store::persons::create(
-                &state.surreal,
+                &state.application_store,
                 &store::persons::NewPerson::with_role(
                     "client@example.com",
                     "client@example.com",

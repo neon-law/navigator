@@ -180,14 +180,14 @@ pub async fn get_expunge_document() -> Result<ExpungeDocumentView, ServerFnError
         return Ok(hidden(String::new()));
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
 
     // The completed-expunge state, keyed by the audit row the redirect carries.
     if let Some(raw) = query.record.as_deref() {
         let Ok(record_id) = raw.parse::<uuid::Uuid>() else {
             return Ok(hidden(doc_id.to_string()));
         };
-        let record = store::expunge_records::by_id(&surreal, record_id)
+        let record = store::expunge_records::by_id(&application_store, record_id)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?;
         let Some(record) = record else {
@@ -209,7 +209,7 @@ pub async fn get_expunge_document() -> Result<ExpungeDocumentView, ServerFnError
         });
     }
 
-    let asset = store::assets::find_by_id(&surreal, doc_id)
+    let asset = store::assets::find_by_id(&application_store, doc_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     // Only a project document asset (project-scoped, with a repo-path filename)

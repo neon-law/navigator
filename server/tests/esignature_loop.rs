@@ -25,8 +25,8 @@ use http_body_util::BodyExt;
 use portal::signature::DocuSignSignatureProvider;
 use portal::webhook_auth::sign_hmac_sha256_b64;
 use portal::AppState;
+use store::application_store::ApplicationStore;
 use store::seed;
-use store::surreal::SurrealDb;
 use store::test_support::with_postgres;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -66,7 +66,7 @@ async fn body_string(resp: axum::http::Response<Body>) -> String {
 struct SentLoop {
     app: axum::Router,
     replay_state: AppState,
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     storage: Arc<dyn cloud::StorageService>,
     nid: uuid::Uuid,
     docusign: MockServer,
@@ -148,7 +148,7 @@ async fn sent_loop() -> SentLoop {
         .mount(&docusign)
         .await;
 
-    let surreal = SurrealDb::uninitialized();
+    let application_store = ApplicationStore::uninitialized();
     let storage_directory = tempfile::tempdir().unwrap();
     // `generate_pdf__retainer_pdf` is worker-dispatched and web reads
     // the template body + rendered PDF back from storage, so seed and
@@ -158,51 +158,53 @@ async fn sent_loop() -> SentLoop {
             .await
             .unwrap(),
     );
-    seed::seed_canonical(&surreal, &storage).await.unwrap();
+    seed::seed_canonical(&application_store, &storage)
+        .await
+        .unwrap();
     // Hold a handle so tests can assert the archived documents after the
     // shared `storage` is moved into AppState below.
     let storage_handle = storage.clone();
-    let tmpl = store::templates::resolve(&surreal, None, TEMPLATE_CODE)
+    let tmpl = store::templates::resolve(&application_store, None, TEMPLATE_CODE)
         .await
         .unwrap()
         .expect("seed inserts onboarding__letter");
     let libra = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::new("Libra", "libra@example.com"),
     )
     .await
     .unwrap();
     let proj = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: format!("libra-retainer-{}", Uuid::now_v7()),
             name: "Libra retainer".into(),
             status: "open".into(),
-            entity_id: store::test_support::seed_entity(&surreal).await,
+            entity_id: store::test_support::seed_entity(&application_store).await,
             ..Default::default()
         },
     )
     .await
     .unwrap();
     // The browser and CLI act as the same participating lawyer.
-    let lawyer = store::persons::default_firm_dri(&surreal)
+    let lawyer = store::persons::default_firm_dri(&application_store)
         .await
         .unwrap()
         .expect("canonical seed has a firm principal");
-    store::projects::add_participation(&surreal, proj.id, lawyer, "lawyer")
+    store::projects::add_participation(&application_store, proj.id, lawyer, "lawyer")
         .await
         .unwrap();
     let lawyer_bearer =
         portal::test_support::bearer_header_with_person(store::persons::Role::Lawyer, lawyer);
     let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
-        &surreal,
+        &application_store,
         Some(&storage),
         &tmpl,
     )
     .await
     .unwrap();
     let nid = store::notations::create(
-        &surreal,
+        &application_store,
         &store::notations::NewNotation::new(tmpl.id, libra.id, proj.id, "BEGIN")
             .with_questionnaire_snapshot(snapshot)
             .with_delivery(store::notations::DELIVERY_EMAILED),
@@ -234,7 +236,7 @@ async fn sent_loop() -> SentLoop {
         signature_provider: Arc::new(provider),
         esignature_hmac_key: Some(HMAC_KEY.to_string()),
         email,
-        ..portal::test_support::app_state(surreal.clone()).await
+        ..portal::test_support::app_state(application_store.clone()).await
     };
     let replay_state = state.clone();
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
@@ -275,7 +277,7 @@ async fn sent_loop() -> SentLoop {
     // and dispatch refuses an engagement agreement whose slot is empty
     // (NRPC 1.5(b), Cal. B&P § 6148). Write the clause the lawyer would.
     store::notation_clauses::append(
-        &surreal,
+        &application_store,
         nid,
         "**Fees.** Billed at $400 per hour; expenses passed through at cost.",
         None,
@@ -351,13 +353,13 @@ async fn sent_loop() -> SentLoop {
     }
 
     // The real provider returned ENVELOPE_ID and it was persisted.
-    let row = store::notations::find_by_id(&surreal, nid)
+    let row = store::notations::find_by_id(&application_store, nid)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(row.state, "sent_for_signature__pending");
     assert_eq!(
-        store::signatures::request_id_for_notation(&surreal, nid)
+        store::signatures::request_id_for_notation(&application_store, nid)
             .await
             .unwrap()
             .as_deref(),
@@ -367,7 +369,7 @@ async fn sent_loop() -> SentLoop {
     SentLoop {
         app,
         replay_state,
-        surreal,
+        application_store,
         storage: storage_handle,
         nid,
         docusign,
@@ -385,7 +387,7 @@ async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
 async fn check_signature_loop_reaches_end_through_real_provider_and_webhook() {
     let SentLoop {
         app,
-        surreal,
+        application_store,
         storage: storage_handle,
         nid,
         docusign,
@@ -445,7 +447,7 @@ async fn check_signature_loop_reaches_end_through_real_provider_and_webhook() {
         body_string(resp).await
     );
 
-    let row = store::notations::find_by_id(&surreal, nid)
+    let row = store::notations::find_by_id(&application_store, nid)
         .await
         .unwrap()
         .unwrap();
@@ -486,7 +488,7 @@ async fn journaled_receipt_recovers_after_a_mid_delivery_death() {
 async fn check_journaled_receipt_recovers_after_a_mid_delivery_death() {
     let SentLoop {
         replay_state,
-        surreal,
+        application_store,
         storage,
         nid,
         runtime,
@@ -497,7 +499,7 @@ async fn check_journaled_receipt_recovers_after_a_mid_delivery_death() {
     // journal and nothing was consumed. The webhook never reaches the
     // router in this test — the delivery died here.
     store::signature_webhook_journal::journal_verified_receipt(
-        &surreal,
+        &application_store,
         store::signatures::SignatureProvider::DocuSign,
         ENVELOPE_ID,
         store::signatures::SignatureState::Completed.as_str(),
@@ -505,7 +507,7 @@ async fn check_journaled_receipt_recovers_after_a_mid_delivery_death() {
     )
     .await
     .unwrap();
-    let row = store::notations::find_by_id(&surreal, nid)
+    let row = store::notations::find_by_id(&application_store, nid)
         .await
         .unwrap()
         .unwrap();
@@ -521,7 +523,7 @@ async fn check_journaled_receipt_recovers_after_a_mid_delivery_death() {
 
     // The loop closed: END, the signature stamped, the executed
     // documents archived, the journal drained.
-    let row = store::notations::find_by_id(&surreal, nid)
+    let row = store::notations::find_by_id(&application_store, nid)
         .await
         .unwrap()
         .unwrap();
@@ -532,7 +534,7 @@ async fn check_journaled_receipt_recovers_after_a_mid_delivery_death() {
             .unwrap();
     assert_eq!(final_state.as_str(), "END");
     let signature = store::signatures::by_provider(
-        &surreal,
+        &application_store,
         store::signatures::SignatureProvider::DocuSign,
         ENVELOPE_ID,
     )
@@ -558,7 +560,7 @@ async fn check_journaled_receipt_recovers_after_a_mid_delivery_death() {
         .expect("certificate of completion archived by the sweep")
         .bytes;
     assert_eq!(cert, b"%PDF-certificate");
-    let pending = store::signature_webhook_journal::pending_receipts(&surreal, 100)
+    let pending = store::signature_webhook_journal::pending_receipts(&application_store, 100)
         .await
         .unwrap();
     assert!(
@@ -578,7 +580,7 @@ async fn a_redelivered_completion_is_answered_from_the_journal() {
 async fn check_redelivered_completion_is_answered_from_the_journal() {
     let SentLoop {
         app,
-        surreal,
+        application_store,
         nid,
         docusign,
         ..
@@ -610,13 +612,13 @@ async fn check_redelivered_completion_is_answered_from_the_journal() {
         );
     }
 
-    let row = store::notations::find_by_id(&surreal, nid)
+    let row = store::notations::find_by_id(&application_store, nid)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(row.state, "END", "the redelivery must not re-run the loop");
     let receipt = store::signature_webhook_journal::by_event(
-        &surreal,
+        &application_store,
         store::signatures::SignatureProvider::DocuSign,
         ENVELOPE_ID,
         store::signatures::SignatureState::Completed.as_str(),
@@ -629,7 +631,7 @@ async fn check_redelivered_completion_is_answered_from_the_journal() {
         "one consumed row for the event"
     );
 
-    let documents = store::assets::for_project(&surreal, row.project_id)
+    let documents = store::assets::for_project(&application_store, row.project_id)
         .await
         .unwrap();
     let mut filed: Vec<_> = documents
@@ -680,7 +682,7 @@ async fn a_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving() {
 async fn check_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving() {
     let SentLoop {
         replay_state,
-        surreal,
+        application_store,
         storage,
         nid,
         runtime,
@@ -691,7 +693,7 @@ async fn check_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving() 
     // bytes, so the journal takes it; replay cannot correlate it. Plus
     // the real completion behind it.
     store::signature_webhook_journal::journal_verified_receipt(
-        &surreal,
+        &application_store,
         store::signatures::SignatureProvider::DocuSign,
         "env-never-sent",
         store::signatures::SignatureState::Completed.as_str(),
@@ -700,7 +702,7 @@ async fn check_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving() 
     .await
     .unwrap();
     store::signature_webhook_journal::journal_verified_receipt(
-        &surreal,
+        &application_store,
         store::signatures::SignatureProvider::DocuSign,
         ENVELOPE_ID,
         store::signatures::SignatureState::Completed.as_str(),
@@ -714,7 +716,7 @@ async fn check_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving() 
         .unwrap();
 
     // The good receipt recovered through the same sweep.
-    let row = store::notations::find_by_id(&surreal, nid)
+    let row = store::notations::find_by_id(&application_store, nid)
         .await
         .unwrap()
         .unwrap();
@@ -733,7 +735,7 @@ async fn check_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving() 
 
     // The uncorrelatable one stays pending with the failure named —
     // visible, retryable, and not blocking the next receipt.
-    let pending = store::signature_webhook_journal::pending_receipts(&surreal, 100)
+    let pending = store::signature_webhook_journal::pending_receipts(&application_store, 100)
         .await
         .unwrap();
     assert_eq!(

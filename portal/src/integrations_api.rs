@@ -177,12 +177,15 @@ async fn targets(
     match (&selector.project_code, selector.all) {
         (Some(code), false) => Ok(vec![one_target(state, authed, code).await?]),
         (None, true) => {
-            let visible =
-                store::access::visible_projects(&state.surreal, authed.0.person_id, authed.0.role)
-                    .await
-                    .map_err(ApiError::Db)?;
+            let visible = store::access::visible_projects(
+                &state.application_store,
+                authed.0.person_id,
+                authed.0.role,
+            )
+            .await
+            .map_err(ApiError::Db)?;
             let admitted_firm_ids = store::firm_capability::allowed_firm_ids(
-                &state.surreal,
+                &state.application_store,
                 authed.0.role,
                 authed.0.person_id,
                 store::firm_capability::FirmCapability::UseIntegrations,
@@ -220,10 +223,11 @@ async fn one_target(
     code: &str,
 ) -> Result<store::projects::Project, ApiError> {
     let person = authed.0.person_id.ok_or(ApiError::NotFound)?;
-    let project = store::access::visible_firm_project_by_code(&state.surreal, person, code)
-        .await
-        .map_err(ApiError::Db)?
-        .ok_or(ApiError::NotFound)?;
+    let project =
+        store::access::visible_firm_project_by_code(&state.application_store, person, code)
+            .await
+            .map_err(ApiError::Db)?
+            .ok_or(ApiError::NotFound)?;
     authorize_project(state, authed, project).await
 }
 
@@ -243,7 +247,7 @@ async fn authorize_project(
         return Err(ApiError::NotFound);
     };
     let decision = store::firm_capability::resolve(
-        &state.surreal,
+        &state.application_store,
         authed.0.role,
         authed.0.person_id,
         firm_id,
@@ -277,7 +281,7 @@ async fn ensure_one_page(state: &ApiState, project: &store::projects::Project) -
         ensure_lock(workflows::IntegrationJob::notion(project.id, &project.code).job_id).await;
     let notion = match state
         .integration_providers
-        .notion(&state.surreal, project.id)
+        .notion(&state.application_store, project.id)
         .await
     {
         Ok(notion) => notion,
@@ -333,7 +337,7 @@ async fn ensure_one_page(state: &ApiState, project: &store::projects::Project) -
     // Record the address before reporting success. The row is what every
     // later surface reads; an ensure that provisioned a page and lost its
     // address would look done and leave the next run creating another.
-    if store::projects::set_private_notion_page_url(&state.surreal, project.id, &page.url)
+    if store::projects::set_private_notion_page_url(&state.application_store, project.id, &page.url)
         .await
         .is_err()
     {
@@ -387,7 +391,7 @@ async fn apply_notion_decision(
                         return ProjectOutcome::plain(project.code.clone(), "wrong_parent");
                     }
                     if store::projects::set_private_notion_page_url(
-                        &state.surreal,
+                        &state.application_store,
                         project.id,
                         &page.url,
                     )
@@ -425,7 +429,7 @@ async fn reconcile_one_page(
 ) -> ProjectOutcome {
     let notion = match state
         .integration_providers
-        .notion(&state.surreal, project.id)
+        .notion(&state.application_store, project.id)
         .await
     {
         Ok(notion) => notion,
@@ -512,7 +516,7 @@ async fn ensure_one_channel(
         ensure_lock(workflows::IntegrationJob::slack(project.id, &project.code).job_id).await;
     let slack = match state
         .integration_providers
-        .slack(&state.surreal, project.id)
+        .slack(&state.application_store, project.id)
         .await
     {
         Ok(slack) => slack,
@@ -546,7 +550,7 @@ async fn ensure_one_channel(
                     return ProjectOutcome::plain(project.code.clone(), "address_mismatch");
                 }
                 if store::projects::set_internal_slack_channel(
-                    &state.surreal,
+                    &state.application_store,
                     project.id,
                     &channel.id,
                     &canonical_url,
@@ -581,7 +585,7 @@ async fn ensure_one_channel(
     // Record the id and its canonical URL together so the two coordinates the
     // Project row carries for this channel never disagree.
     if store::projects::set_internal_slack_channel(
-        &state.surreal,
+        &state.application_store,
         project.id,
         &channel.id,
         &cloud::slack_channel_url(&channel.id),
@@ -618,7 +622,7 @@ async fn repair_channel_name(
         Err(_) => return ProjectOutcome::plain(project.code.clone(), "provider_unavailable"),
     };
     if store::projects::set_internal_slack_channel(
-        &state.surreal,
+        &state.application_store,
         project.id,
         &channel.id,
         &cloud::slack_channel_url(&channel.id),
@@ -657,7 +661,7 @@ pub(crate) async fn slack_notify_door(
     let project = one_target(&state, &authed, &request.project_code).await?;
     let slack = match state
         .integration_providers
-        .slack(&state.surreal, project.id)
+        .slack(&state.application_store, project.id)
         .await
     {
         Ok(slack) => slack,
@@ -745,7 +749,7 @@ pub(crate) async fn converge_project_channel(
 ) -> ProjectOutcome {
     let slack = match state
         .integration_providers
-        .slack(&state.surreal, project.id)
+        .slack(&state.application_store, project.id)
         .await
     {
         Ok(slack) => slack,
@@ -795,7 +799,7 @@ async fn log_channel_change(
         detail: format!("Project status {}", project.status),
         project_id: Some(project.id),
     };
-    if let Err(error) = store::relationship_logs::record(&state.surreal, &entry).await {
+    if let Err(error) = store::relationship_logs::record(&state.application_store, &entry).await {
         tracing::warn!(project_id = %project.id, %error, "slack channel change not logged");
     }
 }
@@ -830,11 +834,15 @@ pub(crate) async fn pull_request_event_door(
     if let Err(message) = event.validate() {
         return Ok(crate::api::bad_request("invalid_event", message));
     }
-    let project = store::projects::find_by_id(&state.surreal, id)
+    let project = store::projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
-    let slack = match state.integration_providers.slack(&state.surreal, id).await {
+    let slack = match state
+        .integration_providers
+        .slack(&state.application_store, id)
+        .await
+    {
         Ok(slack) => slack,
         Err(error) => {
             return Ok(pull_request_refusal(
@@ -931,7 +939,7 @@ pub(crate) async fn calendar_events_door(
     let unavailable = || (StatusCode::BAD_GATEWAY, "Project Calendar unavailable").into_response();
     let Ok(calendar) = state
         .integration_providers
-        .calendar(&state.surreal, project.id)
+        .calendar(&state.application_store, project.id)
         .await
     else {
         return Ok(unavailable());
@@ -985,8 +993,12 @@ async fn sync_one_contacts(state: &ApiState, project: &store::projects::Project)
         Ok(books) => books,
         Err(error) => return unavailable(project, &error),
     };
-    match store::contact_sync::sync_project_members(&state.surreal, project.id, books.as_ref())
-        .await
+    match store::contact_sync::sync_project_members(
+        &state.application_store,
+        project.id,
+        books.as_ref(),
+    )
+    .await
     {
         Ok(report) => ProjectOutcome::with_detail(
             project.code.clone(),
@@ -1012,7 +1024,7 @@ async fn ensure_one_calendar(
 ) -> ProjectOutcome {
     let calendar = match state
         .integration_providers
-        .calendar(&state.surreal, project.id)
+        .calendar(&state.application_store, project.id)
         .await
     {
         Ok(calendar) => calendar,
@@ -1021,7 +1033,9 @@ async fn ensure_one_calendar(
     let Ok(_guard) = calendar_lock(project.id).await else {
         return ProjectOutcome::plain(project.code.clone(), "provider_unavailable");
     };
-    match store::project_calendar::ensure(&state.surreal, project.id, calendar.as_ref()).await {
+    match store::project_calendar::ensure(&state.application_store, project.id, calendar.as_ref())
+        .await
+    {
         Ok(report) => ProjectOutcome::plain(project.code.clone(), report.outcome.slug()),
         Err(store::project_calendar::ProjectCalendarError::Calendar(
             cloud::CalendarError::AmbiguousSummary { count },
@@ -1090,7 +1104,7 @@ pub(crate) async fn mirror_one(
 ) -> ProjectOutcome {
     let calendar = match state
         .integration_providers
-        .calendar(&state.surreal, project.id)
+        .calendar(&state.application_store, project.id)
         .await
     {
         Ok(calendar) => calendar,
@@ -1112,7 +1126,7 @@ pub(crate) async fn mirror_one(
         }
     }
     match store::deadline_calendar::reconcile(
-        &state.surreal,
+        &state.application_store,
         calendar.as_ref(),
         project.id,
         state.canonical_base_url.as_deref(),

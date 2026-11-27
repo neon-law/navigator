@@ -1,7 +1,7 @@
 //! Native Contract Review fields, edits, timestamps, and independent review identities.
 use super::*;
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 use chrono::{DateTime, SubsecRound, Utc};
 use serde_json::Value;
 use sqlx::Row;
@@ -33,7 +33,7 @@ async fn assert_stored(pg: &PostgresDb, expected: &ContractReview) {
     );
 }
 
-async fn review_fixture(pg: &PostgresDb, db: &SurrealDb) -> NewContractReview {
+async fn review_fixture(pg: &PostgresDb, db: &ApplicationStore) -> NewContractReview {
     // Reuse the crate's canonical domain-row fixture, not its enrollment helper.
     let (_, notation_id, _) = crate::postgres::fixtures::workflow_fixture(pg).await;
     let entity_id = sqlx::query_scalar(
@@ -64,7 +64,7 @@ async fn review_fixture(pg: &PostgresDb, db: &SurrealDb) -> NewContractReview {
 async fn native_lifecycle_preserves_fields_timestamps_and_other_reviews() {
     crate::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let directory = tempfile::tempdir().unwrap();
         let storage: Arc<dyn cloud::StorageService> =
             Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
@@ -117,7 +117,11 @@ async fn native_lifecycle_preserves_fields_timestamps_and_other_reviews() {
     .await;
 }
 
-async fn edit_review(pg: &PostgresDb, db: &SurrealDb, original: &ContractReview) -> ContractReview {
+async fn edit_review(
+    pg: &PostgresDb,
+    db: &ApplicationStore,
+    original: &ContractReview,
+) -> ContractReview {
     let id = original.id;
     let mut findings = vec![Finding {
         clause_ref: "Synthetic section".into(),
@@ -174,7 +178,7 @@ async fn edit_review(pg: &PostgresDb, db: &SurrealDb, original: &ContractReview)
     approved
 }
 
-async fn assert_missing(pg: &PostgresDb, db: &SurrealDb, approved: &ContractReview) {
+async fn assert_missing(pg: &PostgresDb, db: &ApplicationStore, approved: &ContractReview) {
     let missing = Uuid::new_v4();
     assert!(by_id(db, missing).await.unwrap().is_none());
     let findings = findings_of(approved).unwrap();
@@ -200,7 +204,7 @@ async fn assert_missing(pg: &PostgresDb, db: &SurrealDb, approved: &ContractRevi
     assert!(by_id(db, missing).await.unwrap().is_none());
 }
 
-async fn clear_and_reject(pg: &PostgresDb, db: &SurrealDb, approved: &ContractReview) {
+async fn clear_and_reject(pg: &PostgresDb, db: &ApplicationStore, approved: &ContractReview) {
     update_findings(db, approved.id, &[]).await.unwrap();
     set_status(db, approved.id, STATUS_REJECTED).await.unwrap();
     let final_row = by_id(db, approved.id).await.unwrap().unwrap();

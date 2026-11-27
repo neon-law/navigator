@@ -336,58 +336,16 @@ pub(crate) async fn confirm_calendar_backups(
     Ok(())
 }
 
-/// Export the configured PostgreSQL sources after normal application admission.
-/// Only explicit `all` compatibility runs may skip an unconfigured PostgreSQL source
-/// or export without application admission; raw recovery helpers are independent.
-/// Connection and coverage errors become [`PostgresExport::Failed`].
-/// The workflow retains completed
-/// source snapshots for notification, then fails the coverage invocation.
+/// Export the configured PostgreSQL databases after application admission.
 pub async fn export_configured<F: Fn(&str) -> Option<String>>(
     get: F,
     storage: &dyn StorageService,
     _scheduled_for: Option<DateTime<Utc>>,
 ) -> Option<PostgresExport> {
-    let source = match crate::source::ArchiveSource::from_lookup(&get) {
-        Ok(source) => source,
-        Err(error) => {
-            return Some(PostgresExport::Failed {
-                error: error.to_string(),
-            });
-        }
-    };
-    export_for_source(source, get, storage).await
-}
-
-/// Export the admitted PostgreSQL databases for a DBOS archive run.
-pub(crate) async fn export_admitted(
-    get: impl Fn(&str) -> Option<String>,
-    storage: &dyn StorageService,
-) -> Option<PostgresExport> {
-    export_for_source(crate::source::ArchiveSource::Postgres, get, storage).await
-}
-
-async fn export_for_source(
-    source: crate::source::ArchiveSource,
-    get: impl Fn(&str) -> Option<String>,
-    storage: &dyn StorageService,
-) -> Option<PostgresExport> {
-    let host = get("NAVIGATOR_POSTGRES_HOST").filter(|host| !host.trim().is_empty());
-    if host.is_none() {
-        return if matches!(source, crate::source::ArchiveSource::Postgres)
-            || [
-                "NAVIGATOR_ARCHIVE_COVERAGE",
-                "NAVIGATOR_ARCHIVE_POSTGRES_USER",
-                "NAVIGATOR_ARCHIVE_FORGEJO_USER",
-            ]
-            .iter()
-            .any(|key| get(key).is_some_and(|value| !value.trim().is_empty()))
-        {
-            Some(PostgresExport::Failed {
-                error: "NAVIGATOR_POSTGRES_HOST is required for paired coverage".into(),
-            })
-        } else {
-            None
-        };
+    if get("NAVIGATOR_POSTGRES_HOST").is_none_or(|host| host.trim().is_empty()) {
+        return Some(PostgresExport::Failed {
+            error: "NAVIGATOR_POSTGRES_HOST is required for paired coverage".into(),
+        });
     }
     let outcome = async {
         let required = |key: &str| {
@@ -398,7 +356,7 @@ async fn export_for_source(
         let coverage: crate::coverage::ConfiguredCoverage =
             serde_json::from_str(&required("NAVIGATOR_ARCHIVE_COVERAGE")?)
                 .context("decode reviewed database coverage")?;
-        let db = source.postgres().await?;
+        let db = store::postgres::PostgresDb::application().await?;
         let server = db.pool().connect_options().as_ref().clone();
         // The runtime login reads only `public`; a deployed archive signs in
         // to Navigator as its own read-everything login instead.
@@ -1212,37 +1170,6 @@ mod tests {
         assert_eq!(Kind::from_pg("label_id"), Some(Kind::Text));
         assert_eq!(Kind::from_pg("label_kind"), Some(Kind::Text));
         assert_eq!(Kind::from_pg("vector"), None);
-    }
-
-    #[tokio::test]
-    async fn dbos_export_requires_postgres_even_with_a_compatibility_source_setting() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = FsStorage::new(dir.path()).await.unwrap();
-        let result = export_admitted(
-            |key| (key == "NAVIGATOR_ARCHIVE_SOURCE").then(|| "all".into()),
-            &storage,
-        )
-        .await;
-        assert!(matches!(result, Some(PostgresExport::Failed { .. })));
-        assert!(storage.list("").await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn explicit_compatibility_can_skip_unconfigured_postgres_without_writing() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = FsStorage::new(dir.path()).await.unwrap();
-        for get in [
-            &(|key: &str| (key == "NAVIGATOR_ARCHIVE_SOURCE").then(|| "all".into()))
-                as &dyn Fn(&str) -> Option<String>,
-            &|key: &str| match key {
-                "NAVIGATOR_ARCHIVE_SOURCE" => Some("all".into()),
-                "NAVIGATOR_POSTGRES_HOST" => Some(" ".into()),
-                _ => None,
-            },
-        ] {
-            assert!(export_configured(get, &storage, None).await.is_none());
-        }
-        assert!(storage.list("").await.unwrap().is_empty());
     }
 
     struct InsertBetween {

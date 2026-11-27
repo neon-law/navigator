@@ -91,7 +91,7 @@ async fn linked_attachments(
     state: &ApiState,
     row: &store::inbox::UnprocessedRow,
 ) -> Result<Vec<store::inbox::MessageAttachment>, ApiError> {
-    store::inbox::message_assets(&state.surreal, row.firm_id, row.id)
+    store::inbox::message_assets(&state.application_store, row.firm_id, row.id)
         .await
         .map_err(map_inbox)
 }
@@ -137,12 +137,12 @@ pub(crate) async fn unprocessed(
     LawyerSession(session): LawyerSession,
 ) -> Result<Response, ApiError> {
     let actor_id = actor_id(&session)?;
-    let rows = store::inbox::unprocessed_inbox(&state.surreal, actor_id)
+    let rows = store::inbox::unprocessed_inbox(&state.application_store, actor_id)
         .await
         .map_err(map_inbox)?;
     let mut views = Vec::with_capacity(rows.len());
     for row in rows {
-        let saved = store::inbox::process_state(&state.surreal, row.id)
+        let saved = store::inbox::process_state(&state.application_store, row.id)
             .await
             .map_err(map_inbox)?
             .ok_or(ApiError::NotFound)?;
@@ -181,9 +181,10 @@ pub(crate) async fn process(
     Json(request): Json<ProcessRequest>,
 ) -> Result<Response, ApiError> {
     let actor_id = actor_id(&session)?;
-    let context = store::inbox::process_context(&state.surreal, actor_id, request.message)
-        .await
-        .map_err(map_inbox)?;
+    let context =
+        store::inbox::process_context(&state.application_store, actor_id, request.message)
+            .await
+            .map_err(map_inbox)?;
     if !request.apply {
         let attachments = linked_attachments(&state, &context.row).await?;
         return Ok(Json(view(context.row, context.state, attachments)).into_response());
@@ -207,9 +208,10 @@ pub(crate) async fn process(
     let _apply_guard = message_lock(&APPLY_LOCKS, request.message)?
         .lock_owned()
         .await;
-    let context = store::inbox::process_context(&state.surreal, actor_id, request.message)
-        .await
-        .map_err(map_inbox)?;
+    let context =
+        store::inbox::process_context(&state.application_store, actor_id, request.message)
+            .await
+            .map_err(map_inbox)?;
     let decision = classify_inbound_facts(
         &context.row.external_address,
         context.row.subject.as_deref().unwrap_or_default(),
@@ -247,7 +249,7 @@ pub(crate) async fn process(
     // LAW-166: apply always records the route and the processing time, so
     // a re-run reports idempotency instead of duplicating work.
     store::inbox::mark_processed(
-        &state.surreal,
+        &state.application_store,
         request.message,
         decision.route.as_str(),
         recorded_at,
@@ -364,7 +366,7 @@ pub(crate) async fn attachment(
     Json(request): Json<AttachmentRequest>,
 ) -> Result<Response, ApiError> {
     let actor_id = actor_id(&session)?;
-    let row = store::inbox::process_context(&state.surreal, actor_id, request.message)
+    let row = store::inbox::process_context(&state.application_store, actor_id, request.message)
         .await
         .map_err(map_inbox)?
         .row;
@@ -376,7 +378,7 @@ pub(crate) async fn attachment(
         .into_iter()
         .find(|link| link.asset_id == request.asset)
         .ok_or(ApiError::NotFound)?;
-    let asset = store::assets::find_by_id(&state.surreal, link.asset_id)
+    let asset = store::assets::find_by_id(&state.application_store, link.asset_id)
         .await
         .map_err(ApiError::Asset)?
         .ok_or(ApiError::NotFound)?;
@@ -405,10 +407,14 @@ async fn require_firm_side(
     session: &SessionData,
     project_id: Uuid,
 ) -> Result<(), ApiError> {
-    let viewer =
-        store::access::matter_viewer(&state.surreal, session.person_id, session.role, project_id)
-            .await
-            .map_err(ApiError::Db)?;
+    let viewer = store::access::matter_viewer(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        project_id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     if viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
         Ok(())
     } else {
@@ -438,7 +444,7 @@ pub(crate) enum SlackNotice {
 /// matter channel is never provisioned here — a missing channel is
 /// reported so an operator runs `slack ensure` deliberately.
 async fn notify_inbox_routed(state: &ApiState, project_id: Uuid) -> SlackNotice {
-    let project = match store::projects::find_by_id(&state.surreal, project_id).await {
+    let project = match store::projects::find_by_id(&state.application_store, project_id).await {
         Ok(Some(project)) => project,
         Ok(None) => return SlackNotice::NoProject,
         Err(error) => {
@@ -448,7 +454,7 @@ async fn notify_inbox_routed(state: &ApiState, project_id: Uuid) -> SlackNotice 
     };
     let slack = match state
         .integration_providers
-        .slack(&state.surreal, project_id)
+        .slack(&state.application_store, project_id)
         .await
     {
         Ok(slack) => slack,
@@ -802,7 +808,7 @@ async fn assignment_matches_for_page(
                 .map(|address| (row.firm_id, address.trim().to_owned()))
         })
         .collect();
-    let resolved = store::inbox::assignment_candidates(&state.surreal, addresses, scope)
+    let resolved = store::inbox::assignment_candidates(&state.application_store, addresses, scope)
         .await
         .map_err(map_inbox)?;
 
@@ -858,7 +864,7 @@ pub(crate) async fn assign_matches(
             .map_err(map_inbox)?
     } else {
         store::inbox::unprocessed_assignment_page(
-            &state.surreal,
+            &state.application_store,
             actor_id,
             request.after,
             MAX_ASSIGN_MATCH_THREADS + 1,
@@ -886,7 +892,7 @@ pub(crate) async fn assign_matches(
                 let choices = match choices_by_firm.entry(row.firm_id) {
                     std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                     std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
-                        store::inbox::projects_in_firm(&state.surreal, row.firm_id)
+                        store::inbox::projects_in_firm(&state.application_store, row.firm_id)
                             .await
                             .map_err(map_inbox)?,
                     ),

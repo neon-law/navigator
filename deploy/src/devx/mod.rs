@@ -201,12 +201,8 @@ const DEFAULT_KUSTOMIZE_KIND: &str = "k8s/overlays/kind";
 const DEFAULT_KUSTOMIZE_GKE: &str = "examples/deploy/k8s/gke";
 
 // Host-side ports the locally-run `web` binary connects to.
-// Restate's ingress port (8080 in-cluster) is remapped to host 9080
-// because KIND already binds host 8080 to its nginx ingress.
 const DEFAULT_INGRESS_HTTP_HOST_PORT: u16 = 8080;
 const DEFAULT_INGRESS_HTTPS_HOST_PORT: u16 = 8443;
-const DEFAULT_RESTATE_INGRESS_HOST_PORT: u16 = 9080;
-const DEFAULT_RESTATE_ADMIN_HOST_PORT: u16 = 9070;
 const DEFAULT_CLAMAV_HOST_PORT: u16 = 13310;
 // Rauthy is exposed through KIND's fixed NodePort mapping. SeaweedFS S3
 // uses a normal `kubectl port-forward`, so existing clusters pick up a
@@ -220,7 +216,6 @@ const DEFAULT_SEAWEEDFS_S3_HOST_PORT: u16 = 30900;
 // default on a developer's machine, and 8080 is already KIND's ingress,
 // so the host mapping is 18000 — clear of every other port this module
 // binds.
-const DEFAULT_SURREAL_HOST_PORT: u16 = 18000;
 
 // Local `web` defaults — matches `cargo run -p neon` defaults.
 const DEFAULT_LOCAL_WEB_PORT: u16 = 3001;
@@ -267,12 +262,9 @@ struct KindConfig {
     gke_overlay: String,
     ingress_http_port: u16,
     ingress_https_port: u16,
-    restate_ingress_port: u16,
-    restate_admin_port: u16,
     clamav_port: u16,
     rauthy_port: u16,
     seaweedfs_s3_port: u16,
-    surreal_port: u16,
     web_port: u16,
     delete_your_data_web_port: u16,
     openobserve_port: u16,
@@ -307,21 +299,12 @@ impl KindConfig {
                 "NAVIGATOR_KIND_INGRESS_HTTPS_PORT",
                 DEFAULT_INGRESS_HTTPS_HOST_PORT,
             ),
-            restate_ingress_port: env_port(
-                "NAVIGATOR_KIND_RESTATE_INGRESS_PORT",
-                DEFAULT_RESTATE_INGRESS_HOST_PORT,
-            ),
-            restate_admin_port: env_port(
-                "NAVIGATOR_KIND_RESTATE_ADMIN_PORT",
-                DEFAULT_RESTATE_ADMIN_HOST_PORT,
-            ),
             clamav_port: env_port("NAVIGATOR_KIND_CLAMAV_PORT", DEFAULT_CLAMAV_HOST_PORT),
             rauthy_port: env_port("NAVIGATOR_KIND_RAUTHY_PORT", DEFAULT_RAUTHY_HOST_PORT),
             seaweedfs_s3_port: env_port(
                 "NAVIGATOR_KIND_SEAWEEDFS_S3_PORT",
                 DEFAULT_SEAWEEDFS_S3_HOST_PORT,
             ),
-            surreal_port: env_port("NAVIGATOR_KIND_SURREAL_PORT", DEFAULT_SURREAL_HOST_PORT),
             web_port: env_port("NAVIGATOR_KIND_WEB_PORT", DEFAULT_LOCAL_WEB_PORT),
             delete_your_data_web_port: env_port(
                 delete_your_data_port_env_var(),
@@ -2743,8 +2726,6 @@ mod tests {
         "NAVIGATOR_GKE_OVERLAY",
         "NAVIGATOR_KIND_INGRESS_HTTP_PORT",
         "NAVIGATOR_KIND_INGRESS_HTTPS_PORT",
-        "NAVIGATOR_KIND_RESTATE_INGRESS_PORT",
-        "NAVIGATOR_KIND_RESTATE_ADMIN_PORT",
         "NAVIGATOR_KIND_CLAMAV_PORT",
         "NAVIGATOR_KIND_RAUTHY_PORT",
         "NAVIGATOR_KIND_SEAWEEDFS_S3_PORT",
@@ -2781,12 +2762,9 @@ mod tests {
             gke_overlay: DEFAULT_KUSTOMIZE_GKE.into(),
             ingress_http_port: DEFAULT_INGRESS_HTTP_HOST_PORT,
             ingress_https_port: DEFAULT_INGRESS_HTTPS_HOST_PORT,
-            restate_ingress_port: DEFAULT_RESTATE_INGRESS_HOST_PORT,
-            restate_admin_port: DEFAULT_RESTATE_ADMIN_HOST_PORT,
             clamav_port: DEFAULT_CLAMAV_HOST_PORT,
             rauthy_port: DEFAULT_RAUTHY_HOST_PORT,
             seaweedfs_s3_port: DEFAULT_SEAWEEDFS_S3_HOST_PORT,
-            surreal_port: DEFAULT_SURREAL_HOST_PORT,
             web_port: DEFAULT_LOCAL_WEB_PORT,
             delete_your_data_web_port: DEFAULT_LOCAL_DELETE_YOUR_DATA_WEB_PORT,
             openobserve_port: DEFAULT_OPENOBSERVE_HOST_PORT,
@@ -2920,8 +2898,6 @@ mod tests {
         clear_kind_env();
         env::set_var("NAVIGATOR_KIND_INGRESS_HTTP_PORT", "18080");
         env::set_var("NAVIGATOR_KIND_INGRESS_HTTPS_PORT", "18443");
-        env::set_var("NAVIGATOR_KIND_RESTATE_INGRESS_PORT", "19080");
-        env::set_var("NAVIGATOR_KIND_RESTATE_ADMIN_PORT", "19070");
         env::set_var("NAVIGATOR_KIND_CLAMAV_PORT", "23310");
         env::set_var("NAVIGATOR_KIND_RAUTHY_PORT", "31080");
         env::set_var("NAVIGATOR_KIND_SEAWEEDFS_S3_PORT", "31900");
@@ -2931,8 +2907,6 @@ mod tests {
         clear_kind_env();
         assert_eq!(cfg.ingress_http_port, 18080);
         assert_eq!(cfg.ingress_https_port, 18443);
-        assert_eq!(cfg.restate_ingress_port, 19080);
-        assert_eq!(cfg.restate_admin_port, 19070);
         assert_eq!(cfg.clamav_port, 23310);
         assert_eq!(cfg.rauthy_port, 31080);
         assert_eq!(cfg.seaweedfs_s3_port, 31900);

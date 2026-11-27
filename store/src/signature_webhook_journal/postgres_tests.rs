@@ -1,6 +1,6 @@
 use super::postgres;
 use super::*;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 
 async fn database() -> Option<PostgresDb> {
     let (options, database) = fresh_schema().await?;
@@ -46,31 +46,5 @@ async fn a_redelivery_lands_on_the_journaled_row_and_consumption_drains_it() {
         .unwrap();
     assert!(consumed.consumed_at.is_some());
     assert_eq!(consumed.last_error, None);
-    pg.0.close().await;
-}
-
-#[tokio::test]
-async fn surreal_receipts_copy_once_with_their_identity() {
-    let Some(pg) = database().await else { return };
-    let surreal = crate::surreal::test_support::mem().await;
-    let receipt = journal_verified_receipt(
-        &surreal,
-        SignatureProvider::DocuSign,
-        "synthetic-envelope",
-        "completed",
-        "{}",
-    )
-    .await
-    .unwrap();
-
-    let copied = postgres::copy_from_surreal(&surreal, &pg).await.unwrap();
-    assert_eq!((copied.applied, copied.failures.len()), (1, 0));
-    let rerun = postgres::copy_from_surreal(&surreal, &pg).await.unwrap();
-    assert_eq!(rerun.applied, 0, "a rerun writes nothing");
-
-    let pending = postgres::pending_receipts(&pg, 10).await.unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].id, receipt.id);
-    assert_eq!(pending[0].payload, receipt.payload);
     pg.0.close().await;
 }

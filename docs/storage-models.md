@@ -6,8 +6,7 @@ constraints, and add ordered migrations under `store/postgres/migrations/`. The 
 `navigator-migrate` before serving requests. [PostgreSQL tooling](postgres-tooling.md) covers the driver and runner.
 
 Write through the domain accessor. Ordinary application reads and writes require PostgreSQL configuration and completed
-historical enrollment. Missing configuration, unavailable PostgreSQL, or invalid history returns an error; ordinary
-operations do not fall back to SurrealDB or copy their committed writes into it.
+historical enrollment. Missing configuration, unavailable PostgreSQL, or invalid history returns an error.
 
 ## Historical admission
 
@@ -22,10 +21,10 @@ but no valid handoff cannot serve application requests. Each scope names an exac
 | `tenancy:1` | Six Firm, Brand, Project, and membership tables |
 | `application:1` | Sixteen Template, communication, Deadline, page, secret, audit, and Journal tables |
 
-The registry in `store::postgres_backfill::family` owns the table sets. Existing completed scopes retain their sealed
-receipts and checkpoints. A later enrollment does not reinterpret an earlier receipt as proof of newly switched tables.
-Import preserves native rows and refuses unresolved references or divergent overlap; activation requires the registered
-scope's complete proof. See the [scoped enrollment procedure](postgres-tooling.md#scoped-family-enrollment).
+The registry in `store::postgres::history` owns the table sets. Existing completed scopes retain their sealed receipts
+and checkpoints. A later enrollment does not reinterpret an earlier receipt as proof of newly switched tables. Import
+preserves native rows and refuses unresolved references or divergent overlap; activation requires the registered scope's
+complete proof. See the [scoped enrollment procedure](postgres-tooling.md#application-admission).
 
 Explicit migrations, imports, diagnostics, and raw recovery connect through `PostgresDb::from_env` before application
 admission is possible. That operator connection does not activate a database. Source reads belong to the explicit
@@ -128,13 +127,8 @@ the exact source timestamp used by encryption as well as their PostgreSQL repres
 re-encrypt history to align timestamps. [Tasks](glossary/task.md), [Case Stages](glossary/case-stage.md), and
 [Purchases](glossary/purchase.md) also have PostgreSQL-native models.
 
-## Recovery and compatibility
+## PostgreSQL recovery
 
-Scheduled [archives](iceberg-archive.md) default to admitted PostgreSQL. Explicit compatibility exports and independent
-raw PostgreSQL recovery remain available before application activation. Physical base backups, WAL archives, and Iceberg
-coverage generations have separate recovery evidence; selecting PostgreSQL does not establish a successful restore.
-
-[SurrealDB compatibility](surreal-compatibility.md) covers retained source operations. A schema link, passing fixture,
-or merged port does not establish a deployed data cutover or permit retiring recovery access. Reconcile historical data,
-verify Source-unavailable application behavior and recovery, and retain required durable-work handover before removing
-the old services.
+Physical base backups, WAL archives, and [Iceberg logical exports](iceberg-archive.md) have separate recovery evidence.
+Prove restoration with their respective drills. [Project recovery archives](project-recovery-archives.md) cover the
+Project repository and document parts of the recovery contract.

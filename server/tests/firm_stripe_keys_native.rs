@@ -39,7 +39,7 @@ async fn stripe_command_writes_only_for_its_firm_and_lists_only_metadata() {
 }
 
 async fn exercise() {
-    let db = store::surreal::SurrealDb::uninitialized();
+    let db = store::application_store::ApplicationStore::uninitialized();
     let (firm_id, dri_id) =
         store::test_support::seed_firm_with_new_brand(&db, "synthetic-billing").await;
     let (_, other_id) = store::test_support::seed_firm_with_new_brand(&db, "synthetic-other").await;

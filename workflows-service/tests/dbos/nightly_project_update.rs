@@ -133,13 +133,15 @@ impl SlackBot for AcceptInviteThenHold {
     }
 }
 
-async fn seed_project(surreal: &store::surreal::SurrealDb) -> uuid::Uuid {
-    let (project, _) = crate::support::native_project::matter(surreal).await;
-    store::projects::set_internal_slack_channel_id(surreal, project.id, "C0123456789")
+async fn seed_project(
+    application_store: &store::application_store::ApplicationStore,
+) -> uuid::Uuid {
+    let (project, _) = crate::support::native_project::matter(application_store).await;
+    store::projects::set_internal_slack_channel_id(application_store, project.id, "C0123456789")
         .await
         .expect("set synthetic internal Slack channel");
     let person = store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role(
             "Synthetic Lawyer",
             "synthetic@example.invalid",
@@ -148,11 +150,11 @@ async fn seed_project(surreal: &store::surreal::SurrealDb) -> uuid::Uuid {
     )
     .await
     .expect("seed synthetic Project member");
-    store::projects::add_participation(surreal, project.id, person.id, "lawyer")
+    store::projects::add_participation(application_store, project.id, person.id, "lawyer")
         .await
         .expect("assign synthetic Project member");
-    store::projects::designate_dri_in_surreal(
-        surreal,
+    store::projects::designate_dri(
+        application_store,
         project.id,
         person.id,
         store::projects::DriSide::Lawyer,
@@ -160,7 +162,7 @@ async fn seed_project(surreal: &store::surreal::SurrealDb) -> uuid::Uuid {
     .await
     .expect("designate synthetic Lawyer DRI");
     store::external_identities::link(
-        surreal,
+        application_store,
         person.id,
         store::external_identities::ExternalSystem::Slack,
         "U_SYNTHETIC",
@@ -175,11 +177,11 @@ async fn seed_project(surreal: &store::surreal::SurrealDb) -> uuid::Uuid {
 #[allow(clippy::too_many_lines)] // One crash/restart scenario keeps the DBOS evidence together.
 async fn registered_nightly_parent_resumes_the_same_date_and_deduplicates_notices() {
     let Some(db) = database().await else { return };
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let _project = seed_project(&surreal).await;
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    let _project = seed_project(&application_store).await;
     let slack = Arc::new(AcceptInviteThenHold::holding_invites());
     let context = Context::new(
-        surreal.clone(),
+        application_store.clone(),
         slack.clone(),
         Arc::new(workflows_service::firm_slack::SharedSlackBot(slack.clone())),
         "synthetic-messages".into(),
@@ -287,11 +289,11 @@ async fn registered_nightly_parent_resumes_the_same_date_and_deduplicates_notice
 #[allow(clippy::too_many_lines)] // End-to-end registered child crash/restart scenario.
 async fn registered_slack_child_reuses_receipt_after_acceptance_before_checkpoint() {
     let Some(db) = database().await else { return };
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let _project_id = seed_project(&surreal).await;
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    let _project_id = seed_project(&application_store).await;
     let slack = Arc::new(AcceptInviteThenHold::holding_project_notices());
     let context = Context::new(
-        surreal,
+        application_store,
         slack.clone(),
         Arc::new(workflows_service::firm_slack::SharedSlackBot(slack.clone())),
         "synthetic-messages".into(),

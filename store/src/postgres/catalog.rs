@@ -44,16 +44,13 @@ type Query<'q> = sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArgume
 
 /// The pool to serve the catalog from, or `None` in a process without
 /// PostgreSQL and for the mirror reading its SurrealDB source.
-pub(crate) fn authority() -> Boxed<'static, Result<Option<PostgresDb>, CatalogError>> {
+pub(crate) fn authority() -> Boxed<'static, Result<PostgresDb, CatalogError>> {
     Box::pin(async {
-        if crate::postgres_mirror::reading_source() {
-            return Ok(None);
-        }
         #[cfg(test)]
         if let Ok(pg) = TEST_CATALOG_DB.try_with(Clone::clone) {
-            return Ok(Some(pg));
+            return Ok(pg);
         }
-        Ok(PostgresDb::configured().await?)
+        Ok(PostgresDb::application().await?)
     })
 }
 

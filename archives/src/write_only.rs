@@ -286,12 +286,6 @@ pub(crate) struct Unconfirmed {
 }
 
 impl Bundle {
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn inventory(&self) -> &Inventory {
-        &self.inventory
-    }
-
     fn unconfirmed(&self, acknowledged: usize) -> Unconfirmed {
         Unconfirmed {
             inventory_uri: format!("{}/{}", self.root, self.descriptor),

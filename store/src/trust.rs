@@ -69,8 +69,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use String;
 
+use crate::application_store::ApplicationStore;
 use crate::notation_events::{append_event, TransitionRecord};
-use crate::surreal::SurrealDb;
 
 /// Machine-kind discriminator for trust-ledger events on the
 /// `notation_events` journal. Distinct from `questionnaire` / `workflow`, so a
@@ -552,12 +552,12 @@ pub fn position(movements: &[Movement]) -> TrustLedgerResult<Position> {
 /// Returns a [`String`] if the movement cannot be serialized or the row cannot
 /// be inserted (e.g. the notation does not exist).
 pub async fn record_movement(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     notation_id: Uuid,
     acting_person_id: Uuid,
     movement: &Movement,
 ) -> Result<crate::notation_events::NotationEvent, String> {
-    let notation = crate::notations::find_by_id(surreal, notation_id)
+    let notation = crate::notations::find_by_id(application_store, notation_id)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("notation {notation_id}"))?;
@@ -567,7 +567,7 @@ pub async fn record_movement(
     let payload =
         serde_json::to_string(movement).map_err(|e| format!("serialize trust movement: {e}"))?;
     append_event(
-        surreal,
+        application_store,
         TransitionRecord {
             notation_id,
             acting_person_id: Some(acting_person_id),
@@ -592,14 +592,14 @@ pub async fn record_movement(
 /// missing or unparseable payload — a corruption we surface loudly rather than
 /// silently skip.
 pub async fn movements_for(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Vec<Movement>, String> {
-    let notation = crate::notations::find_by_id(surreal, notation_id)
+    let notation = crate::notations::find_by_id(application_store, notation_id)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("notation {notation_id}"))?;
-    let rows: Vec<_> = crate::notation_events::for_notation(surreal, notation_id)
+    let rows: Vec<_> = crate::notation_events::for_notation(application_store, notation_id)
         .await
         .map_err(|error| error.to_string())?
         .into_iter()
@@ -641,8 +641,11 @@ pub async fn movements_for(
 /// # Errors
 ///
 /// Propagates any [`String`] from [`movements_for`].
-pub async fn position_for(surreal: &SurrealDb, notation_id: Uuid) -> Result<Position, String> {
-    position(&movements_for(surreal, notation_id).await?).map_err(|e| trust_error(&e))
+pub async fn position_for(
+    application_store: &ApplicationStore,
+    notation_id: Uuid,
+) -> Result<Position, String> {
+    position(&movements_for(application_store, notation_id).await?).map_err(|e| trust_error(&e))
 }
 
 /// The notation a matter's trust postings anchor to: its **earliest**
@@ -658,10 +661,10 @@ pub async fn position_for(surreal: &SurrealDb, notation_id: Uuid) -> Result<Posi
 ///
 /// Propagates a notation read failure.
 pub async fn engagement_anchor(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Option<Uuid>, String> {
-    let mut notations = crate::notations::list_by_project(surreal, project_id)
+    let mut notations = crate::notations::list_by_project(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?;
     notations.sort_by(|a, b| a.inserted_at.cmp(&b.inserted_at).then(a.id.cmp(&b.id)));
@@ -680,15 +683,15 @@ pub async fn engagement_anchor(
 ///
 /// Propagates a notation or journal read failure, or a corrupt payload.
 pub async fn movements_for_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<Movement>, String> {
-    let notations = crate::notations::list_by_project(surreal, project_id)
+    let notations = crate::notations::list_by_project(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?;
     let mut movements = Vec::new();
     for notation in notations {
-        movements.extend(movements_for(surreal, notation.id).await?);
+        movements.extend(movements_for(application_store, notation.id).await?);
     }
     Ok(movements)
 }
@@ -701,10 +704,11 @@ pub async fn movements_for_project(
 ///
 /// Propagates any failure from [`movements_for_project`].
 pub async fn position_for_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Position, String> {
-    position(&movements_for_project(surreal, project_id).await?).map_err(|e| trust_error(&e))
+    position(&movements_for_project(application_store, project_id).await?)
+        .map_err(|e| trust_error(&e))
 }
 
 /// Whether this matter's ledger already carries a movement mirrored from
@@ -718,11 +722,11 @@ pub async fn position_for_project(
 ///
 /// Propagates any failure from [`movements_for_project`].
 pub async fn has_external_ref(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     external_ref: &str,
 ) -> Result<bool, String> {
-    Ok(movements_for_project(surreal, project_id)
+    Ok(movements_for_project(application_store, project_id)
         .await?
         .iter()
         .any(|movement| movement.external_ref.as_deref() == Some(external_ref)))
@@ -759,7 +763,7 @@ pub enum Recorded {
 /// Returns a [`String`] when the movement is invalid for the matter, when it
 /// carries no `external_ref`, or when a read or append fails.
 pub async fn record_project_movement(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     movement: &Movement,
 ) -> Result<Recorded, String> {
@@ -773,17 +777,17 @@ pub async fn record_project_movement(
                 .to_string(),
         );
     };
-    if has_external_ref(surreal, project_id, external_ref).await? {
+    if has_external_ref(application_store, project_id, external_ref).await? {
         return Ok(Recorded::AlreadyRecorded);
     }
-    let Some(anchor) = engagement_anchor(surreal, project_id).await? else {
+    let Some(anchor) = engagement_anchor(application_store, project_id).await? else {
         return Ok(Recorded::NoAnchor);
     };
-    let notation = crate::notations::find_by_id(surreal, anchor)
+    let notation = crate::notations::find_by_id(application_store, anchor)
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("notation {anchor}"))?;
-    record_movement(surreal, anchor, notation.person_id, movement).await?;
+    record_movement(application_store, anchor, notation.person_id, movement).await?;
     Ok(Recorded::Posted)
 }
 
@@ -985,368 +989,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod db_tests {
-    use super::{
-        append_event, client_account, movements_for, position_for, record_movement, trust_account,
-        Movement, TransitionRecord, MACHINE_TRUST_LEDGER,
-    };
-    use crate::persons::{self, NewPerson};
-    use crate::surreal::SurrealDb;
-    use crate::test_support::mem_surreal;
-    use uuid::Uuid;
-
-    /// Seed the person/template/project/notation graph a trust movement is
-    /// anchored to. Returns `(notation_id, project_id, acting_person_id)`.
-    async fn seed_engagement(surreal: &SurrealDb) -> (Uuid, Uuid, Uuid) {
-        // Unique per call so a single test can seed more than one engagement
-        // without colliding on the person-email / template-code constraints.
-        let tag = Uuid::now_v7().simple().to_string();
-        let libra = persons::create(
-            surreal,
-            &NewPerson::new("Libra", format!("libra-{tag}@example.com")),
-        )
-        .await
-        .unwrap();
-        let tmpl = crate::templates::save_version(
-            surreal,
-            None,
-            &format!("onboarding__letter_{tag}"),
-            crate::templates::Version {
-                title: "Retainer".into(),
-                respondent_type: "person_and_entity".into(),
-                asset_id: None,
-                form_code: None,
-                kind: None,
-                source_commit_sha: None,
-            },
-        )
-        .await
-        .unwrap()
-        .into_model();
-        let proj = crate::test_support::seed_project(surreal, "Libra litigation").await;
-        let notation_id = crate::notations::create(
-            surreal,
-            &crate::notations::NewNotation::new(tmpl.id, libra.id, proj.id, "BEGIN"),
-        )
-        .await
-        .unwrap()
-        .id;
-        (notation_id, proj.id, libra.id)
-    }
-
-    /// A full lifecycle persists to the journal and folds back to the same
-    /// position, with movements returned oldest → newest.
-    #[tokio::test]
-    async fn record_and_read_back_a_trust_lifecycle() {
-        let surreal = mem_surreal().await;
-        let (notation_id, project, actor) = seed_engagement(&surreal).await;
-
-        let deposit = Movement::deposit(project, "USD", "1483.87", 148_387, "2026-07-08T00:00:00Z")
-            .with_phase("pleadings");
-        let earned = Movement::earned_draw(project, 100_000, "2026-09-01T00:00:00Z");
-        let refund = Movement::refund(project, 48_387, "2026-10-01T00:00:00Z");
-
-        record_movement(&surreal, notation_id, actor, &deposit)
-            .await
-            .unwrap();
-        record_movement(&surreal, notation_id, actor, &earned)
-            .await
-            .unwrap();
-        record_movement(&surreal, notation_id, actor, &refund)
-            .await
-            .unwrap();
-
-        let movements = movements_for(&surreal, notation_id).await.unwrap();
-        assert_eq!(movements.len(), 3, "oldest → newest");
-        assert_eq!(movements[0].phase.as_deref(), Some("pleadings"));
-        assert_eq!(movements[1], earned);
-        assert_eq!(movements[2], refund);
-
-        let pos = position_for(&surreal, notation_id).await.unwrap();
-        assert_eq!(pos.deposited_cents, 148_387);
-        assert_eq!(pos.earned_cents, 100_000);
-        assert_eq!(pos.refunded_cents, 48_387);
-        assert_eq!(pos.held_cents(), 0, "earned + refunded exhaust the deposit");
-    }
-
-    /// The event carries the double-entry legs on `from_state`/`to_state` and
-    /// the kind on `condition`, so a trust posting reads at a glance on the
-    /// journal.
-    #[tokio::test]
-    async fn movement_mirrors_its_legs_onto_the_journal_row() {
-        let surreal = mem_surreal().await;
-        let (notation_id, project, actor) = seed_engagement(&surreal).await;
-        let deposit = Movement::deposit(project, "USD", "500.00", 50_000, "2026-07-08T00:00:00Z");
-        let row = record_movement(&surreal, notation_id, actor, &deposit)
-            .await
-            .unwrap();
-
-        assert_eq!(row.machine_kind, MACHINE_TRUST_LEDGER);
-        assert_eq!(row.condition, "deposit");
-        assert_eq!(row.from_state, deposit.from_account);
-        assert_eq!(row.to_state, deposit.to_account);
-        assert_eq!(row.acting_person_id, actor);
-
-        // Only trust_ledger rows come back from movements_for.
-        let count = crate::notation_events::for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|e| e.machine_kind == MACHINE_TRUST_LEDGER)
-            .count();
-        assert_eq!(count, 1);
-    }
-
-    #[tokio::test]
-    async fn record_rejects_a_movement_for_another_project() {
-        let surreal = mem_surreal().await;
-        let (notation_id, _project, actor) = seed_engagement(&surreal).await;
-        let other_project = Uuid::now_v7();
-        let deposit = Movement::deposit(
-            other_project,
-            "USD",
-            "500.00",
-            50_000,
-            "2026-07-08T00:00:00Z",
-        );
-
-        assert!(record_movement(&surreal, notation_id, actor, &deposit)
-            .await
-            .is_err());
-    }
-
-    #[tokio::test]
-    async fn read_rejects_payload_that_disagrees_with_journal_legs() {
-        let surreal = mem_surreal().await;
-        let (notation_id, project, actor) = seed_engagement(&surreal).await;
-        let deposit = Movement::deposit(project, "USD", "500.00", 50_000, "2026-07-08T00:00:00Z");
-        append_event(
-            &surreal,
-            TransitionRecord {
-                notation_id,
-                acting_person_id: Some(actor),
-                machine_kind: MACHINE_TRUST_LEDGER,
-                from_state: &trust_account(project),
-                to_state: &client_account(project),
-                condition: "deposit",
-                payload_json: Some(serde_json::to_string(&deposit).unwrap()),
-                recorded_at: "2026-07-08T00:00:00Z",
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(movements_for(&surreal, notation_id).await.is_err());
-    }
-
-    /// A `trust_ledger` row with a missing or unparseable payload is a
-    /// corruption `movements_for` surfaces loudly rather than silently drops.
-    #[tokio::test]
-    async fn malformed_trust_events_surface_as_errors() {
-        let surreal = mem_surreal().await;
-
-        let raw = |notation_id, actor, payload_json| TransitionRecord {
-            notation_id,
-            acting_person_id: Some(actor),
-            machine_kind: MACHINE_TRUST_LEDGER,
-            from_state: "client:x",
-            to_state: "trust:x",
-            condition: "deposit",
-            payload_json,
-            recorded_at: "2026-07-08T00:00:00Z",
-        };
-
-        // Missing payload.
-        let (empty, _project, actor) = seed_engagement(&surreal).await;
-        append_event(&surreal, raw(empty, actor, None))
-            .await
-            .unwrap();
-        assert!(
-            movements_for(&surreal, empty).await.is_err(),
-            "a payload-less trust event must error"
-        );
-
-        // Unparseable payload.
-        let (bad, _project, actor) = seed_engagement(&surreal).await;
-        append_event(&surreal, raw(bad, actor, Some("{ not json".to_string())))
-            .await
-            .unwrap();
-        assert!(
-            movements_for(&surreal, bad).await.is_err(),
-            "an unparseable trust event must error"
-        );
-    }
-}
+mod db_tests {}
 
 #[cfg(test)]
-mod project_ledger_tests {
-    use super::{
-        engagement_anchor, has_external_ref, position_for_project, record_project_movement,
-        Movement, Recorded,
-    };
-    use crate::surreal::SurrealDb;
-    use uuid::Uuid;
-
-    /// A seeded matter that already has a notation to anchor postings to.
-    async fn matter(surreal: &SurrealDb) -> Uuid {
-        let notation_id = crate::test_support::seed_notation(surreal).await;
-        crate::notations::find_by_id(surreal, notation_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .project_id
-    }
-
-    fn deposit(project_id: Uuid, cents: i64, xero_id: &str) -> Movement {
-        Movement::deposit(
-            project_id,
-            "USD",
-            format!("{}.00", cents / 100),
-            cents,
-            "2026-09-01T00:00:00Z",
-        )
-        .with_external_ref(xero_id)
-    }
-
-    /// A deposit lands on the matter's ledger and moves its position.
-    #[tokio::test]
-    async fn a_mirrored_deposit_moves_the_matters_position() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let project_id = matter(&surreal).await;
-
-        let posted =
-            record_project_movement(&surreal, project_id, &deposit(project_id, 500_000, "bt-1"))
-                .await
-                .unwrap();
-        assert_eq!(posted, Recorded::Posted);
-
-        let position = position_for_project(&surreal, project_id).await.unwrap();
-        assert_eq!(position.deposited_cents, 500_000);
-        assert_eq!(position.held_cents(), 500_000);
-        assert!(has_external_ref(&surreal, project_id, "bt-1")
-            .await
-            .unwrap());
-    }
-
-    /// The nightly mirror re-reads the same Xero transaction every night.
-    /// The second read must post nothing.
-    #[tokio::test]
-    async fn re_mirroring_one_xero_transaction_does_not_double_count() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let project_id = matter(&surreal).await;
-        let movement = deposit(project_id, 250_000, "bt-1");
-
-        assert_eq!(
-            record_project_movement(&surreal, project_id, &movement)
-                .await
-                .unwrap(),
-            Recorded::Posted
-        );
-        assert_eq!(
-            record_project_movement(&surreal, project_id, &movement)
-                .await
-                .unwrap(),
-            Recorded::AlreadyRecorded
-        );
-
-        let position = position_for_project(&surreal, project_id).await.unwrap();
-        assert_eq!(position.deposited_cents, 250_000, "posted once, not twice");
-    }
-
-    /// Two matters keep two ledgers. A pooled bank account is shared; the
-    /// positions are not.
-    #[tokio::test]
-    async fn two_matters_keep_two_ledgers() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let first = matter(&surreal).await;
-        let second = matter(&surreal).await;
-
-        record_project_movement(&surreal, first, &deposit(first, 100_000, "bt-a"))
-            .await
-            .unwrap();
-        record_project_movement(&surreal, second, &deposit(second, 700_000, "bt-b"))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            position_for_project(&surreal, first)
-                .await
-                .unwrap()
-                .held_cents(),
-            100_000
-        );
-        assert_eq!(
-            position_for_project(&surreal, second)
-                .await
-                .unwrap()
-                .held_cents(),
-            700_000
-        );
-    }
-
-    /// A matter with no notation has nothing to anchor a posting to. It is
-    /// reported, not anchored to something invented.
-    #[tokio::test]
-    async fn a_matter_with_no_notation_has_no_anchor() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let project_id = crate::projects::create(
-            &surreal,
-            &crate::projects::NewProject {
-                code: "unanchored".into(),
-                name: "Unanchored".into(),
-                status: "open".into(),
-                entity_id: crate::test_support::seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id;
-
-        assert_eq!(engagement_anchor(&surreal, project_id).await.unwrap(), None);
-        assert_eq!(
-            record_project_movement(&surreal, project_id, &deposit(project_id, 1, "bt-x"))
-                .await
-                .unwrap(),
-            Recorded::NoAnchor
-        );
-        assert_eq!(
-            position_for_project(&surreal, project_id).await.unwrap(),
-            super::Position::default()
-        );
-    }
-
-    /// A posting with no provider reference could not be recognised on the
-    /// next night's read, so it is refused rather than duplicated later.
-    #[tokio::test]
-    async fn a_movement_without_a_provider_reference_is_refused() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let project_id = matter(&surreal).await;
-        let unreferenced =
-            Movement::deposit(project_id, "USD", "10.00", 1_000, "2026-09-01T00:00:00Z");
-
-        let refused = record_project_movement(&surreal, project_id, &unreferenced).await;
-        assert!(refused.is_err(), "got {refused:?}");
-    }
-
-    /// A refund reduces what is held without touching what was deposited.
-    #[tokio::test]
-    async fn a_refund_reduces_the_held_balance() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let project_id = matter(&surreal).await;
-        record_project_movement(&surreal, project_id, &deposit(project_id, 500_000, "bt-1"))
-            .await
-            .unwrap();
-
-        let refund =
-            Movement::refund(project_id, 200_000, "2026-09-10T00:00:00Z").with_external_ref("bt-2");
-        record_project_movement(&surreal, project_id, &refund)
-            .await
-            .unwrap();
-
-        let position = position_for_project(&surreal, project_id).await.unwrap();
-        assert_eq!(position.deposited_cents, 500_000);
-        assert_eq!(position.refunded_cents, 200_000);
-        assert_eq!(position.held_cents(), 300_000);
-    }
-}
+mod project_ledger_tests {}

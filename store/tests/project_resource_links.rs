@@ -26,11 +26,11 @@ fn command(name: &str) -> UpdateProjectCommand {
 #[tokio::test]
 async fn both_notion_pages_are_stored_on_the_matter_row() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let matter = native_project::create("notion-round-trip").await;
 
         update_project(
-            &surreal,
+            &application_store,
             matter.id,
             &UpdateProjectCommand {
                 private_notion_page_url: Some(
@@ -45,7 +45,7 @@ async fn both_notion_pages_are_stored_on_the_matter_row() {
         .await
         .expect("update stores both Notion pages");
 
-        let saved = find_by_id(&surreal, matter.id)
+        let saved = find_by_id(&application_store, matter.id)
             .await
             .expect("read back")
             .expect("matter exists");
@@ -66,11 +66,11 @@ async fn both_notion_pages_are_stored_on_the_matter_row() {
 #[tokio::test]
 async fn a_blank_notion_field_clears_the_column() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let matter = native_project::create("notion-clears").await;
 
         update_project(
-            &surreal,
+            &application_store,
             matter.id,
             &UpdateProjectCommand {
                 private_notion_page_url: Some(
@@ -82,7 +82,7 @@ async fn a_blank_notion_field_clears_the_column() {
         .await
         .expect("store a page");
         update_project(
-            &surreal,
+            &application_store,
             matter.id,
             &UpdateProjectCommand {
                 private_notion_page_url: Some(String::new()),
@@ -92,7 +92,7 @@ async fn a_blank_notion_field_clears_the_column() {
         .await
         .expect("clear the page");
 
-        let saved = find_by_id(&surreal, matter.id)
+        let saved = find_by_id(&application_store, matter.id)
             .await
             .expect("read back")
             .expect("matter exists");
@@ -108,7 +108,7 @@ async fn a_blank_notion_field_clears_the_column() {
 #[tokio::test]
 async fn a_resource_url_that_would_not_navigate_is_refused() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let matter = native_project::create("notion-refuses").await;
 
         for hostile in [
@@ -118,7 +118,7 @@ async fn a_resource_url_that_would_not_navigate_is_refused() {
             "https://user:token@www.notion.so/page",
         ] {
             let outcome = update_project(
-                &surreal,
+                &application_store,
                 matter.id,
                 &UpdateProjectCommand {
                     private_notion_page_url: Some(hostile.to_string()),
@@ -132,7 +132,7 @@ async fn a_resource_url_that_would_not_navigate_is_refused() {
             );
         }
 
-        let saved = find_by_id(&surreal, matter.id)
+        let saved = find_by_id(&application_store, matter.id)
             .await
             .expect("read back")
             .expect("matter exists");
@@ -146,7 +146,7 @@ async fn a_resource_url_that_would_not_navigate_is_refused() {
 #[tokio::test]
 async fn the_slack_columns_pass_the_same_gate() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let matter = native_project::create("slack-validated").await;
 
         for field in ["internal", "external"] {
@@ -158,7 +158,7 @@ async fn the_slack_columns_pass_the_same_gate() {
             }
             assert!(
                 matches!(
-                    update_project(&surreal, matter.id, &input).await,
+                    update_project(&application_store, matter.id, &input).await,
                     Err(ProjectCommandError::Invalid(_))
                 ),
                 "the {field} Slack channel must reject a script URL"

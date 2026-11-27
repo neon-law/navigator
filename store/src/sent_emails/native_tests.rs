@@ -5,10 +5,10 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn unactivated_history_refuses_email_audit_reads_and_writes() {
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+    let (options, database) = crate::postgres::fixtures::fresh_schema()
         .await
         .expect("required PostgreSQL fixture");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     PostgresDb::with_test_db(pg, async {
         let message = NewSentEmail {
             recipient: "synthetic@example.invalid".into(),
@@ -39,10 +39,10 @@ async fn unactivated_history_refuses_email_audit_reads_and_writes() {
 }
 
 async fn fixture() -> PostgresDb {
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+    let (options, database) = crate::postgres::fixtures::fresh_schema()
         .await
         .expect("required PostgreSQL fixture");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     crate::postgres::fixtures::activate_application(&pg).await;
     pg
 }

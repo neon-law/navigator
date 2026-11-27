@@ -29,6 +29,5 @@ model, and the evidence-and-guardrails playbook.
 
 ## Boundaries
 
-- *Add* a new workflow (template + questionnaire + handlers): [[create-legal-workflow]]. *Author* a Restate handler
-  without breaking durability (the `ctx.run` rule): [[restate]]. Telemetry, the trigger metric, and BigQuery:
-  [[observability]].
+- *Add* a new workflow (template + questionnaire + handlers): [[create-legal-workflow]].
+  Telemetry, the trigger metric, and BigQuery: [[observability]].

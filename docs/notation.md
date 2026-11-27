@@ -53,7 +53,7 @@ classifying what the file is — so the four parts can be discussed as one model
 Nesting them under a real `metadata:` key would be a breaking parser change touching every file under
 [`templates/`](../templates/) as well as `rules::frontmatter`, and is deliberately not implied by this model.
 
-- Schema: [`template` in `navigator.surql`](../store/src/schema/navigator.surql) Queries:
+- Schema: [`template` in PostgreSQL](../store/postgres/schema.sql) Queries:
   [`store::templates`](../store/src/templates.rs) Files: [`templates/`](../templates/) — three top-level shelves:
   `notations/forms/<country>/<jurisdiction>/<office>/<code>.md` for government forms, `notations/neon_law/<document>.md`
   for Neon Law firm work, and `github/<notation>.md` for engineering intake. Only the first two are Templates in the
@@ -150,8 +150,7 @@ that document's Notation Markdown at each point in its life.
   move/reorder — a gap the manifest makes visible rather than hides.
 
 - Schema: [`notation_document` and `notation_document_version` in
-  `navigator.surql`](../store/src/schema/navigator.surql) Queries:
-  [`store::notation_documents`](../store/src/notation_documents.rs)
+  PostgreSQL](../store/postgres/schema.sql) Queries: [`store::notation_documents`](../store/src/notation_documents.rs)
 
 ## Questionnaire
 

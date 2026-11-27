@@ -9,7 +9,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use dbos::{CancellationToken, StepOptions, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use tokio::time::{sleep, Duration};
 use workflows::SlackBot;
 
@@ -36,7 +36,7 @@ pub trait ReconcileRunner: Send + Sync + 'static {
     async fn run(&self) -> Result<ReconcileReport, ReconcileDbosError>;
 }
 
-struct LiveReconcileRunner(SurrealDb);
+struct LiveReconcileRunner(ApplicationStore);
 
 #[async_trait::async_trait]
 impl ReconcileRunner for LiveReconcileRunner {
@@ -49,7 +49,7 @@ impl ReconcileRunner for LiveReconcileRunner {
 }
 
 struct ProviderReconcileRunner {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     postgres: store::postgres::PostgresDb,
     provider: Arc<dyn BillingProvider>,
 }
@@ -59,7 +59,7 @@ impl ReconcileRunner for ProviderReconcileRunner {
     async fn run(&self) -> Result<ReconcileReport, ReconcileDbosError> {
         store::postgres::PostgresDb::with_application_db(
             self.postgres.clone(),
-            reconcile_once(self.provider.as_ref(), &self.surreal),
+            reconcile_once(self.provider.as_ref(), &self.application_store),
         )
         .await
         .map_err(|_| ReconcileDbosError::Reconcile)?
@@ -78,7 +78,7 @@ pub struct Context {
 
 impl Context {
     pub fn from_env(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         slack: Arc<dyn SlackBot>,
         simulated: bool,
         get: impl Fn(&str) -> Option<String>,
@@ -92,7 +92,7 @@ impl Context {
             return Err("DBOS ReconcileInvoices requires SLACK_FINANCE_CHANNEL_ID");
         }
         Ok(Self {
-            runner: Arc::new(LiveReconcileRunner(surreal)),
+            runner: Arc::new(LiveReconcileRunner(application_store)),
             slack,
             finance_channel,
             simulated,
@@ -102,7 +102,7 @@ impl Context {
 
     /// Reuse reconciliation with explicit providers and an owned application store.
     pub fn with_provider(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         postgres: store::postgres::PostgresDb,
         provider: Arc<dyn BillingProvider>,
         slack: Arc<dyn SlackBot>,
@@ -111,7 +111,7 @@ impl Context {
     ) -> Self {
         Self::with_runner(
             Arc::new(ProviderReconcileRunner {
-                surreal,
+                application_store,
                 postgres,
                 provider,
             }),
@@ -362,9 +362,9 @@ mod tests {
         if billing::XeroBillingProvider::from_env().is_some() {
             return;
         }
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let refused = Context::from_env(
-            surreal,
+            application_store,
             Arc::new(workflows::CapturingSlackBot::new()),
             true,
             |_| None,

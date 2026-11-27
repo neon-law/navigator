@@ -5,8 +5,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 use store::{
+    application_store::ApplicationStore,
     firm_secrets::{resolve_firm_credential, IntegrationProvider, IntegrationSecretKind},
-    surreal::SurrealDb,
 };
 use uuid::Uuid;
 
@@ -106,7 +106,7 @@ pub(crate) struct FirmDocuSign {
 impl FirmDocuSign {
     pub(crate) async fn for_firm(
         &self,
-        db: &SurrealDb,
+        db: &ApplicationStore,
         firm: Uuid,
     ) -> Result<DocuSignSignatureProvider, SignatureError> {
         self.connection(db, firm).await?.provider(self.demo)
@@ -114,7 +114,7 @@ impl FirmDocuSign {
 
     pub(crate) async fn connect_key(
         &self,
-        db: &SurrealDb,
+        db: &ApplicationStore,
         firm: Uuid,
     ) -> Result<(Uuid, String), SignatureError> {
         let connection = self.connection(db, firm).await?;
@@ -126,7 +126,11 @@ impl FirmDocuSign {
         Ok((account, key))
     }
 
-    async fn connection(&self, db: &SurrealDb, firm: Uuid) -> Result<Connection, SignatureError> {
+    async fn connection(
+        &self,
+        db: &ApplicationStore,
+        firm: Uuid,
+    ) -> Result<Connection, SignatureError> {
         let credential = resolve_firm_credential(
             db,
             firm,
@@ -144,7 +148,7 @@ impl FirmDocuSign {
 impl SignatureProvider for FirmDocuSign {
     async fn for_project(
         &self,
-        db: &SurrealDb,
+        db: &ApplicationStore,
         project_id: Uuid,
     ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
         let pg = store::postgres::PostgresDb::from_env()
@@ -161,7 +165,7 @@ impl SignatureProvider for FirmDocuSign {
 
     async fn for_firm(
         &self,
-        db: &SurrealDb,
+        db: &ApplicationStore,
         firm: Uuid,
     ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
         FirmDocuSign::for_firm(self, db, firm).await.map(Some)
@@ -169,7 +173,7 @@ impl SignatureProvider for FirmDocuSign {
 
     async fn verify_firm_connect(
         &self,
-        db: &SurrealDb,
+        db: &ApplicationStore,
         firm: Uuid,
         signature: &str,
         body: &[u8],
@@ -223,7 +227,7 @@ impl SignatureProvider for FirmDocuSign {
 
 pub(crate) async fn for_notation(
     provider: &dyn SignatureProvider,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
     let notation = store::notations::find_by_id(db, notation_id)

@@ -846,8 +846,8 @@ mod tests {
             create, list_events, list_for_project, mark_invoiced, set_stage, unbilled_billable,
             write_off, BillingStatus, NewTimeEntry, TimeEntryError, TimeEntrySource,
         };
+        use crate::postgres::fixtures::{connect, fresh_schema};
         use crate::postgres::PostgresDb;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
         use sqlx::Row;
         use uuid::Uuid;
 

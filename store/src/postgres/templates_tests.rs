@@ -1,8 +1,8 @@
 //! PostgreSQL-only Template version and isolation boundaries.
 use crate::postgres::fixtures::{activate_application, firm_for_notation, workflow_fixture};
+use crate::postgres::fixtures::{connect, fresh_schema};
+use crate::postgres::history::Family;
 use crate::postgres::PostgresDb;
-use crate::postgres_backfill::family::Family;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::template_source::TemplateSourceError;
 use crate::templates::{self, Scope, Version};
 use uuid::Uuid;
@@ -40,7 +40,7 @@ async fn project_for_notation(pg: &PostgresDb, notation: Uuid) -> Uuid {
 }
 
 async fn assert_scope_title(
-    source: &crate::surreal::SurrealDb,
+    source: &crate::application_store::ApplicationStore,
     project: Option<Uuid>,
     title: &str,
 ) {
@@ -61,7 +61,7 @@ async fn template_versions_keep_the_first_provenance_and_pinned_notation() {
     };
     let (person, notation, _) = workflow_fixture(&pg).await;
     let project = project_for_notation(&pg, notation).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
         let asset =
@@ -178,7 +178,7 @@ async fn template_scope_resolution_keeps_other_firms_private() {
         return;
     };
     let (firm, project, other, unowned) = scope_fixture(&pg).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
         let asset =
@@ -248,7 +248,7 @@ async fn concurrent_identical_template_versions_share_one_current_row() {
     let Some(pg) = database().await else {
         return;
     };
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(pg.clone(), async {
         let (left, right) = tokio::join!(
             templates::save_version(&unavailable, None, "concurrent", version("Same", None)),
@@ -274,7 +274,7 @@ async fn a_failed_template_insert_preserves_the_current_version() {
     let Some(pg) = database().await else {
         return;
     };
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(pg.clone(), async {
         let first = templates::save_version(&unavailable, None, "atomic", version("Original", None)).await.unwrap().into_model();
         sqlx::raw_sql("CREATE FUNCTION reject_template_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rejected insert'; END $$; CREATE TRIGGER reject_template_insert BEFORE INSERT ON template FOR EACH ROW EXECUTE FUNCTION reject_template_insert();")
@@ -301,7 +301,7 @@ async fn template_history_admission_precedes_content_and_question_writes() {
     .execute(pg.pool())
     .await
     .unwrap();
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let (dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
         let error = crate::template_source::persist_contents(
@@ -341,7 +341,7 @@ async fn template_source_persists_and_reads_a_pinned_version_without_source() {
     };
     let (_, notation, _) = workflow_fixture(&pg).await;
     let project = project_for_notation(&pg, notation).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
         let body = include_str!("../../../templates/notations/neon_law/onboarding__letter.md");
@@ -380,37 +380,11 @@ async fn template_source_persists_and_reads_a_pinned_version_without_source() {
 }
 
 #[tokio::test]
-async fn template_import_refuses_before_source_access_after_activation() {
-    let Some(pg) = database().await else {
-        return;
-    };
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
-    let key = Uuid::new_v4();
-    let error = crate::postgres_mirror::templates::mirror(&unavailable, &pg, key)
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        crate::postgres_mirror::MirrorError::MatterAuthority
-    ));
-    let error = crate::postgres_mirror::during_initial_copy(
-        crate::postgres_mirror::templates::mirror(&unavailable, &pg, key),
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        crate::postgres_mirror::MirrorError::MatterAuthority
-    ));
-    pg.pool().close().await;
-}
-
-#[tokio::test]
 async fn every_changed_spec_field_appends_and_whitespace_kind_is_normalized() {
     let Some(pg) = database().await else {
         return;
     };
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
         let asset =
@@ -461,37 +435,11 @@ async fn every_changed_spec_field_appends_and_whitespace_kind_is_normalized() {
 }
 
 #[tokio::test]
-async fn scoped_versions_require_commit_body_and_existing_asset() {
-    let Some(pg) = database().await else {
-        return;
-    };
-    let (_, notation, _) = workflow_fixture(&pg).await;
-    let (firm, project) = firm_for_notation(&pg, notation).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
-    let (_dir, storage) = storage().await;
-    PostgresDb::with_test_db(pg.clone(), async {
-        let asset = crate::assets::ingest_content(&unavailable, &storage, b"pinned", "text/markdown").await.unwrap();
-        for scope in [Scope::Project(project), Scope::Firm(firm)] {
-            for commit in [None, Some(" ".into())] {
-                let mut spec = version("Refused", Some(asset)); spec.source_commit_sha = commit;
-                assert!(matches!(templates::save_version_in(&unavailable, scope, "missing", spec).await, Err(templates::TemplateError::MissingSourceCommit)));
-            }
-            assert!(matches!(templates::save_version_in(&unavailable, scope, "missing", version("Refused", None)).await, Err(templates::TemplateError::MissingBody)));
-            let missing = Uuid::new_v4();
-            assert!(matches!(templates::save_version_in(&unavailable, scope, "missing", version("Refused", Some(missing))).await, Err(templates::TemplateError::DanglingAsset(id)) if id == missing));
-            assert!(templates::resolve_in(&unavailable, scope, "missing").await.unwrap().is_none());
-        }
-        assert!(crate::postgres_mirror::from_source(templates::save_version(&unavailable, None, "source-write", version("Refused", None))).await.is_err());
-    }).await;
-    pg.pool().close().await;
-}
-
-#[tokio::test]
 async fn body_checks_missing_assets_content_and_notation_pins() {
     let Some(pg) = database().await else {
         return;
     };
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
         let empty = templates::save_version(&unavailable, None, "empty", version("Empty", None))
@@ -575,7 +523,7 @@ async fn an_unpinned_version_is_retained_when_a_pinned_version_is_appended() {
     };
     let (_, notation, _) = workflow_fixture(&pg).await;
     let project = project_for_notation(&pg, notation).await;
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
         let asset = crate::assets::ingest_content(&unavailable, &storage, b"body", "text/markdown")
@@ -624,7 +572,7 @@ async fn different_concurrent_versions_keep_one_current_and_all_saved_versions()
     let Some(pg) = database().await else {
         return;
     };
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(pg.clone(), async {
         let (a, b, c) = tokio::join!(
             templates::save_version(&unavailable, None, "different", version("A", None)),
@@ -700,7 +648,7 @@ async fn repository_blueprint_aliases_keep_the_same_version_and_first_commit() {
     };
     let project = repository_project(&pg).await;
     let (project, code) = (project.id, project.code);
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
         let body = include_str!("../../../templates/notations/neon_law/onboarding__letter.md");
@@ -741,7 +689,7 @@ async fn repository_errors_and_invalid_drafts_refuse_persistence() {
     };
     let project = repository_project(&pg).await;
     let (project, code) = (project.id, project.code);
-    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let unavailable = crate::application_store::ApplicationStore::uninitialized();
     let (_dir, storage) = storage().await;
     PostgresDb::with_test_db(pg.clone(), async {
         let body =

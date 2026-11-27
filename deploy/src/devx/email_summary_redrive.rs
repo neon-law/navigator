@@ -28,7 +28,7 @@ async fn redrive(
     recovery_id: Option<Uuid>,
     from_recovery: Option<Uuid>,
 ) -> Result<()> {
-    let surreal = crate::application_store()
+    let application_store = crate::application_store()
         .await
         .context("verify PostgreSQL application authority")?;
     let config = workflows::EmailSummaryConfig::from_env()
@@ -38,7 +38,7 @@ async fn redrive(
         .context("configure the summary recovery ingress")?;
     let operation_id = recovery_id
         .context("--recovery-id is required for DBOS; reuse it when retrying this operation")?;
-    let receipt = store::email_receipts::find_by_id(&surreal, receipt_id)
+    let receipt = store::email_receipts::find_by_id(&application_store, receipt_id)
         .await
         .context("load the receipt")?
         .context("receipt not found")?;

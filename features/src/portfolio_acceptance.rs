@@ -4,11 +4,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::{body::Body, http::Request, Router};
-use portal::session::{SessionData, SESSION_COOKIE_NAME};
-use portal::SessionStore;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
 pub const TARGET: &str = store::synthetic_portfolio::STAGING_TARGET;
 
@@ -162,12 +158,6 @@ pub const SCENARIOS: &[Scenario] = &[
 ];
 
 #[derive(Debug, Clone)]
-pub struct ApiResult {
-    pub status: u16,
-    pub body: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct ScenarioResult {
     pub scenario_id: &'static str,
     pub actual_status: u16,
@@ -214,97 +204,6 @@ pub fn check_result(id: &str, status: u16, body: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Configure the app process to render the synthetic-matters disclosure used
-/// by the staging acceptance target. Call before the first HTML response: the
-/// portal resolves this deployment setting once at process startup.
-pub fn configure_test_environment() {
-    std::env::set_var("NAVIGATOR_ENVIRONMENT", "production");
-    std::env::set_var("NAVIGATOR_SIMULATED_MATTERS", "true");
-}
-
-pub async fn request_api(app: &Router, sessions: &SessionStore, id: &str) -> Result<ApiResult> {
-    let scenario = scenario(id)
-        .ok_or_else(|| anyhow::anyhow!("unknown portfolio acceptance scenario `{id}`"))?;
-    let surreal = crate::shared_surreal().await;
-    let person = store::persons::find_by_email_ci(&surreal, scenario.actor_email)
-        .await
-        .context("look up acceptance actor")?
-        .ok_or_else(|| {
-            anyhow::anyhow!("acceptance actor {} is not seeded", scenario.actor_email)
-        })?;
-    let role = person.role;
-    let session = SessionData {
-        sub: format!("acceptance-{}", scenario.actor_email),
-        email: Some(scenario.actor_email.to_string()),
-        person_id: Some(person.id),
-        exp: portal::session::now_unix_secs() + 60,
-        role,
-        csrf_token: "acceptance-csrf".into(),
-        source: portal::session::SessionSource::Browser,
-        provider: None,
-        viewing_as_dri: None,
-        email_verified: false,
-        scope: None,
-    };
-    let cookie = format!("{SESSION_COOKIE_NAME}={}", sessions.encode(&session));
-    let request = Request::builder()
-        .uri(scenario.route)
-        .header("cookie", cookie)
-        .body(Body::empty())
-        .context("build acceptance request")?;
-    let response = app
-        .clone()
-        .oneshot(request)
-        .await
-        .context("dispatch acceptance request")?;
-    let status = response.status().as_u16();
-    let body = crate::body_string(response).await;
-    Ok(ApiResult { status, body })
-}
-
-/// Apply the shared fixture and prove a second apply reports no writes in the
-/// same isolated feature-test store.
-pub async fn prepare_test_fixture() -> ApplyCounts {
-    static APPLIED: tokio::sync::OnceCell<ApplyCounts> = tokio::sync::OnceCell::const_new();
-    *APPLIED
-        .get_or_init(|| async {
-            let surreal = crate::shared_surreal().await;
-            let storage = crate::fs_storage("portfolio-acceptance").await;
-            store::seed::seed_canonical(&surreal, &storage)
-                .await
-                .expect("seed canonical fixture dependencies");
-            let first = store::synthetic_portfolio::apply(
-                &surreal,
-                &storage,
-                store::DeploymentEnvironment::Dev,
-                Some(TARGET),
-            )
-            .await
-            .expect("apply versioned synthetic portfolio");
-            let second = store::synthetic_portfolio::apply(
-                &surreal,
-                &storage,
-                store::DeploymentEnvironment::Dev,
-                Some(TARGET),
-            )
-            .await
-            .expect("repeat synthetic portfolio apply");
-            assert_eq!(first.version, store::synthetic_portfolio::PORTFOLIO_VERSION);
-            assert_eq!(first.target, TARGET);
-            assert_eq!(second.version, first.version);
-            assert_eq!(second.target, first.target);
-            assert_eq!(second.created(), 0, "repeat apply must not write fixtures");
-            bridge_acceptance_people(&surreal).await;
-            add_firm_only_document(&surreal, &storage).await;
-            ApplyCounts {
-                first_created: first.created(),
-                second_created: second.created(),
-                second_unchanged: second.unchanged(),
-            }
-        })
-        .await
-}
-
 pub fn report_json(results: &[ScenarioResult], counts: ApplyCounts) -> Result<String> {
     serde_json::to_string_pretty(&report_value(results, counts))
         .context("serialize acceptance report")
@@ -342,17 +241,29 @@ pub fn report_value(results: &[ScenarioResult], counts: ApplyCounts) -> Value {
 
 /// Link the synthetic portfolio to the acceptance actors used by API and
 /// browser runners without introducing real client data.
-pub async fn bridge_acceptance_people(surreal: &store::surreal::SurrealDb) {
-    let client = ensure_actor(surreal, "client@neonlaw.com", store::persons::Role::Client).await;
+pub async fn bridge_acceptance_people(
+    application_store: &store::application_store::ApplicationStore,
+) {
+    let client = ensure_actor(
+        application_store,
+        "client@neonlaw.com",
+        store::persons::Role::Client,
+    )
+    .await;
     for code in [
         "synthetic-portfolio-001",
         "synthetic-portfolio-invoice-matrix",
         "synthetic-portfolio-pooled-draw-a",
         "synthetic-portfolio-closed-pitch",
     ] {
-        add_person_to_project(surreal, code, client.id, "client").await;
+        add_person_to_project(application_store, code, client.id, "client").await;
     }
-    let lawyer = ensure_actor(surreal, "lawyer@neonlaw.com", store::persons::Role::Lawyer).await;
+    let lawyer = ensure_actor(
+        application_store,
+        "lawyer@neonlaw.com",
+        store::persons::Role::Lawyer,
+    )
+    .await;
     for code in [
         "synthetic-portfolio-pitch",
         "synthetic-portfolio-closed-active",
@@ -362,17 +273,17 @@ pub async fn bridge_acceptance_people(surreal: &store::surreal::SurrealDb) {
         "synthetic-portfolio-invoice-matrix",
         "synthetic-portfolio-pooled-draw-a",
     ] {
-        add_person_to_project(surreal, code, lawyer.id, "lawyer").await;
+        add_person_to_project(application_store, code, lawyer.id, "lawyer").await;
     }
 }
 
 async fn ensure_actor(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     email: &str,
     role: store::persons::Role,
 ) -> store::persons::Person {
     store::test_support::ensure_person(
-        surreal,
+        application_store,
         &store::persons::NewPerson {
             oidc_subject: Some(format!("rauthy-{email}-subject")),
             ..store::persons::NewPerson::with_role(email.to_string(), email.to_string(), role)
@@ -382,21 +293,21 @@ async fn ensure_actor(
 }
 
 async fn add_person_to_project(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     code: &str,
     person_id: uuid::Uuid,
     participation: &str,
 ) {
-    let project = store::projects::find_by_code(surreal, code)
+    let project = store::projects::find_by_code(application_store, code)
         .await
         .expect("look up portfolio project")
         .unwrap_or_else(|| panic!("portfolio project `{code}` is missing"));
-    if store::projects::participation_for_person(surreal, person_id, project.id)
+    if store::projects::participation_for_person(application_store, person_id, project.id)
         .await
         .expect("check portfolio participation")
         .is_none()
     {
-        store::projects::add_participation(surreal, project.id, person_id, participation)
+        store::projects::add_participation(application_store, project.id, person_id, participation)
             .await
             .expect("add local Rauthy actor to portfolio project");
     }
@@ -405,15 +316,15 @@ async fn add_person_to_project(
 /// Add the internal-only document used to prove that client pages do not
 /// disclose firm material.
 pub async fn add_firm_only_document(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
 ) {
-    let project = store::projects::find_by_code(surreal, "synthetic-portfolio-001")
+    let project = store::projects::find_by_code(application_store, "synthetic-portfolio-001")
         .await
         .expect("look up base portfolio project")
         .expect("base portfolio project is applied");
     store::documents::ingest_bytes_exactly_once(
-        surreal,
+        application_store,
         storage,
         &store::documents::IngestArgs {
             project_id: project.id,

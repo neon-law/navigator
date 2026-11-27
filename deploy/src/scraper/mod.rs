@@ -206,7 +206,7 @@ impl std::fmt::Display for RunReport {
 /// inject doubles for every one.
 pub(crate) struct ScraperDeps<'a> {
     pub sessions: &'a dyn SessionFactory,
-    pub surreal: &'a store::surreal::SurrealDb,
+    pub application_store: &'a store::application_store::ApplicationStore,
     pub firm_id: uuid::Uuid,
     pub kms: &'a dyn cloud::RuntimeKms,
     pub fetcher: &'a dyn crate::scraper::fetcher::HttpFetcher,
@@ -238,7 +238,8 @@ pub(crate) async fn run_scraper(
     // is `false`): a credential that simply is not provisioned is fine
     // there — the run proceeds unauthenticated — while a store failure or
     // a malformed provisioned row still hard-stops, never silently ignored.
-    let resolved = credentials::resolve_portal_logins(deps.surreal, deps.firm_id, deps.kms).await;
+    let resolved =
+        credentials::resolve_portal_logins(deps.application_store, deps.firm_id, deps.kms).await;
     let resolved = match resolved {
         Ok(resolved) => resolved,
         Err(CredentialsError::NotConfigured { .. }) if !adapter.requires_login() => {

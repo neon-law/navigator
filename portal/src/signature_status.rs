@@ -19,7 +19,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 pub(crate) async fn project_envelope_json(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     notation: Option<&store::notations::Notation>,
     envelope: &crate::signature::ExternalEnvelope,
@@ -120,12 +120,12 @@ pub struct EnvelopeStatusReport {
 /// the webhook has already recorded (a `tracing::warn` names the gap)
 /// and an absent envelope reports structurally empty.
 pub async fn status_for_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     notation: &store::notations::Notation,
 ) -> EnvelopeStatusReport {
     let Some(signature) =
-        store::signatures::latest_for_notation(surreal, notation.id).await.unwrap_or_else(|error| {
+        store::signatures::latest_for_notation(application_store, notation.id).await.unwrap_or_else(|error| {
             tracing::warn!(notation_id = %notation.id, %error, "signature status: latest_for_notation failed");
             None
         })
@@ -135,7 +135,7 @@ pub async fn status_for_notation(
 
     let completed = signature.state == store::signatures::SignatureState::Completed;
     let signed_roles = &signature.completed_signer_roles;
-    let signers = match declared_roles(surreal, storage, notation).await {
+    let signers = match declared_roles(application_store, storage, notation).await {
         Ok(declared) => declared
             .into_iter()
             .map(|signer| {
@@ -178,7 +178,7 @@ pub async fn status_for_notation(
 
 pub(crate) async fn read_signer_identities(
     report: &mut EnvelopeStatusReport,
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
     provider: &dyn crate::signature::SignatureProvider,
 ) {
@@ -217,15 +217,15 @@ pub(crate) async fn read_signer_identities(
 /// resolution the send path's manifest used, so status and envelope
 /// never disagree about who signs.
 async fn declared_roles(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     notation: &store::notations::Notation,
 ) -> Result<Vec<rules::f107::SignerRole>, String> {
-    let template = store::templates::find_by_id(surreal, notation.template_id)
+    let template = store::templates::find_by_id(application_store, notation.template_id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "template row missing".to_string())?;
-    let source = store::templates::body(surreal, storage, &template)
+    let source = store::templates::body(application_store, storage, &template)
         .await
         .map_err(|e| e.to_string())?;
     let set = crate::signature_flow::signer_set_for_template(&template.code, &source)?;

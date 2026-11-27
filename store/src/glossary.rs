@@ -41,7 +41,6 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 pub use model::glossary::{
@@ -49,11 +48,8 @@ pub use model::glossary::{
     EntryError, LinkTarget, Term, GLOSSARY, GLOSSARY_LABEL, README,
 };
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::catalog;
-use crate::surreal::{record_uuid, SurrealDb};
-
-/// The table these rows live in.
-const TABLE: &str = "glossary_term";
 
 /// One materialized glossary term row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -70,43 +66,10 @@ pub struct GlossaryTerm {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it — the seam between
-/// [`GlossaryTerm`] and the SDK's own `RecordId` and `Datetime`.
-#[derive(SurrealValue)]
-struct GlossaryTermRow {
-    id: surrealdb::types::RecordId,
-    slug: String,
-    title: String,
-    body: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl GlossaryTermRow {
-    /// `None` when the record id is not a native UUID key — a row
-    /// written by something that bypassed [`crate::surreal::record_id`].
-    fn into_term(self) -> Option<GlossaryTerm> {
-        Some(GlossaryTerm {
-            id: record_uuid(&self.id)?,
-            slug: self.slug,
-            title: self.title,
-            body: self.body,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`GlossaryTermRow`] from only one query.
-const SELECT: &str = "id, slug, title, body, inserted_at, updated_at";
-
 /// Errors reading or writing a glossary term.
 #[derive(Debug, thiserror::Error)]
 pub enum GlossaryError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error("glossary writes require PostgreSQL authority")]
     AuthorityUnavailable,
     /// The PostgreSQL catalog authority could not serve the call.
@@ -152,10 +115,8 @@ fn from_pg(row: &sqlx::postgres::PgRow) -> Result<GlossaryTerm, sqlx::Error> {
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn materialize(_db: &SurrealDb, terms: &[Term]) -> Result<usize, GlossaryError> {
-    let pg = catalog::authority()
-        .await?
-        .ok_or(GlossaryError::AuthorityUnavailable)?;
+pub async fn materialize(_db: &ApplicationStore, terms: &[Term]) -> Result<usize, GlossaryError> {
+    let pg = catalog::authority().await?;
     for term in terms {
         catalog::execute(
             sqlx::query(PG_UPSERT)
@@ -176,19 +137,12 @@ pub async fn materialize(_db: &SurrealDb, terms: &[Term]) -> Result<usize, Gloss
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn by_slug(db: &SurrealDb, slug: &str) -> Result<Option<GlossaryTerm>, GlossaryError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::one(&pg, PG_BY_SLUG, slug.to_string(), from_pg).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE slug = $slug LIMIT 1"
-        ))
-        .bind(("slug", slug.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<GlossaryTermRow> = response.take(0)?;
-    Ok(row.and_then(GlossaryTermRow::into_term))
+pub async fn by_slug(
+    _db: &ApplicationStore,
+    slug: &str,
+) -> Result<Option<GlossaryTerm>, GlossaryError> {
+    let pg = catalog::authority().await?;
+    Ok(catalog::one(&pg, PG_BY_SLUG, slug.to_string(), from_pg).await?)
 }
 
 /// Every materialized term, alphabetical by slug.
@@ -196,19 +150,9 @@ pub async fn by_slug(db: &SurrealDb, slug: &str) -> Result<Option<GlossaryTerm>,
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn all(db: &SurrealDb) -> Result<Vec<GlossaryTerm>, GlossaryError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?);
-    }
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY slug ASC"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<GlossaryTermRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(GlossaryTermRow::into_term)
-        .collect())
+pub async fn all(_db: &ApplicationStore) -> Result<Vec<GlossaryTerm>, GlossaryError> {
+    let pg = catalog::authority().await?;
+    Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?)
 }
 
 #[cfg(test)]

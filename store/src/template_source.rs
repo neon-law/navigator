@@ -71,8 +71,6 @@ pub enum TemplateSourceError {
     Asset(#[from] crate::assets::AssetError),
     #[error("template: {0}")]
     Template(#[from] crate::templates::TemplateError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A store lookup this module makes through a seam that owns its own
     /// error type (projects, questions).
     #[error("{0}")]
@@ -157,7 +155,7 @@ pub(crate) fn selected_blueprint(
 /// [`crate::templates::Saved::Unchanged`] — the commit SHA is provenance,
 /// not identity, so it does not churn a version.
 pub async fn persist_from_repo(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     repo: &repos::RepoStore,
     project_id: Uuid,
@@ -166,7 +164,7 @@ pub async fn persist_from_repo(
     crate::templates::write_authority().await?;
     // Read the pinned commit and HEAD tree together, off the async pool —
     // both shell `git` (project_export.rs / provision_repo do the same).
-    let project_code = crate::projects::find_by_id(surreal, project_id)
+    let project_code = crate::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| TemplateSourceError::Store(error.to_string()))?
         .ok_or(TemplateSourceError::RepoEmpty(project_id))?
@@ -187,7 +185,15 @@ pub async fn persist_from_repo(
 
     let commit_sha = commit_sha.ok_or(TemplateSourceError::RepoEmpty(project_id))?;
     let contents = selected_blueprint(tree, code)?;
-    persist_contents(surreal, storage, project_id, code, contents, commit_sha).await
+    persist_contents(
+        application_store,
+        storage,
+        project_id,
+        code,
+        contents,
+        commit_sha,
+    )
+    .await
 }
 
 /// Validate one Draft's `contents` (refusing on any Error-severity
@@ -200,7 +206,7 @@ pub async fn persist_from_repo(
 /// [`TemplateSourceError::Invalid`] for a blocking violation, and any
 /// composition, asset, or template error.
 pub async fn persist_contents(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     project_id: Uuid,
     code: &str,
@@ -208,7 +214,7 @@ pub async fn persist_contents(
     commit_sha: String,
 ) -> Result<Persisted, TemplateSourceError> {
     persist_contents_in(
-        surreal,
+        application_store,
         storage,
         crate::templates::Scope::Project(project_id),
         code,
@@ -226,7 +232,7 @@ pub async fn persist_contents(
 /// # Errors
 /// As [`persist_contents`].
 pub async fn persist_contents_in(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     scope: crate::templates::Scope,
     code: &str,
@@ -265,16 +271,20 @@ pub async fn persist_contents_in(
         .unwrap_or_default();
 
     // The body is content-addressed — its content sha256 is the content hash.
-    let asset_id =
-        crate::assets::ingest_content(surreal, storage, contents.as_bytes(), "text/markdown")
-            .await?;
+    let asset_id = crate::assets::ingest_content(
+        application_store,
+        storage,
+        contents.as_bytes(),
+        "text/markdown",
+    )
+    .await?;
 
     // Register every referenced question code so answers can FK a question
     // row (mirrors the batch importer's registry step).
-    register_questions(surreal, &fm).await?;
+    register_questions(application_store, &fm).await?;
 
     let saved = crate::templates::save_version_in(
-        surreal,
+        application_store,
         scope,
         code,
         crate::templates::Version {
@@ -300,7 +310,7 @@ pub async fn persist_contents_in(
 /// State keys may carry a `__label` suffix; the question code is the
 /// prefix. `BEGIN` / `END` are control states and never registered.
 async fn register_questions(
-    surreal: &crate::surreal::SurrealDb,
+    application_store: &crate::application_store::ApplicationStore,
     fm: &Frontmatter,
 ) -> Result<(), TemplateSourceError> {
     let mut codes: BTreeSet<String> = BTreeSet::new();
@@ -318,7 +328,7 @@ async fn register_questions(
         // on one auto-registered code would otherwise surface `CodeTaken`,
         // and the existing row's template-authored prompt is left alone.
         crate::questions::find_or_create(
-            surreal,
+            application_store,
             &crate::questions::NewQuestion::new(
                 code.clone(),
                 format!("(auto-registered) {code}"),

@@ -49,7 +49,7 @@ pub fn descriptor() -> Value {
 }
 
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     scope: &ReadScope,
     _arguments: &Value,
 ) -> Result<Value, ToolError> {
@@ -57,20 +57,20 @@ pub async fn call(
         // Oversight is a different question with a different answer, so it
         // returns before the membership projection below rather than
         // filtering it.
-        ReadScope::Directory { role } => return directory(surreal, *role).await,
+        ReadScope::Directory { role } => return directory(application_store, *role).await,
         // An authenticated email with no `persons` row is scoped to nothing.
         // `visible_projects` would answer the same way for a `None`
         // `person_id`, but there is no role to ask it with.
         ReadScope::Unlinked => Vec::new(),
         ReadScope::Membership { person_id, role } => super::portal_access()
-            .visible_projects(surreal, Some(*person_id), *role)
+            .visible_projects(application_store, Some(*person_id), *role)
             .await
             .map_err(ToolError::Database)?,
-        ReadScope::Deployment => store::projects::all(surreal)
+        ReadScope::Deployment => store::projects::all(application_store)
             .await
             .map_err(|error| ToolError::Database(error.to_string()))?,
     };
-    let entities = store::entities::all(surreal).await?;
+    let entities = store::entities::all(application_store).await?;
 
     let entity_name = |id: uuid::Uuid| {
         entities
@@ -129,10 +129,10 @@ pub async fn call(
 /// unassigned matter is what this lens exists to surface, so the summary
 /// says so in words rather than leaving the model to read an empty array.
 async fn directory(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     role: store::persons::Role,
 ) -> Result<Value, ToolError> {
-    let entries = store::projects::matter_directory(surreal, role)
+    let entries = store::projects::matter_directory(application_store, role)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?;
 
@@ -174,12 +174,15 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    async fn seed_entity(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
-        crate::test_fixtures::seed_entity_named(surreal, name).await
+    async fn seed_entity(
+        application_store: &store::application_store::ApplicationStore,
+        name: &str,
+    ) -> Uuid {
+        crate::test_fixtures::seed_entity_named(application_store, name).await
     }
 
     async fn seed_project(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         name: &str,
         status: &str,
         entity_id: Option<Uuid>,
@@ -188,11 +191,11 @@ mod tests {
         // a fresh throwaway one when the test doesn't care which.
         let entity_id = match entity_id {
             Some(e) => e,
-            None => store::test_support::seed_entity(surreal).await,
+            None => store::test_support::seed_entity(application_store).await,
         };
-        crate::test_fixtures::seed_brands(surreal).await;
+        crate::test_fixtures::seed_brands(application_store).await;
         store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: format!("test-{}", Uuid::now_v7()),
                 name: name.into(),
@@ -218,8 +221,8 @@ mod tests {
     #[tokio::test]
     async fn empty_database_returns_zero_count_not_an_error() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let r = call(&surreal, &ReadScope::Deployment, &json!({}))
+            let application_store = crate::test_fixtures::handle();
+            let r = call(&application_store, &ReadScope::Deployment, &json!({}))
                 .await
                 .unwrap();
             assert_eq!(r["structuredContent"]["count"], 0);
@@ -232,10 +235,10 @@ mod tests {
     #[tokio::test]
     async fn returns_seeded_projects_sorted_by_name() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed_project(&surreal, "Zeta Settlement", "open", None).await;
-            seed_project(&surreal, "Alpha Matter", "open", None).await;
-            let r = call(&surreal, &ReadScope::Deployment, &json!({}))
+            let application_store = crate::test_fixtures::handle();
+            seed_project(&application_store, "Zeta Settlement", "open", None).await;
+            seed_project(&application_store, "Alpha Matter", "open", None).await;
+            let r = call(&application_store, &ReadScope::Deployment, &json!({}))
                 .await
                 .unwrap();
             let names: Vec<&str> = r["structuredContent"]["projects"]
@@ -252,16 +255,20 @@ mod tests {
     #[tokio::test]
     async fn row_carries_status_and_bound_entity_name() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let eid = seed_entity(&surreal, crate::test_fixtures::ORGANIZATION.as_str()).await;
+            let application_store = crate::test_fixtures::handle();
+            let eid = seed_entity(
+                &application_store,
+                crate::test_fixtures::ORGANIZATION.as_str(),
+            )
+            .await;
             seed_project(
-                &surreal,
+                &application_store,
                 crate::test_fixtures::ESTATE.as_str(),
                 "open",
                 Some(eid),
             )
             .await;
-            let r = call(&surreal, &ReadScope::Deployment, &json!({}))
+            let r = call(&application_store, &ReadScope::Deployment, &json!({}))
                 .await
                 .unwrap();
             let row = &r["structuredContent"]["projects"][0];
@@ -279,23 +286,27 @@ mod tests {
     #[tokio::test]
     async fn summary_lists_status_and_bound_entity() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let eid = seed_entity(&surreal, crate::test_fixtures::ORGANIZATION.as_str()).await;
+            let application_store = crate::test_fixtures::handle();
+            let eid = seed_entity(
+                &application_store,
+                crate::test_fixtures::ORGANIZATION.as_str(),
+            )
+            .await;
             seed_project(
-                &surreal,
+                &application_store,
                 crate::test_fixtures::ESTATE.as_str(),
                 "open",
                 Some(eid),
             )
             .await;
             seed_project(
-                &surreal,
+                &application_store,
                 crate::test_fixtures::MATTER.as_str(),
                 "closed",
                 Some(eid),
             )
             .await;
-            let r = call(&surreal, &ReadScope::Deployment, &json!({}))
+            let r = call(&application_store, &ReadScope::Deployment, &json!({}))
                 .await
                 .unwrap();
             let text = r["content"][0]["text"].as_str().unwrap();
@@ -320,21 +331,21 @@ mod tests {
     /// derives it from the person's tier, which is the only way one is
     /// written.
     async fn participant(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         email: &str,
         tier: store::persons::Role,
         project_id: Option<Uuid>,
         dri: store::participation::DriRequest,
     ) -> store::persons::Person {
         let person = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(email, email, tier),
         )
         .await
         .unwrap();
         if let Some(project_id) = project_id {
             store::participation::add_participant(
-                surreal,
+                application_store,
                 &store::participation::AddParticipantCommand {
                     project_id,
                     person_id: person.id,
@@ -369,11 +380,11 @@ mod tests {
     #[tokio::test]
     async fn a_lawyer_receives_only_the_matter_they_participate_in() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let matter_a = seed_project(&surreal, "Matter A", "open", None).await;
-            seed_project(&surreal, "Matter B", "open", None).await;
+            let application_store = crate::test_fixtures::handle();
+            let matter_a = seed_project(&application_store, "Matter A", "open", None).await;
+            seed_project(&application_store, "Matter B", "open", None).await;
             let lawyer = participant(
-                &surreal,
+                &application_store,
                 "lawyer@example.com",
                 store::persons::Role::Lawyer,
                 Some(matter_a),
@@ -381,14 +392,14 @@ mod tests {
             )
             .await;
 
-            let r = call(&surreal, &membership(&lawyer), &json!({}))
+            let r = call(&application_store, &membership(&lawyer), &json!({}))
                 .await
                 .unwrap();
             assert_eq!(r["structuredContent"]["lens"], "membership");
             assert_eq!(names(&r), vec!["Matter A"]);
             // The unscoped read returned both, so the filter is what is being
             // observed here rather than a database that only holds one row.
-            let unscoped = call(&surreal, &ReadScope::Deployment, &json!({}))
+            let unscoped = call(&application_store, &ReadScope::Deployment, &json!({}))
                 .await
                 .unwrap();
             assert_eq!(names(&unscoped), vec!["Matter A", "Matter B"]);
@@ -401,11 +412,11 @@ mod tests {
     #[tokio::test]
     async fn a_client_receives_only_their_own_client_side_matter() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let theirs = seed_project(&surreal, "Their Matter", "open", None).await;
-            let other = seed_project(&surreal, "Someone Else", "open", None).await;
+            let application_store = crate::test_fixtures::handle();
+            let theirs = seed_project(&application_store, "Their Matter", "open", None).await;
+            let other = seed_project(&application_store, "Someone Else", "open", None).await;
             let client = participant(
-                &surreal,
+                &application_store,
                 "client@example.com",
                 store::persons::Role::Client,
                 Some(theirs),
@@ -413,7 +424,7 @@ mod tests {
             )
             .await;
             participant(
-                &surreal,
+                &application_store,
                 "lawyer@example.com",
                 store::persons::Role::Lawyer,
                 Some(other),
@@ -421,7 +432,7 @@ mod tests {
             )
             .await;
 
-            let r = call(&surreal, &membership(&client), &json!({}))
+            let r = call(&application_store, &membership(&client), &json!({}))
                 .await
                 .unwrap();
             assert_eq!(names(&r), vec!["Their Matter"]);
@@ -435,10 +446,10 @@ mod tests {
     #[tokio::test]
     async fn a_lawyer_on_no_matter_receives_an_empty_list() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed_project(&surreal, "Matter A", "open", None).await;
+            let application_store = crate::test_fixtures::handle();
+            seed_project(&application_store, "Matter A", "open", None).await;
             let lawyer = participant(
-                &surreal,
+                &application_store,
                 "unassigned@example.com",
                 store::persons::Role::Lawyer,
                 None,
@@ -446,7 +457,7 @@ mod tests {
             )
             .await;
 
-            let r = call(&surreal, &membership(&lawyer), &json!({}))
+            let r = call(&application_store, &membership(&lawyer), &json!({}))
                 .await
                 .unwrap();
             assert_eq!(r["structuredContent"]["count"], 0);
@@ -464,14 +475,19 @@ mod tests {
     async fn owner_and_admin_receive_the_directory_over_every_matter() {
         for tier in [store::persons::Role::Owner, store::persons::Role::Admin] {
             store::test_support::with_postgres(async move {
-                let surreal = crate::test_fixtures::handle();
-                let eid = seed_entity(&surreal, crate::test_fixtures::ORGANIZATION.as_str()).await;
-                let matter_a = seed_project(&surreal, "Matter A", "open", Some(eid)).await;
-                seed_project(&surreal, "Matter B", "closed", Some(eid)).await;
+                let application_store = crate::test_fixtures::handle();
+                let eid = seed_entity(
+                    &application_store,
+                    crate::test_fixtures::ORGANIZATION.as_str(),
+                )
+                .await;
+                let matter_a =
+                    seed_project(&application_store, "Matter A", "open", Some(eid)).await;
+                seed_project(&application_store, "Matter B", "closed", Some(eid)).await;
                 // Accountability on one matter and not the other, so the
                 // unassigned case is observed rather than assumed.
                 participant(
-                    &surreal,
+                    &application_store,
                     "dri@example.com",
                     store::persons::Role::Lawyer,
                     Some(matter_a),
@@ -480,7 +496,7 @@ mod tests {
                 .await;
                 // The oversight caller holds no participation row at all.
                 let overseer = participant(
-                    &surreal,
+                    &application_store,
                     "overseer@example.com",
                     tier,
                     None,
@@ -489,7 +505,7 @@ mod tests {
                 .await;
 
                 let r = call(
-                    &surreal,
+                    &application_store,
                     &ReadScope::Directory {
                         role: overseer.role,
                     },
@@ -528,9 +544,9 @@ mod tests {
     #[tokio::test]
     async fn an_unlinked_caller_receives_nothing() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed_project(&surreal, "Matter A", "open", None).await;
-            let r = call(&surreal, &ReadScope::Unlinked, &json!({}))
+            let application_store = crate::test_fixtures::handle();
+            seed_project(&application_store, "Matter A", "open", None).await;
+            let r = call(&application_store, &ReadScope::Unlinked, &json!({}))
                 .await
                 .unwrap();
             assert_eq!(r["structuredContent"]["count"], 0);
@@ -544,17 +560,21 @@ mod tests {
     #[tokio::test]
     async fn ignores_arguments_silently() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             seed_project(
-                &surreal,
+                &application_store,
                 crate::test_fixtures::MATTER.as_str(),
                 "open",
                 None,
             )
             .await;
-            let r = call(&surreal, &ReadScope::Deployment, &json!({ "garbage": 42 }))
-                .await
-                .unwrap();
+            let r = call(
+                &application_store,
+                &ReadScope::Deployment,
+                &json!({ "garbage": 42 }),
+            )
+            .await
+            .unwrap();
             assert_eq!(r["structuredContent"]["count"], 1);
         })
         .await;

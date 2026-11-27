@@ -38,11 +38,11 @@ use crate::firm_capability::FirmCapability;
 use crate::notation_documents::{NotationDocument, NotationDocumentVersion};
 pub(crate) mod restore_parents;
 
+use crate::application_store::ApplicationStore;
 use crate::notations::Notation;
 use crate::persons::Role;
 use crate::postgres::PostgresDb;
 use crate::projects::Project;
-use crate::surreal::SurrealDb;
 
 /// The manifest and restore-metadata format this build writes and reads.
 pub const FORMAT: u32 = 2;
@@ -101,13 +101,13 @@ impl ArchiveAuthority {
 /// [`ArchiveError::Forbidden`] when the capability is refused or the Firm does
 /// not exist, or a database error.
 pub async fn authorize(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     role: Role,
     person_id: Uuid,
     firm_id: Uuid,
 ) -> Result<ArchiveAuthority, ArchiveError> {
     let decision = FirmCapability::ManageRecoveryArchives
-        .resolve(surreal, role, Some(person_id), firm_id)
+        .resolve(application_store, role, Some(person_id), firm_id)
         .await
         .map_err(|error| ArchiveError::Store(error.to_string()))?;
     if decision.is_allowed() {
@@ -156,7 +156,7 @@ impl SourceBackupReference {
 /// archived-projects lane; `source_backups` is the Git bundle lane and is
 /// needed only for a Project with a repository.
 pub struct ArchiveStores<'a> {
-    pub surreal: &'a SurrealDb,
+    pub application_store: &'a ApplicationStore,
     pub pg: &'a PostgresDb,
     pub documents: &'a Arc<dyn StorageService>,
     pub archive: &'a Arc<dyn StorageService>,
@@ -530,7 +530,7 @@ pub async fn request(
     {
         return Err(ArchiveError::InvalidOperationKey);
     }
-    let project = crate::projects::find_by_id(stores.surreal, project_id)
+    let project = crate::projects::find_by_id(stores.application_store, project_id)
         .await
         .map_err(store_error)?
         .ok_or(ArchiveError::ProjectNotFound)?;
@@ -603,8 +603,8 @@ struct Plan {
 /// Read the Project's current recoverable record and describe every item a
 /// complete generation must hold.
 async fn plan(stores: &ArchiveStores<'_>, generation: &Generation) -> Result<Plan, ArchiveError> {
-    let surreal = stores.surreal;
-    let project = crate::projects::find_by_id(surreal, generation.project_id)
+    let application_store = stores.application_store;
+    let project = crate::projects::find_by_id(application_store, generation.project_id)
         .await
         .map_err(store_error)?
         .ok_or(ArchiveError::ProjectNotFound)?;
@@ -617,7 +617,7 @@ async fn plan(stores: &ArchiveStores<'_>, generation: &Generation) -> Result<Pla
     let (firm_id, project_id) = (generation.firm_id, generation.project_id);
     let mut items = Vec::new();
     let mut assets: BTreeMap<Uuid, Asset> = BTreeMap::new();
-    for asset in crate::assets::for_project_including_deleted(surreal, project_id)
+    for asset in crate::assets::for_project_including_deleted(application_store, project_id)
         .await
         .map_err(store_error)?
     {
@@ -705,8 +705,8 @@ async fn plan_notations(
     assets: &mut BTreeMap<Uuid, Asset>,
     items: &mut Vec<PlannedItem>,
 ) -> Result<NotationRecord, ArchiveError> {
-    let surreal = stores.surreal;
-    let mut notations = crate::notations::list_by_project(surreal, project_id)
+    let application_store = stores.application_store;
+    let mut notations = crate::notations::list_by_project(application_store, project_id)
         .await
         .map_err(store_error)?;
     notations.sort_by_key(|notation| notation.id);
@@ -714,12 +714,12 @@ async fn plan_notations(
     let mut versions = Vec::new();
     for notation in &notations {
         if let Some(document) =
-            crate::notation_documents::document_for_notation(surreal, notation.id)
+            crate::notation_documents::document_for_notation(application_store, notation.id)
                 .await
                 .map_err(store_error)?
         {
             let mut source_assets = vec![document.original_asset_id];
-            for version in crate::notation_documents::versions_of(surreal, document.id)
+            for version in crate::notation_documents::versions_of(application_store, document.id)
                 .await
                 .map_err(store_error)?
             {
@@ -731,7 +731,7 @@ async fn plan_notations(
                 if assets.contains_key(&asset_id) {
                     continue;
                 }
-                let asset = crate::assets::find_by_id(surreal, asset_id)
+                let asset = crate::assets::find_by_id(application_store, asset_id)
                     .await
                     .map_err(store_error)?
                     .ok_or_else(|| ArchiveError::SourceMissing(format!("asset {asset_id}")))?;
@@ -1337,7 +1337,7 @@ pub async fn verify(
 /// The store a generation is restored into. It may be a fresh, isolated
 /// deployment or the live one; either way nothing different is overwritten.
 pub struct RestoreTarget<'a> {
-    pub surreal: &'a SurrealDb,
+    pub application_store: &'a ApplicationStore,
     pub documents: &'a Arc<dyn StorageService>,
 }
 
@@ -1437,14 +1437,14 @@ pub async fn restore(
     {
         return Err(ArchiveError::ManifestMismatch);
     }
-    if crate::firms::find_by_id(target.surreal, generation.firm_id)
+    if crate::firms::find_by_id(target.application_store, generation.firm_id)
         .await
         .map_err(store_error)?
         .is_none()
     {
         return Err(ArchiveError::RestorePrerequisite("the Project's Firm"));
     }
-    if crate::entities::find_by_id(target.surreal, metadata.project.entity_id)
+    if crate::entities::find_by_id(target.application_store, metadata.project.entity_id)
         .await
         .map_err(store_error)?
         .is_none()
@@ -1529,22 +1529,22 @@ async fn restore_rows(
         RowRestore::Conflict => Err(ArchiveError::RestoreConflict(what)),
     };
     tally(
-        crate::projects::restore_archived(target.surreal, &metadata.project)
+        crate::projects::restore_archived(target.application_store, &metadata.project)
             .await
             .map_err(store_error)?,
         format!("project {}", metadata.project.id),
     )?;
     for notation in &metadata.notations {
         tally(
-            crate::notations::restore_archived(target.surreal, notation)
+            crate::notations::restore_archived(target.application_store, notation)
                 .await
                 .map_err(store_error)?,
             format!("notation {}", notation.id),
         )?;
     }
-    let parents = match &pg {
-        Some(pg) => Some(restore_parents::acquire(pg, metadata).await?),
-        None => None,
+    let parents = {
+        let pg = &pg;
+        Some(restore_parents::acquire(pg, metadata).await?)
     };
     for asset in &metadata.assets {
         tally(
@@ -1552,7 +1552,7 @@ async fn restore_rows(
                 Some(parents) => crate::postgres::assets::restore_history(parents, asset)
                     .await
                     .map_err(store_error)?,
-                None => crate::assets::restore_archived(target.surreal, asset)
+                None => crate::assets::restore_archived(target.application_store, asset)
                     .await
                     .map_err(store_error)?,
             },
@@ -1567,11 +1567,12 @@ async fn restore_rows(
                         .await
                         .map_err(store_error)?
                 }
-                None => {
-                    crate::notation_documents::restore_archived_document(target.surreal, document)
-                        .await
-                        .map_err(store_error)?
-                }
+                None => crate::notation_documents::restore_archived_document(
+                    target.application_store,
+                    document,
+                )
+                .await
+                .map_err(store_error)?,
             },
             format!("notation document {}", document.id),
         )?;
@@ -1584,11 +1585,12 @@ async fn restore_rows(
                         .await
                         .map_err(store_error)?
                 }
-                None => {
-                    crate::notation_documents::restore_archived_version(target.surreal, version)
-                        .await
-                        .map_err(store_error)?
-                }
+                None => crate::notation_documents::restore_archived_version(
+                    target.application_store,
+                    version,
+                )
+                .await
+                .map_err(store_error)?,
             },
             format!("notation document version {}", version.id),
         )?;

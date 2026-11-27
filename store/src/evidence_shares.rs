@@ -224,7 +224,7 @@ pub fn image_content_type(asset: &crate::assets::Asset, project: Uuid) -> Option
 
 /// Resolve the ordered declaration to an immutable list of image revisions.
 pub async fn resolve_media(
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     project: Uuid,
     declared: &[rules::pages::TimelineMedia],
 ) -> Result<Vec<MediaRevision>, crate::assets::AssetError> {
@@ -254,7 +254,7 @@ pub async fn resolve_media(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::postgres_mirror::tests::fresh_schema;
+    use crate::postgres::fixtures::fresh_schema;
 
     #[tokio::test]
     async fn evidence_share_requires_acceptance_and_stops_counting_after_revocation() {

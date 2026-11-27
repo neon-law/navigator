@@ -734,16 +734,16 @@ fn postgres_mirror_reconcile_job_runs_once_as_the_runtime_login() {
         );
         assert_eq!(config_map_key(job, "NAVIGATOR_POSTGRES_SSLMODE"), "sslmode");
         assert_eq!(config_map_key(job, "NAVIGATOR_POSTGRES_HOST"), "host");
-        for surreal in [
+        for application_store in [
             "NAVIGATOR_SURREAL_ENDPOINT",
             "NAVIGATOR_SURREAL_NAMESPACE",
             "NAVIGATOR_SURREAL_DATABASE",
             "NAVIGATOR_SURREAL_USER",
             "NAVIGATOR_SURREAL_PASSWORD",
         ] {
-            let source = &env_entry(job, surreal)["valueFrom"]["secretKeyRef"];
+            let source = &env_entry(job, application_store)["valueFrom"]["secretKeyRef"];
             assert_eq!(source["name"].as_str(), Some("navigator-web-secrets"));
-            assert_eq!(source["key"].as_str(), Some(surreal));
+            assert_eq!(source["key"].as_str(), Some(application_store));
         }
         assert!(
             reconcile["envFrom"].is_null(),

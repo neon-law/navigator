@@ -159,25 +159,6 @@ Two counters are recorded once per run, in a journaled step so a replay does not
 failure in the last day, which is critical at five or more for one tag, and no finished run in 26 hours. Dash0 is
 staging-only today, so production relies on the Slack headline until a production row declares `DASH0_ENDPOINT`.
 
-## Archives
-
-The twice-daily `Archives` run ([durable workflows](durable-workflows.md), [Iceberg archive](iceberg-archive.md)) ends
-as a failure when any table with rows fails to write, and its Slack digest opens with `Iceberg data export FAILED` and
-names each table. Two counters are recorded inside the digest step, after the post, so a replay does not double count:
-
-- `navigator.archives.run`, with `outcome` set to `clean` or `failed`.
-- `navigator.archives.table_written`, the number of tables the run wrote. Counts only; never a table name.
-
-Every host that binds Archives — the Restate worker, or `web` when `NAVIGATOR_DBOS_ARCHIVES_ENABLED` is on — starts both
-series at zero on boot, so the first run after a restart is a visible increase.
-
-[`dash0-archives-check-rules.yaml`](../examples/deploy/k8s/observability/dash0-archives-check-rules.yaml) alerts on
-both: a failed run, and no table written in 13 hours. The runs are twelve hours apart, so 13 hours is one missed slot
-plus an hour of slack. The stale rule reads `increase()` over a zero-started series with `or vector(0)`, so it fires
-whether the run failed, never started, or no host is exporting at all. Route both rules to the ops channel with the
-`workflow = archives` label. Dash0 is staging-only today, so production relies on the Slack headline until a production
-row declares `DASH0_ENDPOINT`.
-
 ## Forgejo Actions
 
 The runner controller (`hudson ops forgejo runner-controller`, see [Forgejo deployment](forgejo-deployment.md)) is
@@ -318,29 +299,11 @@ Work down the chain (full version in the [durable-workflows guide](durable-workf
 4. **Is durable execution alive at all?** The six-hourly `Heartbeat` Slack line, posted by the DBOS executor in `web`,
    is the liveness signal; its *absence* is the alert.
 
-## Tracing across the Restate boundary
+## Authenticated DBOS ingress
 
-A workflow kicked off from `web` continues the caller's trace into the durable handler, so a single trace spans "button
-click → ingress POST → snapshot/dispatch steps." `workflows::trigger` injects the current span's W3C `traceparent` into
-the outbound ingress POST (`telemetry::current_trace_context_headers`); instrumented handlers extract it from
-`ctx.headers()` and parent their span on the result (`telemetry::set_span_parent`, used by `Archives::run` and every
-`Notation` handler). Only opaque trace context crosses — never a client field (LEGAL #2). When OTLP is unconfigured the
-inject/extract pair is a no-op, so an explicitly stdout-only environment stays zero-cost.
-
-The Rust contract — inject produces a well-formed `traceparent`, extract recovers the same trace id — is covered by
-`telemetry`'s round-trip test and `workflows`' `trace_propagation` integration test. The **one** thing only a live
-cluster confirms is that Restate forwards the ingress `traceparent` onto the handler invocation headers; verify once in
-KIND/prod by checking a `web`-initiated workflow and its steps share a trace id in OpenObserve. If a future Restate
-version stops forwarding it, the fallback is to carry a `trace_id` in the request body and link (rather than parent) the
-handler span — no other code changes.
-
-## The hardening that came with this
-
-- **HTTP timeout** in `start_workflow` (30s) so a hung ingress can't keep a trigger pod running forever.
-  **`activeDeadlineSeconds: 120` + `startingDeadlineSeconds`** on the trigger `CronJob`s, so a stuck trigger
-  self-terminates instead of holding the `Forbid` lock and skipping every run — the precise failure mode that stopped
-  the nightly archives email for days.
-- **`hudson ops doctor`** so the next operator sees the wedge in one command instead of `kubectl` archaeology.
+Outbound requests propagate W3C trace headers. Metrics distinguish accepted submissions, ingress rejections, and
+transport failures. The [durability rules](dbos-durability.md) describe how to identify the resulting execution and
+verify its checkpoint.
 
 ## See also
 

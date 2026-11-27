@@ -158,8 +158,8 @@ pub async fn get_project_new_form() -> Result<ProjectNewView, ServerFnError> {
     .map(|axum::extract::Query(q)| q)
     .unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let entities = store::entities::all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let entities = store::entities::all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -170,7 +170,7 @@ pub async fn get_project_new_form() -> Result<ProjectNewView, ServerFnError> {
         .collect();
     // The client roster is filtered in Rust: `persons` is in the other
     // engine and the directory read has no role predicate.
-    let clients = store::persons::list_directory(&surreal)
+    let clients = store::persons::list_directory(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -179,7 +179,7 @@ pub async fn get_project_new_form() -> Result<ProjectNewView, ServerFnError> {
         .collect();
     // The entity-type reference table lives in SurrealDB (ENG-20);
     // `list` keeps the name ordering this picker always had.
-    let entity_types = store::entity_types::list(&surreal, &[])
+    let entity_types = store::entity_types::list(&application_store, &[])
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -190,7 +190,7 @@ pub async fn get_project_new_form() -> Result<ProjectNewView, ServerFnError> {
         .collect();
     // The jurisdiction reference table lives in SurrealDB (ENG-20);
     // `list_all` keeps the name ordering this picker always had.
-    let jurisdictions = store::jurisdictions::list_all(&surreal)
+    let jurisdictions = store::jurisdictions::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()

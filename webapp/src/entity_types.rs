@@ -4,7 +4,7 @@
 //! The successor to the `views::pages::admin::entity_types` read view — the
 //! first admin list page migrated to the Dioxus stack, following the
 //! `/app/admin/people` (Tranche 1) seam: a `#[server]` function reads `?sort=` and
-//! the injected `SurrealDb`, queries the shared `store::entity_types` command,
+//! the injected `ApplicationStore`, queries the shared `store::entity_types` command,
 //! and `use_server_future` renders the sorted rows into the SSR HTML, readable
 //! before hydration, with the sort header a real anchor. The URL contract holds:
 //! the route pre-handler `400`s a `?sort=` naming anything but `name`.
@@ -48,7 +48,7 @@ pub struct EntityTypesView {
 }
 
 /// Fetch the entity-types list for the current request: read `?sort=` and the
-/// injected `store::surreal::SurrealDb` (the table lives in `SurrealDB` since
+/// injected `store::application_store::ApplicationStore` (the table lives in `SurrealDB` since
 /// its ENG-20 slice), and query the shared `store::entity_types` command —
 /// the same command boundary the REST API uses.
 #[server]
@@ -76,8 +76,8 @@ pub async fn list_entity_types() -> Result<EntityTypesView, ServerFnError> {
         return Err(ServerFnError::new("lawyer access required"));
     }
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let rows = store::entity_types::list(&surreal, &parse_sort(&sort))
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let rows = store::entity_types::list(&application_store, &parse_sort(&sort))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 

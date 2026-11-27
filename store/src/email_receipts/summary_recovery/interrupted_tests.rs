@@ -3,7 +3,7 @@ use super::*;
 async fn interrupted_recovery_keeps_confirmation_and_binds_the_receipt_digest() {
     crate::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let receipt = crate::email_receipts::ensure(
             &source,
             &crate::email_receipts::NewEmailReceipt {

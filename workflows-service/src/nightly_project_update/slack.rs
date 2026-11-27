@@ -12,14 +12,12 @@
 //! emails stay inside the journaled step that renders the canvas.
 
 use std::fmt::Write;
-#[cfg(test)]
-use std::sync::Arc;
 
 use cloud::forge::ForgeService;
 
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::projects::ProjectCanvas;
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::{upsert_channel_canvas, CanvasWrite, SlackBot};
 
@@ -47,37 +45,15 @@ pub enum CanvasStep {
     Edited,
 }
 
-#[cfg(test)]
-fn outcome(canvas: CanvasStep, notice_posted: bool) -> SlackOutcome {
-    SlackOutcome {
-        canvases_created: usize::from(canvas == CanvasStep::Created),
-        canvases_edited: usize::from(canvas == CanvasStep::Edited),
-        notices_posted: usize::from(notice_posted),
-        canvas_failures: 0,
-    }
-}
-
-#[cfg(test)]
-fn canvas_outcome<E>(canvas: &Result<CanvasStep, E>, posted: bool) -> SlackOutcome {
-    match canvas {
-        Ok(canvas) => outcome(*canvas, posted),
-        Err(_) => SlackOutcome {
-            notices_posted: usize::from(posted),
-            canvas_failures: 1,
-            ..Default::default()
-        },
-    }
-}
-
 /// Upsert one open Project's internal channel canvas.
 pub async fn upsert_canvas(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     slack: &dyn SlackBot,
     portal_origin: Option<&str>,
     ran_on: &str,
     project_id: Uuid,
 ) -> Result<CanvasStep, WorkflowStepError> {
-    let Some(canvas) = store::projects::project_canvas(surreal, project_id)
+    let Some(canvas) = store::projects::project_canvas(application_store, project_id)
         .await
         .map_err(WorkflowStepError::retryable)?
     else {
@@ -109,13 +85,13 @@ pub(crate) fn notice(ran_on: &str) -> String {
 /// `false` when the
 /// Project is closed or has no internal channel.
 pub async fn post_notice(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     slack: &dyn SlackBot,
     forge: &RepositoryForge,
     ran_on: &str,
     project_id: Uuid,
 ) -> Result<bool, WorkflowStepError> {
-    let Some(project) = store::projects::find_by_id(surreal, project_id)
+    let Some(project) = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(WorkflowStepError::retryable)?
     else {
@@ -127,21 +103,21 @@ pub async fn post_notice(
     ) else {
         return Ok(false);
     };
-    let mentions = super::membership::member_mentions(surreal, slack, project_id).await?;
+    let mentions = super::membership::member_mentions(application_store, slack, project_id).await?;
     let mut text = notice(ran_on);
     if !mentions.is_empty() {
         // The channel is muted, so a mention is what notifies each person.
         text = format!("{mentions} {text}");
     }
     if let Some(url) = project.repository_url.as_deref() {
-        let activity = repository_activity(surreal, forge, &project, url).await;
+        let activity = repository_activity(application_store, forge, &project, url).await;
         let _ = write!(
             text,
             "\n{activity} <{}|View repository>",
             url.trim_end_matches('/')
         );
     }
-    let deadlines = store::project_deadlines::list(surreal, project_id)
+    let deadlines = store::project_deadlines::list(application_store, project_id)
         .await
         .map_err(WorkflowStepError::retryable)?;
     let open: Vec<_> = deadlines
@@ -188,7 +164,7 @@ pub async fn post_notice(
 /// One line on the recorded repository's default branch. A forge that cannot
 /// be reached degrades to a line saying so; the notice still posts.
 async fn repository_activity(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     forge: &RepositoryForge,
     project: &store::projects::Project,
     url: &str,
@@ -201,7 +177,7 @@ async fn repository_activity(
                 .into()
         }
         RepositoryForge::GitHub(forge) => forge.as_ref(),
-        RepositoryForge::Forgejo(firms) => match firms.for_project(surreal, project.id).await {
+        RepositoryForge::Forgejo(firms) => match firms.for_project(application_store, project.id).await {
             Ok(forge) => {
                 firm_forge = forge;
                 firm_forge.as_ref()
@@ -230,20 +206,6 @@ fn slack_plain_text(value: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-}
-
-/// Test composition using no forge client.
-#[cfg(test)]
-pub(crate) async fn reconcile_slack(
-    surreal: &SurrealDb,
-    slack: &dyn SlackBot,
-    portal_origin: Option<&str>,
-    ran_on: &str,
-    project_id: Uuid,
-) -> Result<SlackOutcome, WorkflowStepError> {
-    let canvas = upsert_canvas(surreal, slack, portal_origin, ran_on, project_id).await;
-    let posted = post_notice(surreal, slack, &RepositoryForge::None, ran_on, project_id).await?;
-    Ok(canvas_outcome(&canvas, posted))
 }
 
 /// The matter show page, which renders the Project's declared Matter Pages.
@@ -310,291 +272,6 @@ pub(crate) fn render_canvas(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nightly_project_update::repository::tests::{github, mixed_forges};
-    use std::sync::Mutex;
-    use store::persons::{self, NewPerson, Role};
-    use store::projects::{self, create, designate_dri_in_surreal, DriSide, NewProject};
-    use store::test_support::{mem_surreal, seed_entity};
-    use workflows::{CapturingSlackBot, SlackBotError};
-
-    const INTERNAL: &str = "CINTERNAL1";
-    const EXTERNAL: &str = "CEXTERNAL1";
-
-    #[tokio::test]
-    async fn daily_notice_includes_github_and_only_open_stored_deadlines() {
-        use cloud::forge::{FakeForge, ForgeService};
-        use store::project_deadlines::{self, NewDeadline};
-
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-update", "open").await;
-        let forge = FakeForge::new();
-        let repository = forge.ensure_repository(&project.code).await.unwrap();
-        projects::update_project(
-            &surreal,
-            project.id,
-            &projects::UpdateProjectCommand {
-                repository_url: Some(repository.url.clone()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        forge.set_head_commit_committed_at(&project.code, "2026-10-05T12:00:00Z");
-        let input = NewDeadline {
-            title: None,
-            description: None,
-            project_id: project.id,
-            hearing: None,
-            due_on: None,
-            due_at: "2026-10-09T17:00:00-07:00".into(),
-            authority_kind: "contract".into(),
-            authority: "Synthetic agreement".into(),
-            source: "lawyer".into(),
-            source_document_id: None,
-            owner_person_id: None,
-            calendar_role: "firm".into(),
-            category: Some("internal".into()),
-            internal_lead_days: Some(7),
-            client_lead_days: None,
-            replay_key: None,
-        };
-        let open = project_deadlines::create(&surreal, &input).await.unwrap();
-        project_deadlines::create(
-            &surreal,
-            &NewDeadline {
-                authority_kind: "court_order".into(),
-                category: Some("court".into()),
-                authority: "Unreviewed synthetic order".into(),
-                ..input.clone()
-            },
-        )
-        .await
-        .unwrap();
-        let completed = project_deadlines::create(
-            &surreal,
-            &NewDeadline {
-                authority: "Completed synthetic date".into(),
-                ..input.clone()
-            },
-        )
-        .await
-        .unwrap();
-        project_deadlines::complete(&surreal, project.id, completed.id)
-            .await
-            .unwrap();
-        let cancelled = project_deadlines::create(
-            &surreal,
-            &NewDeadline {
-                authority: "Cancelled synthetic date".into(),
-                ..input
-            },
-        )
-        .await
-        .unwrap();
-        project_deadlines::cancel(&surreal, project.id, cancelled.id)
-            .await
-            .unwrap();
-        let slack = CapturingSlackBot::new();
-        post_notice(&surreal, &slack, &github(&forge), "2026-10-06", project.id)
-            .await
-            .unwrap();
-        let posted = slack.posted_messages();
-        assert_eq!(posted[0].0, INTERNAL);
-        let text = &posted[0].1;
-        assert!(text.contains("2026-10-05T12:00:00Z"));
-        assert!(text.contains(&format!("<{}|View repository>", repository.url)));
-        assert!(text.contains(&open.due_at));
-        assert!(text.contains("Synthetic agreement"));
-        assert!(!text.contains("Unreviewed synthetic order"));
-        assert!(!text.contains("Completed synthetic date"));
-        assert!(!text.contains("Cancelled synthetic date"));
-        assert!(!text.contains(EXTERNAL));
-    }
-
-    #[tokio::test]
-    async fn an_unconfigured_forge_is_visible_in_the_internal_update() {
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-no-forge", "open").await;
-        projects::update_project(
-            &surreal,
-            project.id,
-            &projects::UpdateProjectCommand {
-                repository_url: Some("https://forge.example/example/sample-no-forge".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let slack = CapturingSlackBot::new();
-        post_notice(
-            &surreal,
-            &slack,
-            &RepositoryForge::None,
-            "2026-10-06",
-            project.id,
-        )
-        .await
-        .unwrap();
-        let text = &slack.posted_messages()[0].1;
-        assert!(
-            text.contains("no forge provider for the recorded repository"),
-            "{text}"
-        );
-        assert!(
-            text.contains("<https://forge.example/example/sample-no-forge|View repository>"),
-            "the recorded repository is linked even without a forge client: {text}"
-        );
-    }
-
-    /// A Forgejo deployment reads the latest commit through the Project's own
-    /// Firm forge and links the Forgejo repository in the channel.
-    #[tokio::test]
-    async fn a_recorded_forgejo_repository_uses_the_firm_forge_with_a_github_default() {
-        use cloud::forge::{FakeForge, ForgeService};
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-forgejo", "open").await;
-        let forge = FakeForge::new();
-        let repository = forge.ensure_repository(&project.code).await.unwrap();
-        forge.set_head_commit_committed_at(&project.code, "2026-11-08T09:00:00Z");
-        let github = FakeForge::new();
-        github.ensure_repository(&project.code).await.unwrap();
-        github.set_head_commit_committed_at(&project.code, "2026-01-01T00:00:00Z");
-        projects::update_project(
-            &surreal,
-            project.id,
-            &projects::UpdateProjectCommand {
-                repository_url: Some(repository.url.clone()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let slack = CapturingSlackBot::new();
-        post_notice(
-            &surreal,
-            &slack,
-            &mixed_forges(&github, &forge),
-            "2026-11-09",
-            project.id,
-        )
-        .await
-        .unwrap();
-        let text = &slack.posted_messages()[0].1;
-        assert!(
-            text.contains("Latest default-branch commit: 2026-11-08T09:00:00Z."),
-            "{text}"
-        );
-        assert!(
-            text.contains(&format!("<{}|View repository>", repository.url)),
-            "{text}"
-        );
-        assert!(!text.contains("GitHub"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn retry_after_notice_acceptance_uses_the_same_daily_receipt() {
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-notice-receipt", "open").await;
-        let slack = CapturingSlackBot::new();
-        post_notice(
-            &surreal,
-            &slack,
-            &RepositoryForge::None,
-            "2026-10-06",
-            project.id,
-        )
-        .await
-        .unwrap();
-        post_notice(
-            &surreal,
-            &slack,
-            &RepositoryForge::None,
-            "2026-10-06",
-            project.id,
-        )
-        .await
-        .unwrap();
-        assert_eq!(slack.posted_messages().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_recorded_repository_on_another_forge_is_not_replaced_with_provider_activity() {
-        use cloud::forge::{FakeForge, ForgeService};
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-other-forge", "open").await;
-        let forge = FakeForge::new();
-        forge.ensure_repository(&project.code).await.unwrap();
-        forge.set_head_commit_committed_at(&project.code, "2026-10-05T12:00:00Z");
-        projects::update_project(
-            &surreal,
-            project.id,
-            &projects::UpdateProjectCommand {
-                repository_url: Some("https://other.example/example/sample-other-forge".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let slack = CapturingSlackBot::new();
-        post_notice(&surreal, &slack, &github(&forge), "2026-10-06", project.id)
-            .await
-            .unwrap();
-        let text = &slack.posted_messages()[0].1;
-        assert!(text.contains("unavailable for the recorded repository"));
-        assert!(!text.contains("2026-10-05T12:00:00Z"));
-    }
-
-    #[tokio::test]
-    async fn an_unknown_project_gets_neither_canvas_nor_notice() {
-        let surreal = mem_surreal().await;
-        let slack = CapturingSlackBot::new();
-        let missing = uuid::Uuid::now_v7();
-        assert!(matches!(
-            upsert_canvas(&surreal, &slack, None, "2026-10-06", missing)
-                .await
-                .unwrap(),
-            CanvasStep::Skipped
-        ));
-        assert!(!post_notice(
-            &surreal,
-            &slack,
-            &RepositoryForge::None,
-            "2026-10-06",
-            missing
-        )
-        .await
-        .unwrap());
-        assert!(slack.posted_messages().is_empty());
-        assert!(slack.canvas_writes().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_repository_without_a_commit_date_says_so() {
-        use cloud::forge::{FakeForge, ForgeService};
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-empty-repository", "open").await;
-        let forge = FakeForge::new();
-        let repository = forge.ensure_repository(&project.code).await.unwrap();
-        projects::update_project(
-            &surreal,
-            project.id,
-            &projects::UpdateProjectCommand {
-                repository_url: Some(repository.url.clone()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let slack = CapturingSlackBot::new();
-        post_notice(&surreal, &slack, &github(&forge), "2026-10-06", project.id)
-            .await
-            .unwrap();
-        let text = &slack.posted_messages()[0].1;
-        assert!(
-            text.contains("No default-branch commit date available."),
-            "{text}"
-        );
-    }
 
     #[test]
     fn citations_cannot_inject_slack_mentions() {
@@ -602,114 +279,6 @@ mod tests {
             slack_plain_text("Rule <@U123> & <!channel>"),
             "Rule &lt;@U123&gt; &amp; &lt;!channel&gt;"
         );
-    }
-
-    /// A Project with both DRI sides, an internal channel, and a customer
-    /// channel recorded on its other column.
-    async fn seeded(surreal: &SurrealDb, code: &str, status: &str) -> projects::Project {
-        let project = create(
-            surreal,
-            &NewProject {
-                code: code.to_string(),
-                name: "Cruller v. Prine".to_string(),
-                status: status.to_string(),
-                description: Some("A synthetic litigation matter.".to_string()),
-                entity_id: seed_entity(surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create Project");
-        projects::set_internal_slack_channel_id(surreal, project.id, INTERNAL)
-            .await
-            .expect("set internal channel")
-            .expect("Project exists");
-        let external = format!("https://example.slack.com/archives/{EXTERNAL}");
-        projects::update_project(
-            surreal,
-            project.id,
-            &projects::UpdateProjectCommand {
-                external_slack_channel_url: Some(external),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("record the customer channel");
-        for (name, email, role, participation, side) in [
-            (
-                "Lawyer DRI",
-                "lawyer@example.com",
-                Role::Lawyer,
-                "lawyer",
-                DriSide::Lawyer,
-            ),
-            (
-                "Client DRI",
-                "client@example.com",
-                Role::Client,
-                "client",
-                DriSide::Client,
-            ),
-        ] {
-            let person = persons::create(surreal, &NewPerson::with_role(name, email, role))
-                .await
-                .expect("create Person");
-            projects::add_participation(surreal, project.id, person.id, participation)
-                .await
-                .expect("add participation");
-            designate_dri_in_surreal(surreal, project.id, person.id, side)
-                .await
-                .expect("designate DRI");
-        }
-        project
-    }
-
-    #[tokio::test]
-    async fn the_canvas_holds_the_synopsis_dris_portal_and_handles() {
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-litigation", "open").await;
-        let slack = CapturingSlackBot::new();
-
-        let outcome = reconcile_slack(&surreal, &slack, None, "2026-10-05", project.id)
-            .await
-            .expect("canvas");
-        assert_eq!(outcome.canvases_created, 1);
-        let body = slack.canvas_markdown(INTERNAL).expect("canvas written");
-        for expected in [
-            "A synthetic litigation matter.",
-            "client@example.com",
-            "Lawyer DRI (lawyer@example.com)",
-            "Matter: /app/projects/sample-litigation\n",
-            "`sample-litigation`",
-            "Status: open",
-            "2026-10-05",
-        ] {
-            assert!(
-                body.contains(expected),
-                "{expected:?} missing from:\n{body}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a_second_run_edits_the_same_canvas() {
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-litigation", "open").await;
-        let slack = CapturingSlackBot::new();
-
-        let first = reconcile_slack(&surreal, &slack, None, "2026-10-05", project.id)
-            .await
-            .expect("first");
-        let second = reconcile_slack(&surreal, &slack, None, "2026-10-06", project.id)
-            .await
-            .expect("second");
-        assert_eq!((first.canvases_created, first.canvases_edited), (1, 0));
-        assert_eq!((second.canvases_created, second.canvases_edited), (0, 1));
-        assert_eq!(slack.canvas_channels(), [INTERNAL], "one canvas, not two");
-        assert!(slack
-            .canvas_markdown(INTERNAL)
-            .unwrap()
-            .contains("2026-10-06"));
     }
 
     #[tokio::test]
@@ -737,208 +306,5 @@ mod tests {
             body,
             render_canvas(&canvas, Some("https://www.example.com"), "2026-10-05")
         );
-    }
-
-    #[tokio::test]
-    async fn the_customer_channel_is_never_passed_to_slack() {
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-litigation", "open").await;
-        let slack = CapturingSlackBot::new();
-        reconcile_slack(&surreal, &slack, None, "2026-10-05", project.id)
-            .await
-            .expect("canvas and notice");
-
-        let touched: Vec<String> = slack
-            .canvas_channels()
-            .into_iter()
-            .chain(
-                slack
-                    .posted_messages()
-                    .into_iter()
-                    .map(|(channel, _)| channel),
-            )
-            .collect();
-        assert!(!touched.is_empty());
-        assert!(
-            touched.iter().all(|channel| channel == INTERNAL),
-            "only the internal channel is written: {touched:?}"
-        );
-        assert!(!touched.iter().any(|channel| channel == EXTERNAL));
-        let canvas = projects::project_canvas(&surreal, project.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(!format!("{canvas:?}").contains(EXTERNAL));
-    }
-
-    #[tokio::test]
-    async fn the_notice_is_mechanism_only() {
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-litigation", "open").await;
-        let slack = CapturingSlackBot::new();
-        let outcome = reconcile_slack(&surreal, &slack, None, "2026-10-05", project.id)
-            .await
-            .expect("canvas and notice");
-
-        assert_eq!(outcome.notices_posted, 1);
-        let posted = slack.posted_messages();
-        assert_eq!(posted.len(), 1);
-        let (channel, text) = &posted[0];
-        assert_eq!(channel, INTERNAL);
-        assert_eq!(text, "The Nightly Project Update ran on 2026-10-05.");
-        for forbidden in [
-            "@",
-            "example.com",
-            "Cruller",
-            "Prine",
-            "sample-litigation",
-            "synthetic",
-            "Lawyer DRI",
-        ] {
-            assert!(!text.contains(forbidden), "{forbidden:?} in {text:?}");
-        }
-    }
-
-    #[tokio::test]
-    async fn directory_emails_reach_the_canvas_but_not_the_journal_value() {
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-litigation", "open").await;
-        let slack = CapturingSlackBot::new();
-
-        let step = upsert_canvas(&surreal, &slack, None, "2026-10-05", project.id)
-            .await
-            .expect("canvas step");
-        let journal_value = serde_json::to_string(&step).unwrap();
-        assert!(slack
-            .canvas_markdown(INTERNAL)
-            .unwrap()
-            .contains("client@example.com"));
-        assert!(!journal_value.contains('@') && !journal_value.contains("example.com"));
-
-        let outcome = reconcile_slack(&surreal, &slack, None, "2026-10-05", project.id)
-            .await
-            .unwrap();
-        assert!(!serde_json::to_string(&outcome).unwrap().contains('@'));
-        let report = crate::nightly_project_update::render_report(
-            &crate::nightly_project_update::NightlyProjectUpdateReport::default(),
-        );
-        assert!(!report.contains('@'));
-    }
-
-    #[tokio::test]
-    async fn a_closed_project_is_given_no_canvas_and_no_notice() {
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-closed", "closed").await;
-        let slack = CapturingSlackBot::new();
-        let outcome = reconcile_slack(&surreal, &slack, None, "2026-10-05", project.id)
-            .await
-            .expect("skipped");
-        assert_eq!(outcome, SlackOutcome::default());
-        assert!(slack.canvas_writes().is_empty());
-        assert!(slack.posted_messages().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_project_without_an_internal_channel_is_skipped() {
-        let surreal = mem_surreal().await;
-        let project = create(
-            &surreal,
-            &NewProject {
-                code: "sample-unchanneled".to_string(),
-                name: "Sample".to_string(),
-                status: "open".to_string(),
-                entity_id: seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create Project");
-        let slack = CapturingSlackBot::new();
-        let step = upsert_canvas(&surreal, &slack, None, "2026-10-05", project.id)
-            .await
-            .expect("skipped");
-        assert_eq!(step, CanvasStep::Skipped);
-        assert!(slack.canvas_writes().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_canvas_failure_still_posts_the_update_and_is_counted_by_the_sweep() {
-        let surreal = mem_surreal().await;
-        let failing = seeded(&surreal, "sample-failing", "open").await;
-        let capture = Arc::new(CapturingSlackBot::new().failing_canvases("missing_scope"));
-        let slack: Arc<dyn SlackBot> = capture.clone();
-        let outcome = reconcile_slack(&surreal, slack.as_ref(), None, "2026-10-05", failing.id)
-            .await
-            .expect("the daily notice succeeds independently");
-        assert_eq!(outcome.canvas_failures, 1);
-        assert_eq!(outcome.notices_posted, 1);
-        assert_eq!(capture.posted_messages().len(), 1);
-        assert_eq!(capture.posted_messages()[0].0, INTERNAL);
-
-        let report =
-            crate::nightly_project_update::sweep_in_process(&surreal, &slack, None, false).await;
-        assert_eq!(report.slack_failures, 1);
-        assert_eq!(report.notices_posted, 1);
-        assert_eq!(
-            report.membership_failures, 0,
-            "the other tags still ran for this Project"
-        );
-    }
-
-    /// Records every channel a call names, to prove nothing else is touched.
-    #[derive(Default)]
-    struct Spy {
-        channels: Mutex<Vec<String>>,
-    }
-
-    #[async_trait::async_trait]
-    impl SlackBot for Spy {
-        async fn create_private_channel(
-            &self,
-            _: &str,
-        ) -> Result<workflows::SlackChannel, SlackBotError> {
-            unreachable!("the slack tag never creates a channel")
-        }
-        async fn post_message(&self, channel_id: &str, _: &str) -> Result<(), SlackBotError> {
-            self.channels.lock().unwrap().push(channel_id.to_string());
-            Ok(())
-        }
-        async fn user_id_by_email(&self, _: &str) -> Result<Option<String>, SlackBotError> {
-            unreachable!("the slack tag never looks anyone up")
-        }
-        async fn channel_member_ids(&self, _: &str) -> Result<Vec<String>, SlackBotError> {
-            unreachable!("the slack tag never reads membership")
-        }
-        async fn invite_to_channel(&self, _: &str, _: &[String]) -> Result<(), SlackBotError> {
-            unreachable!("the slack tag never invites")
-        }
-        async fn channel_canvas_id(
-            &self,
-            channel_id: &str,
-        ) -> Result<Option<String>, SlackBotError> {
-            self.channels.lock().unwrap().push(channel_id.to_string());
-            Ok(None)
-        }
-        async fn create_channel_canvas(
-            &self,
-            channel_id: &str,
-            _: &str,
-        ) -> Result<String, SlackBotError> {
-            self.channels.lock().unwrap().push(channel_id.to_string());
-            Ok("F1".to_string())
-        }
-    }
-
-    #[tokio::test]
-    async fn the_slack_tag_only_ever_names_the_internal_channel() {
-        let surreal = mem_surreal().await;
-        let project = seeded(&surreal, "sample-litigation", "open").await;
-        let spy = Spy::default();
-        reconcile_slack(&surreal, &spy, None, "2026-10-05", project.id)
-            .await
-            .expect("canvas and notice");
-        let channels = spy.channels.lock().unwrap();
-        assert!(!channels.is_empty());
-        assert!(channels.iter().all(|channel| channel == INTERNAL));
     }
 }

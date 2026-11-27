@@ -61,19 +61,16 @@
 //! captured identities directly, and Source read access remains available.
 
 use chrono::{DateTime, Utc};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
+use crate::application_store::ApplicationStore;
 use crate::persons::{self, PersonError};
 use crate::postgres::identity::{self as authority, AuthorityError};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
 const TABLE: &str = "person_external_identity";
-/// The table `person_id` links into.
-const PERSON_TABLE: &str = "person";
 
 /// A third-party system Navigator can name a Person in.
 ///
@@ -196,8 +193,6 @@ impl std::fmt::Display for ExternalSystem {
 #[derive(Debug, thiserror::Error)]
 pub enum ExternalIdentityError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// Reading the person a write links to failed.
     #[error(transparent)]
     Person(#[from] PersonError),
@@ -272,12 +267,7 @@ async fn pg_one(
 
 /// External identity writes require admitted PostgreSQL identity authority.
 async fn write_authority() -> Result<crate::postgres::PostgresDb, ExternalIdentityError> {
-    authority::authority().await?.ok_or_else(|| {
-        AuthorityError::Unavailable(
-            "external identity writes are unavailable in Source context".into(),
-        )
-        .into()
-    })
+    Ok(authority::authority().await?)
 }
 
 /// One Person's account on one external system.
@@ -293,40 +283,6 @@ pub struct ExternalIdentity {
     pub handle: Option<String>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// The row as the engine reads and writes it. Separate from
-/// [`ExternalIdentity`] because the SDK owns its own `RecordId` and
-/// `Datetime`, and `system` arrives as the stored string; the conversion
-/// belongs at this seam rather than in every caller.
-#[derive(SurrealValue)]
-struct ExternalIdentityRow {
-    id: surrealdb::types::RecordId,
-    person_id: surrealdb::types::RecordId,
-    system: String,
-    external_id: String,
-    handle: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl ExternalIdentityRow {
-    /// `None` when a record id is not a native UUID key (see
-    /// [`crate::surreal`] for why the two key spellings differ) or when
-    /// `system` is not one the vocabulary names. Both are rows this
-    /// workspace could not have written; reporting them would invent an
-    /// id or a system.
-    fn into_identity(self) -> Option<ExternalIdentity> {
-        Some(ExternalIdentity {
-            id: record_uuid(&self.id)?,
-            person_id: record_uuid(&self.person_id)?,
-            system: ExternalSystem::parse(&self.system)?,
-            external_id: self.external_id,
-            handle: self.handle,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
 }
 
 /// The projection every read shares, so one field list describes the row
@@ -348,7 +304,7 @@ const SELECT: &str = "id, person_id, system, external_id, handle, inserted_at, u
 /// already holds one on this system. [`ExternalIdentityError::Authority`]
 /// reports PostgreSQL failures.
 pub async fn link(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     system: ExternalSystem,
     external_id: &str,
@@ -384,33 +340,19 @@ pub async fn link(
 ///
 /// [`ExternalIdentityError::Db`] if the lookup fails.
 pub async fn find_by_person_and_system(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
     system: ExternalSystem,
 ) -> Result<Option<ExternalIdentity>, ExternalIdentityError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(pg_one(
-            &pg,
-            "person_id = $1::uuid AND system = $2",
-            person_id.to_string(),
-            system.as_str().to_string(),
-            system,
-        ))
-        .await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE person_id = $person_id AND system = $system \
-             LIMIT 1"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("system", system.as_str().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let row: Option<ExternalIdentityRow> = response.take(0)?;
-    Ok(row.and_then(ExternalIdentityRow::into_identity))
+    let pg = authority::authority().await?;
+    Box::pin(pg_one(
+        &pg,
+        "person_id = $1::uuid AND system = $2",
+        person_id.to_string(),
+        system.as_str().to_string(),
+        system,
+    ))
+    .await
 }
 
 /// The reverse lookup: who is `system` account `external_id`? An indexed
@@ -424,33 +366,19 @@ pub async fn find_by_person_and_system(
 ///
 /// [`ExternalIdentityError::Db`] if the lookup fails.
 pub async fn find_by_account(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     system: ExternalSystem,
     external_id: &str,
 ) -> Result<Option<ExternalIdentity>, ExternalIdentityError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(pg_one(
-            &pg,
-            "system = $1 AND external_id = $2",
-            system.as_str().to_string(),
-            external_id.trim().to_string(),
-            system,
-        ))
-        .await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE system = $system AND external_id = $external_id \
-             LIMIT 1"
-        ))
-        .bind(("system", system.as_str().to_string()))
-        .bind(("external_id", external_id.trim().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let row: Option<ExternalIdentityRow> = response.take(0)?;
-    Ok(row.and_then(ExternalIdentityRow::into_identity))
+    let pg = authority::authority().await?;
+    Box::pin(pg_one(
+        &pg,
+        "system = $1 AND external_id = $2",
+        system.as_str().to_string(),
+        external_id.trim().to_string(),
+        system,
+    ))
+    .await
 }
 
 /// Resolve the Person named by an external account id.
@@ -465,7 +393,7 @@ pub async fn find_by_account(
 ///
 /// [`ExternalIdentityError::Db`] if either lookup fails.
 pub async fn find_person_by_account(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     system: ExternalSystem,
     external_id: &str,
 ) -> Result<Option<persons::Person>, ExternalIdentityError> {
@@ -490,7 +418,7 @@ pub async fn find_person_by_account(
 /// [`ExternalIdentityError::Db`] if the participation or identity lookup
 /// fails.
 pub async fn notion_user_ids_for_project_leads(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<String>, ExternalIdentityError> {
     let participations = crate::projects::participations_for_project(db, project_id)
@@ -520,36 +448,22 @@ pub async fn notion_user_ids_for_project_leads(
 ///
 /// [`ExternalIdentityError::Db`] if the lookup fails.
 pub async fn for_person(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Vec<ExternalIdentity>, ExternalIdentityError> {
-    if let Some(pg) = authority::authority().await? {
-        let rows = sqlx::query(AssertSqlSafe(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 ORDER BY inserted_at, id"
-        )))
-        .bind(person_id)
-        .fetch_all(&pg.0)
-        .await
-        .map_err(AuthorityError::from)?;
-        return Ok(rows
-            .iter()
-            .map(from_pg)
-            .collect::<Result<_, _>>()
-            .map_err(AuthorityError::from)?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $person_id ORDER BY inserted_at ASC"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-
-    let rows: Vec<ExternalIdentityRow> = response.take(0)?;
+    let pg = authority::authority().await?;
+    let rows = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 ORDER BY inserted_at, id"
+    )))
+    .bind(person_id)
+    .fetch_all(&pg.0)
+    .await
+    .map_err(AuthorityError::from)?;
     Ok(rows
-        .into_iter()
-        .filter_map(ExternalIdentityRow::into_identity)
-        .collect())
+        .iter()
+        .map(from_pg)
+        .collect::<Result<_, _>>()
+        .map_err(AuthorityError::from)?)
 }
 
 /// Link the identity unless this person already holds one on this
@@ -571,7 +485,7 @@ pub async fn for_person(
 /// somebody else — a real conflict, not a race — and
 /// [`ExternalIdentityError::Db`] if a lookup or the insert fails.
 pub async fn find_or_link(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     system: ExternalSystem,
     external_id: &str,
@@ -605,7 +519,7 @@ pub async fn find_or_link(
 /// [`ExternalIdentityError::AccountTaken`] when another Person holds the
 /// account, or [`ExternalIdentityError::Authority`] for a PostgreSQL failure.
 pub async fn set_for_person(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     system: ExternalSystem,
     external_id: Option<&str>,
@@ -654,7 +568,10 @@ pub async fn set_for_person(
 /// # Errors
 ///
 /// [`ExternalIdentityError::Authority`] if the delete fails.
-pub async fn unlink(_db: &SurrealDb, identity_id: Uuid) -> Result<(), ExternalIdentityError> {
+pub async fn unlink(
+    _db: &ApplicationStore,
+    identity_id: Uuid,
+) -> Result<(), ExternalIdentityError> {
     let pg = write_authority().await?;
     sqlx::query(AssertSqlSafe(format!("DELETE FROM {TABLE} WHERE id = $1")))
         .bind(identity_id)

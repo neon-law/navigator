@@ -5,10 +5,10 @@
 use sqlx::{AssertSqlSafe, Postgres, QueryBuilder, Row, Transaction};
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::listing::{self, ListParams, Page};
 use crate::persons::{NewPerson, Person, PersonEdit, PersonError, Role};
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 
 const COLUMNS: &str = "id, name, given_name, family_name, middle_name, email, \
     oidc_subject, microsoft_subject, apple_subject, role, title, phone, \
@@ -326,7 +326,7 @@ async fn person_transaction(
 
 pub(crate) async fn set_text(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     column: &str,
     value: Option<&str>,
@@ -356,7 +356,7 @@ pub(crate) async fn set_text(
 
 pub(crate) async fn set_flag(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     column: &str,
     value: bool,
@@ -384,7 +384,7 @@ pub(crate) async fn set_flag(
 
 pub(crate) async fn set_role(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     role: Role,
 ) -> Result<Option<Person>, PersonError> {
@@ -408,7 +408,7 @@ pub(crate) async fn set_role(
 
 pub(crate) async fn link_subject(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     column: &str,
     subject: &str,
@@ -445,7 +445,7 @@ pub(crate) async fn link_subject(
 
 pub(crate) async fn edit(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     input: &PersonEdit,
 ) -> Result<Option<Person>, PersonError> {
@@ -536,7 +536,7 @@ pub(crate) async fn edit(
 
 pub(crate) async fn update_contact(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     input: &crate::persons::ContactUpdate,
 ) -> Result<Option<Person>, PersonError> {
@@ -553,7 +553,11 @@ pub(crate) async fn update_contact(
     Ok(Some(row))
 }
 
-pub(crate) async fn delete(pg: &PostgresDb, _db: &SurrealDb, id: Uuid) -> Result<(), PersonError> {
+pub(crate) async fn delete(
+    pg: &PostgresDb,
+    _db: &ApplicationStore,
+    id: Uuid,
+) -> Result<(), PersonError> {
     let mut tx = person_transaction(pg, id).await?;
     sqlx::query("DELETE FROM person_mailbox WHERE person_id=$1")
         .bind(id)
@@ -698,7 +702,7 @@ async fn relink_tagged_people(
     keep_id: Uuid,
     drop_id: Uuid,
 ) -> Result<(), PersonError> {
-    for (table, column) in crate::postgres_mirror::records::authoritative_tagged_person_links() {
+    for &(table, column) in crate::postgres::record_metadata::TAGGED_PERSON_LINKS {
         sqlx::query(AssertSqlSafe(format!(
             "UPDATE \"{table}\" SET \"{column}\" = jsonb_set(\"{column}\", '{{id,Uuid}}', to_jsonb($1::text), false) WHERE \"{column}\"->>'tb'='person' AND \"{column}\"->'id'->>'Uuid'=$2::text"
         )))
@@ -770,7 +774,9 @@ async fn merge_rows_with_actor(
     .await
     .map_err(database)?;
     links.extend(
-        crate::postgres_mirror::records::authoritative_person_links()
+        crate::postgres::record_metadata::PERSON_LINKS
+            .iter()
+            .copied()
             .map(|(table, column)| (table.to_owned(), column.to_owned())),
     );
     links.sort();
@@ -823,7 +829,7 @@ async fn merge_rows_with_actor(
 
 pub(crate) async fn merge(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     keep_id: Uuid,
     drop_id: Uuid,
     actor: Option<Role>,
@@ -913,7 +919,7 @@ pub(crate) async fn aliases(pg: &PostgresDb, id: Uuid) -> Result<Vec<String>, Pe
 /// left as it is; one another Person holds is refused, never taken.
 pub(crate) async fn add_alias(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     email: &str,
 ) -> Result<(), PersonError> {
@@ -939,7 +945,7 @@ pub(crate) async fn add_alias(
 
 pub(crate) async fn create(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     input: &NewPerson,
 ) -> Result<Person, PersonError> {
     let id = Uuid::now_v7();
@@ -960,7 +966,7 @@ pub(crate) async fn create(
 
 pub(crate) async fn find_or_create(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     input: &NewPerson,
 ) -> Result<Person, PersonError> {
     if let Some(row) = by_email(pg, &input.email).await? {

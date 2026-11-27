@@ -107,13 +107,13 @@ pub async fn get_conversation() -> Result<ConversationView, ServerFnError> {
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     // One path serves both sides, so the tier is what says which thread this
     // is — not the prefix the caller typed.
     let is_lawyer = role.is_lawyer_tier();
     // The matter arrives as its code; everything below keys on the row id, so
     // this one lookup is both the resolution and the existence check.
-    let Some(project) = store::projects::find_by_code(&surreal, &project_code)
+    let Some(project) = store::projects::find_by_code(&application_store, &project_code)
         .await
         .map_err(server_error)?
     else {
@@ -127,9 +127,10 @@ pub async fn get_conversation() -> Result<ConversationView, ServerFnError> {
     let project_id = project.id;
     let base = format!("/app/projects/{}", project.code);
 
-    let visible = store::access::can_see_project(&surreal, person_id, store_role, project_id)
-        .await
-        .map_err(server_error)?;
+    let visible =
+        store::access::can_see_project(&application_store, person_id, store_role, project_id)
+            .await
+            .map_err(server_error)?;
     if !visible {
         return Ok(not_found(
             project_id.to_string(),
@@ -141,9 +142,9 @@ pub async fn get_conversation() -> Result<ConversationView, ServerFnError> {
     // Lens-scoped rows: the firm sees every row, a client every row except
     // firm-internal notes.
     let rows = if is_lawyer {
-        store::communications::for_project(&surreal, project_id).await
+        store::communications::for_project(&application_store, project_id).await
     } else {
-        store::communications::for_project_client_visible(&surreal, project_id).await
+        store::communications::for_project_client_visible(&application_store, project_id).await
     }
     .map_err(server_error)?;
 
@@ -152,7 +153,7 @@ pub async fn get_conversation() -> Result<ConversationView, ServerFnError> {
     let authors: HashMap<_, _> = if author_ids.is_empty() {
         HashMap::new()
     } else {
-        store::persons::find_by_ids(&surreal, &author_ids)
+        store::persons::find_by_ids(&application_store, &author_ids)
             .await
             .map_err(server_error)?
             .into_iter()

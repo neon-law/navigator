@@ -25,9 +25,9 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::Firm;
+use crate::application_store::ApplicationStore;
 use crate::firm_secrets::{IntegrationProvider, IntegrationSecretKind};
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 
 /// A Firm's organization as Navigator last reconciled it: one
 /// `firm_forgejo_organization` row.
@@ -74,9 +74,6 @@ pub enum ProvisionError {
     Db(String),
     #[error("PostgreSQL: {0}")]
     Postgres(#[from] sqlx::Error),
-    /// The Firm row could not be mirrored into PostgreSQL before recording.
-    #[error("mirror the Firm into PostgreSQL: {0}")]
-    Mirror(#[from] crate::postgres_mirror::MirrorError),
     /// The stored row names another organization; the slug is immutable, so
     /// this needs a human, not a retry.
     #[error("the Firm's recorded Forgejo organization differs from its slug")]
@@ -90,25 +87,18 @@ impl From<ForgeError> for ProvisionError {
 }
 
 /// [`reconcile`] the Firm's organization on the forge, then [`record`] it on
-/// the Firm. The Firm row is mirrored into PostgreSQL first, so a Firm created
-/// before the mirror ran still has the row its record points at.
+/// the Firm in PostgreSQL.
 ///
 /// # Errors
 /// Any [`ProvisionError`] from either step. A forge failure records nothing.
 pub async fn provision(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     firm_id: Uuid,
     kms: &dyn cloud::RuntimeKms,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<(Reconciled, ForgejoOrganization), ProvisionError> {
-    let reconciled = reconcile(surreal, firm_id, kms, lookup).await?;
-    crate::postgres_mirror::mirror(
-        surreal,
-        pg,
-        &crate::postgres_mirror::MirrorKey::Firm(firm_id),
-    )
-    .await?;
+    let reconciled = reconcile(application_store, firm_id, kms, lookup).await?;
     let recorded = record(pg, &reconciled).await?;
     Ok((reconciled, recorded))
 }
@@ -127,12 +117,12 @@ pub async fn provision(
 /// [`ProvisionError::Unavailable`] naming each missing setting, or the forge's
 /// refusal.
 pub async fn reconcile(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
     kms: &dyn cloud::RuntimeKms,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<Reconciled, ProvisionError> {
-    let firm: Firm = super::find_by_id(surreal, firm_id)
+    let firm: Firm = super::find_by_id(application_store, firm_id)
         .await
         .map_err(|error| ProvisionError::Db(error.to_string()))?
         .ok_or(ProvisionError::NotFound)?;
@@ -140,7 +130,7 @@ pub async fn reconcile(
     let root = setting(NAVIGATOR_FORGEJO_ROOT_URL_ENV);
     let provisioner = setting(NAVIGATOR_FORGEJO_PROVISIONER_TOKEN_ENV);
     let firm_token = crate::firm_secrets::resolve_firm_credential(
-        surreal,
+        application_store,
         firm.id,
         IntegrationProvider::Forgejo,
         IntegrationSecretKind::ForgejoAccessToken,
@@ -239,7 +229,7 @@ pub async fn find(
 #[cfg(test)]
 mod tests {
     use super::{find, record, Reconciled};
-    use crate::postgres_mirror::tests::{connect, fresh_schema};
+    use crate::postgres::fixtures::{connect, fresh_schema};
     use uuid::Uuid;
 
     fn reconciled(firm_id: Uuid, organization: &str, forgejo_id: i64) -> Reconciled {

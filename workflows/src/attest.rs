@@ -188,7 +188,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 pub async fn dispatch_onchain_record(
     storage: &dyn cloud::StorageService,
     attestor: &dyn Attestor,
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
     payload: &OnChainPayload,
 ) -> Result<(), AttestError> {
@@ -216,7 +216,7 @@ pub async fn dispatch_onchain_record(
         store::attestations::STATUS_PENDING
     };
     store::attestations::record(
-        surreal,
+        application_store,
         &store::attestations::NewAttestation {
             notation_id,
             chain: attestor.chain(),

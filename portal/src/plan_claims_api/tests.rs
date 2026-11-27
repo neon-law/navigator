@@ -5,13 +5,13 @@ use axum::{
 };
 use serde_json::{json, Value};
 use store::{
+    application_store::ApplicationStore,
     firms::{self, FirmMembership, NewFirm, NewPersonFirmRole},
     legal_plans::{self, NewLegalPlan},
     participation::{self, AddParticipantCommand, DriActor, DriRequest},
     persons::{self, NewPerson, Role},
     postgres::PostgresDb,
     projects::{self, NewProject, PlanColumns},
-    surreal::SurrealDb,
     test_support::with_postgres,
     time_entries::{self, NewTimeEntry, TimeEntrySource},
 };
@@ -53,7 +53,7 @@ async fn request(
     )
 }
 
-async fn person(db: &SurrealDb, email: &str, role: Role) -> Uuid {
+async fn person(db: &ApplicationStore, email: &str, role: Role) -> Uuid {
     persons::create(
         db,
         &NewPerson::with_role("Synthetic claims actor", email, role),
@@ -63,7 +63,7 @@ async fn person(db: &SurrealDb, email: &str, role: Role) -> Uuid {
     .id
 }
 
-async fn create_firm(db: &SurrealDb, entity: Uuid, admin: Uuid) -> Uuid {
+async fn create_firm(db: &ApplicationStore, entity: Uuid, admin: Uuid) -> Uuid {
     firms::create(
         db,
         &NewFirm {
@@ -149,7 +149,7 @@ async fn a_closed_project_reconciles_claims_through_the_authenticated_routes() {
         return;
     }
     Box::pin(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = PostgresDb::application().await.unwrap();
         let pool = pg.pool();
         sqlx::query("INSERT INTO brand(name,brand_key) VALUES ('Synthetic Brand','neon')")

@@ -53,7 +53,7 @@ pub fn daily_cost_export(
 /// Active switches refuse any value other than `true` or `false`. Disabled billing
 /// selectors always resolve to false, including stale deployment values.
 pub fn flag_enabled(name: &'static str, value: Option<&str>) -> Result<bool, SettingsError> {
-    if store::workflow_engine::disabled_billing_flag(name) {
+    if store::disabled_billing::disabled_billing_flag(name) {
         return Ok(false);
     }
     match value.map(str::trim) {
@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn billing_timers_and_selectors_cannot_be_reenabled() {
         for value in [None, Some("true"), Some("false"), Some("invalid")] {
-            for selection in store::workflow_engine::DISABLED_BILLING {
+            for selection in store::disabled_billing::DISABLED_BILLING {
                 assert!(!flag_enabled(selection.flag, value).unwrap());
             }
             for key in [

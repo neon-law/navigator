@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 use dbos::{StepOptions, WorkflowRef};
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::notation_machine_state::operations;
 use store::notation_machine_state::{MachineStateError, TransitionOutcome};
 use store::postgres::PostgresDb;
-use store::surreal::SurrealDb;
 use workflows::{
     dispatch_step, dispatches_side_effect, MachineKind, QuestionnaireSpec, StateName, StepDeps,
     WorkflowSpec,
@@ -72,7 +72,7 @@ const STEP_MAX_ATTEMPTS: u32 = 3;
 /// Each workflow callback binds its admitted application pool; inline steps inherit it.
 #[derive(Clone)]
 pub struct Context {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     postgres: PostgresDb,
     email: Arc<dyn workflows::EmailService>,
     storage: Arc<dyn cloud::StorageService>,
@@ -81,13 +81,13 @@ pub struct Context {
 impl Context {
     #[must_use]
     pub fn new(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         postgres: PostgresDb,
         email: Arc<dyn workflows::EmailService>,
         storage: Arc<dyn cloud::StorageService>,
     ) -> Self {
         Self {
-            surreal,
+            application_store,
             postgres,
             email,
             storage,
@@ -483,11 +483,12 @@ async fn preflight(
         Operation::Approve {
             review_revision, ..
         } => {
-            let notation = store::notations::find_by_id(&context.surreal, request.notation_id)
-                .await
-                .map_err(|error| {
-                    dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
-                })?;
+            let notation =
+                store::notations::find_by_id(&context.application_store, request.notation_id)
+                    .await
+                    .map_err(|error| {
+                        dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+                    })?;
             if notation.is_none_or(|row| row.updated_at.timestamp_micros() != *review_revision) {
                 return Err(dbos::Error::Application(NotationTransitionError::Terminal(
                     "Lawyer Review changed after the approval was submitted".into(),
@@ -586,9 +587,9 @@ async fn record_funnel_step(
     step: WorkflowFunnelStep,
 ) -> dbos::Result<(), NotationTransitionError> {
     dbos::step_with("record-funnel-step", retryable_steps(), move || {
-        let surreal = context.surreal.clone();
+        let application_store = context.application_store.clone();
         async move {
-            record_notation_funnel_step(&surreal, notation_id, step)
+            record_notation_funnel_step(&application_store, notation_id, step)
                 .await
                 .map_err(NotationTransitionError::from_logic)
                 .map_err(dbos::Error::Application)
@@ -608,10 +609,10 @@ async fn send_notification_step(
     hop: ReviewNotificationHop,
 ) -> dbos::Result<(), NotationTransitionError> {
     dbos::step_with("send-review-notification", retryable_steps(), move || {
-        let surreal = context.surreal.clone();
+        let application_store = context.application_store.clone();
         let email = Arc::clone(&context.email);
         async move {
-            let target = review_notification_target(&surreal, project_id, recipient_id)
+            let target = review_notification_target(&application_store, project_id, recipient_id)
                 .await
                 .map_err(NotationTransitionError::from_logic)
                 .map_err(dbos::Error::Application)?;
@@ -716,42 +717,43 @@ async fn signal(
     // Step-kind side effects run BEFORE the journal append so the artifact
     // they produce can ride the journal row's payload — the workflow
     // handler's order, unchanged. The questionnaire never dispatches.
-    let dispatch_payload: Option<String> =
-        if kind == MachineKind::Workflow && dispatches_side_effect(&next) {
-            let email = Arc::clone(&context.email);
-            let storage = Arc::clone(&context.storage);
-            let surreal = context.surreal.clone();
-            let state = next.clone();
+    let dispatch_payload: Option<String> = if kind == MachineKind::Workflow
+        && dispatches_side_effect(&next)
+    {
+        let email = Arc::clone(&context.email);
+        let storage = Arc::clone(&context.storage);
+        let application_store = context.application_store.clone();
+        let state = next.clone();
+        let value = value.clone();
+        dbos::step_with("dispatch-step", retryable_steps(), move || {
+            let email = Arc::clone(&email);
+            let storage = Arc::clone(&storage);
+            let application_store = application_store.clone();
+            let state = state.clone();
             let value = value.clone();
-            dbos::step_with("dispatch-step", retryable_steps(), move || {
-                let email = Arc::clone(&email);
-                let storage = Arc::clone(&storage);
-                let surreal = surreal.clone();
-                let state = state.clone();
-                let value = value.clone();
-                async move {
-                    let deps = StepDeps::new(email, storage).with_surreal(surreal);
-                    let started = std::time::Instant::now();
-                    let result = dispatch_step(&deps, notation_id, &state, value.as_deref()).await;
-                    if state.prefix() == "generate_pdf" {
-                        tracing::info!(
-                            %notation_id,
-                            elapsed_ms = started.elapsed().as_millis(),
-                            rendered = result.is_ok(),
-                            "approval render completed",
-                        );
-                    }
-                    result.map_err(|error| {
-                        dbos::Error::Application(NotationTransitionError::Store(format!(
-                            "dispatch: {error}"
-                        )))
-                    })
+            async move {
+                let deps = StepDeps::new(email, storage).with_application_store(application_store);
+                let started = std::time::Instant::now();
+                let result = dispatch_step(&deps, notation_id, &state, value.as_deref()).await;
+                if state.prefix() == "generate_pdf" {
+                    tracing::info!(
+                        %notation_id,
+                        elapsed_ms = started.elapsed().as_millis(),
+                        rendered = result.is_ok(),
+                        "approval render completed",
+                    );
                 }
-            })
-            .await?
-        } else {
-            None
-        };
+                result.map_err(|error| {
+                    dbos::Error::Application(NotationTransitionError::Store(format!(
+                        "dispatch: {error}"
+                    )))
+                })
+            }
+        })
+        .await?
+    } else {
+        None
+    };
 
     // The journal append — skipped for ephemeral machines, which have no
     // `notations` row for `append_event`'s read-back. A questionnaire signal
@@ -762,12 +764,12 @@ async fn signal(
             MachineKind::Questionnaire => value.as_deref().map(answer_payload),
             MachineKind::Workflow => dispatch_payload,
         };
-        let surreal = context.surreal.clone();
+        let application_store = context.application_store.clone();
         let from_str = machine.current_state.clone();
         let to_str = next.as_str().to_owned();
         let condition_for_step = condition.to_owned();
         dbos::step_with("append-event", retryable_steps(), move || {
-            let surreal = surreal.clone();
+            let application_store = application_store.clone();
             let from_str = from_str.clone();
             let to_str = to_str.clone();
             let condition = condition_for_step.clone();
@@ -775,7 +777,7 @@ async fn signal(
             async move {
                 let recorded_at = chrono::Utc::now().to_rfc3339();
                 append_event(
-                    &surreal,
+                    &application_store,
                     TransitionRecord {
                         notation_id,
                         acting_person_id,
@@ -810,9 +812,9 @@ async fn signal(
                 "resolve-review-notification-recipients",
                 retryable_steps(),
                 move || {
-                    let surreal = context.surreal.clone();
+                    let application_store = context.application_store.clone();
                     async move {
-                        resolve_review_notification_plan(&surreal, notation_id, hop)
+                        resolve_review_notification_plan(&application_store, notation_id, hop)
                             .await
                             .map_err(NotationTransitionError::from_logic)
                             .map_err(dbos::Error::Application)
@@ -841,11 +843,11 @@ async fn signal(
         // The firm signing the closing letter closes the matter — the
         // symmetric bookend to the client-signed retainer that opened it.
         if workflows::closes_matter(&from_state) {
-            let surreal = context.surreal.clone();
+            let application_store = context.application_store.clone();
             dbos::step_with("close-matter", retryable_steps(), move || {
-                let surreal = surreal.clone();
+                let application_store = application_store.clone();
                 async move {
-                    workflows::close_matter(&surreal, notation_id)
+                    workflows::close_matter(&application_store, notation_id)
                         .await
                         .map_err(|error| {
                             dbos::Error::Application(NotationTransitionError::Store(format!(
@@ -865,13 +867,13 @@ async fn signal(
     {
         // Keep the Lawyer Review projection recoverable even after the caller
         // disconnects. Publish the new state after the render and journal.
-        let surreal = context.surreal.clone();
+        let application_store = context.application_store.clone();
         let approved_state = next.as_str().to_owned();
         dbos::step_with("publish-approval-state", retryable_steps(), move || {
-            let surreal = surreal.clone();
+            let application_store = application_store.clone();
             let approved_state = approved_state.clone();
             async move {
-                store::notations::update_state(&surreal, notation_id, &approved_state)
+                store::notations::update_state(&application_store, notation_id, &approved_state)
                     .await
                     .map(|_| ())
                     .map_err(|error| {
@@ -923,11 +925,11 @@ async fn back(
     let token_owned = token.to_owned();
     let from = machine.current_state.clone();
     let previous = dbos::step_with("append-back", retryable_steps(), move || {
-        let surreal = context.surreal.clone();
+        let application_store = context.application_store.clone();
         let token = token_owned.clone();
         let from = from.clone();
         async move {
-            let events = store::notation_events::for_notation(&surreal, notation_id)
+            let events = store::notation_events::for_notation(&application_store, notation_id)
                 .await
                 .map_err(|error| {
                     dbos::Error::Application(NotationTransitionError::Store(format!(
@@ -954,7 +956,7 @@ async fn back(
             let previous = previous.as_str().to_owned();
             let recorded_at = chrono::Utc::now().to_rfc3339();
             append_event(
-                &surreal,
+                &application_store,
                 TransitionRecord {
                     notation_id,
                     acting_person_id: Some(acting_person_id),

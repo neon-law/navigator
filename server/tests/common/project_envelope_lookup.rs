@@ -7,7 +7,7 @@ use portal::signature::{
 };
 use serde_json::json;
 use std::sync::Arc;
-use store::{persons::Role, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, persons::Role};
 use uuid::Uuid;
 use wiremock::{
     matchers::{body_json, header, method, path},
@@ -21,14 +21,14 @@ struct FixtureConnection(DocuSignSignatureProvider);
 impl SignatureProvider for FixtureConnection {
     async fn for_project(
         &self,
-        _: &SurrealDb,
+        _: &ApplicationStore,
         _: Uuid,
     ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
         Ok(Some(self.0.clone()))
     }
     async fn for_firm(
         &self,
-        _: &SurrealDb,
+        _: &ApplicationStore,
         _: Uuid,
     ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
         Ok(Some(self.0.clone()))

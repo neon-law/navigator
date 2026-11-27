@@ -27,8 +27,8 @@ use rules::project_manifest::{
     pin_status, pinned_version, with_pinned_version, PinStatus, FILE as MANIFEST,
 };
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::project_surfaces::SurfaceStatus;
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 use crate::workflow_step_error::WorkflowStepError;
@@ -117,7 +117,7 @@ pub trait FirmForges: Send + Sync {
     /// When the Firm, its token, or the Forgejo root cannot be resolved.
     async fn for_project(
         &self,
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         project_id: Uuid,
     ) -> Result<Arc<dyn GovernedForge>, WorkflowStepError>;
 }
@@ -139,11 +139,11 @@ impl EnvFirmForges {
 impl FirmForges for EnvFirmForges {
     async fn for_project(
         &self,
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         project_id: Uuid,
     ) -> Result<Arc<dyn GovernedForge>, WorkflowStepError> {
         let forge = store::project_surfaces::forgejo_for_project(
-            surreal,
+            application_store,
             project_id,
             self.kms.as_ref(),
             |key| std::env::var(key).ok(),
@@ -167,7 +167,7 @@ pub fn update_branch(version: &str) -> String {
 /// repeats nothing. A failure is returned to the parent, which counts it
 /// against this Project and tag.
 pub async fn reconcile_repository(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     forge: &RepositoryForge,
     project_id: Uuid,
     runtime_version: &str,
@@ -175,7 +175,7 @@ pub async fn reconcile_repository(
     if matches!(forge, RepositoryForge::None) {
         return Ok(RepositoryOutcome::default());
     }
-    let Some(project) = store::projects::find_by_id(surreal, project_id)
+    let Some(project) = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(WorkflowStepError::retryable)?
         .filter(|project| project.status == "open")
@@ -184,7 +184,9 @@ pub async fn reconcile_repository(
     };
     let selected = forge.for_repository(project.repository_url.as_deref());
     let governed = match &selected {
-        RepositoryForge::Forgejo(firms) => Some(firms.for_project(surreal, project_id).await?),
+        RepositoryForge::Forgejo(firms) => {
+            Some(firms.for_project(application_store, project_id).await?)
+        }
         _ => None,
     };
     let forge: &dyn ForgeService = match (&selected, governed.as_deref()) {
@@ -205,7 +207,7 @@ pub async fn reconcile_repository(
         }
     }
     let surfaces = store::project_surfaces::reconcile(
-        surreal,
+        application_store,
         project_id,
         None::<&cloud::GoogleDrive>,
         Some(forge),
@@ -317,12 +319,6 @@ async fn read_pin(
 pub(crate) mod tests {
     use super::*;
     use cloud::forge::FakeForge;
-    use store::projects::{create, NewProject};
-    use store::test_support::{mem_surreal, seed_entity};
-
-    pub(crate) fn github(forge: &FakeForge) -> RepositoryForge {
-        RepositoryForge::GitHub(Arc::new(forge.clone()))
-    }
 
     /// Every Project resolves to the same in-memory Firm forge.
     struct FakeFirms(FakeForge);
@@ -331,15 +327,11 @@ pub(crate) mod tests {
     impl FirmForges for FakeFirms {
         async fn for_project(
             &self,
-            _surreal: &SurrealDb,
+            _application_store: &ApplicationStore,
             _project_id: Uuid,
         ) -> Result<Arc<dyn GovernedForge>, WorkflowStepError> {
             Ok(Arc::new(self.0.clone()))
         }
-    }
-
-    pub(crate) fn forgejo(forge: &FakeForge) -> RepositoryForge {
-        RepositoryForge::Forgejo(Arc::new(FakeFirms(forge.clone())))
     }
 
     pub(crate) fn mixed_forges(github: &FakeForge, forgejo: &FakeForge) -> RepositoryForge {
@@ -362,263 +354,6 @@ pub(crate) mod tests {
             forges.for_repository(Some("https://forge.example.attacker.test/firm/project")),
             RepositoryForge::None
         ));
-    }
-
-    const STALE: &str =
-        "# Sample manifest\nversion: 26.9.13\nproject:\n  host: staging.example.com\n";
-
-    async fn open_project(surreal: &SurrealDb, code: &str) -> store::projects::Project {
-        create(
-            surreal,
-            &NewProject {
-                code: code.to_string(),
-                name: format!("Sample {code}"),
-                status: "open".to_string(),
-                entity_id: seed_entity(surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create Project")
-    }
-
-    #[tokio::test]
-    async fn a_pin_equal_to_the_runtime_is_current_and_opens_no_pull_request() {
-        let surreal = mem_surreal().await;
-        let project = open_project(&surreal, "sample-current").await;
-        let forge = FakeForge::new();
-        forge.set_file(
-            &project.code,
-            "navigator.yaml",
-            "version: 26.10.4\nproject:\n  host: staging.example.com\n  name: sample-current\n",
-        );
-
-        let outcome = reconcile_repository(&surreal, &github(&forge), project.id, "26.10.4")
-            .await
-            .expect("reconcile");
-        assert_eq!(outcome.pin, Some(PinStatus::Current));
-        assert_eq!(outcome.pinned_version.as_deref(), Some("26.10.4"));
-        assert_eq!(outcome.runtime_version.as_deref(), Some("26.10.4"));
-        assert_eq!(outcome.synced, 1);
-        assert_eq!(
-            forge.repository_count(),
-            1,
-            "the repository was created; nothing else touched the forge"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_pin_behind_the_runtime_is_stale_and_still_opens_no_pull_request() {
-        let surreal = mem_surreal().await;
-        let project = open_project(&surreal, "sample-stale").await;
-        let forge = FakeForge::new();
-        forge.set_file(&project.code, "navigator.yaml", "version: 26.9.13\n");
-
-        let outcome = reconcile_repository(&surreal, &github(&forge), project.id, "26.10.4")
-            .await
-            .expect("reconcile");
-        assert_eq!(outcome.pin, Some(PinStatus::Stale));
-        assert_eq!(outcome.pinned_version.as_deref(), Some("26.9.13"));
-        assert_eq!(
-            forge
-                .read_file(&project.code, "navigator.yaml")
-                .await
-                .unwrap()
-                .as_deref(),
-            Some("version: 26.9.13\n"),
-            "the committed manifest is untouched: detection only"
-        );
-        assert_eq!(forge.ensure_calls(), 1);
-        assert_eq!(outcome.update, None);
-        assert_eq!(
-            forge.governance_reconciles(),
-            0,
-            "GitHub is not governed here"
-        );
-        assert!(forge.update_pulls(&project.code).is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_stale_forgejo_repository_gets_exactly_one_update_pull_request_per_release() {
-        let surreal = mem_surreal().await;
-        let project = open_project(&surreal, "sample-forgejo-stale").await;
-        let forge = FakeForge::new();
-        forge.set_file(&project.code, "navigator.yaml", STALE);
-        forge.set_head_commit_sha(&project.code, "synthetic-head");
-
-        let first = reconcile_repository(&surreal, &forgejo(&forge), project.id, "26.10.5")
-            .await
-            .expect("reconcile");
-        assert_eq!(first.pin, Some(PinStatus::Stale));
-        assert_eq!(first.update, Some(UpdateProposal::Opened));
-        let again = reconcile_repository(&surreal, &forgejo(&forge), project.id, "26.10.5")
-            .await
-            .expect("re-run");
-        assert_eq!(again.update, Some(UpdateProposal::Pending));
-
-        let pulls = forge.update_pulls(&project.code);
-        assert_eq!(pulls.len(), 1, "one pull request for the release");
-        let pull = &pulls["navigator/update-26.10.5"];
-        assert_eq!(pull.path, "navigator.yaml");
-        assert_eq!(
-            pull.content,
-            "# Sample manifest\nversion: 26.10.5\nproject:\n  host: staging.example.com\n",
-            "only `version:` changes"
-        );
-        assert_eq!(pull.title, "Update Navigator to 26.10.5");
-        assert_eq!(
-            forge
-                .read_file(&project.code, "navigator.yaml")
-                .await
-                .unwrap()
-                .as_deref(),
-            Some(STALE),
-            "main is untouched until the pull request merges"
-        );
-
-        let next = reconcile_repository(&surreal, &forgejo(&forge), project.id, "26.10.6")
-            .await
-            .unwrap();
-        assert_eq!(
-            next.update,
-            Some(UpdateProposal::Opened),
-            "a new release, a new PR"
-        );
-        assert_eq!(forge.update_pulls(&project.code).len(), 2);
-    }
-
-    #[tokio::test]
-    async fn nightly_governance_repairs_only_the_verified_forgejo_repository() {
-        let surreal = mem_surreal().await;
-        let project = open_project(&surreal, "sample-forgejo-drift").await;
-        let forge = FakeForge::new();
-        let recorded = forge.ensure_repository(&project.code).await.unwrap();
-        store::projects::set_repository_url(&surreal, project.id, Some(&recorded.url))
-            .await
-            .unwrap()
-            .unwrap();
-        let forges = mixed_forges(&FakeForge::new(), &forge);
-        forge.set_file(&project.code, "navigator.yaml", "version: 26.10.5\n");
-        forge.set_head_commit_sha(&project.code, "synthetic-head");
-        forge.set_governance_drift(
-            &project.code,
-            &["main.enable_push", "repository.allow_merge_commits"],
-        );
-
-        let outcome = reconcile_repository(&surreal, &forges, project.id, "26.10.5")
-            .await
-            .unwrap();
-        assert_eq!(outcome.governance_repaired, 2);
-        assert_eq!(outcome.pin, Some(PinStatus::Current));
-        assert_eq!(outcome.update, None, "a current pin proposes nothing");
-        let rerun = reconcile_repository(&surreal, &forges, project.id, "26.10.5")
-            .await
-            .unwrap();
-        assert_eq!(rerun.governance_repaired, 0);
-        assert_eq!(forge.governance_reconciles(), 2, "reconciled every run");
-        store::projects::set_repository_url(
-            &surreal,
-            project.id,
-            Some("https://forge.example/another-firm/sample-forgejo-drift"),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert!(
-            reconcile_repository(&surreal, &forges, project.id, "26.10.5")
-                .await
-                .is_err()
-        );
-        assert_eq!(forge.governance_reconciles(), 2);
-    }
-
-    #[tokio::test]
-    async fn an_empty_forgejo_repository_is_neither_governed_nor_updated() {
-        let surreal = mem_surreal().await;
-        let project = open_project(&surreal, "sample-forgejo-empty").await;
-        let forge = FakeForge::new();
-
-        let outcome = reconcile_repository(&surreal, &forgejo(&forge), project.id, "26.10.5")
-            .await
-            .unwrap();
-        assert_eq!(outcome.synced, 1, "the repository is still created");
-        assert_eq!(outcome.pin, Some(PinStatus::Unreadable));
-        assert_eq!(forge.governance_reconciles(), 0);
-        assert!(forge.update_pulls(&project.code).is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_closed_update_pull_request_is_not_reopened() {
-        let surreal = mem_surreal().await;
-        let project = open_project(&surreal, "sample-forgejo-declined").await;
-        let forge = FakeForge::new();
-        forge.set_file(&project.code, "navigator.yaml", STALE);
-        forge.set_head_commit_sha(&project.code, "synthetic-head");
-        reconcile_repository(&surreal, &forgejo(&forge), project.id, "26.10.5")
-            .await
-            .unwrap();
-        forge.close_update_pull(&project.code, "navigator/update-26.10.5");
-
-        let outcome = reconcile_repository(&surreal, &forgejo(&forge), project.id, "26.10.5")
-            .await
-            .unwrap();
-        assert_eq!(outcome.update, Some(UpdateProposal::Declined));
-        assert_eq!(forge.update_pulls(&project.code).len(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_missing_or_unparsable_manifest_is_unreadable_and_does_not_fail_the_sweep() {
-        let surreal = mem_surreal().await;
-        let missing = open_project(&surreal, "sample-missing").await;
-        let broken = open_project(&surreal, "sample-broken").await;
-        let rolling = open_project(&surreal, "sample-rolling").await;
-        let forge = FakeForge::new();
-        forge.set_file(&broken.code, "navigator.yaml", "version: [\n");
-        forge.set_file(&rolling.code, "navigator.yaml", "version: latest\n");
-
-        for project in [&missing, &broken, &rolling] {
-            let outcome = reconcile_repository(&surreal, &github(&forge), project.id, "26.10.4")
-                .await
-                .expect("an unreadable manifest is counted, not fatal");
-            assert_eq!(outcome.pin, Some(PinStatus::Unreadable), "{}", project.code);
-            assert_eq!(outcome.synced, 1);
-        }
-        assert_eq!(
-            reconcile_repository(&surreal, &github(&forge), rolling.id, "26.10.4")
-                .await
-                .unwrap()
-                .pinned_version
-                .as_deref(),
-            Some("latest"),
-            "the text read is reported even when it is not a release version"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_closed_project_and_a_deployment_without_a_forge_report_no_pin() {
-        let surreal = mem_surreal().await;
-        let closed = create(
-            &surreal,
-            &NewProject {
-                code: "sample-closed".to_string(),
-                name: "Sample Closed".to_string(),
-                status: "closed".to_string(),
-                entity_id: seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let forge = FakeForge::new();
-        let outcome = reconcile_repository(&surreal, &github(&forge), closed.id, "26.10.4")
-            .await
-            .unwrap();
-        assert_eq!(outcome, RepositoryOutcome::default());
-        let open = open_project(&surreal, "sample-no-forge").await;
-        let outcome = reconcile_repository(&surreal, &RepositoryForge::None, open.id, "26.10.4")
-            .await
-            .unwrap();
-        assert_eq!(outcome, RepositoryOutcome::default());
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! Bind a court-date citation to the archived version and an immutable private Forgejo blob.
-use crate::{assets::Asset, deadline_proposals::VerifiedForgejo, surreal::SurrealDb};
+use crate::{
+    application_store::ApplicationStore, assets::Asset, deadline_proposals::VerifiedForgejo,
+};
 use cloud::forgejo_forge::{CitationFile, CitationRepository};
 use model::deadline_proposals::{Draft, Evidence, ForgejoRepository, Role};
 use model::document_pointers::DocumentPointer;
@@ -29,7 +31,7 @@ fn forge_error(error: &cloud::forge::ForgeError) -> Error {
 }
 
 async fn forge(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project: Uuid,
     kms: &dyn cloud::RuntimeKms,
 ) -> Result<cloud::ForgejoForge, Error> {
@@ -60,7 +62,7 @@ fn matches_archive(bytes: &[u8], asset: &Asset, evidence: &Evidence) -> bool {
 }
 
 async fn archive(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project: Uuid,
     source: &Evidence,
     can_read_authorities: bool,
@@ -113,7 +115,7 @@ async fn read(
 /// Calls only the owning Firm's configured Forgejo with its own scoped credential.
 /// The caller enforces participation before checking any submitted source.
 pub async fn verify(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project: Uuid,
     draft: &Draft,
     can_read_authorities: bool,
@@ -128,7 +130,7 @@ pub async fn verify(
 
 /// Verify with the authenticated Project provider selected by the caller.
 pub async fn verify_with(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project: Uuid,
     draft: &Draft,
     can_read_authorities: bool,
@@ -189,7 +191,7 @@ pub async fn verify_with(
 /// Read a previously attested repository by numeric identity. The caller authorizes the
 /// recorded version and asset before calling, including a lawyer-tier check for Authority.
 pub async fn reopen(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project: Uuid,
     source: &Evidence,
     asset: &Asset,
@@ -306,7 +308,7 @@ mod tests {
     }
 
     async fn check_archive_scope() {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = crate::postgres::PostgresDb::application().await.unwrap();
         let (project, _) = crate::test_support::seed_calendar_project().await;
         let (asset, mut source) = fixture(project, Uuid::now_v7(), b"fixture");

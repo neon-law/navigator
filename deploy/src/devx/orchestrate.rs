@@ -412,7 +412,7 @@ fn seed_native_application(
             )?)?);
         store::postgres::PostgresDb::with_application_db(pg, async {
             store::seed::seed_environment_with_stage(
-                &store::surreal::SurrealDb::uninitialized(),
+                &store::application_store::ApplicationStore::from(app.clone()),
                 &storage,
                 store::DeploymentEnvironment::Dev,
                 store::seed::BrandSeed::Neon,
@@ -1123,14 +1123,7 @@ pub(super) fn status(cfg: &KindConfig) {
         if let Ok(state) = StateDir::new(&root) {
             let pids = state.read_pids().unwrap_or_default();
             println!("Port-forward PIDs ({}): {pids:?}", pids.len());
-            for &port in &[
-                cfg.restate_ingress_port,
-                cfg.restate_admin_port,
-                cfg.clamav_port,
-                cfg.rauthy_port,
-                cfg.seaweedfs_s3_port,
-                cfg.surreal_port,
-            ] {
+            for &port in &[cfg.clamav_port, cfg.rauthy_port, cfg.seaweedfs_s3_port] {
                 let listening = std::net::TcpStream::connect_timeout(
                     &format!("127.0.0.1:{port}").parse().unwrap(),
                     Duration::from_millis(200),
@@ -1275,10 +1268,7 @@ pub(super) fn require_tools(tools: &[&str]) -> Result<()> {
 
 /// Verify that auth-bearing CLIs are not just present but **authenticated**.
 ///
-/// A present-but-unauthenticated `gcloud` / `restate` doesn't
-/// fail until deep in a flow — mid-push to Artifact Registry, mid-Restate
-/// re-register — where the error is cryptic and a half-finished ship is
-/// already on the cluster. This runs the cheapest read-only probe per CLI
+/// Verify credentials before pushing images or changing the cluster. This runs the cheapest read-only probe per CLI
 /// up front so the whole flow aborts in one clear line before it touches
 /// anything. Each probe's output is discarded; only its exit status counts.
 pub(super) fn require_auth(tools: &[&str]) -> Result<()> {
@@ -1290,13 +1280,6 @@ pub(super) fn require_auth(tools: &[&str]) -> Result<()> {
             "gcloud" => (
                 "gcloud auth print-access-token",
                 "run `gcloud auth login` (or activate a service account)",
-            ),
-            // `whoami` succeeds only when an environment is configured. This
-            // catches "never logged in"; a stale Cloud token can still slip
-            // through, so the register step remains the real proof.
-            "restate" => (
-                "restate whoami",
-                "run `restate cloud login` then `restate cloud environments configure <env>`",
             ),
             // The daemon must be reachable to build/push images.
             "docker" => ("docker info", "start the Docker daemon"),
