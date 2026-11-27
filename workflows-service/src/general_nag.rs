@@ -13,8 +13,8 @@
 //!    copy is [`crate::dri_digest::open_matters_followup`].
 //!
 //! **Internal operations signal**, not client correspondence: the jab is a
-//! static slogan, and the follow-up is a firm-wide count with no matter
-//! names. Posted only to `#general`.
+//! static slogan, and the follow-up counts the Slack Firm's matters per Brand
+//! with no matter names. Posted only to `#general`.
 //!
 //! The `general-nag` `CronJob` fires nightly at 01:11 UTC, keyed on the UTC
 //! run date so a same-day double-fire is a no-op.
@@ -113,20 +113,23 @@ impl GeneralNagService {
         let mut posted_followup = false;
         if !self.simulated {
             let surreal = self.surreal.clone();
-            let (open, pitches) = ctx
+            let brands = ctx
                 .run(move || async move {
-                    store::projects::matter_open_pitch_counts(&surreal)
-                        .await
-                        .map(Json)
-                        .map_err(|error| {
-                            HandlerError::from(TerminalError::new(format!("counts: {error}")))
-                        })
+                    workflows::dri_digest::slack_firm_open_pitch_counts(
+                        &surreal,
+                        workflows::firm_slack::DeploymentSlackFirm::DefaultBrand,
+                    )
+                    .await
+                    .map(Json)
+                    .map_err(|error| {
+                        HandlerError::from(TerminalError::new(format!("counts: {error}")))
+                    })
                 })
                 .name("counts")
                 .await?
                 .into_inner();
 
-            if let Some(followup) = open_matters_followup(self.simulated, open, pitches) {
+            if let Some(followup) = open_matters_followup(self.simulated, &brands) {
                 let channel_id = self.channel_id.clone();
                 let slack = Arc::clone(&self.slack);
                 ctx.run(move || async move {
@@ -148,7 +151,6 @@ impl GeneralNagService {
 #[cfg(test)]
 mod tests {
     use super::nag_message;
-    use crate::dri_digest::open_matters_followup;
 
     #[test]
     fn simulated_and_production_nags_share_one_slogan() {
@@ -157,19 +159,6 @@ mod tests {
         assert!(
             !nag_message(true).contains("staging"),
             "the slogan must not carry a staging parenthetical; the adapter marks staging"
-        );
-    }
-
-    #[test]
-    fn a_simulated_deployment_posts_no_open_matters_followup() {
-        assert_eq!(open_matters_followup(true, 3, 1), None);
-    }
-
-    #[test]
-    fn a_real_deployment_posts_the_open_matters_followup() {
-        assert_eq!(
-            open_matters_followup(false, 3, 1),
-            Some("Total open matters: 3, pitches: 1".to_string())
         );
     }
 }
