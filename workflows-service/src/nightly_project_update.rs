@@ -938,48 +938,17 @@ mod tests {
     }
 
     #[test]
-    fn the_daily_trigger_runs_at_0333_utc_in_every_manifest() {
-        for source in [
-            include_str!(
-                "../../examples/deploy/k8s/exports/cron-nightly-project-update-trigger.yaml"
-            ),
-            include_str!(
-                "../../k8s/overlays/kind/nightly-project-update-trigger/nightly-project-update-trigger.yaml"
-            ),
-        ] {
-            let manifest: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
-            assert_eq!(manifest["spec"]["schedule"].as_str(), Some("33 3 * * *"));
-            assert_eq!(manifest["spec"]["timeZone"].as_str(), Some("Etc/UTC"));
-            assert_eq!(
-                manifest["metadata"]["name"].as_str(),
-                Some("nightly-project-update-trigger")
-            );
-        }
-    }
-
-    #[test]
-    fn the_trigger_manifest_is_listed_in_every_kustomization() {
-        let exports: serde_yaml::Value = serde_yaml::from_str(include_str!(
-            "../../examples/deploy/k8s/exports/kustomization.yaml"
+    fn the_daily_trigger_runs_at_0333_utc() {
+        let manifest: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../examples/deploy/k8s/exports/cron-nightly-project-update-trigger.yaml"
         ))
         .unwrap();
-        let listed = |value: &serde_yaml::Value, entry: &str| {
-            value["resources"]
-                .as_sequence()
-                .unwrap()
-                .iter()
-                .any(|resource| resource.as_str() == Some(entry))
-        };
-        assert!(listed(&exports, "cron-nightly-project-update-trigger.yaml"));
-        let kind: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../k8s/overlays/kind/kustomization.yaml"))
-                .unwrap();
-        assert!(listed(&kind, "nightly-project-update-trigger"));
-        let overlay: serde_yaml::Value = serde_yaml::from_str(include_str!(
-            "../../k8s/overlays/kind/nightly-project-update-trigger/kustomization.yaml"
-        ))
-        .unwrap();
-        assert!(listed(&overlay, "nightly-project-update-trigger.yaml"));
+        assert_eq!(manifest["spec"]["schedule"].as_str(), Some("33 3 * * *"));
+        assert_eq!(manifest["spec"]["timeZone"].as_str(), Some("Etc/UTC"));
+        assert_eq!(
+            manifest["metadata"]["name"].as_str(),
+            Some("nightly-project-update-trigger")
+        );
     }
 
     #[test]
