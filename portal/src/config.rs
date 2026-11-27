@@ -304,7 +304,6 @@ mod tests {
     #[test]
     fn prod_invariants_pass_when_all_set() {
         let result = production_invariants(lookup(&[
-            ("RESTATE_BROKER_URL", "http://restate:9070"),
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
@@ -325,9 +324,6 @@ mod tests {
             ("NAVIGATOR_CREDENTIAL_ENVIRONMENT", "production"),
             ("SESSION_SECRET", SECRET32),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
-            ("RESTATE_INGRESS_URL", "https://ingress.restate.cloud:8080"),
-            ("RESTATE_AUTH_TOKEN", "key_test"),
-            ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
             ("GOOGLE_OAUTH_CLIENT_IDS", "123.apps.googleusercontent.com"),
             ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
             ("NAVIGATOR_POSTGRES_PORT", "5432"),
@@ -361,7 +357,6 @@ mod tests {
         // project-scope check on `create_notation` silently stops
         // running. Fail at boot rather than fail open per request.
         let base = [
-            ("RESTATE_BROKER_URL", "http://restate:9070"),
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
@@ -382,9 +377,6 @@ mod tests {
             ("NAVIGATOR_CREDENTIAL_ENVIRONMENT", "production"),
             ("SESSION_SECRET", SECRET32),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
-            ("RESTATE_INGRESS_URL", "https://ingress.restate.cloud:8080"),
-            ("RESTATE_AUTH_TOKEN", "key_test"),
-            ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
             ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
             ("NAVIGATOR_POSTGRES_PORT", "5432"),
             ("NAVIGATOR_POSTGRES_DATABASE", "navigator"),
@@ -402,31 +394,6 @@ mod tests {
         let mut with_ids = base.to_vec();
         with_ids.push(("GOOGLE_OAUTH_CLIENT_IDS", "123.apps.googleusercontent.com"));
         assert!(production_invariants(lookup(&with_ids)).is_ok());
-    }
-
-    #[test]
-    fn only_the_automation_home_requires_restate_ingress_credentials() {
-        let ingress_keys = ["RESTATE_INGRESS_URL", "RESTATE_AUTH_TOKEN"];
-        let without_ingress = |automation_home: bool| {
-            let mut pairs = full_with_jwks();
-            pairs.retain(|(key, _)| !ingress_keys.contains(key));
-            if automation_home {
-                pairs.push((store::deployment::GITHUB_AUTOMATION_HOME_FLAG, "true"));
-            }
-            pairs
-        };
-
-        assert!(
-            production_invariants(lookup(&without_ingress(false))).is_ok(),
-            "a tenant deployment must not need the singleton Restate ingress credentials"
-        );
-
-        let err = production_invariants(lookup(&without_ingress(true))).unwrap_err();
-        assert_eq!(err.violations.len(), 1);
-        assert!(
-            err.violations[0].starts_with("RESTATE_INGRESS_URL"),
-            "the automation home must fail closed without its Restate ingress credentials: {err:?}"
-        );
     }
 
     #[test]
@@ -457,10 +424,6 @@ mod tests {
         assert!(err
             .violations
             .iter()
-            .any(|v| v.starts_with("RESTATE_INGRESS_URL")));
-        assert!(err
-            .violations
-            .iter()
             .any(|v| v.starts_with("NAVIGATOR_GITHUB_ORG")));
         assert!(err
             .violations
@@ -474,10 +437,6 @@ mod tests {
             .violations
             .iter()
             .any(|v| v.starts_with("SENDGRID_EVENTS_PUBLIC_KEY")));
-        assert!(err
-            .violations
-            .iter()
-            .any(|v| v.starts_with("RESTATE_BROKER_URL")));
         assert!(err
             .violations
             .iter()
@@ -504,7 +463,6 @@ mod tests {
     /// pinned, OIDC not disabled.
     fn full_with_jwks() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("RESTATE_BROKER_URL", "http://restate:9070"),
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
@@ -525,9 +483,6 @@ mod tests {
             ("NAVIGATOR_CREDENTIAL_ENVIRONMENT", "production"),
             ("SESSION_SECRET", SECRET32),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
-            ("RESTATE_INGRESS_URL", "https://ingress.restate.cloud:8080"),
-            ("RESTATE_AUTH_TOKEN", "key_test"),
-            ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
             ("OIDC_JWKS_URL", "https://idp/jwks"),
             ("OIDC_AUDIENCE", "navigator-web"),
             ("OIDC_ISSUER", "https://idp"),
@@ -544,40 +499,14 @@ mod tests {
     }
 
     #[test]
-    fn complete_native_production_and_automation_boot_without_any_restate_key() {
-        use store::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
+    fn production_invariants_admit_both_automation_profiles() {
         for automation_home in ["false", "true"] {
             let mut pairs = full_with_jwks();
-            pairs.retain(|(key, _)| !key.starts_with("RESTATE_"));
-            pairs.extend(WORKFLOWS.iter().map(|row| (row.flag, "true")));
-            pairs.extend([
-                (COHOST_ENV, "true"),
-                (DBOS_ENABLED_ENV, "true"),
-                (ENGINE_ENV, "dbos"),
-                (
-                    store::deployment::GITHUB_AUTOMATION_HOME_FLAG,
-                    automation_home,
-                ),
-            ]);
+            pairs.push((
+                store::deployment::GITHUB_AUTOMATION_HOME_FLAG,
+                automation_home,
+            ));
             production_invariants(lookup(&pairs)).unwrap();
-            pairs.retain(|(key, _)| *key != "NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED");
-            pairs.push(("NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED", "false"));
-            let mixed = production_invariants(lookup(&pairs)).unwrap_err();
-            assert!(mixed
-                .violations
-                .iter()
-                .any(|message| message.starts_with("RESTATE_BROKER_URL")));
-            assert!(mixed
-                .violations
-                .iter()
-                .any(|message| message.starts_with("RESTATE_IDENTITY_KEY")));
-            assert_eq!(
-                mixed
-                    .violations
-                    .iter()
-                    .any(|message| message.starts_with("RESTATE_INGRESS_URL")),
-                automation_home == "true"
-            );
         }
     }
 
@@ -596,7 +525,6 @@ mod tests {
     fn jwks_path_requires_audience_and_issuer() {
         // JWKS set but neither audience nor issuer → two violations.
         let err = production_invariants(lookup(&[
-            ("RESTATE_BROKER_URL", "http://restate:9070"),
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
@@ -617,9 +545,6 @@ mod tests {
             ("NAVIGATOR_CREDENTIAL_ENVIRONMENT", "production"),
             ("SESSION_SECRET", SECRET32),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
-            ("RESTATE_INGRESS_URL", "https://ingress.restate.cloud:8080"),
-            ("RESTATE_AUTH_TOKEN", "key_test"),
-            ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
             ("OIDC_JWKS_URL", "https://idp/jwks"),
         ]))
         .unwrap_err();
@@ -666,7 +591,6 @@ mod tests {
     #[test]
     fn prod_invariants_reject_filesystem_backend() {
         let err = production_invariants(lookup(&[
-            ("RESTATE_BROKER_URL", "http://restate:9070"),
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "fs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
@@ -687,9 +611,6 @@ mod tests {
             ("NAVIGATOR_CREDENTIAL_ENVIRONMENT", "production"),
             ("SESSION_SECRET", SECRET32),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
-            ("RESTATE_INGRESS_URL", "https://ingress.restate.cloud:8080"),
-            ("RESTATE_AUTH_TOKEN", "key_test"),
-            ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
             ("GOOGLE_OAUTH_CLIENT_IDS", "123.apps.googleusercontent.com"),
             ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
             ("NAVIGATOR_POSTGRES_PORT", "5432"),
@@ -716,7 +637,6 @@ mod tests {
 
     fn dev_pairs() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("RESTATE_BROKER_URL", "http://restate:9070"),
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
@@ -737,9 +657,6 @@ mod tests {
             ("NAVIGATOR_CREDENTIAL_ENVIRONMENT", "dev"),
             ("SESSION_SECRET", SECRET32),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
-            ("RESTATE_INGRESS_URL", "https://ingress.restate.cloud:8080"),
-            ("RESTATE_AUTH_TOKEN", "key_test"),
-            ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
             ("GOOGLE_OAUTH_CLIENT_IDS", "123.apps.googleusercontent.com"),
             ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
             ("NAVIGATOR_POSTGRES_PORT", "5432"),
@@ -791,7 +708,6 @@ mod tests {
     #[test]
     fn only_explicit_dev_ci_harness_may_use_fakes() {
         let harness = [
-            ("RESTATE_BROKER_URL", "http://restate:9070"),
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
