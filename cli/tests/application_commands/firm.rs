@@ -149,14 +149,14 @@ async fn firm_secret_verbs_store_list_and_revoke_a_stripe_key() {
     );
 
     let set = target("set", "sandbox");
-    site.navigator_reading(&set, "sk_test_example\n")
+    site.navigator_reading(&set, "rk_test_example\n")
         .await
         .succeeded();
     let requests = site.server.received_requests().await.unwrap();
     let put = requests.last().unwrap();
     assert_eq!(
         (put.method.as_str(), put.url.path(), &put.body[..]),
-        ("PUT", key.as_str(), &b"sk_test_example"[..])
+        ("PUT", key.as_str(), &b"rk_test_example"[..])
     );
 
     site.navigator(&target("delete", "sandbox"))
@@ -165,7 +165,7 @@ async fn firm_secret_verbs_store_list_and_revoke_a_stripe_key() {
     let (method, path, _) = site.last_request().await;
     assert_eq!((method.as_str(), path), ("DELETE", key));
 
-    site.navigator_reading(&set, "sk_live_example\n")
+    site.navigator_reading(&set, "rk_live_example\n")
         .await
         .refused(1, "does not match the selected kind and mode");
     site.navigator(&target("delete", "live"))

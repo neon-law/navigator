@@ -29,14 +29,16 @@ pub enum Mode {
 impl Mode {
     #[must_use]
     pub fn accepts(self, kind: KeyKind, value: &str) -> bool {
-        let prefix = match (self, kind) {
-            (Self::Sandbox, KeyKind::Publishable) => "pk_test_",
-            (Self::Sandbox, KeyKind::Secret) => "sk_test_",
-            (Self::Live, KeyKind::Publishable) => "pk_live_",
-            (Self::Live, KeyKind::Secret) => "sk_live_",
+        let prefixes: &[_] = match (self, kind) {
+            (Self::Sandbox, KeyKind::Publishable) => &["pk_test_"],
+            (Self::Sandbox, KeyKind::Secret) => &["sk_test_", "rk_test_"],
+            (Self::Live, KeyKind::Publishable) => &["pk_live_"],
+            (Self::Live, KeyKind::Secret) => &["sk_live_", "rk_live_"],
         };
-        value.strip_prefix(prefix).is_some_and(|suffix| {
-            !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_alphanumeric())
+        prefixes.iter().any(|&prefix| {
+            value.strip_prefix(prefix).is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
         })
     }
 }
@@ -64,8 +66,10 @@ mod tests {
         for (value, expected_kind, expected_mode) in [
             ("pk_test_example", KeyKind::Publishable, Mode::Sandbox),
             ("sk_test_example", KeyKind::Secret, Mode::Sandbox),
+            ("rk_test_example", KeyKind::Secret, Mode::Sandbox),
             ("pk_live_example", KeyKind::Publishable, Mode::Live),
             ("sk_live_example", KeyKind::Secret, Mode::Live),
+            ("rk_live_example", KeyKind::Secret, Mode::Live),
         ] {
             for kind in [KeyKind::Publishable, KeyKind::Secret] {
                 for mode in [Mode::Sandbox, Mode::Live] {
@@ -76,7 +80,7 @@ mod tests {
                 }
             }
         }
-        for invalid in ["", "sk_test_", "rk_test_example", "sk_test_a\nsk_test_b"] {
+        for invalid in ["", "sk_test_", "rk_test_", "sk_test_a\nsk_test_b"] {
             assert!(!Mode::Sandbox.accepts(KeyKind::Secret, invalid));
         }
     }

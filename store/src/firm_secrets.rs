@@ -148,12 +148,7 @@ impl IntegrationSecretKind {
             return Ok(None);
         };
         let mode = stripe_mode()?;
-        // Existing billing integrations also accept restricted server keys.
-        let restricted = kind == KeyKind::Secret
-            && value
-                .strip_prefix("rk_")
-                .is_some_and(|suffix| mode.accepts(kind, &format!("sk_{suffix}")));
-        if mode.accepts(kind, value) || restricted {
+        if mode.accepts(kind, value) {
             Ok(Some(mode))
         } else {
             Err(SecretStoreError::InvalidStripeKey)
