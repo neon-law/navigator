@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "archives"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "arrow",
@@ -1393,7 +1393,7 @@ dependencies = [
 
 [[package]]
 name = "billing"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1413,7 +1413,7 @@ dependencies = [
 
 [[package]]
 name = "billing-workflows"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1925,7 +1925,7 @@ checksum = "e0921b3876b3a1df8a1c9f912e7f94342458022c2e84288015893d83c4d62a79"
 
 [[package]]
 name = "cli"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1989,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "cloud"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "aes-gcm 0.11.1",
  "anyhow",
@@ -3830,7 +3830,7 @@ dependencies = [
 
 [[package]]
 name = "ephemeris"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4046,7 +4046,7 @@ checksum = "6a7107516a8be9a4ffe92495f3dbfe04348be0ad18f17c67a1d846511f99e599"
 
 [[package]]
 name = "features"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4233,7 +4233,7 @@ dependencies = [
 
 [[package]]
 name = "forms"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "cloud",
  "pdf",
@@ -4356,7 +4356,7 @@ dependencies = [
 
 [[package]]
 name = "gateway"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4466,7 +4466,7 @@ dependencies = [
 
 [[package]]
 name = "geotime"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -5212,7 +5212,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hudson"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "archives",
@@ -5767,7 +5767,7 @@ checksum = "6e44b0a4eaa4c82f441d50a963f2d5f05a787240aeee097597033e72accfd22f"
 
 [[package]]
 name = "import"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -6472,7 +6472,7 @@ checksum = "02b614978e47ce529faee66579f2b2fe19c94aa96d910a6a9a8043b2b02d8175"
 
 [[package]]
 name = "live-inquiry"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6603,7 +6603,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
 name = "lsp"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "lsp-types",
@@ -6748,7 +6748,7 @@ dependencies = [
 
 [[package]]
 name = "mcp"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -6869,7 +6869,7 @@ dependencies = [
 
 [[package]]
 name = "model"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7012,7 +7012,7 @@ dependencies = [
 
 [[package]]
 name = "neon"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -7611,7 +7611,7 @@ checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
 
 [[package]]
 name = "pdf"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "chrono",
  "lopdf 0.47.0",
@@ -7983,7 +7983,7 @@ dependencies = [
 
 [[package]]
 name = "portal"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -8240,7 +8240,7 @@ dependencies = [
 
 [[package]]
 name = "project-scaffold"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "rules",
  "serde_json",
@@ -8746,7 +8746,7 @@ dependencies = [
 
 [[package]]
 name = "repos"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -8972,7 +8972,7 @@ dependencies = [
 
 [[package]]
 name = "rules"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "chrono",
  "include_dir",
@@ -9168,7 +9168,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox-skills"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "serde",
 ]
@@ -9214,7 +9214,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scorpio"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "archives",
@@ -9539,7 +9539,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "arrow",
@@ -10128,7 +10128,7 @@ dependencies = [
 
 [[package]]
 name = "store"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "addr",
  "anyhow",
@@ -10687,7 +10687,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "base64 0.23.1",
  "opentelemetry",
@@ -11522,7 +11522,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "typesafe"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "async-trait",
  "reqwest 0.13.5",
@@ -12325,7 +12325,7 @@ dependencies = [
 
 [[package]]
 name = "views"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "chrono",
  "forms",
@@ -12588,7 +12588,7 @@ dependencies = [
 
 [[package]]
 name = "webapp"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -13007,7 +13007,7 @@ dependencies = [
 
 [[package]]
 name = "word"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "pulldown-cmark",
  "serde",
@@ -13019,7 +13019,7 @@ dependencies = [
 
 [[package]]
 name = "workflows"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -13059,7 +13059,7 @@ dependencies = [
 
 [[package]]
 name = "workflows-service"
-version = "26.11.28-rc.4"
+version = "26.11.28-rc.5"
 dependencies = [
  "anyhow",
  "archives",
