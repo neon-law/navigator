@@ -16,14 +16,6 @@ use super::{require_tools, use_kind_context, KindConfig};
 const MIN_QUESTIONS: i64 = 8;
 /// The bundled template catalog carries 20+ current rows.
 const MIN_TEMPLATES: i64 = 8;
-/// Every workload the applied tier deploys, waited on before the checks
-/// that depend on it. A member joins this list the day it joins the tier:
-/// the deploy workflow applies `k8s/overlays/kind` wholesale, so an
-/// unlisted member would deploy unwatched and fail later as a confusing
-/// connection error. It leaves the list the day it leaves the tier — a
-/// name here that no manifest declares fails the gate outright, because
-/// `kubectl rollout status` exits non-zero for a resource that does not
-/// exist. Both directions are guarded by the `tests` module below.
 
 /// Whether the seed counts clear the minimums.
 fn seed_counts_ok(questions: i64, templates: i64) -> bool {

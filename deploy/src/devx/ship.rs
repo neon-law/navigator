@@ -764,7 +764,7 @@ fn require_dbos_schedule_prerequisites(deployment: &super::deployments::Deployme
     Ok(())
 }
 
-/// These CronJobs are retired because their schedule runs in DBOS or was discontinued.
+/// These `CronJobs` are retired because their schedule runs in DBOS or was discontinued.
 const RETIRED_CRONJOBS: &[&str] = &[
     "heartbeat-trigger",
     "billing-canary-trigger",
