@@ -287,7 +287,7 @@ fn ledger(projects: &[ProjectOption]) -> Element {
                 for project in groups {
                     tbody {
                         tr { class: "daily-billing__group", th { scope: "rowgroup", colspan: 4,
-                            a { class: "nav-link", href: "/app/projects/{project.code}/billing", "{project.name} ({project.code})" }
+                            a { class: "nav-link", href: "/app/projects/{project.code}/finances", "{project.name} ({project.code})" }
                         } }
                         for line in &project.entries.lines {
                             tr { td { "{line.description}" if !line.status.is_empty() { " · {line.status}" } }

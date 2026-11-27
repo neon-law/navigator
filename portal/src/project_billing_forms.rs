@@ -30,7 +30,7 @@ use crate::session::SessionData;
 /// The success toast rides `?flash=`; a refusal rides `?error=` — two
 /// channels, because one names what happened and the other what to do next.
 fn back_to_billing(code: &str, flash: Option<&str>, error: Option<&str>) -> Response {
-    let mut url = format!("/app/projects/{code}/billing");
+    let mut url = format!("/app/projects/{code}/finances");
     // The first parameter opens the query with `?`; later ones continue it
     // with `&` — an `&` before the first would break the path outright.
     let mut separator = '?';
@@ -687,7 +687,7 @@ pub(crate) async fn generate_invoice(
     // The first POST is the action's start: nothing provider-bound has run,
     // and the compose preview is a read rendered at `?confirm=1`.
     if input.confirm.is_none() {
-        return Redirect::to(&format!("/app/projects/{code}/billing?confirm=1")).into_response();
+        return Redirect::to(&format!("/app/projects/{code}/finances?confirm=1")).into_response();
     }
     let Ok(pg) = crate::time_tracking_api::postgres("generate_invoice", Some(project.id)).await
     else {
@@ -922,22 +922,22 @@ mod tests {
         // No channel: the bare tab path, no dangling separator.
         assert_eq!(
             redirect_location(&back_to_billing("ACME", None, None)),
-            "/app/projects/ACME/billing"
+            "/app/projects/ACME/finances"
         );
         // Success alone rides `?flash=`; a refusal alone rides `?error=`.
         assert_eq!(
             redirect_location(&back_to_billing("ACME", Some("Time logged."), None)),
-            "/app/projects/ACME/billing?flash=Time%20logged."
+            "/app/projects/ACME/finances?flash=Time%20logged."
         );
         assert_eq!(
             redirect_location(&back_to_billing("ACME", None, Some("Capture the time in whole minutes — for example, 90."))),
-            "/app/projects/ACME/billing?error=Capture%20the%20time%20in%20whole%20minutes%20%E2%80%94%20for%20example,%2090."
+            "/app/projects/ACME/finances?error=Capture%20the%20time%20in%20whole%20minutes%20%E2%80%94%20for%20example,%2090."
         );
         // Both channels: flash opens the query, error continues it — an `&`
         // before the first parameter would break the path outright.
         assert_eq!(
             redirect_location(&back_to_billing("ACME", Some("a?b"), Some("c&d"))),
-            "/app/projects/ACME/billing?flash=a%3Fb&error=c%26d"
+            "/app/projects/ACME/finances?flash=a%3Fb&error=c%26d"
         );
     }
 
@@ -1504,24 +1504,24 @@ mod end_to_end_tests {
     fn back_to_billing_rides_two_channels_and_encodes_both() {
         let response = back_to_billing("acme", None, None);
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(location(&response), "/app/projects/acme/billing");
+        assert_eq!(location(&response), "/app/projects/acme/finances");
 
         let response = back_to_billing("acme", Some("Time logged."), None);
         assert_eq!(
             location(&response),
-            "/app/projects/acme/billing?flash=Time%20logged."
+            "/app/projects/acme/finances?flash=Time%20logged."
         );
 
         let response = back_to_billing("acme", None, Some("Capture the time in whole minutes."));
         assert_eq!(
             location(&response),
-            "/app/projects/acme/billing?error=Capture%20the%20time%20in%20whole%20minutes."
+            "/app/projects/acme/finances?error=Capture%20the%20time%20in%20whole%20minutes."
         );
 
         let response = back_to_billing("acme", Some("Time & time again?"), Some("#hash"));
         assert_eq!(
             location(&response),
-            "/app/projects/acme/billing?flash=Time%20%26%20time%20again%3F&error=%23hash"
+            "/app/projects/acme/finances?flash=Time%20%26%20time%20again%3F&error=%23hash"
         );
     }
 

@@ -1204,7 +1204,7 @@ async fn daily_billing_groups_interleaved_project_entries_after_saving() {
     );
     for (project, subtotal) in [(&first, "$180.00"), (&second, "$0.00")] {
         let selector = format!(
-            "tbody:has(a[href='/app/projects/{}/billing']) .daily-billing__subtotal",
+            "tbody:has(a[href='/app/projects/{}/finances']) .daily-billing__subtotal",
             project.code
         );
         let rows = c.find_all(Locator::Css(&selector)).await.unwrap();
@@ -1346,7 +1346,7 @@ async fn the_billing_tab_opens_and_its_empty_sections_explain_themselves() {
     };
     login_as_lawyer(&c).await;
     let url = format!(
-        "{}/app/projects/{}/billing",
+        "{}/app/projects/{}/finances",
         base_url(),
         store::seed::SAMPLE_LITIGATION_CODE
     );

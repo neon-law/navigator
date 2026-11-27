@@ -60,8 +60,8 @@ pub struct FirmEditView {
     pub status: String,
     pub entity_id: Option<String>,
     pub entities: Vec<FirmEntityOption>,
-    /// The Firm's Portal Theme Brand key; `None` keeps each host's own look.
     #[serde(default)]
+    pub workspace_provider: String,
     pub google_workspace_calendar_owner: Option<String>,
     pub deadline_buffer_minutes: String,
     pub deadline_end_of_business: String,
@@ -69,9 +69,7 @@ pub struct FirmEditView {
     /// Whether the Firm's Projects use Google Drive folders. Read for the Owner only.
     #[serde(default)]
     pub google_drive: bool,
-    /// The Firm's e-signature provider key (`docusign` or `dropbox_sign`).
-    #[serde(default)]
-    pub esign_provider: String,
+    /// The Firm-owned Brand selected as the base website.
     pub portal_theme_brand_key: Option<String>,
     /// The Brands this Firm owns, the only ones the theme picker offers.
     #[serde(default)]
@@ -199,6 +197,9 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         (None, Vec::new())
     };
 
+    let workspace_provider = store::firms::workspace_provider(id)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?;
     let google_workspace_calendar_owner = if role == ViewerRole::Owner {
         store::firms::calendar_owner(id)
             .await
@@ -230,11 +231,22 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         && store::firms::google_drive(id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?;
-    let esign_provider = esign_provider_key(id).await?;
+    let base = if let Some((_, mark)) =
+        crate::app_chrome::firm_settings_brand(&application_store, &firm).await
+    {
+        FirmEditView {
+            logo: mark.logo,
+            tokens_href: mark.tokens_href,
+            firm_name: mark.firm_name,
+            ..base
+        }
+    } else {
+        base
+    };
     Ok(FirmEditView {
         found: true,
-        esign_provider,
         google_workspace_calendar_owner,
+        workspace_provider,
         deadline_buffer_minutes: policy.buffer_minutes().to_string(),
         deadline_end_of_business: policy.end_of_business().format("%H:%M").to_string(),
         deadline_effort: [
@@ -260,14 +272,6 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
     })
 }
 
-#[cfg(feature = "server")]
-async fn esign_provider_key(firm_id: uuid::Uuid) -> Result<String, ServerFnError> {
-    store::firm_esign::for_firm(firm_id)
-        .await
-        .map(|provider| provider.as_str().to_string())
-        .map_err(|error| ServerFnError::new(error.to_string()))
-}
-
 /// The Brands this Firm owns: the only choices for its Portal Theme Brand.
 #[cfg(feature = "server")]
 async fn owned_brands(
@@ -277,9 +281,12 @@ async fn owned_brands(
     Ok(store::brands::for_firm(application_store, firm_id)
         .await?
         .into_iter()
-        .map(|brand| FirmBrandOption {
-            key: brand.key,
-            name: brand.name,
+        .filter_map(|brand| {
+            let url = crate::app_chrome::brand_website_url(&brand)?;
+            Some(FirmBrandOption {
+                key: brand.key,
+                name: format!("{} · {url}", brand.name),
+            })
         })
         .collect())
 }
@@ -317,10 +324,6 @@ async fn admin_dri_choices(
 
 const STATUS_CHOICES: [&str; 3] = ["active", "suspended", "archived"];
 
-/// The e-signature providers a Firm can pick: stored key, then label.
-const ESIGN_PROVIDER_CHOICES: [(&str, &str); 2] =
-    [("docusign", "DocuSign"), ("dropbox_sign", "Dropbox Sign")];
-
 fn entity_options(entities: &[FirmEntityOption]) -> Vec<Choice> {
     let mut options = vec![Choice::new("", "—")];
     options.extend(
@@ -332,7 +335,7 @@ fn entity_options(entities: &[FirmEntityOption]) -> Vec<Choice> {
 }
 
 fn theme_options(brands: &[FirmBrandOption]) -> Vec<Choice> {
-    let mut options = vec![Choice::new("", "Each host's own brand")];
+    let mut options = vec![Choice::new("", "Default Firm website")];
     options.extend(
         brands
             .iter()
@@ -375,14 +378,13 @@ fn edit_form(view: &FirmEditView) -> Element {
         .required()
         .help("The legal organization this Firm is. Create the entity first if it isn't listed."),
         Field::select(
-            "Portal theme",
+            "Base Firm URL",
             "portal_theme_brand_key",
             theme_options(&view.owned_brands),
             view.portal_theme_brand_key.clone(),
         )
         .help(
-            "The brand your team sees when signed in. Clients see the brand of the site \
-             where they sign in.",
+            "Choose a Firm-owned website for the Firm link and settings styles. An Owner can edit the website URL in Brand settings.",
         ),
     ];
     if view.can_appoint_dri {
@@ -414,24 +416,6 @@ fn edit_form(view: &FirmEditView) -> Element {
             csrf_token: Some(view.csrf_token.clone()),
             fields,
         }
-        FormCard {
-            title: "E-signature provider".to_string(),
-            action: format!("/app/admin/firms/{}/edit", view.id),
-            submit_label: "Save provider".to_string(),
-            heading: Heading::H2,
-            csrf_token: Some(view.csrf_token.clone()),
-            fields: vec![Field::select(
-                "Provider",
-                "esign_provider",
-                ESIGN_PROVIDER_CHOICES
-                    .iter()
-                    .map(|(key, label)| Choice::new(*key, *label))
-                    .collect(),
-                Some(view.esign_provider.clone()),
-            )
-            .required()
-            .help("Every brand this Firm owns sends engagement letters and other signature requests through this provider.")],
-        }
         if view.role == ViewerRole::Owner {
             {integration_cards(view)}
         }
@@ -441,21 +425,23 @@ fn edit_form(view: &FirmEditView) -> Element {
 /// The Owner's Google Calendar and Google Drive switches (Firm Integrations).
 fn integration_cards(view: &FirmEditView) -> Element {
     rsx! {
-        FormCard {
-            title: "Google Calendar".to_string(),
-            action: format!("/app/admin/firms/{}/edit", view.id),
-            submit_label: "Save Google Calendar".to_string(),
-            heading: Heading::H2,
-            csrf_token: Some(view.csrf_token.clone()),
-            fields: vec![
-                on_off("Google Calendar", "google_calendar", view.google_workspace_calendar_owner.is_some())
-                    .help("On gives each Project a shared Project Calendar and shows it on the Project page. Off hides Calendar; record dates as Deadlines and hand out ICS files."),
-                Field::email(
-                    "Google Workspace main email",
-                    "google_workspace_calendar_owner",
-                    view.google_workspace_calendar_owner.clone().unwrap_or_default(),
-                ).help("The mailbox that creates and owns the Firm’s Project Calendars, and the Firm’s main email. Required when Calendar is on. Gmail addresses are not supported."),
-            ],
+        if view.workspace_provider != "microsoft_365" {
+            FormCard {
+                title: "Google Calendar".to_string(),
+                action: format!("/app/admin/firms/{}/edit", view.id),
+                submit_label: "Save Google Calendar".to_string(),
+                heading: Heading::H2,
+                csrf_token: Some(view.csrf_token.clone()),
+                fields: vec![
+                    on_off("Google Calendar", "google_calendar", view.google_workspace_calendar_owner.is_some())
+                        .help("On gives each Project a shared Project Calendar and shows it on the Project page. Off hides Calendar; record dates as Deadlines and hand out ICS files."),
+                    Field::email(
+                        "Google Workspace main email",
+                        "google_workspace_calendar_owner",
+                        view.google_workspace_calendar_owner.clone().unwrap_or_default(),
+                    ).help("The mailbox that creates and owns the Firm’s Project Calendars, and the Firm’s main email. Required when Calendar is on. Gmail addresses are not supported."),
+                ],
+            }
         }
         FormCard {
             title: "Deadline scheduling".to_string(),
@@ -474,14 +460,16 @@ fn integration_cards(view: &FirmEditView) -> Element {
                 Field::text("Tickler work (minutes)", "deadline_effort_tickler", view.deadline_effort[3].clone()).required(),
             ],
         }
-        FormCard {
-            title: "Google Drive".to_string(),
-            action: format!("/app/admin/firms/{}/edit", view.id),
-            submit_label: "Save Google Drive".to_string(),
-            heading: Heading::H2,
-            csrf_token: Some(view.csrf_token.clone()),
-            fields: vec![on_off("Google Drive", "google_drive", view.google_drive)
-                .help("On gives each Project a private Drive folder and shows it on the Project page. Off hides Drive.")],
+        if view.workspace_provider != "microsoft_365" {
+            FormCard {
+                title: "Google Drive".to_string(),
+                action: format!("/app/admin/firms/{}/edit", view.id),
+                submit_label: "Save Google Drive".to_string(),
+                heading: Heading::H2,
+                csrf_token: Some(view.csrf_token.clone()),
+                fields: vec![on_off("Google Drive", "google_drive", view.google_drive)
+                    .help("On gives each Project a private Drive folder and shows it on the Project page. Off hides Drive.")],
+            }
         }
 
     }
@@ -531,6 +519,9 @@ pub fn FirmEdit() -> Element {
                 header { class: "page-header",
                     h1 { "Edit firm" }
                     p { a { href: "{back_href}", "← Back" } }
+                    if view.role.is_owner() {
+                        p { a { class: "nav-link", href: "/app/admin/brands", "Manage Brand website URLs" } }
+                    }
                 }
                 {edit_form(&view)}
             } else {
@@ -565,12 +556,12 @@ mod tests {
                 id: ENTITY_ID.to_string(),
                 name: "Guieb & Shook PC".to_string(),
             }],
+            workspace_provider: "google_workspace".into(),
             google_workspace_calendar_owner: Some("calendar@example.test".to_string()),
             deadline_buffer_minutes: "15".into(),
             deadline_end_of_business: "17:00".into(),
             deadline_effort: ["360", "240", "30", "15"].map(str::to_owned),
             google_drive: false,
-            esign_provider: "docusign".to_string(),
             portal_theme_brand_key: Some("guieb-shook".to_string()),
             owned_brands: vec![
                 FirmBrandOption {

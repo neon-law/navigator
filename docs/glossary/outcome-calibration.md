@@ -1,10 +1,10 @@
 ---
 title: "Outcome Calibration"
 description: >-
-  The Firm show page's comparison of resolved matters' Outcome Estimates with their Matter Outcomes, naming no matter.
+  Firm Finances compares Outcome Estimates with Matter Outcomes without naming matters.
 ---
 
-**Outcome Calibration** is a section on the Firm show page, after [Projected Contingency
+**Outcome Calibration** is a section on the Firm Finances dashboard, after [Projected Contingency
 Cash](projected-contingency-cash.md), for Owner and Admin. It scores every resolved matter the Firm owns on the odds in
 force thirty days before it resolved: the newest [Outcome Estimate](outcome-estimate.md) recorded on or before that day,
 against the matter's current [Matter Outcome](matter-outcome.md). A corrected outcome counts only through its current

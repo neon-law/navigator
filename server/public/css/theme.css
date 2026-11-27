@@ -2900,6 +2900,19 @@ a.nav-link:hover {
   margin: 0;
 }
 
+#firm-integrations .nav-form {
+  margin-block-end: var(--nav-space-4);
+}
+
+#firm-integrations .nav-form > .nav-btn {
+  margin-block-start: var(--nav-space-2);
+}
+
+#firm-finances .page-header {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
 /* Firm inbox: a full-width, Gmail-style surface. One dense row per
  * conversation; unread rows are bold with a dot, and the subject link is
  * stretched over the whole row so the entire row opens the thread. The

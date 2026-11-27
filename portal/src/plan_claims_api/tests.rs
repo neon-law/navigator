@@ -87,7 +87,7 @@ async fn billing_page(app: &Router, code: &str, person: Uuid, role: Role) -> (St
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{code}/billing"))
+                .uri(format!("/app/projects/{code}/finances"))
                 .header(
                     header::COOKIE,
                     format!("{}={token}", crate::session::SESSION_COOKIE_NAME),

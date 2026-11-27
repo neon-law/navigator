@@ -48,7 +48,7 @@ pub const SHOW_PAGE_TITLE: &str = "Overview";
 pub const BUILTIN_TAB_TITLES: &[&str] = &[
     "Onboarding",
     "Deadlines",
-    "Billing",
+    "Finances",
     "Tasks",
     "Communications",
     "Documents",
@@ -68,6 +68,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "deadlines",
     "documents",
     "edit",
+    "finances",
     "graph",
     "inbox",
     "intake",

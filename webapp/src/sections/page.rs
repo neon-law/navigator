@@ -179,7 +179,7 @@ impl MatterTab {
             Self::Tasks => "tasks",
             Self::Communications => "communications",
             Self::Documents => "documents",
-            Self::Billing => "billing",
+            Self::Billing => "finances",
             Self::Participants => "participants",
             Self::Testimonial => "testimonial",
         }
@@ -196,7 +196,7 @@ impl MatterTab {
             Self::Tasks => "Tasks",
             Self::Communications => "Communications",
             Self::Documents => "Documents",
-            Self::Billing => "Billing",
+            Self::Billing => "Finances",
             Self::Participants => "Participants",
             Self::Testimonial => "Testimonial",
         }
@@ -233,6 +233,7 @@ impl MatterTab {
         segments.next()?;
         let tab = match segments.next() {
             None => Self::Overview,
+            Some("billing") => Self::Billing,
             Some(segment) => Self::ROUTED
                 .into_iter()
                 .find(|tab| tab.segment() == segment)?,
@@ -1153,7 +1154,7 @@ mod tests {
         dom.rebuild_in_place();
         let html = dioxus_ssr::render(&dom);
         assert!(html.contains("Chat timeline") && html.contains("Image timeline"));
-        assert!(!html.contains("Billing"), "{html}");
+        assert!(!html.contains("Finances"), "{html}");
         assert!(!html.contains("Communications"), "{html}");
     }
 
@@ -1403,7 +1404,7 @@ mod tests {
                 "/app/projects/m",
                 "/app/projects/m/onboarding",
                 "/app/projects/m/deadlines",
-                "/app/projects/m/billing",
+                "/app/projects/m/finances",
                 "/app/projects/m/timeline",
                 "/app/projects/m/engagement",
             ];
@@ -1440,7 +1441,7 @@ mod tests {
         fn a_page_shadowed_by_a_built_in_route_is_left_out_of_the_strip() {
             use super::super::matter_tabs;
             let mut pages = pages();
-            pages[1].slug = "billing".into();
+            pages[1].slug = "finances".into();
             let hrefs: Vec<String> = matter_tabs("m", &pages, store::access::MatterViewer::Lawyer)
                 .into_iter()
                 .map(|tab| tab.href)
@@ -1448,10 +1449,10 @@ mod tests {
             assert_eq!(
                 hrefs
                     .iter()
-                    .filter(|href| href.as_str() == "/app/projects/m/billing")
+                    .filter(|href| href.as_str() == "/app/projects/m/finances")
                     .count(),
                 1,
-                "only the built-in Billing tab: {hrefs:?}"
+                "only the built-in Finances tab: {hrefs:?}"
             );
             let labels: Vec<String> = matter_tabs("m", &pages, store::access::MatterViewer::Lawyer)
                 .into_iter()

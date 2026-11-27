@@ -392,7 +392,7 @@ pub fn MatterTimer(code: String, csrf: String, timer: TimerView) -> Element {
                 {
                     a {
                         class: "nav-link",
-                        href: "/app/projects/{other_code}/billing",
+                        href: "/app/projects/{other_code}/finances",
                         "{other_name}"
                     }
                 } else {
@@ -451,7 +451,7 @@ pub fn BillingTab(
     });
     rsx! {
         section { class: "lawyer-detail__section lawyer-detail__billing",
-            h2 { "Billing" }
+            h2 { "Finances" }
             if let Some(error) = error {
                 p { class: "nav-form-error", role: "alert", "{error}"
                     if rate_error {
@@ -905,7 +905,7 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
                 if generate.stripe_iolta.is_some() { "Create Stripe draft" } else { "Raise in Xero" }
             }
         }
-        a { class: "nav-link", href: "/app/projects/{code}/billing", "Not now" }
+        a { class: "nav-link", href: "/app/projects/{code}/finances", "Not now" }
     }
 }
 
@@ -1470,8 +1470,8 @@ mod tests {
             }
         });
         assert!(
-            html.contains("/app/projects/other/billing"),
-            "missing [/app/projects/other/billing]"
+            html.contains("/app/projects/other/finances"),
+            "missing [/app/projects/other/finances]"
         );
         assert!(
             !html.contains("/app/projects/acme/timer/stop"),
@@ -1849,7 +1849,7 @@ mod tests {
             html.contains("name=\"digest\" value=\"digest-of-the-reviewed-compose\""),
             "missing [name=\"digest\" value=\"digest-of-the-reviewed-compose\"]"
         );
-        assert!(html.contains(r#"href="/app/projects/acme/billing""#));
+        assert!(html.contains(r#"href="/app/projects/acme/finances""#));
         assert!(html.contains("records a receivable in Xero"));
     }
 

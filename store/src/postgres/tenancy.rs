@@ -401,6 +401,32 @@ pub async fn update_membership(
     firm_id: Uuid,
     membership: firms::FirmMembership,
 ) -> Result<firms::PersonFirmRole, firms::FirmError> {
+    change_membership(
+        actor_role,
+        actor_person_id,
+        person_id,
+        firm_id,
+        Some(membership),
+    )
+    .await
+}
+
+pub(crate) async fn demote_admin(
+    actor_role: crate::persons::Role,
+    actor_person_id: Option<Uuid>,
+    person_id: Uuid,
+    firm_id: Uuid,
+) -> Result<firms::PersonFirmRole, firms::FirmError> {
+    change_membership(actor_role, actor_person_id, person_id, firm_id, None).await
+}
+
+async fn change_membership(
+    actor_role: crate::persons::Role,
+    actor_person_id: Option<Uuid>,
+    person_id: Uuid,
+    firm_id: Uuid,
+    requested: Option<firms::FirmMembership>,
+) -> Result<firms::PersonFirmRole, firms::FirmError> {
     let pg = db().await?;
     authorize_firm_management(pg.pool(), actor_role, actor_person_id, firm_id).await?;
     let mut tx = pg.pool().begin().await?;
@@ -416,11 +442,21 @@ pub async fn update_membership(
         .bind(person_id).bind(firm_id).fetch_optional(&mut *tx).await?
         .ok_or(firms::FirmError::NotAMember(person_id, firm_id))?;
     let current = membership_row(&row).map_err(firms::FirmError::Postgres)?;
+    let membership = match requested {
+        Some(membership) => membership,
+        None if current.membership == firms::FirmMembership::Admin => firms::FirmMembership::Lawyer,
+        None => return Err(firms::FirmError::NotAuthorized),
+    };
     if current.is_dri
         && status.as_deref() == Some("active")
         && membership != firms::FirmMembership::Admin
     {
         return Err(firms::FirmError::WouldLeaveFirmWithoutAdminDri(firm_id));
+    }
+    if current.membership == firms::FirmMembership::Admin
+        && membership != firms::FirmMembership::Admin
+    {
+        require_admin_dri_to_remove_admin(&mut tx, actor_person_id, person_id, firm_id).await?;
     }
     let updated = sqlx::query("UPDATE person_firm_role SET membership=$3,updated_at=now() WHERE person_id=$1 AND firm_id=$2 RETURNING id,person_id,firm_id,membership,is_dri,inserted_at,updated_at")
         .bind(person_id).bind(firm_id).bind(membership.as_str())
@@ -447,7 +483,7 @@ pub async fn remove_membership(
         return Err(firms::FirmError::NoSuchFirm(firm_id));
     }
     let row = sqlx::query(
-        "SELECT is_dri FROM person_firm_role WHERE person_id=$1 AND firm_id=$2 FOR UPDATE",
+        "SELECT membership,is_dri FROM person_firm_role WHERE person_id=$1 AND firm_id=$2 FOR UPDATE",
     )
     .bind(person_id)
     .bind(firm_id)
@@ -458,6 +494,9 @@ pub async fn remove_membership(
     if is_dri && status.as_deref() == Some("active") {
         return Err(firms::FirmError::WouldLeaveFirmWithoutAdminDri(firm_id));
     }
+    if row.try_get::<String, _>("membership")? == "admin" {
+        require_admin_dri_to_remove_admin(&mut tx, actor_person_id, person_id, firm_id).await?;
+    }
     sqlx::query("DELETE FROM person_firm_role WHERE person_id=$1 AND firm_id=$2")
         .bind(person_id)
         .bind(firm_id)
@@ -465,6 +504,33 @@ pub async fn remove_membership(
         .await?;
     tx.commit().await?;
     Ok(())
+}
+
+// The caller holds the Firm row lock, which serializes this check with DRI transfers.
+async fn require_admin_dri_to_remove_admin(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor_person_id: Option<Uuid>,
+    target_person_id: Uuid,
+    firm_id: Uuid,
+) -> Result<(), firms::FirmError> {
+    if actor_person_id == Some(target_person_id) {
+        return Err(firms::FirmError::NotAuthorized);
+    }
+    let is_dri: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM person_firm_role
+            WHERE person_id=$1 AND firm_id=$2 AND membership='admin' AND is_dri
+        )",
+    )
+    .bind(actor_person_id)
+    .bind(firm_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if is_dri {
+        Ok(())
+    } else {
+        Err(firms::FirmError::NotAuthorized)
+    }
 }
 
 pub async fn appoint_admin_dri(
