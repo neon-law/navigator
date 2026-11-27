@@ -65,49 +65,11 @@ struct JobCopy {
     description: &'static str,
     /// The `POST` route segment that queues this job on demand, for the jobs
     /// `portal::cron_schedules` can start. `None` where there is no such route:
-    /// a self-contained batch has no durable workflow for the Restate ingress
-    /// to invoke, and a button that answers 404 is worse than no button.
+    /// leave the action absent for a scheduled trigger with no manual entry point.
     manual_slug: Option<&'static str>,
 }
 
 const JOB_COPY: &[JobCopy] = &[
-    JobCopy {
-        cron_name: "archives-trigger",
-        name: "Archives twice-daily export",
-        cadence: "Twice daily · 05:55 and 17:55 UTC",
-        description: "Snapshots configured database tables to Parquet on GCS, summarizes GCP cost, \
-                      emails the diagnostic report, and posts a Slack digest with any missing-table warnings.",
-        manual_slug: Some("archives"),
-    },
-    JobCopy {
-        cron_name: "surreal-archive",
-        name: "SurrealDB operational archive",
-        cadence: "Daily · 03:00 PST",
-        description: "Exports the database to a recoverable SurrealQL artifact on object \
-                      storage — the operational restore path, distinct from the analytical \
-                      Parquet output the twice-daily Archives workflow writes.",
-        manual_slug: None,
-    },
-    JobCopy {
-        cron_name: "billing-digest-trigger",
-        name: "Billing digest",
-        cadence: "Daily · 05:00 PST",
-        description: "Posts firm ops a trailing-30-day GCP cost report covering every configured \
-                      billing account and every project on each — a cross-account roll-up, then \
-                      per account a table by project and one by service, each against the prior \
-                      30 days. A two-step Restate workflow; a no-op where no billing export is \
-                      configured.",
-        manual_slug: Some("billing-digest"),
-    },
-    JobCopy {
-        cron_name: "dri-digest-trigger",
-        name: "DRI digest",
-        cadence: "Daily · 17:11 PST (prior day)",
-        description: "Reads each open project's lawyer and client DRI and posts firm ops one Slack \
-                      line per project naming both sides, saying \"none\" where a side is \
-                      unassigned so the gap is visible from the notice itself.",
-        manual_slug: None,
-    },
     JobCopy {
         cron_name: "nightly-project-update-trigger",
         name: "Nightly Project Update",
@@ -118,41 +80,12 @@ const JOB_COPY: &[JobCopy] = &[
         manual_slug: None,
     },
     JobCopy {
-        cron_name: "notation-reset-trigger",
-        name: "Notation draft reset",
-        cadence: "Daily · 04:20 UTC",
-        description: "Deletes every Notation draft on the deployment — a Notation still at BEGIN or \
-                      intake_persisted with no document and no signature, plus every stored preview \
-                      draft — with its dependent rows, then posts the environment, counts, duration, \
-                      and any failing ids to the environment's messages channel. A zero-count run \
-                      posts too, so a missing post means the job did not run.",
-        manual_slug: Some("notation-reset"),
-    },
-    JobCopy {
-        cron_name: "social-publish-reconciler-trigger",
-        name: "Social publication reconciler",
-        cadence: "Every five minutes",
-        description: "Checks scheduled social publications and reconciles provider delivery states so \
-                      completed, failed, or delayed posts are reflected in the Brand content catalog.",
-        manual_slug: None,
-    },
-    JobCopy {
         cron_name: "youtube-comments-poll-trigger",
         name: "YouTube comments poll",
         cadence: "Every fifteen minutes",
         description: "Reads comments on the Brand's published YouTube videos and files each \
                       audience comment into the firm inbox on the youtube channel with full \
                       attribution; the same alert and triage workflows run on every fresh comment.",
-        manual_slug: None,
-    },
-    JobCopy {
-        cron_name: "general-nag",
-        name: "General channel nag",
-        cadence: "Daily · 17:11 PST (prior day)",
-        description: "Posts the daily jab to the firm's general Slack channel. Persistent staging \
-                      is marked by the Slack adapter's final from Staging line; a real \
-                      deployment follows with how many neon-brand matters are open and how many \
-                      of those are still pitches.",
         manual_slug: None,
     },
 ];
@@ -567,31 +500,6 @@ mod tests {
                 copy.cron_name
             );
         }
-    }
-
-    #[test]
-    fn lists_the_archives_export_with_schedule_and_trigger() {
-        let html = dioxus_ssr::render_element(schedules_body(&view()));
-        assert!(html.contains("Archives twice-daily export"), "{html}");
-        assert!(html.contains("55 5,17 * * *"), "{html}");
-        assert!(html.contains("05:55 and 17:55 UTC"), "{html}");
-        // The manual trigger renders as a CSRF-protected POST form.
-        assert!(
-            html.contains("action=\"/app/admin/schedules/archives/run\""),
-            "{html}"
-        );
-        assert!(html.contains("name=\"_csrf\""), "{html}");
-        assert!(html.contains("value=\"tok-9\""), "{html}");
-        assert!(html.contains("Run now"), "{html}");
-    }
-
-    #[test]
-    fn lists_the_billing_digest_daily_workflow() {
-        let html = dioxus_ssr::render_element(schedules_body(&view()));
-        assert!(html.contains("Billing digest"), "{html}");
-        assert!(html.contains("0 13 * * *"), "{html}");
-        assert!(html.contains("05:00 PST"), "{html}");
-        assert!(html.contains("trailing-30-day GCP cost"), "{html}");
     }
 
     #[test]

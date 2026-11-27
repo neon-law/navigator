@@ -13,9 +13,7 @@ resources:
   - ../base
   - ../base/web
   - ../base/rauthy
-  - restate.yaml
   - ../base/openobserve
-  - workflows-service.yaml
   - ../base/clamav
   - brand-bundle.yaml
 

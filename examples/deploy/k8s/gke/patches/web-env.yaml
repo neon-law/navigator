@@ -113,10 +113,6 @@ spec:
             # one selection that boots here. Its credentials ride the Secret.
             - name: NAVIGATOR_SIGNATURE_PROVIDER
               value: docusign
-            - name: RESTATE_IDENTITY_KEY
-              # Public key used to verify Restate Cloud request signatures.
-              # `ops ship` renders it from the deployment config.
-              value: YOUR_RESTATE_IDENTITY_KEY
             - name: NAVIGATOR_CLAMD_ADDR
               value: clamav.navigator.svc.cluster.local:3310
             - name: NAVIGATOR_BOOTSTRAP_COMPANY

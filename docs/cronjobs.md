@@ -1,166 +1,33 @@
-# Scheduled jobs (CronJobs)
+# Scheduled jobs
 
-Kubernetes runs the CronJobs listed below in the `navigator` namespace. The native DBOS executor separately owns the
-daily Project forge maintenance schedule.
+The application deployment ships two Kubernetes CronJobs in the `navigator` namespace. Each submits an authenticated,
+idempotent invocation to the private DBOS endpoint in the web deployment.
 
-Which jobs ship is the `resources:` list in `examples/deploy/k8s/exports/kustomization.yaml`, which is the same list
-that `kubectl kustomize` resolves when `ops ship` reconciles a cluster. A manifest sitting in that directory and named
-by no `resources:` entry renders nowhere. This page deliberately does not restate the list, because prose cannot be
-bound to it by a test: read the kustomization itself, or the lawyer console at `/app/admin/schedules`, which derives its
-table from that list. What this page explains is how a job gets onto it.
+| CronJob | Cadence | Work |
+| --- | --- | --- |
+| Nightly Project Update | 03:33 UTC daily | Sync open Project calendars, guests, Slack channels and repositories. |
+| YouTube comments poll | Every 15 minutes | File new audience comments in the firm inbox. |
 
-GitHub Actions is **not** a scheduler here. CI/CD on GitHub does exactly one thing for the runtime: build and push
-images. The cluster runs its batch jobs near the secrets and services they use.
+The deployment and the lawyer console at `/app/admin/schedules` use the same manifest list in [the scheduled trigger
+overlay](../examples/deploy/k8s/exports/kustomization.yaml). The NetworkPolicy admits only the two trigger pods to the
+private DBOS port. Each trigger reads its bearer from the deployment's web Secret. Keep the bearer out of the manifest.
 
-A k8s `CronJob` is the right scheduler because it is **stateless and self-healing**: it fires every period regardless of
-what happened last time, so a failed or missed run never breaks the next one. (A self-rescheduling timer inside an app
-is a chain — one broken link and it silently stops forever.) See
-[durable-workflows.md](durable-workflows.md#where-the-schedule-lives) for the full "why k8s, not Restate" reasoning.
+DBOS runs the other application schedules from PostgreSQL. See [durable workflows](durable-workflows.md) for the
+executor and its recovery behavior. PostgreSQL backups have a separate [operational
+schedule](../k8s/postgres/backup/kustomization.yaml).
 
 ## Daily Project forge maintenance
 
-DBOS runs `daily-project-forge-parity` at **4:44 a.m. America/New_York**. For each open or pitch Project, it verifies
-both private repositories and their main revisions. It can fast-forward the mirror from the recorded primary. Divergent
-branches, unverified destinations and missing credentials are recorded for investigation.
+DBOS runs `daily-project-forge-parity` at 4:44 a.m. America/New_York. For each open or pitch Project, it verifies both
+private repositories and their main revisions. It can fast-forward the mirror from the recorded primary. It records
+divergent branches, unverified destinations and missing credentials for investigation.
 
-After parity is verified, the schedule compares the manifest at that revision with published stable releases. It queues
-the next release in order. Each Project, release and starting revision identifies one durable job. See the [maintenance
-worker setup](../scripts/project-maintenance/README.md) for the CLI and Vertex repair queues.
+After verifying parity, the schedule compares the Project manifest with published stable releases. It queues the next
+release in order. Each Project, release and starting revision identifies one durable job. See the [maintenance worker
+setup](../scripts/project-maintenance/README.md) for the CLI and Vertex repair queues.
 
-## Two flavors — pick by what the job does
+## Publishing
 
-| | **A. Durable-workflow trigger** | **B. Self-contained batch** |
-| --- | --- | --- |
-| Shape | a tiny binary `POST`s the Restate ingress | one binary does the whole job in-process |
-| Use when | multi-step, exactly-once, can't-lose-it | idempotent batch that re-runs cleanly |
-| Example | `archives-trigger` → `Archives`; `billing-canary-trigger` → `BillingCanary` | a cache refresh or log prune |
-| Failure unit | Restate replays the failed step | the whole job re-runs next period |
-| Docs | [Durable workflows](durable-workflows.md) | this page |
-
-**Default to B for a *pure* one-shot.** Reach for A when a mid-run crash would *lose or duplicate something
-irreversible* (a filing, a payment, a signature) — **or** when you want the run itself to be a durable, self-reporting
-multi-step. The twice-daily **Archives export** is flavor A (`snapshot → Iceberg promotion → Slack digest`): a flaky
-Slack delivery retries the digest step without re-running extraction. A trivial report or cache refresh that needs no
-notification stays flavor B — it has far fewer moving parts (no worker, no Restate registration, no ingress auth), and
-routing it through Restate only adds the failure surfaces (registration, token) the `archives` cutover tripped on. Weigh
-the durable-two-step benefit against that cost.
-
-## Anatomy of a CronJob
-
-Everything is Rust and env-driven — no per-deployment value is baked into a committed manifest.
-
-1. **A Rust binary** — a new workspace crate, a `[[bin]]` on an existing crate, or a `cli` subcommand (see
-   `AGENTS.md`). Flavor A is a thin "POST and exit"; flavor B does the work and exits non-zero on failure so the Job is
-   marked failed.
-2. **An image** — servers from `images/Containerfile.<name>`; triggers from the shared `images/Containerfile.trigger`
-   (one `--build-arg CRATE=`/`BIN=` row). CI (`deploy.yml`) builds and publishes it to Artifact Registry as
-   `us-west4-docker.pkg.dev/example-project/navigator/navigator-<name>`, tagged with the release version plus `latest`.
-   The repository is private and deletes images 7 days after push, so the node identity needs
-   `roles/artifactregistry.reader` and a tag older than a week cannot be pulled; see
-   [`gke-prod.md`](gke-prod.md#deploy-flow). CI owns image builds — there is no per-image `cargo run -p cli --
-   image-<name>` build command — and the local KIND loop **pulls** them (`hudson dev deploy` / `dev worktree-env
-   --demo`).
-3. **A manifest** under `examples/deploy/k8s/exports/` with placeholders (`YOUR_PROJECT_ID` for the environment,
-   `YOUR_IMAGES_PROJECT_ID` for the registry the image comes from, the image tag, any ingress URL), namespace
-   `navigator`. Render real values at apply time; keep the committed file generic.
-4. **Secrets** via `secretKeyRef` from `navigator-web-secrets`, marked `optional: true` so KIND (which doesn't apply
-   these prod manifests) never blocks on a missing key.
-
-A minimal flavor-B skeleton:
-
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: nrs-scraper
-  namespace: navigator
-spec:
-  schedule: "0 10 * * 0"          # Sunday 02:00 PST (10:00 UTC); see the timezone note below
-  concurrencyPolicy: Forbid       # never overlap a long scrape with the next fire
-  successfulJobsHistoryLimit: 7
-  failedJobsHistoryLimit: 7
-  jobTemplate:
-    spec:
-      backoffLimit: 2
-      template:
-        spec:
-          restartPolicy: OnFailure
-          containers:
-            - name: nrs-scraper
-              image: us-west4-docker.pkg.dev/example-project/navigator/navigator-nrs-scraper:YY.M.D
-              envFrom:
-                - secretRef:
-                    name: navigator-web-secrets   # store credentials, storage creds, etc.
-```
-
-### Timezone convention
-
-`spec.schedule` is **always UTC** (k8s evaluates cron in UTC unless you set `spec.timeZone`). The workspace convention
-is to write the comment in Pacific and the expression in UTC:
-
-- `archives-trigger` uses `55 5,17 * * *` with `timeZone: Etc/UTC`: 05:55 and 17:55 UTC every day.
-- `0 10 * * 0` = **02:00 PST Sunday** (`0` = Sunday), for the weekly example above.
-
-PST is UTC−8; during PDT (UTC−7) the same expression lands at 03:00 local. If a job must hit exactly 02:00 *local*
-year-round, set `spec.timeZone: "America/Los_Angeles"` instead of doing the math.
-
-The `nightly-project-update-trigger` CronJob runs at `33 3 * * *` in `Etc/UTC`. Its UTC date identifies the [Nightly
-Project Update](glossary/nightly-project-update.md). The DBOS parent runs each applicable membership, calendar, Slack,
-and repository child.
-
-## Build and deploy
-
-CI owns image publishing. Cron trigger images are built and pushed by `deploy.yml` to
-`us-west4-docker.pkg.dev/example-project/navigator/navigator-<name>` tagged with the release version + `latest` — the
-same CI-published flow as `navigator-web` and `workflows-service`, never a local `docker build` + push side channel.
-Nothing is built on a laptop, and the login is a Workload Identity token (see
-[`gitops.md`](gitops.md#keyless-pushes-to-artifact-registry)). Deploying a cron job is therefore just: pin the manifest
-to the published tag and apply.
-
-```bash
-# The deployment's coordinates are plaintext TOML — export them from its config:
-set -a; eval "$(grep ' = "' deployments/<name>/config.toml | sed 's/ = /=/')"; set +a
-TAG=$(git ls-remote --tags --refs origin | grep -oE '[0-9]{2}\.[0-9]{2}\.[0-9]{2}$' | sort | tail -1)  # latest release
-
-# Render placeholders to a temp file (keep the committed manifest generic), then apply:
-sed -e "s|YOUR_PROJECT_ID|${NAVIGATOR_GCP_PROJECT_ID}|g" -e "s|:YY.M.D|:${TAG}|g" \
-  examples/deploy/k8s/exports/cron-<name>.yaml > /tmp/cron-<name>.yaml
-kubectl apply -f /tmp/cron-<name>.yaml
-```
-
-> The daily tag flow publishes `navigator-web` and `navigator-workflows-service` today; a new cron *trigger* image must
-  be added to `deploy.yml`'s publish matrix so it ships the same GitHub-built way. Don't reintroduce a local build +
-  push for it as a side channel.
-
-## Operating a CronJob
-
-```bash
-kubectl -n navigator get cronjob                                   # schedules + last-run times
-kubectl -n navigator create job --from=cronjob/<name> <name>-manual-001   # fire one now
-kubectl -n navigator logs job/<name>-manual-001                       # read its output
-kubectl -n navigator patch cronjob <name> -p '{"spec":{"suspend":true}}'  # pause without deleting
-```
-
-`create job --from` is the standard "run it now to test" affordance — that is how the nightly Archives path was verified
-end-to-end after deploy.
-
-## Adding a new scheduled job — checklist
-
-1. Decide the flavor: durable-workflow trigger (A) only if a mid-run crash loses/duplicates something irreversible;
-   otherwise self-contained batch (B).
-2. Write the Rust binary; **make a re-run safe** — the schedule is at-least-once, and a failed run just runs again next
-   period. Exit non-zero on failure so the Job is marked failed and shows in history.
-3. Add a server `images/Containerfile.<name>` (or a `--build-arg CRATE=`/`BIN=` row for a trigger), and add the image to
-   `deploy.yml`'s publish matrix so CI builds and pushes it to Artifact Registry. (There is no per-image CLI build
-   command; CI owns image builds.)
-4. Add `cron-<name>.yaml` under `examples/deploy/k8s/exports/` with placeholders, namespace `navigator`, a UTC schedule
-   with a Pacific comment.
-5. Once CI has published the image, render the manifest to the `YY.M.D` tag and apply (above). For flavor A, also
-   re-register the worker — see [Durable workflows](durable-workflows.md).
-6. Verify with `create job --from` before trusting the schedule.
-
-## See also
-
-- [Durable workflows](durable-workflows.md) — flavor A, the Restate execution engine, and the registration gotcha. [GKE
-  production](gke-prod.md) and [cloud operations](cloud-operations.md) — the cluster + image-shipping mechanics.
-  [Deployment secrets](deployment-secrets.md) — where `navigator-web-secrets` values come from.
+The release workflow builds each trigger from `images/Containerfile.trigger` and publishes a versioned image. `hudson
+ops ship` pins the trigger images to the selected release. Add trigger manifests, runtime configuration and
+operator-facing copy together when introducing a new CronJob.

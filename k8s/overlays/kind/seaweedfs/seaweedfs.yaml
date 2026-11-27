@@ -11,7 +11,6 @@ data:
   s3_endpoint: http://navigator-seaweedfs.navigator.svc.cluster.local:8333
   documents_bucket: navigator-documents
   exports_bucket: navigator-exports
-  surreal_archives_bucket: navigator-exports
   assets_bucket: navigator-assets
   applications_bucket: navigator-applications
   archives_bucket: navigator-archives

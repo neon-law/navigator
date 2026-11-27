@@ -34,8 +34,7 @@ mod notations_preview;
 mod notices;
 mod ops_private_terms;
 mod postgres_admission;
-mod postgres_backfill;
-mod postgres_mirror;
+mod postgres_ops;
 mod project_preview;
 mod public_snapshot;
 mod release_check;
@@ -48,7 +47,6 @@ mod scraper;
 mod sendgrid_openapi;
 mod site_asset;
 mod ssh_keys;
-mod surreal_archive;
 mod surreal_free_tests;
 mod video_prepare;
 
@@ -64,7 +62,7 @@ use cli::{
     login, palette, projects, release, remote,
 };
 use devx::brand::BrandCmd;
-use devx::{CertificatesCmd, DnsCmd, GcpCmd, HostCmd, RestateCmd, StagingAction, WorktreeEnvCmd};
+use devx::{CertificatesCmd, DnsCmd, GcpCmd, HostCmd, StagingAction, WorktreeEnvCmd};
 
 #[derive(Parser)]
 #[command(
@@ -1307,16 +1305,8 @@ enum SiteCmd {
 
 #[derive(Subcommand)]
 enum DevCmd {
-    /// Install the pinned host dependencies the native local tier runs
-    /// (`SurrealDB`, Restate, `SeaweedFS`) via Homebrew. macOS
-    /// only — the cluster lane (`--runtime kind`) is the fallback
-    /// everywhere else. Idempotent: a converged host does one `brew
-    /// list` and stops, so `worktree-env up` can call it every time.
-    Install,
-    /// Build the current checkout's workflow worker, load it into the KIND
-    /// dependency stack (`SurrealDB`, Rauthy, `SeaweedFS`, Restate, `OpenObserve`),
-    /// open host port-forwards, and write `.devx/env` — the
-    /// developer-loop entry point for editing `web` on the host.
+    /// Start the worktree's KIND dependencies and write `.devx/env` for the
+    /// host web process and its DBOS executor.
     Up {
         /// The checkout to bring up. Defaults to the workspace containing the
         /// current directory.
@@ -1334,11 +1324,6 @@ enum DevCmd {
     Env,
     /// Show whether the cluster and port-forwards are up.
     Status,
-    /// Rebuild the current checkout's `workflows-service` image, load it
-    /// into KIND, and restart the in-cluster worker. Run after changing
-    /// worker or shared workflow code; `dev up` does this automatically
-    /// while creating a dependency tier.
-    WorkerReload,
     /// Serve the local website, rebuild Rust/catalog changes, and refresh browsers.
     Serve,
     /// Build the Dioxus client bundle (issue #641): drive `dx` to compile the
@@ -1399,12 +1384,6 @@ enum DevCmd {
     /// then create the buckets. `dev up`/`dev deploy` run this inline;
     /// CI calls it after `kubectl apply -k`.
     SeaweedfsBootstrap,
-    /// Initialize the task-owned KIND PostgreSQL fixture before application writers start.
-    PostgresBootstrap {
-        /// Checkout whose task-owned KIND fixture is initialized.
-        #[arg(long)]
-        path: Option<PathBuf>,
-    },
     /// Pre-seed the Lawyer demo user (`lawyer@neonlaw.com`) with the
     /// `lawyer` role so the browser e2e's admin-gated walk can run.
     /// Native Rust.
@@ -1433,15 +1412,6 @@ enum DevCmd {
         #[arg(long)]
         keep: bool,
     },
-    /// Drive the real inbound-email summary pipeline on this worktree's KIND
-    /// cluster: signed synthetic webhook requests through the host `web`
-    /// listener, the real Restate broker, `SurrealDB`, `SeaweedFS` and `ClamAV`, and
-    /// a branch-built `workflows-service` image. Vertex, Gemini and Slack are
-    /// task-owned synthetic HTTP fixtures. Fails when `OrbStack`, the cluster,
-    /// the branch worker or the `EmailSummary` registration is missing; it
-    /// never skips. Bring the cluster up first with
-    /// `dev worktree-env up --runtime kind`.
-    EmailSummaryE2e,
     /// Reproduce `deploy.yml`'s browser gate locally: resolve the
     /// pinned Chrome for Testing build, start its chromedriver, verify
     /// the host `web` is reachable, grant Lawyer in the worktree store,
@@ -1667,14 +1637,9 @@ enum OpsCmd {
         #[arg(long, conflicts_with = "deployments_dir")]
         project_id: Option<String>,
     },
-    /// Export `SurrealDB` into the firm-controlled object-storage archive, or
-    /// prove one stored export can be restored into a disposable namespace.
+    /// Verify PostgreSQL authority and maintain its graph projection.
     #[command(subcommand)]
-    SurrealArchive(SurrealArchiveCmd),
-    /// PostgreSQL application admission, explicit imports, and compatibility diagnostics.
-    /// Reports contain only counts and UUIDs.
-    #[command(subcommand)]
-    Postgres(postgres_mirror::PostgresCmd),
+    Postgres(postgres_ops::PostgresCmd),
     /// Create-only archive transport and separate read/verification operations.
     #[command(subcommand)]
     Archives(archives_ops::ArchivesCmd),
@@ -1714,7 +1679,7 @@ enum OpsCmd {
     /// Privileged reconciliation of Project Slack delivery evidence.
     #[command(subcommand)]
     ProjectSlack(devx::project_slack_reconcile::Operation),
-    /// Operator recovery for the inbound email-summary Restate workflow.
+    /// Operator recovery for the inbound DBOS email-summary workflow.
     #[command(subcommand)]
     EmailSummary(EmailSummaryCmd),
     /// GCP project provisioning. The actual REST plumbing lives in
@@ -1723,13 +1688,6 @@ enum OpsCmd {
     /// project.
     #[command(subcommand)]
     Gcp(GcpCmd),
-    /// Restate Cloud CLI wrappers. Saves operators from memorizing
-    /// the `restate deployment register …` invocation. Assumes the
-    /// caller has already run `restate -y cloud login` and
-    /// `restate -y cloud env config --env <your-env-name>` (or set
-    /// `RESTATE_CLOUD_TOKEN`/`RESTATE_ENVIRONMENT` in CI).
-    #[command(subcommand)]
-    Restate(RestateCmd),
     /// Diagnose ongoing scheduled-job health: surface trigger Jobs wedged in
     /// `ImagePullBackOff`/`CrashLoopBackOff` (which, under a `CronJob`'s
     /// `concurrencyPolicy: Forbid`, silently skip every subsequent run) and
@@ -2032,19 +1990,6 @@ enum ReleaseCmd {
         /// Write the manifest but create no commit.
         #[arg(long)]
         no_commit: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum SurrealArchiveCmd {
-    /// Export the configured Surreal namespace and database to object storage.
-    Export,
-    /// Download one export, restore it into a disposable namespace, apply the
-    /// current schema, and verify it against its export-time receipt when present.
-    RestoreDrill {
-        /// Object-storage key printed by `surreal-archive export`.
-        #[arg(long)]
-        key: String,
     },
 }
 
@@ -3420,7 +3365,7 @@ fn run() -> ExitCode {
             | OpsCmd::Archives(_)
             | OpsCmd::Sas(_)),
         ) => match action {
-            OpsCmd::Postgres(command) => postgres_mirror::run(command),
+            OpsCmd::Postgres(command) => postgres_ops::run(command),
             OpsCmd::Archives(command) => runtime().block_on(archives_ops::run(command)),
             OpsCmd::Firms { action } => match action {
                 FirmsAction::Doctor => firms_doctor::run(),

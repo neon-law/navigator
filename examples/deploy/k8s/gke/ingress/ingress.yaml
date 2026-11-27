@@ -38,7 +38,6 @@
 #
 # Host-based routing splits the two hostnames:
 #   - NAVIGATOR_PUBLIC_HOST          -> navigator-web:80
-#   - NAVIGATOR_WORKFLOWS_HOST       -> workflows-service:9081
 #     (GitHub posts signed webhooks to workflows.<domain>/webhooks/github/{secret};
 #      Envoy routes that path to the worker's receiver listener, everything
 #      else to the Restate endpoint)
@@ -98,16 +97,6 @@ spec:
     # derived from `views::brand::BrandKey::ALL`. Renders to nothing when
     # this environment serves no other brand.
     # NAVIGATOR_BRAND_HOST_INGRESS_RULES
-    - host: NAVIGATOR_WORKFLOWS_HOST
-      http:
-        paths:
-          - path: /*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: workflows-service
-                port:
-                  number: 9081
     - host: NAVIGATOR_FORGEJO_HOST
       http:
         paths:

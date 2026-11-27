@@ -1,9 +1,5 @@
-# Opt-in DBOS executor inside `web`.
-#
-# `ops ship` adds this patch only for a deployment whose `config.toml` sets
-# `NAVIGATOR_DBOS_ENABLED = "true"`; every other deployment renders without it
-# and `web` never touches DBOS. It must follow `web-env.yaml`, whose
-# `$patch: replace` rebuilds the env list.
+# The web application hosts the DBOS executor and owns the internal ingress.
+# This patch follows web-env.yaml, which supplies the application variables.
 #
 # The executor signs in as the `navigator_dbos` login with verify-full TLS and
 # reads only the `dbos` schema. The password and the CA bundle come from the
@@ -27,12 +23,6 @@ spec:
         - name: web
           env:
             # NAVIGATOR_DBOS_TIMER_ENV
-            - name: NAVIGATOR_DBOS_ENABLED
-              value: "true"
-            # `ops ship` renders each daily schedule's switch here, and the
-            # Slack channels a switched-on schedule posts to. A switch that is
-            # on also drops that schedule's Restate CronJob from the render and
-            # deletes the live one. See docs/dbos-durability.md.
             # NAVIGATOR_DBOS_SCHEDULE_ENV
             - name: NAVIGATOR_DBOS_EXECUTOR_ID
               valueFrom:

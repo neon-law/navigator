@@ -20,8 +20,7 @@ kind: Kustomization
 #   to save ~$15/mo. No WAF / rate-limit at the LB today.
 
 resources:
-  # NAVIGATOR_DBOS_INTERNAL_RESOURCE
-  # NAVIGATOR_ARCHIVES_COVERAGE_RESOURCE
+  - dbos-internal.yaml
   - ../exports
   - ../../../../k8s/base
   - ../../../../k8s/base/web
@@ -31,11 +30,8 @@ resources:
   # NAVIGATOR_BRAND_CERT_RESOURCES
   - ingress/frontend-config.yaml
   - ingress/web-backendconfig.yaml
-  - ingress/workflows-managed-certificate.yaml
   - ingress/forgejo-managed-certificate.yaml
   - ingress/forgejo-backendconfig.yaml
-  - workflows-service/envoy-config.yaml
-  - workflows-service/deployment.yaml
   # `ops ship` renders `disruption-budgets.yaml` here for a two-replica row.
   # NAVIGATOR_DISRUPTION_BUDGETS_RESOURCE
   - iap/backendconfig.yaml
@@ -56,16 +52,6 @@ patches:
       name: navigator-web
   # NAVIGATOR_POSTGRES_WEB_PATCH
   # NAVIGATOR_DBOS_WEB_PATCH
-  # NAVIGATOR_ARCHIVES_WEB_PATCH
-  - path: patches/workflows-env.yaml
-    target:
-      kind: Deployment
-      name: workflows-service
-  # Apply after workflows-env.yaml replaces the worker environment list.
-  - path: postgres/worker/worker-postgres.yaml
-    target:
-      kind: Deployment
-      name: workflows-service
   - path: patches/web-image.yaml
     target:
       kind: Deployment
@@ -79,7 +65,7 @@ patches:
       kind: Service
       name: navigator-web
   # `ops ship` renders the replica count here from the row's profile: one pod
-  # of `navigator-web` and `workflows-service` for simulated matters, two for
+  # of `navigator-web` for simulated matters, two for
   # real matters. See docs/environments.md#replicas.
   # NAVIGATOR_REPLICAS_PATCH
 
@@ -101,5 +87,3 @@ patches:
       metadata:
         name: navigator-web
         namespace: navigator
-
-  # NAVIGATOR_DBOS_ONLY_PATCHES
