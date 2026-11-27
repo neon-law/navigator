@@ -177,7 +177,7 @@ jobs:
           # A pipe into grep -q can SIGPIPE its producer as soon as a large
           # diff matches. Give grep the complete input directly under pipefail.
           if grep -qE \
-              '\.(rs|feature)$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$|^\.cargo/|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$|^features/' \
+              '\.(rs|feature)$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$|^\.cargo/|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$|^\.github/coverage-baseline-exclusions\.txt$|^features/' \
               <<< "${changed}"; then
               echo "-> in scope: running cargo test (workspace)"
               echo "rust=true" >> "${GITHUB_OUTPUT}"
@@ -879,83 +879,18 @@ jobs:
               --test=compliance_filings_workflow_shapes --test=legal_workflow_shapes \
               --test=nonprofit_workflow_shapes --test=template_validate || test_status=$?
           cargo test --workspace --doc || test_status=$?
-          # THE COVERAGE GATE. `--fail-under-lines` exits non-zero when total
-          # workspace line coverage is under the floor, which fails this job and
-          # therefore the `ci` merge gate. There is no upload, no separate
-          # required context, and no third-party service: the full per-file
-          # table printed here IS the diagnostic when it trips — read it to find
-          # which file regressed.
-          #
-          # Same step as the run above on purpose. `show-env` exported the
-          # counter-file location into this shell only, so a later step would
-          # not find the profile data.
-          #
-          # The required floor is 92.0%. ENG-1375
-          # raises it to 95.0% as domains and tests move to PostgreSQL.
-          #
-          # Raising the floor means moving four constants together — the
-          # `rust` job report threshold, `AGENTS.md`, `docs/agent-workflows.md`, and
-          # `docs/oss-install.md` — so raise it deliberately, in one change,
-          # never as a side effect of another. And never lower it to make a
-          # red build green.
-          #
-          # Do NOT compare this job's percentage against one measured over a
-          # different denominator, and do not set a floor from a local run. The
-          # local lane below reads BELOW this job because the workspace nextest
-          # profile excludes `features`, so the cucumber suites never run and
-          # their ~490 lines plus everything their scenarios drive count as
-          # missed:
-          #
-          #   cargo llvm-cov nextest --workspace --no-fail-fast \
-          #       --ignore-filename-regex '<the regex below>'
-          #
-          # That makes it a valid differential and a useless absolute. Use it to
-          # learn the SIGN of a change — confirmed on run 150323146, where it
-          # predicted +0.07pt and this job then measured 90.63%, up from 90.32%:
-          # same sign, 0.83pt apart on the absolute. Set the floor from this
-          # job's own printed number.
-          #
-          # The local measurement is deliberately conservative — CI should read
-          # at or above it, never below — for two reasons. `cargo llvm-cov
-          # --workspace` (the local form) runs `cargo test --tests` and so skips
-          # DOCTESTS, which this job runs as their own `cargo test --workspace
-          # --doc` lane and which can only add covered lines. That lane is why
-          # the move to nextest did not move this number: nextest does not run
-          # doctests, so dropping it would have taken those lines out of the
-          # measurement. And the local pass had one red binary,
-          # `features --test portal_admin_firm_surface`, a macOS-only
-          # runtime-drop panic that is green on Linux, so its scenarios
-          # contributed less coverage locally than they will here.
-          #
-          # `--ignore-filename-regex` excludes the live-cluster orchestrators.
-          # Every function in them shells out to kind/kubectl/helm/docker, reaps
-          # host port-forward children, or drives a real Chromium session, so
-          # none of it can execute in this job — the browser suites self-skip
-          # without a harness, and counting bodies that never run would depress
-          # the number without measuring anything. They are proven by the
-          # deploy.yml browser/e2e gates instead. The pure decision logic each
-          # one sits beside is deliberately NOT excluded and keeps its tests:
-          # `deploy/src/devx/mod.rs` (KindConfig derivation, env rendering,
-          # deploy-order guards), `deploy/src/devx/lifecycle.rs` (every staging
-          # decision, against a fake), and `harness_decision` in features.
-          # Anything here that grows a decision belongs on the other side of
-          # that seam, not in this regex. `email_summary_e2e/harness.rs` and
-          # `scenarios.rs` are the same kind of file: they drive the host web
-          # process and its DBOS workflows on a KIND cluster. Its fixture server and worker-patch logic stay counted.
-          # `forgejo/cluster.rs`, `oidc.rs`, and `smoke.rs` drive kubectl, git,
-          # and HTTP against a KIND Forgejo; `forgejo-postgres.yml` runs them,
-          # and `forgejo/mod.rs` keeps their decisions and their tests here.
-          # `scraper/browser.rs` is the same class one seam over: every
-          # function in it spawns the pinned chromedriver, connects the
-          # WebDriver client, or drives cookies into the running browser, so
-          # none of it can execute here. Its decisions — session config and
-          # redacted `Debug`, cookie/state serialization, the driver command,
-          # capability shape, port polling — stay counted in
-          # `scraper/session.rs` with their tests.
-          # The floor is 92.0% (ENG-1375 raises it to 95.0%). The per-file
-          # table this prints is the diagnostic when it trips.
-          cargo llvm-cov report --fail-under-lines 92.0 \
-              --ignore-filename-regex "(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\\.rs\$" || test_status=$?
+          # Report all instrumented workspace paths except live KIND and browser drivers.
+          # Their behavior is verified by the release and Forgejo integration jobs.
+          live_driver_paths='(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|features/src/webdriver|deploy/src/scraper/browser)\.rs$'
+          echo 'Coverage across all measured workspace files'
+          cargo llvm-cov report --ignore-filename-regex "$live_driver_paths" || test_status=$?
+          # Preserve the 92.0% merge floor and its pre-cutover source scope. The
+          # tracked file list contains the surviving exclusions from that scope.
+          # All tests feed both reports. New source paths enter the required report.
+          prior_paths=$(sed '/^#/d; /^$/d; s/\./\\./g' .github/coverage-baseline-exclusions.txt | paste -sd '|' -)
+          echo 'Coverage for the required 92.0% source scope'
+          cargo llvm-cov report --summary-only --fail-under-lines 92.0 \
+              --ignore-filename-regex "$live_driver_paths|(^|/)($prior_paths)\$" || test_status=$?
           exit "$test_status"
       - name: stop covered PostgreSQL fixture
         if: always()

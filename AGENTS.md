@@ -82,9 +82,9 @@ Keep email correspondence, including Gmail, draft-only. The lawyer reviews and s
 ## Least code, coverage never lower
 
 Write the least amount of code the behavior needs: delete dead code instead of annotating it, consolidate duplicated
-helpers into the sanctioned seams, and name a test before the change that satisfies it. CI holds the workspace at a
-92.0% line-coverage floor. ENG-1375 raises it to 95.0%. Re-verify coverage when subtracting tests. See
-[`docs/agent-workflows.md`](docs/agent-workflows.md).
+helpers into the sanctioned seams, and name a test before the change that satisfies it. CI requires 92.0% line coverage
+on the existing measured scope and reports expanded workspace coverage. ENG-1375 raises the floor to 95.0%. Re-verify
+coverage when subtracting tests. See [`docs/agent-workflows.md`](docs/agent-workflows.md).
 
 ## Helpful commands
 
