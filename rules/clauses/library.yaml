@@ -152,6 +152,34 @@ engagement_technology@1:
     its generally available training models. No third-party system can be made risk-free. A lawyer reviews what
     these tools produce before it becomes advice to you or goes into a filing.
 
+engagement_client_duties@1:
+  kind: onboarding
+  body: |-
+    The Firm needs three things from the Client.
+
+    > **A. Complete and accurate information.** The Firm's advice is only as good as the facts it is given. The fact the
+    > Client would rather not share is often the one most likely to change the answer.
+    >
+    > **B. Timely decisions.** When the work needs an instruction, the Firm will say what it needs and by when. Deadlines
+    > within the Client's control depend on the Client meeting them.
+    >
+    > **C. Prompt payment.** The Client pays each invoice on receipt and raises any question about an invoice promptly,
+    > while both sides still remember the work.
+
+engagement_confidentiality@1:
+  kind: onboarding
+  body: |-
+    Everything the Client tells the Firm in the course of this representation is confidential, and the Firm will protect it.
+    Communications made for the purpose of legal advice are privileged. **The Firm discloses the Client's information only
+    with the Client's consent**, or where the law or the rules of professional conduct require it.
+
+    **If the Firm receives a subpoena, demand, or other legal process for the Client's information, it will notify the
+    Client promptly and, where the law allows, before responding**, so that the Client can assert its privilege.
+
+    > **A. Email and matter page.** The Firm corresponds by email and shares documents through its matter page. If the
+    > Client uses an email account that someone else can access, such as a work account at a company the Client is
+    > negotiating with, that access puts the privilege at risk. Tell the Firm, and it will use a different channel.
+
 legal_plan_arag@1:
   kind: onboarding
   inputs:
