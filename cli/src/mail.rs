@@ -91,7 +91,14 @@ Attachments:
 
   With --draft-id, the update replaces the whole draft: the --attach list
   replaces the draft's previous attachments, and an update without --attach
-  leaves the draft with none. The draft stays unsent.";
+  leaves the draft with none. The draft stays unsent.
+
+Local .eml:
+  --eml <PATH> writes the draft to a new RFC 5322 file instead of Gmail, for a
+  Firm without Gmail: UTF-8, CRLF line ends, `X-Unsent: 1`, no `From:` and no
+  signature, so the lawyer's own mail client fills both. Attachments are MIME
+  parts. --in-reply-to <MESSAGE-ID> sets `In-Reply-To` and `References` for a
+  reply. Nothing connects to Gmail, and an existing file is never replaced.";
 
 #[derive(Subcommand)]
 pub enum MailAction {
@@ -144,14 +151,20 @@ pub enum MailAction {
         #[arg(long)]
         html_body_file: Option<PathBuf>,
         /// Gmail thread ID to reply within.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "eml")]
         thread: Option<String>,
         /// Existing Gmail draft ID to update.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "eml")]
         draft_id: Option<String>,
         /// Attach a file read from disk. Repeat for more files.
         #[arg(long = "attach", value_name = "PATH")]
         attach: Vec<PathBuf>,
+        /// Write the draft to this new local `.eml` file instead of Gmail.
+        #[arg(long, value_name = "PATH")]
+        eml: Option<PathBuf>,
+        /// The `Message-ID` an `.eml` draft replies to.
+        #[arg(long, value_name = "MESSAGE-ID", requires = "eml")]
+        in_reply_to: Option<String>,
     },
     /// Hand a signed packet to the Firm's mail-center vendor for printing and
     /// physical mail: an unsent Gmail draft to the vendor with the PDFs
@@ -2041,12 +2054,43 @@ async fn run_inner(action: MailAction, connect: Connect<'_>) -> Result<()> {
             thread,
             draft_id,
             attach,
+            eml,
+            in_reply_to,
         } => {
             let (body_file, html) = match (body_file, html_body_file) {
                 (Some(path), _) => (path, false),
                 (None, Some(path)) => (path, true),
                 (None, None) => return Err(anyhow!("pass --body-file or --html-body-file")),
             };
+            if let Some(path) = eml {
+                let (text, html) = draft_body(&body_file, html)?;
+                let attachments = load_attachments(&attach, html.as_deref().unwrap_or(&text))?;
+                let subject = subject.ok_or_else(|| anyhow!("pass --subject"))?;
+                let raw = draft_raw(
+                    &to,
+                    &cc,
+                    &bcc,
+                    &subject,
+                    &text,
+                    html.as_deref(),
+                    in_reply_to.as_deref(),
+                    &attachments,
+                )?;
+                let mut file = std::fs::File::create_new(&path).with_context(|| {
+                    format!(
+                        "create {} (an existing file is never replaced)",
+                        path.display()
+                    )
+                })?;
+                std::io::Write::write_all(&mut file, format!("X-Unsent: 1\r\n{raw}").as_bytes())
+                    .with_context(|| format!("write {}", path.display()))?;
+                println!(
+                    "Draft written unsent to {} with {} attachment(s); open it in the lawyer's mail client to review and send.",
+                    path.display(),
+                    attachments.len()
+                );
+                return Ok(());
+            }
             let request = DraftRequest {
                 to,
                 cc,
@@ -2389,6 +2433,23 @@ fn env_fallback(env_signature: Option<&str>, reason: &str) -> ResolvedSignature 
 /// saves one unsent draft. Local refusals happen before `connect` runs; a
 /// draft with no configured signature signs with the Gmail account's default
 /// signature and refuses only when that is blank too (LAW-316).
+/// The draft's plain text and, for an HTML body file, the HTML it derives from.
+fn draft_body(body_file: &Path, html: bool) -> Result<(String, Option<String>)> {
+    let source = std::fs::read_to_string(body_file)
+        .with_context(|| format!("read draft body {}", body_file.display()))?;
+    if source.trim().is_empty() {
+        return Err(anyhow!("draft body is empty"));
+    }
+    Ok(if html {
+        (
+            mail_parser::decoders::html::html_to_text(&source),
+            Some(source),
+        )
+    } else {
+        (source, None)
+    })
+}
+
 async fn save_draft_command<F, Fut>(request: DraftRequest, connect: F) -> Result<SavedDraft>
 where
     F: FnOnce() -> Fut,
@@ -2406,19 +2467,7 @@ where
         attach,
         configured_signature,
     } = request;
-    let source = std::fs::read_to_string(&body_file)
-        .with_context(|| format!("read draft body {}", body_file.display()))?;
-    if source.trim().is_empty() {
-        return Err(anyhow!("draft body is empty"));
-    }
-    let (text, html) = if html {
-        (
-            mail_parser::decoders::html::html_to_text(&source),
-            Some(source),
-        )
-    } else {
-        (source, None)
-    };
+    let (text, html) = draft_body(&body_file, html)?;
     let signed = configured_signature
         .map(|configured| signature::with_signature(&text, Some(&configured)))
         .transpose()?;
@@ -3600,6 +3649,89 @@ mod tests {
     use super::*;
 
     const CONFIGURED_SIGNATURE: &str = "Example Attorney\nConfidential: intended recipient only.";
+
+    #[tokio::test]
+    async fn an_eml_draft_is_written_locally_without_gmail() {
+        let directory = tempfile::tempdir().unwrap();
+        let body = directory.path().join("body.txt");
+        std::fs::write(&body, "The revised agreement is ready.\nPlease review.\n").unwrap();
+        let exhibit = directory.path().join("agreement.pdf");
+        std::fs::write(&exhibit, b"%PDF-1.4 fictitious").unwrap();
+        let eml = directory
+            .path()
+            .join("acme-auto-ny-2026-12-02-agreement.eml");
+        let action = MailAction::Draft {
+            to: vec!["client@example.com".into()],
+            cc: vec!["paralegal@example.com".into()],
+            bcc: vec![],
+            subject: Some("Draft agreement for your review".into()),
+            body_file: Some(body),
+            html_body_file: None,
+            thread: None,
+            draft_id: None,
+            attach: vec![exhibit],
+            eml: Some(eml.clone()),
+            in_reply_to: Some("<original@example.com>".into()),
+        };
+
+        run_inner(action, &|| panic!("an .eml draft never connects to Gmail"))
+            .await
+            .unwrap();
+
+        let raw = std::fs::read_to_string(&eml).unwrap();
+        assert!(raw
+            .starts_with("X-Unsent: 1\r\nTo: client@example.com\r\nCc: paralegal@example.com\r\n"));
+        assert!(raw.contains(
+            "In-Reply-To: <original@example.com>\r\nReferences: <original@example.com>\r\n"
+        ));
+        assert!(raw.contains("Content-Type: text/plain; charset=UTF-8\r\n\r\nThe revised agreement is ready.\r\nPlease review.\r\n"));
+        assert!(raw.contains("Content-Disposition: attachment; filename=\"agreement.pdf\""));
+        assert!(!raw.lines().any(|line| line.starts_with("From:")));
+        assert!(
+            !raw.replace("\r\n", "").contains('\n'),
+            "every line ends in CRLF"
+        );
+
+        let again = MailAction::Draft {
+            to: vec!["client@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            subject: Some("s".into()),
+            body_file: Some(directory.path().join("body.txt")),
+            html_body_file: None,
+            thread: None,
+            draft_id: None,
+            attach: vec![],
+            eml: Some(eml.clone()),
+            in_reply_to: None,
+        };
+        let error = run_inner(again, &|| panic!("no Gmail")).await.unwrap_err();
+        assert!(format!("{error:#}").contains("never replaced"), "{error:#}");
+    }
+
+    #[test]
+    fn eml_drafts_refuse_gmail_only_flags_and_in_reply_to_needs_eml() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Mail {
+            #[command(subcommand)]
+            action: MailAction,
+        }
+
+        let base = ["mail", "draft", "--body-file", "b.txt"];
+        for extra in [
+            &["--eml", "d.eml", "--thread", "t1"][..],
+            &["--eml", "d.eml", "--draft-id", "d1"][..],
+            &["--in-reply-to", "<m@example.com>"][..],
+        ] {
+            assert!(
+                Mail::try_parse_from(base.iter().chain(extra)).is_err(),
+                "{extra:?}"
+            );
+        }
+        assert!(Mail::try_parse_from(base.iter().chain(&["--eml", "d.eml"])).is_ok());
+    }
 
     fn synthetic_message(headers: &[(&str, &str)]) -> GmailMessage {
         GmailMessage {
@@ -7480,6 +7612,8 @@ Date: Fri, 30 Oct 2026 14:03:00 +0000\r\nSubject: Follow-up\r\n\r\nOwn message."
                 thread: None,
                 draft_id: None,
                 attach: Vec::new(),
+                eml: None,
+                in_reply_to: None,
             };
             let error = desk.dispatch(neither).await.unwrap_err();
             assert!(error.to_string().contains("pass --body-file"), "{error}");

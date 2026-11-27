@@ -222,6 +222,19 @@ navigator mail draft --to client@example.test --subject "Engagement letter" --bo
 
 The draft stays unsent; there is still no send operation.
 
+### A local `.eml` draft
+
+For a Firm without Gmail, `navigator mail draft --eml <path>` writes the draft to a new RFC 5322 file and never contacts
+Gmail. The file is UTF-8 with CRLF line ends and `X-Unsent: 1`, so mail clients open it as an unsent draft. It has no
+`From:` and no signature; the lawyer's own client fills both. `--attach` files become MIME parts, and `--in-reply-to
+<message-id>` sets `In-Reply-To` and `References` for a reply. `--thread` and `--draft-id` name Gmail objects and are
+refused with `--eml`, and an existing file is never replaced.
+
+```bash
+navigator mail draft --eml ~/Downloads/acme-auto-ny-2026-12-02-draft-agreement.eml --to client@example.test \
+  --subject "Draft agreement" --body-file body.txt --attach agreement.pdf
+```
+
 ## Mail a packet through the mail-center vendor
 
 `navigator mail packet` hands a signed packet to the Firm's mail-center vendor for printing and physical mail. It saves

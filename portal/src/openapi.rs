@@ -2721,7 +2721,7 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/status": {
           "get": {
             "summary": "Read live matter lifecycle and onboarding evidence",
-            "description": "Lawyer-tier, firm-side participation required for every tier. Returns the workbench lifecycle label, current project_status, opened_at (Project creation), closed_at, ordered history, source_state, onboarding presence and document visibility, recorded DocuSign envelope and signer status, and missing onboarding work. Execution is verified by the completed onboarding Signature.",
+            "description": "Lawyer-tier, firm-side participation required for every tier. Returns the workbench lifecycle label, current project_status, opened_at (Project creation), closed_at, ordered history, source_state, firm_integrations (the owning Firm's Google Calendar and Google Drive switches, both false without a Firm), onboarding presence and document visibility, recorded DocuSign envelope and signer status, and missing onboarding work; a missing Drive folder is listed only when the Firm has Drive on. Execution is verified by the completed onboarding Signature.",
             "parameters": [
               { "name": "id", "in": "path", "required": true,
                 "schema": { "type": "string", "format": "uuid" } }

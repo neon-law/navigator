@@ -80,6 +80,8 @@ pub async fn run(host: Option<&str>, code: &str, draft_id: Option<String>) -> Ex
         thread: None,
         draft_id,
         attach: Vec::new(),
+        eml: None,
+        in_reply_to: None,
     })
     .await
 }

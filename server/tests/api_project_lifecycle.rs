@@ -229,10 +229,6 @@ async fn postgres_status_requires_participation_and_verified_execution() {
     let status = fx.status().await;
     assert_eq!(status["status"], "pitch");
     assert_eq!(status["drive_folder_id"], serde_json::Value::Null);
-    assert!(status["missing"].as_array().unwrap().iter().any(|line| line
-        .as_str()
-        .unwrap()
-        .contains("navigator project set synthetic-onboarding --drive-folder <link>")));
     sqlx::query("UPDATE project SET drive_folder_id='synthetic-drive-folder' WHERE id=$1")
         .bind(fx.project)
         .execute(fx.pg.pool())
@@ -275,6 +271,51 @@ async fn postgres_status_requires_participation_and_verified_execution() {
             .unwrap();
         assert_eq!(fx.status().await["status"], state);
     }
+}
+
+#[tokio::test]
+async fn status_reports_the_projects_own_firm_integrations() {
+    let Some(fx) = Fixture::new(None).await else {
+        return;
+    };
+    fx.participate().await;
+    let status = fx.status().await;
+    assert_eq!(
+        status["firm_integrations"],
+        serde_json::json!({"calendar": false, "drive": false})
+    );
+    assert!(!status["missing"].to_string().contains("--drive-folder"));
+    let (firm, other) = (Uuid::now_v7(), Uuid::now_v7());
+    sqlx::query("INSERT INTO firm(id,name,slug,status) VALUES ($1,'Synthetic Firm','synthetic-firm','active'),($2,'Synthetic Other Firm','synthetic-other-firm','active')")
+        .bind(firm).bind(other).execute(fx.pg.pool()).await.unwrap();
+    sqlx::query(
+        "INSERT INTO firm_drive_settings(firm_id,google_drive) VALUES ($1,true),($2,false)",
+    )
+    .bind(firm)
+    .bind(other)
+    .execute(fx.pg.pool())
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO firm_calendar_settings(firm_id,google_workspace_owner) VALUES ($1,NULL),($2,'calendar@example.com')")
+        .bind(firm).bind(other).execute(fx.pg.pool()).await.unwrap();
+    sqlx::query("UPDATE project SET firm_id=$2 WHERE id=$1")
+        .bind(fx.project)
+        .bind(firm)
+        .execute(fx.pg.pool())
+        .await
+        .unwrap();
+    let status = fx.status().await;
+    assert_eq!(
+        status["firm_integrations"],
+        serde_json::json!({"calendar": false, "drive": true})
+    );
+    assert!(status["missing"].as_array().unwrap().iter().any(|line| line
+        .as_str()
+        .unwrap()
+        .contains("navigator project set synthetic-onboarding --drive-folder <link>")));
+    sqlx::query("UPDATE firm_calendar_settings SET google_workspace_owner='calendar@example.com' WHERE firm_id=$1")
+        .bind(firm).execute(fx.pg.pool()).await.unwrap();
+    assert_eq!(fx.status().await["firm_integrations"]["calendar"], true);
 }
 
 #[tokio::test]

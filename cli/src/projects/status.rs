@@ -152,6 +152,20 @@ fn ownership_line(value: &serde_json::Value) -> String {
     format!("Firm: {firm}; brand: {brand}")
 }
 
+/// The owning Firm's Google Calendar and Google Drive switches as one status line.
+fn integrations_line(value: &serde_json::Value) -> String {
+    let switch = |key: &str| match value["firm_integrations"][key].as_bool() {
+        Some(true) => "on",
+        Some(false) => "off",
+        None => "unknown",
+    };
+    format!(
+        "Firm Integrations: Google Calendar {}; Google Drive {}",
+        switch("calendar"),
+        switch("drive")
+    )
+}
+
 fn print_status(value: &serde_json::Value) {
     for field in [
         "code",
@@ -163,7 +177,7 @@ fn print_status(value: &serde_json::Value) {
     ] {
         println!("{field}: {}", value[field].as_str().unwrap_or("none"));
     }
-    println!("{}", ownership_line(value));
+    println!("{}\n{}", ownership_line(value), integrations_line(value));
     match value["drive_folder_id"].as_str() {
         Some(id) => println!("drive folder: https://drive.google.com/drive/folders/{id}"),
         None => println!("drive folder: none linked"),
@@ -377,6 +391,19 @@ mod ownership_tests {
         assert_eq!(
             ownership_line(&value),
             format!("Firm: {FIRM} (name not visible to this role); brand: vesta")
+        );
+    }
+
+    #[test]
+    fn firm_integrations_print_on_or_off_and_unknown_from_an_older_server() {
+        let on = json!({"firm_integrations": {"calendar": true, "drive": false}});
+        assert_eq!(
+            integrations_line(&on),
+            "Firm Integrations: Google Calendar on; Google Drive off"
+        );
+        assert_eq!(
+            integrations_line(&json!({})),
+            "Firm Integrations: Google Calendar unknown; Google Drive unknown"
         );
     }
 

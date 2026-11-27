@@ -16,6 +16,9 @@ On the [Firm](firm.md) edit page, an Owner switches Google Calendar and Google D
 
 A Firm without a saved Drive choice has Drive off. [G&S](gs.md) has both on.
 
+`navigator project status <code> --json` reports the owning Firm's switches as `firm_integrations`, read inside the
+caller's own matter scope.
+
 The Calendar switch is the presence of a mailbox in `firm_calendar_settings`. The Drive switch is its own table.
 
 The table is `firm_drive_settings`.
