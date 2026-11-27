@@ -2,14 +2,10 @@
 //! `social_handle`, `social_publication`, `social_account`, and
 //! `social_account_selection`.
 //!
-//! Whenever `NAVIGATOR_POSTGRES_HOST` is set ([`PostgresDb::configured`]),
-//! each owning module (`posts`, `social_handles`, `social_publications`,
+//! Each owning module (`posts`, `social_handles`, `social_publications`,
 //! `social_accounts`, `social_account_selections`) reads and writes
-//! PostgreSQL only, and a PostgreSQL failure is returned rather than falling
-//! back. The mirror copies SurrealDB rows into these tables only during the
-//! first Mirror Backfill (see [`crate::postgres_mirror::initial_copy`]).
-//! Without a PostgreSQL host the SurrealDB path is the fallback. The Brand,
-//! Firm, and Person rows the tables name must exist in PostgreSQL.
+//! PostgreSQL only, and a PostgreSQL failure is returned to the caller. The
+//! Brand, Firm, and Person rows the tables name must exist in PostgreSQL.
 //!
 //! Rows come back as the JSON object `to_jsonb` makes of them, so every
 //! statement selects its row as `row` and the owning module's own serde type

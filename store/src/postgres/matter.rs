@@ -2,15 +2,9 @@
 //! generic records mirror carries, read and written in PostgreSQL by their
 //! owning `store` modules.
 //!
-//! Wherever PostgreSQL is configured (`NAVIGATOR_POSTGRES_HOST`), each
-//! module in [`TABLES`] dispatches its reads and writes here instead of
-//! SurrealDB and writes no SurrealDB row, and the records mirror refuses to
-//! overwrite or delete these tables from SurrealDB (a missing SurrealDB row
-//! is not deletion evidence) outside the first Mirror Backfill (see
-//! [`crate::postgres_mirror::initial_copy`]). SurrealDB serves a process
-//! without PostgreSQL, which today means only the SurrealDB test harness.
-//! Parent rows the modules check — the Project, Person, Entity, and Notation — stay on their
-//! own authorities.
+//! Each module in [`TABLES`] dispatches its reads and writes here. Parent
+//! rows the modules check — the Project, Person, Entity, and Notation — stay
+//! on their own authorities.
 //!
 //! The accessor is generic over the records mirror's table registry: a row
 //! goes in and comes out as the JSON object `to_jsonb` and

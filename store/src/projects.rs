@@ -2118,9 +2118,8 @@ const PLAN_CASE_NUMBER_INVALID: &str =
 const PLAN_UNKNOWN: &str = "legal_plan_id does not name a legal plan";
 const PLAN_FIRM_MISMATCH: &str = "legal_plan_id names a plan of another firm";
 
-/// Validates one plan date. ISO `YYYY-MM-DD` only — the same shape the
-/// PostgreSQL DATE mirror parses (`[super::postgres_mirror]::date`), so a
-/// value accepted here also mirrors.
+/// Validates one plan date. ISO `YYYY-MM-DD` only, the shape a PostgreSQL
+/// `DATE` column stores.
 fn valid_plan_date(text: &str) -> bool {
     chrono::NaiveDate::parse_from_str(text, "%F")
         .is_ok_and(|date| date.format("%F").to_string() == text)
