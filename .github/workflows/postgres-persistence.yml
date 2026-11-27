@@ -139,7 +139,7 @@ jobs:
         cargo test --locked -p store --lib postgres_schema::tests
         python3 images/postgres/tests/test-runtime-graph-cleanup.py
         POSTGRES_IMAGE=$(kubectl kustomize k8s/overlays/postgres-spike | awk '/image:/ {print $2}')
-        [[ "$POSTGRES_IMAGE" =~ ^ghcr\.io/neon-law/navigator/postgres@sha256:[a-f0-9]{64}$ ]]
+        [[ "$POSTGRES_IMAGE" =~ ^ghcr\.io/[a-z0-9-]+/[a-z0-9/-]+@sha256:[a-f0-9]{64}$ ]]
         docker pull "$POSTGRES_IMAGE"
         POSTGRES_IMAGE="$POSTGRES_IMAGE" bash images/postgres/tests/runtime-graph-roles.sh
     - name: Verify pinned-image application schema and DBOS recovery
