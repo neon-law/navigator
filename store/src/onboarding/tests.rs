@@ -77,26 +77,9 @@ async fn adoption_links_an_existing_upload_and_reuses_the_filing_on_retry() {
 
 #[tokio::test]
 async fn imported_dropbox_sign_retainer_requires_verification_of_the_current_revision() {
-    let Some((pg, project, notation)) = native_notation_fixture().await else {
+    let Some((pg, project, firm, client_id, client_email)) = dropbox_sign_project().await else {
         return;
     };
-    let (firm, _) = crate::postgres::fixtures::firm_for_notation(&pg, notation).await;
-    let (client_id, client_email): (Uuid, String) = sqlx::query_as(
-        "SELECT p.id,p.email FROM person p JOIN notation n ON n.person_id=p.id WHERE n.id=$1",
-    )
-    .bind(notation)
-    .fetch_one(pg.pool())
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO person_project_role (project_id,person_id,participation,is_client_dri)
-        VALUES ($1,$2,'client',true)",
-    )
-    .bind(project)
-    .bind(client_id)
-    .execute(pg.pool())
-    .await
-    .unwrap();
 
     let root = tempfile::tempdir().unwrap();
     let storage: Arc<dyn StorageService> =
@@ -196,6 +179,29 @@ async fn imported_dropbox_sign_retainer_requires_verification_of_the_current_rev
         .unwrap());
     assert!(official_projects(&pg, &[project]).await.unwrap().is_empty());
     pg.pool().close().await;
+}
+
+async fn dropbox_sign_project() -> Option<(PostgresDb, Uuid, Uuid, Uuid, String)> {
+    let (pg, project, notation) = native_notation_fixture().await?;
+    let (firm, _) = crate::postgres::fixtures::firm_for_notation(&pg, notation).await;
+    let (client_id, client_email): (Uuid, String) = sqlx::query_as(
+        "SELECT p.id,p.email FROM person p JOIN notation n ON n.person_id=p.id WHERE n.id=$1",
+    )
+    .bind(notation)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO person_project_role (project_id,person_id,participation,is_client_dri)
+        VALUES ($1,$2,'client',true)",
+    )
+    .bind(project)
+    .bind(client_id)
+    .execute(pg.pool())
+    .await
+    .unwrap();
+
+    Some((pg, project, firm, client_id, client_email))
 }
 
 async fn native_notation_fixture() -> Option<(PostgresDb, Uuid, Uuid)> {

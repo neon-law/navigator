@@ -7297,7 +7297,7 @@ async fn verified_upload_metadata(
                 .map_err(internal)?,
             None => None,
         };
-        if !template.is_some_and(|template| template.kind.as_deref() == Some("onboarding")) {
+        if template.is_none_or(|template| template.kind.as_deref() != Some("onboarding")) {
             return Err(ApiError::EnvelopeAdoption(
                 "This DocuSign envelope belongs to a different Project or document.",
             ));
