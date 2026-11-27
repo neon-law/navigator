@@ -6002,3 +6002,7 @@ END $$;
 ALTER TABLE firm_calendar_settings ADD COLUMN deadline_buffer_minutes INTEGER NOT NULL DEFAULT 15 CHECK (deadline_buffer_minutes BETWEEN 10 AND 1440);
 ALTER TABLE firm_calendar_settings ADD COLUMN deadline_end_of_business TEXT NOT NULL DEFAULT '17:00:00' CHECK (deadline_end_of_business ~ '^([01][0-9]|2[0-3]):[0-5][0-9]:00$');
 ALTER TABLE firm_calendar_settings ADD COLUMN deadline_effort_defaults JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(deadline_effort_defaults) = 'object');
+
+-- Migration: 20261127200000_index_inbox_message_order.sql
+CREATE INDEX message_conversation_occurred
+    ON message (conversation_id, occurred_at DESC, id DESC);

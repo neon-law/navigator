@@ -17,14 +17,16 @@
 //! Surreal Inbox rows, and the inbox mirror refuses to repair the slice from
 //! SurrealDB (`docs/postgres-tooling.md`).
 
+use std::collections::HashMap;
+
 use chrono::Utc;
 use uuid::Uuid;
 
 use crate::application_store::ApplicationStore;
 use crate::inbox::{
     self, channel, delivery, direction, purpose, Assignment, ContactLink, Conversation,
-    DispatchReport, InboxError, IngestInbound, IngestedInbound, IntakeDetail, IntakeRow, Message,
-    ThreadView,
+    DispatchReport, InboxError, IngestInbound, IngestedInbound, IntakeCursor, IntakeDetail,
+    IntakeFilters, IntakePage, IntakeRow, Message, ThreadView,
 };
 use crate::persons::Role;
 use crate::postgres::PostgresDb;
@@ -1984,11 +1986,11 @@ pub(crate) async fn set_trashed_on(
     Ok(())
 }
 
-pub(crate) async fn list_intake_on(
-    pg: &PostgresDb,
+/// None represents an Owner's cross-Firm visibility. An empty list grants no rows.
+async fn intake_scope(
     db: &ApplicationStore,
     actor_id: Uuid,
-) -> Result<Vec<IntakeRow>, InboxError> {
+) -> Result<(Role, Option<Vec<Uuid>>), InboxError> {
     let actor = inbox::load_person(db, actor_id).await?;
     let visible_firms = if actor.role == Role::Owner {
         None
@@ -2004,21 +2006,142 @@ pub(crate) async fn list_intake_on(
     } else {
         return Err(InboxError::Denied);
     };
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {CONVERSATION_COLUMNS} FROM inbox_conversation ORDER BY updated_at DESC"
-    )))
+    Ok((actor.role, visible_firms))
+}
+
+pub(crate) async fn intake_brands_on(
+    pg: &PostgresDb,
+    db: &ApplicationStore,
+    actor_id: Uuid,
+) -> Result<Vec<String>, InboxError> {
+    let (_, firms) = intake_scope(db, actor_id).await?;
+    let mut brands = sqlx::query_scalar(
+        "SELECT DISTINCT brand_key FROM inbox_conversation
+         WHERE brand_key IS NOT NULL AND ($1::uuid[] IS NULL OR firm_id = ANY($1))",
+    )
+    .bind(firms)
     .fetch_all(&pg.0)
     .await
     .map_err(db_error)?;
-    let mut conversations = rows
+    brands.sort();
+    Ok(brands)
+}
+
+pub(crate) async fn list_intake_on(
+    pg: &PostgresDb,
+    db: &ApplicationStore,
+    actor_id: Uuid,
+) -> Result<Vec<IntakeRow>, InboxError> {
+    let (role, firms) = intake_scope(db, actor_id).await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {CONVERSATION_COLUMNS} FROM inbox_conversation \
+         WHERE ($1::uuid[] IS NULL OR firm_id = ANY($1)) ORDER BY updated_at DESC"
+    )))
+    .bind(firms)
+    .fetch_all(&pg.0)
+    .await
+    .map_err(db_error)?;
+    let conversations = rows
         .iter()
         .map(conversation)
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
-    if let Some(firms) = visible_firms {
-        conversations.retain(|conversation| firms.contains(&conversation.firm_id));
-    }
-    intake_rows(pg, db, actor.role, conversations, false).await
+    intake_rows(pg, db, role, conversations, false).await
+}
+
+// Date ordering uses the latest inbound or authored outbound email. Ignore historical
+// date strings that are outside the provider timestamp format or invalid to PostgreSQL.
+// Keep the fractional seconds as a decimal so cursor comparisons retain nanosecond precision.
+const INTAKE_PAGE_SQL: &str = r#"
+WITH ranked AS (
+    SELECT c.id, COALESCE(
+        CASE WHEN c.channel = 'email' THEN (
+            SELECT max(CASE
+                WHEN m.occurred_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$'
+                  AND pg_input_is_valid(m.occurred_at, 'timestamp with time zone')
+                THEN extract(epoch FROM regexp_replace(m.occurred_at, '\.[0-9]+', '')::timestamptz)
+                   + COALESCE(('0.' || substring(m.occurred_at FROM '\.([0-9]{1,9})'))::numeric, 0)
+                END)
+            FROM message m WHERE m.conversation_id = c.id
+              AND (m.direction = 'inbound' OR (m.direction = 'outbound' AND m.author_person_id IS NOT NULL))
+        ) END, extract(epoch FROM c.updated_at)) AS activity_at
+    FROM inbox_conversation c
+    WHERE ($1::uuid[] IS NULL OR c.firm_id = ANY($1))
+      AND (c.trashed_at IS NOT NULL) = $2
+      AND ($3::text IS NULL OR c.brand_key = $3)
+      AND ($4::text IS NULL OR c.channel = $4)
+      AND (NOT $5 OR c.unread)
+      AND ($6::text IS NULL OR $6 = (
+          SELECT m.direction FROM message m WHERE m.conversation_id = c.id
+          ORDER BY m.occurred_at DESC, m.id DESC LIMIT 1
+      ))
+      AND (NOT $7 OR EXISTS (
+          SELECT 1 FROM message m WHERE m.conversation_id = c.id AND m.attachment_asset_id IS NOT NULL
+      ))
+      AND (NOT $8 OR EXISTS (
+          SELECT 1 FROM message m WHERE m.conversation_id = c.id
+            AND m.direction = 'outbound' AND m.author_person_id IS NOT NULL
+      ))
+), page AS (
+    SELECT id, activity_at FROM ranked
+    WHERE ($9::bigint IS NULL OR (activity_at, id) <
+        ($9::bigint + $10::integer::numeric / 1000000000, $11::uuid))
+    ORDER BY activity_at DESC, id DESC LIMIT $12
+)
+SELECT c.*, floor(page.activity_at)::bigint AS activity_seconds,
+       ((page.activity_at - floor(page.activity_at)) * 1000000000)::integer AS activity_nanos
+FROM page JOIN inbox_conversation c ON c.id = page.id
+ORDER BY page.activity_at DESC, page.id DESC
+"#;
+
+pub(crate) async fn intake_page_on(
+    pg: &PostgresDb,
+    db: &ApplicationStore,
+    actor_id: Uuid,
+    filters: IntakeFilters<'_>,
+    after: Option<IntakeCursor>,
+    page_size: u16,
+) -> Result<IntakePage, InboxError> {
+    use sqlx::Row;
+    let (role, firms) = intake_scope(db, actor_id).await?;
+    let limit = page_size.clamp(1, 100);
+    let mut page = sqlx::query(INTAKE_PAGE_SQL)
+        .bind(firms)
+        .bind(filters.trash_only)
+        .bind(filters.brand)
+        .bind(filters.channel)
+        .bind(filters.unread_only)
+        .bind(filters.direction)
+        .bind(filters.attachments_only)
+        .bind(filters.sent_only)
+        .bind(after.map(|cursor| cursor.activity_at.timestamp()))
+        .bind(after.map(|cursor| cursor.activity_at.timestamp_subsec_nanos().cast_signed()))
+        .bind(after.map(|cursor| cursor.id))
+        .bind(i64::from(limit) + 1)
+        .fetch_all(&pg.0)
+        .await
+        .map_err(db_error)?;
+    let next = if page.len() > usize::from(limit) {
+        page.truncate(usize::from(limit));
+        let last = &page[usize::from(limit) - 1];
+        let seconds = last.try_get("activity_seconds").map_err(db_error)?;
+        let nanos: i32 = last.try_get("activity_nanos").map_err(db_error)?;
+        let activity_at = chrono::DateTime::from_timestamp(seconds, nanos.cast_unsigned())
+            .ok_or_else(|| InboxError::Db("invalid Inbox activity timestamp".into()))?;
+        Some(IntakeCursor {
+            activity_at,
+            id: last.try_get("id").map_err(db_error)?,
+        })
+    } else {
+        None
+    };
+    let conversations = page
+        .iter()
+        .map(conversation)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    let rows = intake_rows(pg, db, role, conversations, false).await?;
+    Ok(IntakePage { rows, next })
 }
 
 pub(crate) async fn intake_detail_on(
@@ -2096,13 +2219,14 @@ async fn intake_rows(
 ) -> Result<Vec<IntakeRow>, InboxError> {
     let can_send_default = matches!(role, Role::Lawyer | Role::Clerk);
     let people = inbox::person_badges(db, &conversations).await?;
+    let mut facts = intake_facts(pg, &conversations).await?;
     let mut listed = Vec::with_capacity(conversations.len());
     for conversation in conversations {
-        let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
+        let facts = facts.remove(&conversation.id).unwrap_or_default();
+        let delivery_state = facts
+            .delivery
+            .unwrap_or_else(|| delivery::RECEIVED.to_owned());
         let assignee_name = inbox::assignee_label(db, conversation.project_id).await?;
-        let (direction, has_attachments, sent, preview, email_sent_at) =
-            latest_row_facts_on(pg, conversation.id, conversation.channel == channel::EMAIL)
-                .await?;
         let person = conversation
             .person_id
             .and_then(|person_id| people.get(&person_id).cloned());
@@ -2126,71 +2250,87 @@ async fn intake_rows(
             external_address: conversation.external_address,
             external_name: conversation.external_name,
             subject: conversation.subject,
-            direction,
-            preview,
+            direction: facts.direction.unwrap_or_default(),
+            preview: facts.preview.as_deref().and_then(inbox::preview_snippet),
             person,
-            has_attachments,
-            sent,
+            has_attachments: facts.has_attachments,
+            sent: facts.sent,
             trashed: conversation.trashed_at.is_some(),
-            email_sent_at,
+            email_sent_at: facts
+                .email_dates
+                .into_iter()
+                .flatten()
+                .filter_map(|date| chrono::DateTime::parse_from_rfc3339(&date).ok())
+                .max()
+                .map(|date| date.with_timezone(&Utc)),
             updated_at: conversation.updated_at,
         });
     }
     Ok(listed)
 }
 
-/// The per-conversation aggregates the list view matches rows on (LAW-238
-/// D3): the direction of the conversation's most recent message
-/// (`occurred_at, id` order; empty when it has none), whether any message
-/// carries a filed attachment, whether a firm-side Person sent a message
-/// (outbound with an author — the Sent folder), and the preview snippet of
-/// the latest written message, skipping author-less outbound
-/// acknowledgements. One round trip per conversation, the same fan-out shape
-/// `latest_outbound_state_on` already follows.
-async fn latest_row_facts_on(
+#[derive(Default)]
+struct IntakeFacts {
+    direction: Option<String>,
+    has_attachments: bool,
+    sent: bool,
+    preview: Option<String>,
+    email_dates: Option<Vec<String>>,
+    delivery: Option<String>,
+}
+
+/// Read message facts for the selected conversations in one round trip.
+async fn intake_facts(
     pg: &PostgresDb,
-    conversation_id: Uuid,
-    email: bool,
-) -> Result<
-    (
-        String,
-        bool,
-        bool,
-        Option<String>,
-        Option<chrono::DateTime<Utc>>,
-    ),
-    InboxError,
-> {
-    let row = sqlx::query_as::<_, (Option<String>, bool, bool, Option<String>, Option<Vec<String>>)>(
-        "SELECT (SELECT direction FROM message WHERE conversation_id = $1 \
-         ORDER BY occurred_at DESC, id DESC LIMIT 1), \
-         EXISTS(SELECT 1 FROM message WHERE conversation_id = $1 \
-         AND attachment_asset_id IS NOT NULL), \
-         EXISTS(SELECT 1 FROM message WHERE conversation_id = $1 \
-         AND direction = 'outbound' AND author_person_id IS NOT NULL), \
-         (SELECT left(body, 400) FROM message WHERE conversation_id = $1 \
-         AND (direction <> 'outbound' OR author_person_id IS NOT NULL) \
-         ORDER BY occurred_at DESC, id DESC LIMIT 1), \
-         CASE WHEN $2 THEN ARRAY(SELECT occurred_at FROM message WHERE conversation_id = $1 \
-         AND (direction = 'inbound' OR (direction = 'outbound' AND author_person_id IS NOT NULL))) END",
+    conversations: &[Conversation],
+) -> Result<HashMap<Uuid, IntakeFacts>, InboxError> {
+    use sqlx::Row;
+    if conversations.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let (ids, is_email): (Vec<_>, Vec<_>) = conversations
+        .iter()
+        .map(|c| (c.id, c.channel == channel::EMAIL))
+        .unzip();
+    let rows = sqlx::query(
+        "SELECT c.id,
+         (SELECT direction FROM message WHERE conversation_id = c.id
+          ORDER BY occurred_at DESC, id DESC LIMIT 1) AS direction,
+         EXISTS(SELECT 1 FROM message WHERE conversation_id = c.id
+          AND attachment_asset_id IS NOT NULL) AS has_attachments,
+         EXISTS(SELECT 1 FROM message WHERE conversation_id = c.id
+          AND direction = 'outbound' AND author_person_id IS NOT NULL) AS sent,
+         (SELECT left(body, 400) FROM message WHERE conversation_id = c.id
+          AND (direction <> 'outbound' OR author_person_id IS NOT NULL)
+          ORDER BY occurred_at DESC, id DESC LIMIT 1) AS preview,
+         CASE WHEN c.is_email THEN ARRAY(SELECT occurred_at FROM message WHERE conversation_id = c.id
+          AND (direction = 'inbound' OR (direction = 'outbound' AND author_person_id IS NOT NULL)))
+          END AS email_dates,
+         (SELECT delivery_state FROM message WHERE conversation_id = c.id
+          AND direction = 'outbound' ORDER BY occurred_at DESC, id DESC LIMIT 1) AS delivery
+         FROM unnest($1::uuid[], $2::bool[]) AS c(id, is_email)",
     )
-    .bind(conversation_id)
-    .bind(email)
-    .fetch_one(&pg.0)
+    .bind(ids)
+    .bind(is_email)
+    .fetch_all(&pg.0)
     .await
     .map_err(db_error)?;
-    Ok((
-        row.0.unwrap_or_default(),
-        row.1,
-        row.2,
-        row.3.as_deref().and_then(inbox::preview_snippet),
-        row.4
-            .into_iter()
-            .flatten()
-            .filter_map(|date| chrono::DateTime::parse_from_rfc3339(&date).ok())
-            .max()
-            .map(|date| date.with_timezone(&Utc)),
-    ))
+    rows.iter()
+        .map(|row| {
+            Ok((
+                row.try_get("id")?,
+                IntakeFacts {
+                    direction: row.try_get("direction")?,
+                    has_attachments: row.try_get("has_attachments")?,
+                    sent: row.try_get("sent")?,
+                    preview: row.try_get("preview")?,
+                    email_dates: row.try_get("email_dates")?,
+                    delivery: row.try_get("delivery")?,
+                },
+            ))
+        })
+        .collect::<Result<_, sqlx::Error>>()
+        .map_err(db_error)
 }
 
 pub(crate) async fn list_project_on(

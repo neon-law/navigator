@@ -722,6 +722,32 @@ pub struct IntakeRow {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Filters on a Firm Inbox page. The store applies them before choosing the page.
+#[derive(Debug, Clone, Copy, Default)]
+#[allow(clippy::struct_excessive_bools)] // Independent filters from the Inbox rail.
+pub struct IntakeFilters<'a> {
+    pub brand: Option<&'a str>,
+    pub channel: Option<&'a str>,
+    pub direction: Option<&'a str>,
+    pub unread_only: bool,
+    pub attachments_only: bool,
+    pub sent_only: bool,
+    pub trash_only: bool,
+}
+
+/// The final row's ordering key. IDs make equal activity times deterministic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntakeCursor {
+    pub activity_at: DateTime<Utc>,
+    pub id: Uuid,
+}
+
+#[derive(Debug)]
+pub struct IntakePage {
+    pub rows: Vec<IntakeRow>,
+    pub next: Option<IntakeCursor>,
+}
+
 /// The Person a text's number belongs to. Display only: a recorded phone is
 /// an address, never proof of who is texting, so it grants nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1861,6 +1887,18 @@ pub async fn list_intake_in_brand(
     intake_rows(db, actor_id, Some(brand_key)).await
 }
 
+/// One Firm Inbox page in descending activity order.
+pub async fn intake_page(
+    db: &ApplicationStore,
+    actor_id: Uuid,
+    filters: IntakeFilters<'_>,
+    after: Option<IntakeCursor>,
+    page_size: u16,
+) -> Result<IntakePage, InboxError> {
+    let pg = inbox_authority().await?;
+    crate::postgres::inbox::intake_page_on(&pg, db, actor_id, filters, after, page_size).await
+}
+
 /// The Brand keys across the conversations this actor may see, sorted and
 /// deduplicated — the filter vocabulary an inbox renders. A Brand with no
 /// conversations this actor may see does not appear.
@@ -1873,12 +1911,7 @@ pub async fn intake_brands(
     actor_id: Uuid,
 ) -> Result<Vec<String>, InboxError> {
     let pg = inbox_authority().await?;
-    let brands: BTreeSet<String> = crate::postgres::inbox::list_intake_on(&pg, db, actor_id)
-        .await?
-        .into_iter()
-        .filter_map(|row| row.brand_key)
-        .collect();
-    Ok(brands.into_iter().collect())
+    crate::postgres::inbox::intake_brands_on(&pg, db, actor_id).await
 }
 
 async fn intake_rows(
@@ -4198,6 +4231,60 @@ let world = world(&db).await;
                 && call.to == "+15555550123"
         }));
 
+        });
+    }
+
+    #[tokio::test]
+    async fn intake_pages_keep_firm_scope_filters_and_email_date_order() {
+        #[rustfmt::skip]
+        with_native_inbox_fixture!(db, pg, {
+            let world = world(&db).await;
+            let mut tied = Vec::new();
+            let mut oldest = None;
+            let mut newest = None;
+            for (i, firm, brand, occurred_at) in [
+                (0, world.firm, "neon", "2026-10-14T08:00:00.000000001-04:00"),
+                (1, world.firm, "neon", "2026-10-14T12:00:00.000000001Z"),
+                (2, world.firm, "neon", "2026-10-13T23:00:00Z"),
+                (3, world.other_firm, "neon", "2026-10-15T00:00:00Z"),
+                (4, world.firm, "vesta", "2026-10-16T00:00:00Z"),
+                (5, world.firm, "neon", "2026-10-14T12:00:00.000000002Z"),
+            ] {
+                let provider_id = format!("paged-{i}");
+                let sender = format!("paged-{i}@example.test");
+                let mut message = inbound(firm, channel::EMAIL, "paged", &provider_id, &sender);
+                message.brand_key = Some(brand);
+                message.occurred_at = occurred_at;
+                let saved = ingest_inbound(&db, &message).await.unwrap();
+                if i < 2 {
+                    tied.push(saved.conversation_id);
+                } else if i == 2 {
+                    oldest = Some(saved.conversation_id);
+                } else if i == 5 {
+                    newest = Some(saved.conversation_id);
+                }
+            }
+            tied.sort_by_key(|id| std::cmp::Reverse(*id));
+            tied.insert(0, newest.unwrap());
+            tied.push(oldest.unwrap());
+            let filters = IntakeFilters {
+                brand: Some("neon"),
+                channel: Some(channel::EMAIL),
+                direction: Some(direction::INBOUND),
+                unread_only: true,
+                ..Default::default()
+            };
+            let mut after = None;
+            for expected_id in tied {
+                let page = intake_page(&db, world.lawyer, filters, after, 1).await.unwrap();
+                assert_eq!(page.rows.iter().map(|row| row.id).collect::<Vec<_>>(), [expected_id]);
+                after = page.next;
+            }
+            assert!(after.is_none());
+            assert!(matches!(
+                intake_page(&db, world.client, filters, None, 1).await,
+                Err(InboxError::Denied)
+            ));
         });
     }
 
