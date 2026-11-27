@@ -565,7 +565,6 @@ async fn deadline_sync_prints_one_line_per_reported_matter() {
     let root = TempDir::new().unwrap();
     let host = server.uri();
     let credentials = credentials(root.path(), &host);
-    mount_projects(&server).await;
     Mock::given(method("POST"))
         .and(path("/app/api/integrations/calendar/deadline-mirror"))
         .and(header("authorization", "Bearer test-token"))
@@ -611,6 +610,66 @@ async fn deadline_sync_prints_one_line_per_reported_matter() {
     );
     assert!(stdout.contains("acme: planned"), "{stdout}");
     server.verify().await;
+}
+
+#[tokio::test]
+async fn deadline_sync_after_gateway_timeout_checks_provider_state_without_retrying_the_write() {
+    for pending in [0, 2] {
+        let server = MockServer::start().await;
+        let root = TempDir::new().unwrap();
+        let host = server.uri();
+        let credentials = credentials(root.path(), &host);
+        for (dry_run, response) in [
+            (false, ResponseTemplate::new(504)),
+            (
+                true,
+                ResponseTemplate::new(200).set_body_json(json!({"results": [{
+                    "project_code": "acme",
+                    "outcome": "mirrored",
+                    "calendar_recorded": true,
+                    "pending_changes": pending,
+                    "detail": format!("mirrored upserted={pending} in_sync=1 deleted=0 (dry run)")
+                }]})),
+            ),
+        ] {
+            Mock::given(method("POST"))
+                .and(path("/app/api/integrations/calendar/deadline-mirror"))
+                .and(header("authorization", "Bearer test-token"))
+                .and(body_json(
+                    json!({"project_code": "acme", "all": false, "dry_run": dry_run}),
+                ))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let result = Command::cargo_bin("navigator")
+            .unwrap()
+            .current_dir(root.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+            .args([
+                "project",
+                "deadline",
+                "sync",
+                "--project",
+                "acme",
+                "--host",
+                &host,
+            ])
+            .assert();
+        if pending == 0 {
+            result
+                .success()
+                .stdout(predicates::str::contains("verified in sync"));
+        } else {
+            result
+                .failure()
+                .stderr(predicates::str::contains("2 pending event changes"));
+        }
+        server.verify().await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
 }
 
 /// A planned pass tells the door `dry_run: true` — nothing writes.
@@ -688,7 +747,7 @@ async fn deadline_sync_fails_when_the_provider_cannot_apply_the_report() {
         .failure()
         .stdout(predicates::str::contains("acme: provider_unavailable"))
         .stderr(predicates::str::contains(
-            "nothing was duplicated; `navigator project deadline sync --project acme` again",
+            "check the current state with `navigator project deadline sync --project acme --dry-run`",
         ));
     server.verify().await;
 }

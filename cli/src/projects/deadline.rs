@@ -27,14 +27,19 @@ async fn coordinates_with_code(
     host: Option<&str>,
     project: Option<&str>,
 ) -> Result<(String, String, Uuid, String)> {
+    let (base, token, code) = project_context(host, project)?;
+    let id = surfaces::resolve_project_id(&base, &token, &code).await?;
+    Ok((base, token, id, code))
+}
+
+fn project_context(host: Option<&str>, project: Option<&str>) -> Result<(String, String, String)> {
     let local = manifest::read(Path::new("."));
     let project = project
         .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
         .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
     let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
     let (base, token) = remote::resolve(host)?;
-    let id = surfaces::resolve_project_id(&base, &token, project).await?;
-    Ok((base, token, id, project.to_string()))
+    Ok((base, token, project.to_string()))
 }
 
 pub(super) async fn call(request: reqwest::RequestBuilder, action: &str) -> Result<Value> {
@@ -43,6 +48,10 @@ pub(super) async fn call(request: reqwest::RequestBuilder, action: &str) -> Resu
         .send()
         .await
         .with_context(|| format!("{action} deadline"))?;
+    deadline_response(response, action).await
+}
+
+async fn deadline_response(response: reqwest::Response, action: &str) -> Result<Value> {
     let status = response.status();
     let body = response.text().await.context("read deadline response")?;
     if !status.is_success() {
@@ -169,21 +178,35 @@ pub async fn ics(host: Option<&str>, project: Option<&str>) -> ExitCode {
 /// credential. `dry_run` plans the same writes without making them.
 pub async fn sync(host: Option<&str>, project: Option<&str>, dry_run: bool) -> ExitCode {
     let mirrored: anyhow::Result<()> = async {
-        let (base, token, _, code) = coordinates_with_code(host, project).await?;
-        let report = call(
-            reqwest::Client::new()
+        let (base, token, code) = project_context(host, project)?;
+        let client = reqwest::Client::new();
+        let request = |dry_run| {
+            client
                 .post(format!(
                     "{base}/app/api/integrations/calendar/deadline-mirror"
                 ))
-                .bearer_auth(token)
-                .json(&json!({
-                    "project_code": code,
-                    "all": false,
-                    "dry_run": dry_run,
-                })),
-            "sync",
-        )
-        .await?;
+                .bearer_auth(&token)
+                .json(&json!({"project_code": code, "all": false, "dry_run": dry_run}))
+        };
+        let report = match request(dry_run)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+        {
+            Ok(response) if !dry_run && matches!(response.status().as_u16(), 502..=504) => {
+                return verify_mirror(request(true), &code).await;
+            }
+            Ok(response) => match deadline_response(response, "sync").await {
+                Err(error) if !dry_run && timed_out(&error) => {
+                    return verify_mirror(request(true), &code).await;
+                }
+                result => result?,
+            },
+            Err(error) if !dry_run && error.is_timeout() => {
+                return verify_mirror(request(true), &code).await;
+            }
+            Err(error) => return Err(error).context("sync deadline"),
+        };
         let results = report["results"]
             .as_array()
             .ok_or_else(|| anyhow!("mirror report is not an array"))?;
@@ -196,8 +219,17 @@ pub async fn sync(host: Option<&str>, project: Option<&str>, dry_run: bool) -> E
                 None => String::new(),
             };
             let code = result["project_code"].as_str().unwrap_or("?");
-            println!("{code}: {outcome}{line}");
-            if let Some(remedy) = sync_remedy(outcome, code) {
+            let recorded = match result["calendar_recorded"].as_bool() {
+                Some(true) => "; calendar recorded",
+                Some(false) => "; no calendar recorded",
+                None => "",
+            };
+            println!("{code}: {outcome}{line}{recorded}");
+            let reason = result["provider_reason"].as_str();
+            if let (Some(reason), Some(action)) = (reason, result["provider_action"].as_str()) {
+                eprintln!("{code}: {reason} while {action}");
+            }
+            if let Some(remedy) = sync_remedy(outcome, reason, code) {
                 eprintln!("{code}: {remedy}");
             }
         }
@@ -217,22 +249,68 @@ pub async fn sync(host: Option<&str>, project: Option<&str>, dry_run: bool) -> E
     }
 }
 
-/// The next step for a sync outcome that wrote nothing, or not everything.
-/// A retry is always safe: each event carries its Deadline id, so a second
-/// pass patches what the first one wrote instead of duplicating it.
-fn sync_remedy(outcome: &str, code: &str) -> Option<String> {
+fn timed_out(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<reqwest::Error>()
+        .is_some_and(reqwest::Error::is_timeout)
+}
+
+/// A lost response can follow a committed write. Only a fresh read can distinguish the cases.
+async fn verify_mirror(preview: reqwest::RequestBuilder, code: &str) -> Result<()> {
+    let retry = format!("navigator project deadline sync --project {code}");
+    let report = call(preview, "verify after timeout")
+        .await
+        .with_context(|| {
+            format!("{code}: sync response lost; verification pending. Run `{retry} --dry-run`")
+        })?;
+    let results = report["results"].as_array().map(Vec::as_slice);
+    if let Some([result]) = results.filter(|rows| {
+        rows.first().is_some_and(|result| {
+            result["project_code"].as_str() == Some(code) && result["outcome"] == "mirrored"
+        })
+    }) {
+        match (result["calendar_recorded"].as_bool(), result["pending_changes"].as_u64()) {
+            (Some(true), Some(0)) => {
+                println!("{code}: calendar recorded and Deadline events verified in sync after timeout");
+                return Ok(());
+            }
+            (Some(true), Some(pending)) => anyhow::bail!(
+                "{code}: calendar recorded with {pending} pending event changes. Run `{retry}` to resume"
+            ),
+            (Some(false), _) => anyhow::bail!(
+                "{code}: no calendar is recorded. Run `{retry}` to adopt or provision it and resume"
+            ),
+            _ => {}
+        }
+    }
+    anyhow::bail!("{code}: sync response lost; verification pending. Run `{retry} --dry-run`")
+}
+
+fn sync_remedy(outcome: &str, provider_reason: Option<&str>, code: &str) -> Option<String> {
     let retry = format!("navigator project deadline sync --project {code}");
     Some(match outcome {
-        "calendar_unprovisioned" => format!(
-            "the Project has no calendar yet; choose the Firm's Workspace calendar owner and \
+        "calendar_unprovisioned"
+            if matches!(
+                provider_reason,
+                None | Some(
+                    "authentication_failed"
+                        | "credential_rejected"
+                        | "provider_forbidden"
+                        | "missing_configuration"
+                )
+            ) =>
+        {
+            format!(
+                "the Project has no calendar yet; choose the Firm's Workspace calendar owner and \
              authorize its calendar delegation (docs/third-party-integrations.md), then `{retry}`"
-        ),
+            )
+        }
         "provider_unauthorized" => format!(
             "Google Workspace refused the Firm's calendar owner; check its domain-wide \
              delegation for the calendar scope, then `{retry}`"
         ),
-        "provider_unavailable" | "mirror_incomplete" => {
-            format!("nothing was duplicated; `{retry}` again to finish the writes")
+        "calendar_unprovisioned" | "provider_unavailable" | "mirror_incomplete" => {
+            format!("check the current state with `{retry} --dry-run`, then `{retry}` to resume")
         }
         "recorded_resource_missing" => format!(
             "preserve the recorded calendar ID and check the delegated owner's access with \
@@ -1154,18 +1232,18 @@ mod tests {
         for (outcome, expected) in [
             ("calendar_unprovisioned", "has no calendar yet"),
             ("provider_unauthorized", "domain-wide"),
-            ("provider_unavailable", "nothing was duplicated"),
-            ("mirror_incomplete", "nothing was duplicated"),
+            ("provider_unavailable", "check the current state"),
+            ("mirror_incomplete", "check the current state"),
             (
                 "recorded_resource_missing",
                 "navigator project deadline sync --project sample --dry-run",
             ),
         ] {
-            let remedy = super::sync_remedy(outcome, "sample").unwrap();
+            let remedy = super::sync_remedy(outcome, None, "sample").unwrap();
             assert!(remedy.contains(expected), "{remedy}");
             assert!(remedy.contains("navigator project deadline sync --project sample"));
         }
-        assert_eq!(super::sync_remedy("mirrored", "sample"), None);
+        assert_eq!(super::sync_remedy("mirrored", None, "sample"), None);
     }
 
     #[test]

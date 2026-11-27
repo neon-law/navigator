@@ -23,6 +23,11 @@ pbpaste | navigator site firm secret set --firm example --provider stripe --acco
 ```
 
 Choose `nevada` or `operating` and `publishable` or `secret`. Staging accepts sandbox keys. Production with real matters
-accepts live keys. The invoice issuer reads the selected account’s secret key. Each version records the actor and time.
+accepts live keys. The `secret` kind accepts standard and restricted server keys in the selected mode. For an invoice
+draft, grant write access to Customers, Invoices, and Invoice Items, and read access to the account identity. Grant
+Balance read access when the key also serves balance checks. Each version records the actor and time.
+
+See [Stripe restricted API keys](https://docs.stripe.com/keys#limit-access).
+
 Use `navigator site firm secret list --firm example` to see key metadata. Use `secret delete` with the same selectors to
 revoke the stored credential.

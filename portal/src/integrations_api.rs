@@ -107,6 +107,14 @@ pub(crate) struct ProjectOutcome {
     pub(crate) outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    calendar_recorded: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pending_changes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_reason: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_action: Option<&'static str>,
 }
 
 impl ProjectOutcome {
@@ -115,14 +123,17 @@ impl ProjectOutcome {
             project_code,
             outcome,
             detail: None,
+            calendar_recorded: None,
+            pending_changes: None,
+            provider_reason: None,
+            provider_action: None,
         }
     }
 
     fn with_detail(project_code: String, outcome: &'static str, detail: String) -> Self {
         Self {
-            project_code,
-            outcome,
             detail: Some(detail),
+            ..Self::plain(project_code, outcome)
         }
     }
 }
@@ -1090,9 +1101,23 @@ pub(crate) async fn calendar_deadline_mirror_door(
         project_code: request.project_code.clone(),
         all: request.all,
     };
+    let start = std::time::Instant::now();
+    let selected = targets(&state, &authed, &selector).await;
+    tracing::debug!(
+        elapsed_ms = start.elapsed().as_secs_f64() * 1000.0,
+        "Deadline mirror Project lookup"
+    );
     let mut results = Vec::new();
-    for project in targets(&state, &authed, &selector).await? {
-        results.push(mirror_one(&state, &project, request.dry_run).await);
+    for project in selected? {
+        let start = std::time::Instant::now();
+        let result = mirror_one(&state, &project, request.dry_run).await;
+        tracing::debug!(
+            project_id = %project.id,
+            elapsed_ms = start.elapsed().as_secs_f64() * 1000.0,
+            outcome = result.outcome,
+            "Deadline mirror reconciliation"
+        );
+        results.push(result);
     }
     Ok((StatusCode::OK, Json(IntegrationReport { results })).into_response())
 }
@@ -1113,18 +1138,6 @@ pub(crate) async fn mirror_one(
     let Ok(_guard) = calendar_lock(project.id).await else {
         return ProjectOutcome::plain(project.code.clone(), "provider_unavailable");
     };
-    let recorded = project
-        .calendar_id
-        .as_deref()
-        .is_some_and(|id| !id.trim().is_empty());
-    // A dry run with no recorded calendar has nothing to read, so it asks
-    // the provider the question the applied pass asks first: a plan that
-    // the provider would refuse is not a plan.
-    if dry_run && !recorded {
-        if let Err(error) = calendar.find_calendar(&project.code).await {
-            return mirror_failure(project.code.clone(), recorded, &error);
-        }
-    }
     match store::deadline_calendar::reconcile(
         &state.application_store,
         calendar.as_ref(),
@@ -1143,10 +1156,21 @@ pub(crate) async fn mirror_one(
             format!("{count} calendars carry this code"),
         ),
         Err(store::deadline_calendar::MirrorError::Calendar(error)) => {
+            let recorded = calendar_recorded(state, project.id).await;
             mirror_failure(project.code.clone(), recorded, &error)
         }
-        Err(_) => ProjectOutcome::plain(project.code.clone(), "provider_unavailable"),
+        Err(_) => ProjectOutcome {
+            calendar_recorded: calendar_recorded(state, project.id).await,
+            ..ProjectOutcome::plain(project.code.clone(), "provider_unavailable")
+        },
     }
+}
+
+async fn calendar_recorded(state: &ApiState, project_id: uuid::Uuid) -> Option<bool> {
+    let project = store::projects::find_by_id(&state.application_store, project_id)
+        .await
+        .ok()??;
+    Some(project.calendar_id.is_some_and(|id| !id.trim().is_empty()))
 }
 
 /// A finished pass. Rows the provider refused are writes that did not
@@ -1155,22 +1179,34 @@ fn mirror_outcome(
     project_code: String,
     report: &store::deadline_calendar::MirrorReport,
 ) -> ProjectOutcome {
+    use store::deadline_calendar::MirrorOutcome;
+
     let mut line = store::deadline_calendar::report_line(report);
     if report.dry_run && report.creates_calendar {
         line.push_str("; creates or adopts the Project calendar first");
     }
-    if report.failures.is_empty() {
-        return ProjectOutcome::with_detail(project_code, report.outcome.slug(), line);
+    let outcome = if report.failures.is_empty() {
+        report.outcome.slug()
+    } else {
+        tracing::warn!(
+            failures = report.failures.len(),
+            "Deadline Calendar reconcile has pending events"
+        );
+        for failure in &report.failures {
+            line.push_str("; ");
+            line.push_str(failure);
+        }
+        "mirror_incomplete"
+    };
+    ProjectOutcome {
+        calendar_recorded: match report.outcome {
+            MirrorOutcome::Mirrored => Some(!report.creates_calendar),
+            MirrorOutcome::RecordedResourceMissing | MirrorOutcome::SkippedClosed => None,
+        },
+        pending_changes: (report.dry_run && outcome == "mirrored")
+            .then_some(report.upserted.len() + report.deleted.len()),
+        ..ProjectOutcome::with_detail(project_code, outcome, line)
     }
-    tracing::warn!(
-        failures = report.failures.len(),
-        "Deadline Calendar reconcile has pending events"
-    );
-    for failure in &report.failures {
-        line.push_str("; ");
-        line.push_str(failure);
-    }
-    ProjectOutcome::with_detail(project_code, "mirror_incomplete", line)
 }
 
 /// The outcome a provider refusal reports. With no recorded calendar the
@@ -1178,18 +1214,53 @@ fn mirror_outcome(
 /// needs to hear; the provider's class rides in the detail.
 fn mirror_failure(
     project_code: String,
-    recorded: bool,
+    recorded: Option<bool>,
     error: &cloud::CalendarError,
 ) -> ProjectOutcome {
     let cause = calendar_failure_slug(error);
-    if recorded {
-        return ProjectOutcome::plain(project_code, cause);
+    let (reason, action) = calendar_provider_failure(error);
+    ProjectOutcome {
+        calendar_recorded: recorded,
+        provider_reason: Some(reason),
+        provider_action: action,
+        ..if recorded == Some(false) {
+            ProjectOutcome::with_detail(
+                project_code,
+                "calendar_unprovisioned",
+                format!("no calendar recorded; creating or adopting it failed with {cause}"),
+            )
+        } else {
+            ProjectOutcome::plain(project_code, cause)
+        }
     }
-    ProjectOutcome::with_detail(
-        project_code,
-        "calendar_unprovisioned",
-        format!("no calendar recorded; creating it failed with {cause}"),
-    )
+}
+
+fn calendar_provider_failure(error: &cloud::CalendarError) -> (&'static str, Option<&'static str>) {
+    use cloud::CalendarError;
+    match error {
+        CalendarError::MissingConfig(_) => ("missing_configuration", None),
+        CalendarError::Authentication => ("authentication_failed", Some("authenticating")),
+        CalendarError::Api { action, status } => (
+            match status {
+                401 => "credential_rejected",
+                403 => "provider_forbidden",
+                429 => "rate_limited",
+                500..=599 => "provider_error",
+                _ => "request_refused",
+            },
+            Some(*action),
+        ),
+        CalendarError::Request { action, source } => (
+            if source.is_timeout() {
+                "request_timeout"
+            } else {
+                "transport_error"
+            },
+            Some(*action),
+        ),
+        CalendarError::Response { action, .. } => ("invalid_response", Some(*action)),
+        _ => ("unverified_provider_state", None),
+    }
 }
 
 /// Sort a provider refusal into the operator's next step: an unconfigured
@@ -1224,7 +1295,7 @@ fn report_one(outcome: ProjectOutcome) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{calendar_failure_slug, mirror_failure, mirror_outcome};
+    use super::{calendar_failure_slug, calendar_provider_failure, mirror_failure, mirror_outcome};
     use store::deadline_calendar::{MirrorOutcome, MirrorReport};
 
     #[test]
@@ -1252,6 +1323,21 @@ mod tests {
             calendar_failure_slug(&CalendarError::MissingConfig("owner".into())),
             "runtime_not_configured"
         );
+        for (status, reason) in [
+            (401, "credential_rejected"),
+            (403, "provider_forbidden"),
+            (429, "rate_limited"),
+            (503, "provider_error"),
+        ] {
+            let error = CalendarError::Api {
+                action: "finding a calendar",
+                status,
+            };
+            assert_eq!(
+                calendar_provider_failure(&error),
+                (reason, Some("finding a calendar"))
+            );
+        }
     }
 
     #[test]
@@ -1260,13 +1346,15 @@ mod tests {
             action: "creating a calendar",
             status: 403,
         };
-        let unprovisioned = mirror_failure("acme".into(), false, &error);
+        let unprovisioned = mirror_failure("acme".into(), Some(false), &error);
         assert_eq!(unprovisioned.outcome, "calendar_unprovisioned");
         assert_eq!(
             unprovisioned.detail.as_deref(),
-            Some("no calendar recorded; creating it failed with provider_unauthorized")
+            Some("no calendar recorded; creating or adopting it failed with provider_unauthorized")
         );
-        let recorded = mirror_failure("acme".into(), true, &error);
+        assert_eq!(unprovisioned.provider_reason, Some("provider_forbidden"));
+        assert_eq!(unprovisioned.provider_action, Some("creating a calendar"));
+        let recorded = mirror_failure("acme".into(), Some(true), &error);
         assert_eq!(recorded.outcome, "provider_unauthorized");
         assert_eq!(recorded.detail, None);
     }
@@ -1300,8 +1388,11 @@ mod tests {
             creates_calendar: true,
             ..MirrorReport::default()
         };
+        let outcome = mirror_outcome("acme".into(), &report);
+        assert_eq!(outcome.calendar_recorded, Some(false));
+        assert_eq!(outcome.pending_changes, Some(0));
         assert_eq!(
-            mirror_outcome("acme".into(), &report).detail.as_deref(),
+            outcome.detail.as_deref(),
             Some("mirrored upserted=0 in_sync=0 deleted=0 (dry run); creates or adopts the Project calendar first")
         );
     }

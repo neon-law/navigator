@@ -53,8 +53,8 @@ async fn exercise() {
     let directory = format!("/app/api/firms/{firm_id}/secrets");
     let mode = firm_secrets::stripe_mode().unwrap();
     let (good, wrong, other_mode) = match mode {
-        Mode::Sandbox => ("sk_test_example", "sk_live_example", Mode::Live),
-        Mode::Live => ("sk_live_example", "sk_test_example", Mode::Sandbox),
+        Mode::Sandbox => ("rk_test_example", "rk_live_example", Mode::Live),
+        Mode::Live => ("rk_live_example", "rk_test_example", Mode::Sandbox),
     };
     let slot = format!("{directory}/stripe/nevada/secret");
     let request = |method, path: String, token: &str, value: &'static str| {

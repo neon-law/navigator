@@ -15,6 +15,10 @@ missing or mismatched calendar returns `recorded_resource_missing`. Run `navigat
 check the delegated owner, Project name, and deployment. Preserve the recorded ID while investigating visibility. Use
 `navigator project set --calendar <id>` after verifying the intended replacement. A rerun reuses the verified calendar.
 
+When a deadline sync loses its response, Navigator checks the calendar and event state with a dry run. A completed check
+reports whether the calendar is recorded and whether event changes remain. If provider state is still unknown, use
+`navigator project deadline sync --dry-run` to check again. An applied sync resumes against the recorded calendar.
+
 When the Firm has a [Workspace calendar owner](firm-calendar-settings.md), DBOS checks assignments on its recorded
 calendars every six hours on the [DBOS schedule](../dbos-durability.md#project-calendar-membership). It also provisions
 missing calendars for open Projects. A participant needs the matching Firm role, a confirmed address in the owner's
