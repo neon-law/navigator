@@ -323,7 +323,7 @@ pub async fn sender_view_get(
     headers: HeaderMap,
     OriginalUri(uri): OriginalUri,
     AxumPath(notation_id): AxumPath<Uuid>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    Query(query): Query<std::collections::BTreeMap<String, String>>,
 ) -> Response {
     // A client session has no sender view to open. Same refusal
     // discipline as the identity gate below: `404`, never `403` —
@@ -447,7 +447,8 @@ async fn sender_return_origin(
             return Ok(brand::project_origin(&project.brand, &local).unwrap_or(local));
         }
     }
-    let base = crate::openapi::base_url_for(authority.as_ref().map(|host| host.as_str()));
+    let base =
+        crate::openapi::base_url_for(authority.as_ref().map(axum::http::uri::Authority::as_str));
     Ok(brand::project_origin(&project.brand, &base).unwrap_or_else(|| key.public_home_href()))
 }
 
@@ -458,6 +459,7 @@ async fn sender_return(
     request_id: &crate::signature::SignatureRequestId,
 ) -> Response {
     use crate::signature::html_escape;
+    use std::fmt::Write as _;
 
     let result = match provider.sender_envelope_status(request_id).await {
         Ok(result) => result,
@@ -490,17 +492,15 @@ async fn sender_return(
     let timing = result.sent_at.map_or_else(String::new, |time| {
         format!("<p>Sent at {}</p>", html_escape(&time))
     });
-    let signers = result
-        .signers
-        .iter()
-        .map(|signer| {
-            format!(
-                "<li>{} &lt;{}&gt;</li>",
-                html_escape(&signer.name),
-                html_escape(&signer.email)
-            )
-        })
-        .collect::<String>();
+    let mut signers = String::new();
+    for signer in &result.signers {
+        let _ = write!(
+            signers,
+            "<li>{} &lt;{}&gt;</li>",
+            html_escape(&signer.name),
+            html_escape(&signer.email)
+        );
+    }
     let id = notation.id;
     let preview = match crate::retainer_walk::render_assembled_document(
         &crate::retainer_walk::render_deps(state),
@@ -514,13 +514,19 @@ async fn sender_return(
             String::new()
         }
     };
+    let tokens = webapp::brand_style::brand_tokens_href(views::brand::brand_key().as_str());
     (
         [(header::CACHE_CONTROL, "no-store")],
         Html(format!(
-            "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Signature envelope</title>\
-             <link rel=\"stylesheet\" href=\"/public/css/harvard-outline.css\">\
-             <main><h1>Signature envelope</h1><p>{label}</p>{timing}<h2>Signers</h2><ul>{signers}</ul>\
-             <p><a href=\"/app/lawyer/notations/{id}/review\">Return to notation review</a></p>{preview}</main></html>"
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+             <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+             <title>Signature envelope</title><link rel=\"stylesheet\" href=\"/public/css/theme.css\">\
+             <link rel=\"stylesheet\" href=\"{tokens}\">\
+             <link rel=\"stylesheet\" href=\"/public/css/harvard-outline.css\"></head>\
+             <body><main class=\"nav-theme signature-return\"><h1>Signature envelope</h1>\
+             <p>{label}</p>{timing}<h2>Signers</h2><ul>{signers}</ul>\
+             <p><a href=\"/app/lawyer/notations/{id}/review\">Return to notation review</a></p>\
+             {preview}</main></body></html>"
         )),
     ).into_response()
 }

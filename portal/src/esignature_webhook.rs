@@ -413,6 +413,31 @@ pub(crate) async fn process_known(
 #[error("webhook consumption failed, receipt stays pending for replay: {0}")]
 pub(crate) struct ConsumeFailure(String);
 
+async fn record_terminal_dispatch(
+    state: &crate::AppState,
+    notation_id: uuid::Uuid,
+    terminal_state: store::signatures::SignatureState,
+) -> Result<(), ConsumeFailure> {
+    if matches!(
+        terminal_state,
+        store::signatures::SignatureState::Completed | store::signatures::SignatureState::Declined
+    ) {
+        let notation = store::notations::find_by_id(&state.application_store, notation_id)
+            .await
+            .map_err(|e| ConsumeFailure(format!("reading notation for dispatch: {e}")))?;
+        if let Some(notation) = notation {
+            crate::signature_flow::record_observed_dispatch(
+                &state.application_store,
+                state.workflow_runtime.as_ref(),
+                &notation,
+            )
+            .await
+            .map_err(|e| ConsumeFailure(format!("recording dispatch: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
 /// One consumption attempt for a verified terminal-event receipt: advance
 /// the workflow wait, mirror the notation row, stamp the signature row,
 /// and — for a completed envelope — archive the executed document set.
@@ -444,24 +469,7 @@ pub(crate) async fn consume_receipt(
     // fixed conditions) has consumed this signal — the tail below is
     // what a replay re-runs.
     if signature.state == store::signatures::SignatureState::Requested {
-        if matches!(
-            terminal_state,
-            store::signatures::SignatureState::Completed
-                | store::signatures::SignatureState::Declined
-        ) {
-            let notation = store::notations::find_by_id(&state.application_store, notation_id)
-                .await
-                .map_err(|e| ConsumeFailure(format!("reading notation for dispatch: {e}")))?;
-            if let Some(notation) = notation {
-                crate::signature_flow::record_observed_dispatch(
-                    &state.application_store,
-                    state.workflow_runtime.as_ref(),
-                    &notation,
-                )
-                .await
-                .map_err(|e| ConsumeFailure(format!("recording dispatch: {e}")))?;
-            }
-        }
+        record_terminal_dispatch(state, notation_id, terminal_state).await?;
         let condition = if terminal_state == store::signatures::SignatureState::Completed {
             SIGNATURE_RECEIVED
         } else {

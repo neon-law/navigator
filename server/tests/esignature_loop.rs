@@ -217,6 +217,9 @@ async fn signature_loop(fake: Option<Arc<FakeSignatureProvider>>) -> SentLoop {
     store::projects::add_participation(&application_store, proj.id, lawyer, "lawyer")
         .await
         .unwrap();
+    store::projects::add_participation(&application_store, proj.id, libra.id, "client")
+        .await
+        .unwrap();
     let lawyer_bearer =
         portal::test_support::bearer_header_with_person(store::persons::Role::Lawyer, lawyer);
     let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
@@ -271,15 +274,16 @@ async fn signature_loop(fake: Option<Arc<FakeSignatureProvider>>) -> SentLoop {
 
     // 2. Walk the full questionnaire — the final POST drives the
     //    workflow through the real provider's send_for_signature.
-    for value in [
-        "Libra Holdings LLC",
-        "500 Innovation Way Reno NV 89501",
-        "Libra",
-        "Firm Principal",
-        "Estate plan",
-        "2026-09-01",
-        "Draft and file the matter documents.",
-        "nevada",
+    let libra_id = libra.id.to_string();
+    for (field, value) in [
+        ("value", "Libra Holdings LLC"),
+        ("value", "500 Innovation Way Reno NV 89501"),
+        ("id", libra_id.as_str()),
+        ("value", "Firm Principal"),
+        ("value", "Estate plan"),
+        ("value", "2026-09-01"),
+        ("value", "Draft and file the matter documents."),
+        ("value", "nevada"),
     ] {
         let resp = app
             .clone()
@@ -289,7 +293,7 @@ async fn signature_loop(fake: Option<Arc<FakeSignatureProvider>>) -> SentLoop {
                     .uri(format!("/app/lawyer/notations/{nid}/step"))
                     .header("authorization", &lawyer_bearer)
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from(format!("value={}", urlencoding(value))))
+                    .body(Body::from(format!("{field}={}", urlencoding(value))))
                     .unwrap(),
             )
             .await
@@ -442,7 +446,7 @@ async fn signature_loop(fake: Option<Arc<FakeSignatureProvider>>) -> SentLoop {
                     assert_eq!(returned.status(), StatusCode::OK);
                     let html = body_string(returned).await;
                     assert!(html.contains("Sent at"));
-                    assert!(html.contains("Libra"));
+                    assert!(html.contains("Libra &lt;libra@example.com&gt;"));
                 }
                 let status = app
                     .clone()

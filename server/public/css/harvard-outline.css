@@ -306,3 +306,9 @@ a.notation-open-term mark {
   border: 1px solid currentColor;
   border-radius: 0.125em;
 }
+
+.signature-return {
+  max-width: 52rem;
+  margin-inline: auto;
+  padding: 1.25rem;
+}
