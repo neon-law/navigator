@@ -549,7 +549,7 @@ mod tests {
             None,
             None,
             PortalWelcome {
-                project_name: Some("Estate of Cornelius Montgomery".into()),
+                project_name: Some("Estate of Bigfoot".into()),
             },
         )
         .0;
@@ -557,7 +557,7 @@ mod tests {
         for needle in [
             "| Portal</title>",
             "<h1>Portal</h1>",
-            &format!("<strong>{firm}</strong> Portal for <strong>Estate of Cornelius Montgomery</strong>"),
+            &format!("<strong>{firm}</strong> Portal for <strong>Estate of Bigfoot</strong>"),
             "Access is by invitation.",
             "Not expecting this?",
             "href=\"/contact\"",

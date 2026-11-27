@@ -2076,6 +2076,12 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
     }
 
     const EXPECTED_WORKSHOP_ASSETS: &[&str] = &[
+        "img/agentic-lawyering/bigfoot-deadlines.jpg",
+        "img/agentic-lawyering/estate-of-bigfoot.jpg",
+        "img/agentic-lawyering/forgejo-bump-pr.jpg",
+        "img/agentic-lawyering/forgejo-sample-estate.jpg",
+        "img/agentic-lawyering/inbox-email.jpg",
+        "img/agentic-lawyering/inbox-list.jpg",
         "img/delete-your-data/01-original.png",
         "img/delete-your-data/02-signup.png",
         "img/delete-your-data/03-business.png",

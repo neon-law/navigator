@@ -285,7 +285,7 @@ mod tests {
     async fn a_description_less_project_is_synopsized_by_name_code_and_status() {
         let canvas = ProjectCanvas {
             code: "sample-estate".into(),
-            name: "Estate of Cornelius Montgomery".into(),
+            name: "Estate of Bigfoot".into(),
             status: "open".into(),
             description: Some("  ".into()),
             repository_url: Some("https://github.com/example/sample-estate".into()),
@@ -294,7 +294,7 @@ mod tests {
             lawyer_dris: Vec::new(),
         };
         let body = render_canvas(&canvas, Some("https://www.example.com/"), "2026-10-05");
-        assert!(body.contains("Estate of Cornelius Montgomery (sample-estate), open"));
+        assert!(body.contains("Estate of Bigfoot (sample-estate), open"));
         assert!(body.contains("Repository: https://github.com/example/sample-estate"));
         assert!(body.contains("Matter: https://www.example.com/app/projects/sample-estate\n"));
         assert!(

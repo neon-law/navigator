@@ -56,7 +56,7 @@ const DECKS: &[&str] = &[
     RUST_IN_PEACE,
     DELETE_YOUR_DATA,
     WELCOME_TO_NEON_LAW,
-    "server/content/workshops/navigator/PORTLAND_CLOUD_NATIVE.md",
+    "server/content/workshops/navigator/AGENTIC_LAWYERING.md",
 ];
 
 /// Collapse a markdown file's whitespace so a claim split across a reflowed
