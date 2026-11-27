@@ -3558,14 +3558,14 @@ pub fn matter_flags(has_engagement: bool, status: &str, has_closing: bool) -> (b
     (missing_onboarding, missing_offboarding_letter)
 }
 
-/// The displayed lifecycle derived from completed DocuSign onboarding evidence.
+/// The displayed lifecycle derived from verified onboarding evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatterLifecycle {
     /// Open Project whose code exempts it from onboarding.
     OnboardingOptional,
-    /// Open, awaiting completed DocuSign onboarding.
+    /// Open, awaiting verified onboarding.
     NeedsOnboarding,
-    /// Open, with verified DocuSign onboarding.
+    /// Open, with verified onboarding.
     OnboardingOnFile,
     /// Closed.
     Closed,
@@ -3600,19 +3600,15 @@ impl MatterLifecycle {
     pub fn title(self) -> &'static str {
         match self {
             MatterLifecycle::OnboardingOptional => "Onboarding is optional for this Project.",
-            MatterLifecycle::NeedsOnboarding => {
-                "The onboarding DocuSign envelope UUID has not been verified as completed."
-            }
-            MatterLifecycle::OnboardingOnFile => {
-                "The onboarding DocuSign envelope UUID is verified as completed."
-            }
+            MatterLifecycle::NeedsOnboarding => "Onboarding is awaiting verified execution.",
+            MatterLifecycle::OnboardingOnFile => "Onboarding execution is verified.",
             MatterLifecycle::Closed => "This matter is closed.",
         }
     }
 }
 
 /// The lifecycle state a matter row renders, from its `status` and whether
-/// it is missing verified DocuSign onboarding. `missing_offboarding_letter` is taken
+/// it is missing verified onboarding. `missing_offboarding_letter` is taken
 /// but deliberately does not branch the result: a closed matter is
 /// [`MatterLifecycle::Closed`] whether or not it still owes its offboarding
 /// letter, and that gap keeps surfacing through the existing "no offboarding
@@ -3656,19 +3652,15 @@ pub fn project_lifecycle(
     matter_lifecycle(status, missing_onboarding, missing_closing)
 }
 
-/// Onboarding is official when Navigator holds a completed DocuSign envelope UUID
-/// on the onboarding notation or a server-verified signed document.
+/// Onboarding is official when Navigator holds verified execution evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnboardingStatus {
     /// The Project can proceed without a signed engagement.
     Optional,
-    /// The matter is still a pitch: no onboarding envelope UUID has verified
-    /// DocuSign completion. Includes a matter whose envelope was
-    /// sent and is still outstanding, and one that was declined, voided, or
-    /// expired — none of those is execution.
+    /// The matter is still awaiting verified execution of its onboarding letter.
     Pitch,
-    /// Navigator holds the onboarding envelope UUID and verified completion.
+    /// Navigator holds verified execution of the onboarding letter.
     Official,
 }
 
@@ -3692,8 +3684,7 @@ impl OnboardingStatus {
         match self {
             Self::Optional => MatterLifecycle::OnboardingOptional.title(),
             Self::Pitch => {
-                "This matter is still a pitch: its onboarding document has not completed a \
-                 DocuSign envelope verified by Navigator."
+                "This matter is still a pitch. Onboarding is awaiting verified execution."
             }
             Self::Official => {
                 "Onboarding is official: Navigator holds the DocuSign envelope UUID and verified completion."
@@ -3701,7 +3692,7 @@ impl OnboardingStatus {
         }
     }
 
-    /// Derive the status from verified completed DocuSign evidence.
+    /// Derive the status from verified onboarding evidence.
     #[must_use]
     pub fn for_project(code: &str, completed: bool) -> Self {
         if completed {
@@ -3714,7 +3705,7 @@ impl OnboardingStatus {
     }
 }
 
-/// Read the Project's verified DocuSign onboarding evidence from PostgreSQL.
+/// Read the Project's verified onboarding evidence from PostgreSQL.
 ///
 /// # Errors
 ///

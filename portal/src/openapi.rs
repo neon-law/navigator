@@ -2721,7 +2721,7 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/status": {
           "get": {
             "summary": "Read live matter lifecycle and onboarding evidence",
-            "description": "Lawyer-tier, firm-side participation required for every tier. Returns the workbench lifecycle label, current project_status, opened_at (Project creation), closed_at, ordered history, source_state, firm_integrations (the owning Firm's Google Calendar and Google Drive switches, both false without a Firm), onboarding presence and document visibility, recorded DocuSign envelope and signer status, and missing onboarding work; a missing Drive folder is listed only when the Firm has Drive on. Execution is verified by the completed onboarding Signature.",
+            "description": "Lawyer-tier, firm-side participation required for every tier. Returns the workbench lifecycle label, current project_status, opened_at (Project creation), closed_at, ordered history, source_state, firm_integrations (the owning Firm's Google Calendar and Google Drive switches, both false without a Firm), onboarding presence and document visibility, recorded DocuSign envelope and signer status, and missing onboarding work; a missing Drive folder is listed only when the Firm has Drive on. Execution is verified from a completed onboarding Signature or a reviewed, manually imported retainer.",
             "parameters": [
               { "name": "id", "in": "path", "required": true,
                 "schema": { "type": "string", "format": "uuid" } }
@@ -5869,6 +5869,36 @@ fn canonical_document(base: &str) -> Value {
               "404": { "description": "No such matter or asset, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "409": { "description": "The row's kind is not accepted (`kind_not_accepted`), or the target is the current kind (`kind_unchanged`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "500": { "description": "The document could not be updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/documents/{asset_id}/verify-dropbox-sign": {
+          "post": {
+            "summary": "Record lawyer verification of an exported Dropbox Sign retainer",
+            "description": "Checks the current Onboarding PDF, reviewed export hash, Project client, and uniqueness of the Dropbox Sign request. With apply, the lawyer attests to the Firm account and completion shown in the manually exported audit trail.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+              { "name": "asset_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": {
+              "type": "object", "required": ["request_id", "sha256", "account_email", "client_email", "signed_on"],
+              "properties": {
+                "request_id": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+                "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "account_email": { "type": "string", "format": "email" },
+                "client_email": { "type": "string", "format": "email" },
+                "signed_on": { "type": "string", "format": "date" },
+                "apply": { "type": "boolean", "default": false }
+              }
+            } } } },
+            "responses": {
+              "200": { "description": "Verification preview or recorded lawyer verification" },
+              "400": { "description": "Invalid audit details" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Caller lacks the lawyer tier" },
+              "404": { "description": "Project or document unavailable to the caller" },
+              "409": { "description": "Document or Project changed, or verification conflicts with existing evidence" },
+              "422": { "description": "The document, Firm, or signer is ineligible for verification" }
             }
           }
         },

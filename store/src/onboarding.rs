@@ -15,10 +15,9 @@ use crate::{
 
 /// Projects whose onboarding letter is executed, from verified PostgreSQL evidence.
 ///
-/// Two sources count. A completed e-signature request from any provider in
-/// [`crate::signatures::SignatureProvider`] counts. So does a live `onboarding` asset whose
-/// server-stamped `verified_onboarding_envelope_id` equals its DocuSign envelope UUID. A committed
-/// pointer alone is not evidence: anyone with repository access can write one.
+/// A completed DocuSign request on an Onboarding Notation or a server-verified
+/// DocuSign upload counts. A manually exported Dropbox Sign retainer counts
+/// when a lawyer records verification against its current document revision.
 pub async fn official_projects(
     pg: &PostgresDb,
     projects: &[Uuid],
@@ -29,7 +28,7 @@ pub async fn official_projects(
         .collect())
 }
 
-/// Signing methods backed by completed provider evidence, keyed by Project.
+/// Signing methods backed by completed provider evidence or verified imports, keyed by Project.
 pub async fn verified_providers(
     pg: &PostgresDb,
     projects: &[Uuid],
@@ -37,22 +36,26 @@ pub async fn verified_providers(
     crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
         .await
         .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
-    let providers: Vec<&str> = crate::signatures::SignatureProvider::ALL
-        .iter()
-        .map(crate::signatures::SignatureProvider::as_str)
-        .collect();
     let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
         "SELECT n.project_id, s.provider, s.provider_id FROM signature s
          JOIN notation n ON n.id=s.notation_id JOIN template t ON t.id=n.template_id
          WHERE n.project_id=ANY($1) AND t.kind='onboarding'
-           AND s.provider=ANY($2) AND s.state='completed' AND s.signed_at IS NOT NULL
+           AND s.provider='docusign' AND s.state='completed' AND s.signed_at IS NOT NULL
          UNION
          SELECT project_id, 'docusign', metadata->>'docusign_envelope_id' FROM asset
          WHERE project_id=ANY($1) AND kind='onboarding' AND deleted_at IS NULL
-           AND metadata->>'verified_onboarding_envelope_id'=metadata->>'docusign_envelope_id'",
+           AND metadata->>'verified_onboarding_envelope_id'=metadata->>'docusign_envelope_id'
+         UNION
+         SELECT v.project_id,v.provider,v.provider_request_id
+         FROM onboarding_signature_evidence v
+         JOIN asset a ON a.id=v.asset_id AND a.project_id=v.project_id
+         JOIN project p ON p.id=v.project_id AND p.firm_id=v.firm_id
+         WHERE v.project_id=ANY($1) AND v.provider='dropbox_sign'
+           AND a.kind='onboarding' AND a.deleted_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM asset newer
+               WHERE newer.project_id=a.project_id AND newer.slug=a.slug AND newer.id>a.id)",
     )
     .bind(projects)
-    .bind(&providers)
     .fetch_all(pg.pool())
     .await?;
     let mut methods = HashMap::<_, BTreeSet<_>>::new();
@@ -64,6 +67,107 @@ pub async fn verified_providers(
         }
     }
     Ok(methods)
+}
+
+/// A lawyer's verification of an exported, completed signing request for a
+/// previously filed Onboarding document.
+#[derive(Clone, Copy)]
+pub struct VerifiedDocument<'a> {
+    pub asset_id: Uuid,
+    pub project_id: Uuid,
+    pub firm_id: Uuid,
+    pub client_id: Uuid,
+    pub client_email: &'a str,
+    pub sha256: &'a str,
+    pub request_id: &'a str,
+    pub account_email: &'a str,
+    pub signed_on: chrono::NaiveDate,
+    pub actor: Uuid,
+}
+
+/// Write verification once for the current revision of an open Project. The
+/// unique provider request prevents the same agreement activating two Projects.
+pub async fn record_verified_document(
+    pg: &PostgresDb,
+    evidence: &VerifiedDocument<'_>,
+    dry_run: bool,
+) -> Result<bool, sqlx::Error> {
+    if !valid_dropbox_sign_request_id(evidence.request_id) {
+        return Ok(false);
+    }
+    crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
+        .await
+        .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
+    let mut tx = pg.pool().begin().await?;
+    let current = sqlx::query_scalar::<_, Uuid>(
+        "SELECT a.id FROM asset a
+         JOIN project p ON p.id=a.project_id JOIN firm f ON f.id=p.firm_id
+         JOIN person client ON client.id=$4
+         WHERE a.id=$1 AND p.id=$2 AND f.id=$3 AND client.email=$5
+           AND EXISTS (SELECT 1 FROM person_project_role r
+                       WHERE r.project_id=p.id AND r.person_id=client.id
+                         AND r.participation='client' AND r.is_client_dri)
+           AND (p.client_dri_person_id=client.id OR
+               (p.client_dri_person_id IS NULL AND NOT EXISTS (
+                   SELECT 1 FROM person_project_role other
+                   WHERE other.project_id=p.id AND other.person_id<>client.id
+                     AND other.participation='client' AND other.is_client_dri)))
+           AND a.sha256_hex=$6 AND p.status IN ('pitch','open')
+           AND a.deleted_at IS NULL AND a.kind='onboarding' AND a.slug IS NOT NULL
+           AND a.content_type='application/pdf'
+           AND (a.signing IS NULL OR (a.signing->>'method'='dropbox_sign' AND a.signing->>'signed_on'=$7::date::text))
+           AND NOT EXISTS (SELECT 1 FROM asset newer
+                           WHERE newer.project_id=p.id AND newer.slug=a.slug AND newer.id>a.id)
+         FOR SHARE OF a,p,f,client",
+    )
+    .bind(evidence.asset_id)
+    .bind(evidence.project_id)
+    .bind(evidence.firm_id)
+    .bind(evidence.client_id)
+    .bind(evidence.client_email)
+    .bind(evidence.sha256)
+    .bind(evidence.signed_on)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current.is_none() {
+        return Ok(false);
+    }
+    let written = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO onboarding_signature_evidence
+             (asset_id,project_id,firm_id,provider,provider_request_id,provider_account_email,signed_on,verified_by)
+         VALUES ($1,$2,$3,'dropbox_sign',$4,$5,$6,$7)
+         ON CONFLICT DO NOTHING
+         RETURNING asset_id",
+    )
+    .bind(evidence.asset_id)
+    .bind(evidence.project_id)
+    .bind(evidence.firm_id)
+    .bind(evidence.request_id)
+    .bind(evidence.account_email)
+    .bind(evidence.signed_on)
+    .bind(evidence.actor)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let verified = written.is_some()
+        || sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM onboarding_signature_evidence
+            WHERE asset_id=$1 AND project_id=$2 AND firm_id=$3 AND provider='dropbox_sign'
+              AND provider_request_id=$4 AND provider_account_email=$5 AND signed_on=$6)",
+        )
+        .bind(evidence.asset_id)
+        .bind(evidence.project_id)
+        .bind(evidence.firm_id)
+        .bind(evidence.request_id)
+        .bind(evidence.account_email)
+        .bind(evidence.signed_on)
+        .fetch_one(&mut *tx)
+        .await?;
+    if dry_run {
+        tx.rollback().await?;
+    } else {
+        tx.commit().await?;
+    }
+    Ok(verified)
 }
 
 /// Methods recorded on current, signed onboarding filings. These are document
@@ -102,13 +206,21 @@ pub async fn filed_signing_methods(
     Ok(methods)
 }
 
-/// Whether a provider's request id can stand as execution evidence. DocuSign envelope ids are
-/// non-nil UUIDs. Another provider's id need only be present.
+/// The document ID printed on a Dropbox Sign audit trail.
+#[must_use]
+pub fn valid_dropbox_sign_request_id(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// Whether a provider's request ID has the shape required for execution evidence.
 fn evidence_id_is_valid(provider: &str, id: &str) -> bool {
-    if provider == "docusign" {
-        Uuid::parse_str(id).is_ok_and(|id| !id.is_nil())
-    } else {
-        !id.trim().is_empty()
+    match provider {
+        "docusign" => Uuid::parse_str(id).is_ok_and(|id| !id.is_nil()),
+        "dropbox_sign" => valid_dropbox_sign_request_id(id),
+        _ => false,
     }
 }
 
@@ -117,7 +229,7 @@ mod evidence_tests {
     use super::evidence_id_is_valid;
 
     #[test]
-    fn a_docusign_id_must_be_a_real_uuid_and_another_providers_id_must_be_present() {
+    fn execution_evidence_requires_a_provider_specific_request_id() {
         assert!(evidence_id_is_valid(
             "docusign",
             "be7c549b-29fc-8c65-8185-fd527ff4e506"
@@ -127,8 +239,15 @@ mod evidence_tests {
             "docusign",
             "00000000-0000-0000-0000-000000000000"
         ));
-        assert!(evidence_id_is_valid("dropbox_sign", "c3f1a9e0d2b4"));
-        assert!(!evidence_id_is_valid("dropbox_sign", "  "));
+        assert!(evidence_id_is_valid(
+            "dropbox_sign",
+            "0123456789abcdef0123456789abcdef01234567"
+        ));
+        assert!(!evidence_id_is_valid("dropbox_sign", "c3f1a9e0d2b4"));
+        assert!(!evidence_id_is_valid(
+            "other",
+            "0123456789abcdef0123456789abcdef01234567"
+        ));
     }
 }
 

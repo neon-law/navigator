@@ -148,9 +148,9 @@ pub struct RetainerRow {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct DashboardView {
     pub total_projects: u64,
-    /// Open matters awaiting completed `DocuSign` onboarding (`MatterLifecycle` pitch).
+    /// Open matters awaiting verified onboarding (`MatterLifecycle` pitch).
     pub pitch_projects: u64,
-    /// Open matters with verified completed `DocuSign` onboarding (`MatterLifecycle` active).
+    /// Open matters with verified onboarding (`MatterLifecycle` active).
     pub active_projects: u64,
     pub closed_projects: u64,
     /// The current page of the status-filtered list.
@@ -243,7 +243,7 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     };
     // The pie splits the same three states the matter-row lifecycle pill uses.
     // Archived matters stay out of the chart; an open matter is pitch until
-    // the onboarding DocuSign envelope UUID is verified as completed.
+    // its onboarding execution is verified.
     let project_ids: Vec<_> = projects.iter().map(|project| project.id).collect();
     let pg = store::postgres::PostgresDb::application()
         .await

@@ -194,6 +194,35 @@ pointer. `navigator project gate --check` and `navigator project sync` write the
 pointer, and keep a block recorded by hand on the committed pointer while the live revision has none. No gate requires
 it, including on a `_signed` filename.
 
+### Import a completed Clio or Dropbox Sign retainer
+
+Clio and Dropbox Sign use manual export and import. Download the original completed PDF with its Dropbox Sign audit
+trail from the signed-in account. Keep the original bytes. The reviewing lawyer confirms the requesting account acted
+for the owning Firm, the Project client matches the audit trail, the PDF is the retainer for that matter, and every
+signature required by the retainer is present.
+
+File the PDF internally as `onboarding` using `navigator site document upload`. Record `--signing-method dropbox_sign`
+and the audit trail's completion date with `--signed-on`. If the same PDF is already filed under another accepted kind,
+use `navigator site document reclassify <asset-id> --project <code> --kind onboarding`. Reuse the current Asset ID to
+avoid another revision. Keep the PDF in ignored storage and commit only its Pointer.
+
+From the Project checkout, preview the verification with the Asset ID, the exact export, and the audit-trail values. The
+examples use shell variables for the Project and document details.
+
+```sh
+navigator site document verify-dropbox-sign "$asset_id" --host "$host" --project "$project" \
+  --file "$signed_pdf" --request-id "$request_id" --account-email "$requesting_account_email" \
+  --client-email "$audited_client_email" --signed-on "$signed_on"
+```
+
+After reviewing the signed retainer and audit trail, the lawyer repeats the command with `--apply`. Navigator matches
+the export hash to the filed revision, matches the supplied signer to the Project client, and records the lawyer,
+signing account, request ID, and completion date. A request can verify one document revision. A matching retry reuses
+the verification.
+
+Read back `navigator project status <code> --host <host> --json`. An open Project with verified execution reports
+`status: active`, `onboarding.status: official`, and `onboarding.execution_verified: true`.
+
 **An executed document can record its notarizations.** The optional pointer list `notarization` holds one entry per
 acknowledgment in the packet. Each entry carries `method` (`in_person` or `remote_online`), `acknowledged_on`, `state`
 (a two-letter code such as `NV`), `county`, and `commission_expires`, with dates as `YYYY-MM-DD`. It never holds the

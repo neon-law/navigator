@@ -538,9 +538,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // Firm envelope read and void admit Lawyer and deny Client, Clerk, CI, and other methods: 724 + 2 = 726.
     // Firm Forgejo parity admits interactive administrators and denies lawyers, clients, and CI.
     // Receipt-backed cost posting admits lawyers and denies clients, clerks, and anonymous callers.
+    // Imported Dropbox Sign retainer verification admits lawyers and denies clerks, clients, and anonymous callers.
     assert_eq!(
         test_names.len(),
-        728,
+        729,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

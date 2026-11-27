@@ -15,6 +15,11 @@ The [full catalog](#current-integrations) below lists every external service the
 operational layers that sit *above* the env-var interface — the SOPS-encrypted `deployments/` tree (secret values),
 DNSimple (DNS) — are deliberately out of scope here: they are not code dependencies, and a fork can swap them freely.
 
+Clio and Dropbox files use manual export and import. For a [signed retainer][retainer-import], the reviewing lawyer
+records verification in Navigator against the exact filed Onboarding PDF.
+
+[retainer-import]: project-repositories.md#import-a-completed-clio-or-dropbox-sign-retainer
+
 ## Why one attachment per deployment
 
 - **No legal or financial weight in dev.** A test envelope or a draft invoice created against the sandbox account is not

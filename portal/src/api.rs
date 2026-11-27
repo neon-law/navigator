@@ -1272,6 +1272,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/projects/{id}/documents/{asset_id}/verify-dropbox-sign",
+            post(verify_dropbox_sign_door),
+        ),
+        (
+            "POST",
             "/app/api/projects/{id}/documents/{asset_id}/delete",
             post(delete_document_door),
         ),
@@ -2998,7 +3003,7 @@ async fn project_status_door(
         .map(|asset| serde_json::json!({"id": asset.id, "visibility": asset.visibility}))
         .collect::<Vec<_>>();
     let mut missing = if lifecycle == store::projects::MatterLifecycle::NeedsOnboarding {
-        vec!["Verify a completed onboarding envelope in the Firm's DocuSign account.".to_string()]
+        vec!["Verify execution of the onboarding letter.".to_string()]
     } else {
         Vec::new()
     };
@@ -7275,6 +7280,49 @@ async fn verified_upload_metadata(
         ));
     }
     crate::signature_adoption::validate(&envelope)?;
+    if let Some(signature) = store::signatures::by_provider(
+        db,
+        store::signatures::SignatureProvider::DocuSign,
+        &id.to_string(),
+    )
+    .await
+    .map_err(internal)?
+    {
+        let linked = store::notations::find_by_id(db, signature.notation_id)
+            .await?
+            .filter(|notation| notation.project_id == project_id);
+        let template = match linked {
+            Some(notation) => store::templates::find_by_id(db, notation.template_id)
+                .await
+                .map_err(internal)?,
+            None => None,
+        };
+        if !template.is_some_and(|template| template.kind.as_deref() == Some("onboarding")) {
+            return Err(ApiError::EnvelopeAdoption(
+                "This DocuSign envelope belongs to a different Project or document.",
+            ));
+        }
+    } else if let Some(provider) = scoped.as_ref() {
+        let firm = store::projects::find_by_id(db, project_id)
+            .await
+            .map_err(internal)?
+            .and_then(|project| project.firm_id)
+            .ok_or(ApiError::NotFound)?;
+        let (fields, names) = provider
+            .envelope_project_hints(id)
+            .await
+            .map_err(internal)?;
+        let matched =
+            crate::docusign_completion::identify_project(db, firm, &envelope, &fields, &names)
+                .await
+                .map_err(internal)?;
+        if !matched.is_ok_and(|project| project.id == project_id) {
+            return Err(ApiError::EnvelopeAdoption(
+                "The completed DocuSign envelope could not be matched to this Project.",
+            ));
+        }
+    }
+
     let fields = metadata
         .get_or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
@@ -10295,6 +10343,116 @@ async fn reclassify_document_door(
         .into_response()),
         Err(error) => reclassify_accepted_kind_response(error),
     }
+}
+
+#[derive(Deserialize)]
+struct VerifyDropboxSignRequest {
+    request_id: String,
+    sha256: String,
+    account_email: String,
+    client_email: String,
+    signed_on: chrono::NaiveDate,
+    #[serde(default)]
+    apply: bool,
+}
+
+async fn verify_dropbox_sign_door(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path((project_id, asset_id)): Path<(Uuid, Uuid)>,
+    JsonOrForm(input): JsonOrForm<VerifyDropboxSignRequest>,
+) -> Result<Response, ApiError> {
+    let db = &state.application_store;
+    if !participates_as_firm(&state, &lawyer, project_id).await {
+        return Err(ApiError::NotFound);
+    }
+    let actor = lawyer.0.person_id.ok_or(ApiError::NotFound)?;
+    let asset = store::assets::find_by_id(db, asset_id)
+        .await
+        .map_err(ApiError::Asset)?
+        .filter(|asset| asset.project_id == Some(project_id) && asset.deleted_at.is_none())
+        .ok_or(ApiError::NotFound)?;
+    if asset.kind.as_deref() != Some("onboarding") || asset.content_type != "application/pdf" {
+        return Err(ApiError::EnvelopeAdoption(
+            "File the signed PDF as Onboarding before verification.",
+        ));
+    }
+    if !store::onboarding::valid_dropbox_sign_request_id(&input.request_id) {
+        return Ok(bad_request(
+            "invalid_request_id",
+            "Use the 40-character lowercase hexadecimal Dropbox Sign request ID.",
+        ));
+    }
+    if input.sha256 != asset.sha256_hex {
+        return Ok(conflict(
+            "document_hash_mismatch",
+            "The selected revision does not match the SHA-256 of the reviewed export.",
+        ));
+    }
+    if input.signed_on > chrono::Utc::now().date_naive() {
+        return Ok(bad_request(
+            "invalid_signed_on",
+            "Use the completion date shown on the audit trail.",
+        ));
+    }
+    let account_email = input.account_email.trim();
+    if !account_email
+        .split_once('@')
+        .is_some_and(|(local, domain)| {
+            !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+        })
+        || account_email.chars().any(char::is_whitespace)
+    {
+        return Ok(bad_request(
+            "invalid_account_email",
+            "Use the requesting Firm account email from the audit trail.",
+        ));
+    }
+    let project = store::projects::find_by_id(db, project_id)
+        .await
+        .map_err(crate::signature_adoption::internal)?
+        .ok_or(ApiError::NotFound)?;
+    let firm_id = project.firm_id.ok_or(ApiError::EnvelopeAdoption(
+        "The Project has no owning Firm.",
+    ))?;
+    let participants = store::projects::participations_for_project(db, project_id)
+        .await
+        .map_err(crate::signature_adoption::internal)?;
+    let client_id = project_client_dri(project.client_dri_person_id, &participants).ok_or(
+        ApiError::EnvelopeAdoption(
+            "Designate the Project's client before verifying the signed retainer.",
+        ),
+    )?;
+    let client = store::persons::find_by_id(db, client_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if !client.email.eq_ignore_ascii_case(input.client_email.trim()) {
+        return Err(ApiError::EnvelopeAdoption(
+            "The audited signer email must match the Project's client.",
+        ));
+    }
+    let pg = store::postgres::PostgresDb::application()
+        .await
+        .map_err(crate::signature_adoption::internal)?;
+    let evidence = store::onboarding::VerifiedDocument {
+        asset_id,
+        project_id,
+        firm_id,
+        client_id,
+        client_email: &client.email,
+        sha256: &input.sha256,
+        request_id: &input.request_id,
+        account_email: &account_email.to_ascii_lowercase(),
+        signed_on: input.signed_on,
+        actor,
+    };
+    if !store::onboarding::record_verified_document(&pg, &evidence, !input.apply)
+        .await
+        .map_err(crate::signature_adoption::internal)?
+    {
+        return Ok(conflict("verification_conflict", "The Project is closed, the revision or its signing details changed, or this request is already recorded."));
+    }
+    Ok(Json(serde_json::json!({ "asset_id": asset_id, "signed_on": input.signed_on, "applied": input.apply })).into_response())
 }
 
 /// Request body for `POST .../documents/{asset_id}/delete`.
