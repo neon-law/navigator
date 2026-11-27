@@ -2208,13 +2208,6 @@ impl ShipConfig {
     pub fn web_image(&self, tag: &str) -> String {
         format!("{}/{}:{tag}", self.registry(), self.web_image_name)
     }
-
-    /// Published `navigator-workflows-service` image URL at the
-    /// `YY.M.D` `tag`.
-    #[must_use]
-    pub fn workflows_image(&self, tag: &str) -> String {
-        format!("{}/navigator-workflows-service:{tag}", self.registry())
-    }
 }
 
 /// The GKE context naming convention `gcloud container clusters
@@ -9075,10 +9068,6 @@ mod tests {
         assert_eq!(
             cfg.web_image("26.6.23"),
             "ghcr.io/example/navigator/neon-server:26.6.23"
-        );
-        assert_eq!(
-            cfg.workflows_image("26.6.23"),
-            "ghcr.io/example/navigator/navigator-workflows-service:26.6.23"
         );
     }
 
