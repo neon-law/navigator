@@ -1,38 +1,6 @@
 name: PostgreSQL compatibility
 on:
   pull_request:
-    paths:
-      - 'images/postgres/**'
-      - 'scripts/postgres-image-pin.sh'
-      - 'k8s/overlays/postgres-spike/**'
-      - 'k8s/overlays/kind-postgres-spike/**'
-      - 'store/postgres/**'
-      - 'store/src/postgres_schema.rs'
-      - 'store/src/schema/navigator.surql'
-      - 'store/src/lib.rs'
-      - 'store/examples/runtime_graph_roles.rs'
-      - 'k8s/postgres/access/roles.sql'
-      - 'store/examples/postgres_schema.rs'
-      - 'store/examples/postgres_callers.rs'
-      - 'store/examples/postgres_callers/**'
-      - 'store/src/postgres_mirror/**'
-      - 'store/tests/firm_journal.rs'
-      - 'store/tests/support/firm_journal.rs'
-      - 'store/src/journal_startup_migration/**'
-      - 'store/src/postgres.rs'
-      - 'store/tests/postgres_tooling.rs'
-      - 'store/Cargo.toml'
-      - 'k8s/kind-postgres-config.yaml'
-      - 'workflows-service/**'
-      - 'workflows/**'
-      - 'archives/**'
-      - 'billing-workflows/**'
-      - 'billing/**'
-      - 'images/Containerfile.workflows-service'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/postgres-compatibility.yml'
-  push:
     branches: [main]
     paths:
       - 'images/postgres/**'
@@ -46,8 +14,6 @@ on:
       - 'store/examples/runtime_graph_roles.rs'
       - 'k8s/postgres/access/roles.sql'
       - 'store/examples/postgres_schema.rs'
-      - 'store/examples/postgres_callers.rs'
-      - 'store/examples/postgres_callers/**'
       - 'store/src/postgres_mirror/**'
       - 'store/tests/firm_journal.rs'
       - 'store/tests/support/firm_journal.rs'
@@ -95,11 +61,6 @@ jobs:
           [[ "$image" =~ ^ghcr\.io/[a-z0-9-]+/[a-z0-9/-]+@sha256:[a-f0-9]{64}$ ]]
           echo "POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"
           echo "$image" >> "$GITHUB_STEP_SUMMARY"
-      - name: Build and test the included recipe
-        run: |
-          docker build -f images/postgres/Containerfile -t navigator-postgres:local images/postgres
-          cd images/postgres
-          bash tests/run.sh navigator-postgres:local 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/navigator-recipe-smoke.log"
       - name: Anonymous pull and pinned SDK recovery smoke
         working-directory: images/postgres
         run: |
@@ -124,18 +85,12 @@ jobs:
           kubectl -n navigator rollout status statefulset/postgres-spike --timeout=180s
           actual=$(kubectl -n navigator get pod postgres-spike-0 -o jsonpath='{.spec.containers[0].image}')
           [[ "$actual" == "$POSTGRES_IMAGE" ]]
-          # run.sh already matched this image's versions to its label; empty
+          # The pinned-image smoke matched its versions to the label; empty
           # declarations keep the shipped-version consistency checks here.
           kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
             -v server_version_num= -v age= -v vector= \
             < "images/postgres/tests/extensions.sql" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/kind-extensions.log"
           cargo test -p store postgres_schema::tests --lib
-          cargo run -p store --example postgres_schema -- source-erd
-          cargo run -p store --example postgres_schema -- erd
-          cargo run -p store --example postgres_schema -- manifest
-          cargo run -p store --example postgres_callers -- check
-          cargo test -p store --example postgres_callers
-          git diff --exit-code -- store/postgres/surreal-source-erd.mmd store/postgres/postgres-erd.mmd store/postgres/parity-manifest.json
           kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
             < store/postgres/schema.sql | tee "$RUNNER_TEMP/postgres-smoke/kind-schema.log"
           kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \

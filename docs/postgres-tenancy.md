@@ -34,5 +34,5 @@ Project participation.
 
 The complete per-table scope matrix is [ownership matrix](../store/postgres/ownership.json). It names every source
 table's ownership path, migration slice and required parity scenario. Fields missing from the source, including Firm
-ownership on accounting or graph records, are explicit backfill requirements. The inventory gate rejects both
-unclassified source tables and obsolete matrix entries.
+ownership on accounting or graph records, are explicit backfill requirements. Schema tests reject unclassified source
+tables and obsolete matrix entries.

@@ -3,7 +3,8 @@
 The compatibility workflow uses the same immutable PostgreSQL image as the KIND overlay. The matrix is PostgreSQL 16.16,
 Apache AGE 1.6.0, pgvector 0.8.7, SQLx 0.9.0, and the native DBOS 0.6.0 synthetic test application in
 [`images/postgres/tests/dbos`](../images/postgres/tests/dbos). The image is built and published weekly from
-[`images/postgres`](../images/postgres/README.md).
+[`images/postgres`](../images/postgres/README.md). The image workflow tests candidate builds on amd64 and arm64. The
+compatibility workflow tests the pinned digest and recovery on pull requests to `main` and by manual dispatch.
 
 | Boundary | Evidence |
 | --- | --- |
