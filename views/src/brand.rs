@@ -3133,13 +3133,7 @@ mod tests {
     #[test]
     fn the_neon_nav_links_its_pages() {
         let nav: Vec<(&str, &str)> = FIRM_BRAND.nav.iter().map(|n| (n.label, n.href)).collect();
-        assert_eq!(
-            nav,
-            [
-                ("Notations", "/notations"),
-                ("Lawyers", "/lawyers"),
-            ]
-        );
+        assert_eq!(nav, [("Notations", "/notations"), ("Lawyers", "/lawyers"),]);
     }
 
     /// How many public destinations every brand's footer row links.

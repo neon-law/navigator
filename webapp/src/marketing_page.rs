@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::components::pricing::{DayRateBadge, PricingCard, PricingSection};
 use crate::components::{
-    is_external_href, BillMarkGlyph, ExternalLink, PlainCodeBlock, PlatformMark, PlatformMarkGlyph, PracticeMark,
-    PracticeMarkGlyph, PublicShell, SocialMeta, StatEntry, StatGrid, TestimonialCard,
+    is_external_href, BillMarkGlyph, ExternalLink, PlainCodeBlock, PlatformMark, PlatformMarkGlyph,
+    PracticeMark, PracticeMarkGlyph, PublicShell, SocialMeta, StatEntry, StatGrid, TestimonialCard,
     TestimonialSection,
 };
 use crate::lead_capture::{LeadCaptureContext, LeadCaptureCopy, LeadCaptureForm};
