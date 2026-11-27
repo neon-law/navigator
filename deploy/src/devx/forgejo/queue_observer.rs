@@ -7,7 +7,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use serde::Deserialize;
 use telemetry::forgejo_queue::{QueueMetrics, Snapshot};
 
-use super::{controller::Forgejo, runner::RunnerApi};
+use super::{controller::Forgejo, job_receipts::JobReceipts, runner::RunnerApi};
 
 const INTERVAL: Duration = Duration::from_secs(20);
 const PAGE_SIZE: usize = 20;
@@ -99,6 +99,7 @@ pub(in crate::devx) fn run(url: &str, repository: &str) -> Result<()> {
     runtime.block_on(async {
         let expected_id = forgejo.private_repository_id(repository).await?;
         let metrics = QueueMetrics::new(repository);
+        let mut receipts = JobReceipts::new(Utc::now());
         let mut interval = tokio::time::interval(INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         tokio::select! {
@@ -106,14 +107,18 @@ pub(in crate::devx) fn run(url: &str, repository: &str) -> Result<()> {
             () = async {
                 loop {
                     interval.tick().await;
-                    let snapshot = match read_snapshot(&forgejo, repository, expected_id, Utc::now()).await {
-                        Ok(snapshot) => snapshot,
+                    match read_snapshot(&forgejo, repository, expected_id, Utc::now()).await {
+                        Ok(snapshot) => {
+                            metrics.replace(snapshot);
+                            if let Err(error) = receipts.observe(&forgejo, repository).await {
+                                tracing::warn!(target: "forgejo", event = "forgejo.task.read_failed", error = %error, "Forgejo job receipt read failed");
+                            }
+                        }
                         Err(error) => {
                             tracing::warn!(target: "forgejo", event = "forgejo.queue.read_failed", error = %error, "Forgejo queue observation failed");
-                            Snapshot::default()
+                            metrics.replace(Snapshot::default());
                         }
-                    };
-                    metrics.replace(snapshot);
+                    }
                 }
             } => Ok(()),
         }

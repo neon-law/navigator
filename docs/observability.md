@@ -199,7 +199,10 @@ can contain source content and stays in Forgejo.
 
 The staging queue observer publishes `navigator.forgejo.queue.waiting_seconds` and
 `navigator.forgejo.queue.recent_failure` for the synthetic repository. These gauges carry the run number so alerts can
-link to the run during a controller outage. Each poll replaces the set of waiting runs and recent main failures.
+link to the run during a controller outage. Each poll replaces the set of waiting runs and recent main failures. The
+observer emits a `forgejo.task.finished` record with the repository, run number, numeric task ID, job category, and
+outcome. Search for that event with `job=gate` and `outcome=failure` to find a failed gate without copying its step
+output.
 
 The collector also scrapes Forgejo's `/metrics` (`prometheus/forgejo`) with the bearer token in
 `navigator-forgejo-metrics`. These are installation-wide gauges only: per-repository and per-label series are off in
