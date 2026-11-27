@@ -4,8 +4,8 @@ This page describes what one environment is made of. Which environments exist, w
 single image serves the brand is mapped in [`environments`](environments.md).
 
 The Neon Law Navigator production deployment runs on **GKE Autopilot** with every supporting service managed by Google
-or Restate. The daily operator workload is reviewing dependency PRs and glancing at dashboards; no node patching, no DB
-failover drills, no Helm chart babysitting.
+or a separate workflow service. The daily operator workload is reviewing dependency PRs and glancing at dashboards; no
+node patching, no DB failover drills, no Helm chart babysitting.
 
 ## Architecture at a glance
 
@@ -22,8 +22,8 @@ internet
 ┌───────────────────────────────────┐
 │  GKE Autopilot                    │ ← Workload Identity for GCP
 │  ┌─────────────────────────────┐  │
-│  │ navigator-web (embedded Rego)│──┼──→ SurrealDB (PSC)
-│  │ workflows-service           │──┼──→  Restate Cloud
+│  │ navigator-web (Rego + DBOS)  │  │
+│  │ PostgreSQL                  │  │
 │  └─────────────────────────────┘  │──→  GCS (object storage)
 └───────────────────────────────────┘   ↑
    ▲                                    │
@@ -44,10 +44,10 @@ Deployment decisions are summarized here and in [`cloud-operations.md`](cloud-op
 | Compute | GKE Autopilot | (cluster, no manifest) |
 | Edge LB | Global External ALB (legacy GKE Ingress) | `examples/deploy/k8s/gke/ingress/ingress.yaml` |
 | TLS | Google-managed certificates, one per hostname family | `examples/deploy/k8s/gke/ingress/` |
-| Store | Hosted SurrealDB | (out-of-cluster; PSC endpoint) |
+| Store | PostgreSQL StatefulSet | `k8s/postgres/` |
 | Object storage | GCS | (out-of-cluster; `-assets`, `-documents`, `-exports`, `-logs` buckets per deployment) |
 | OIDC | Identity Platform | (out-of-cluster; issuer URL) |
-| Workflows | Restate Cloud | (out-of-cluster; bearer-token auth) |
+| Workflows | DBOS inside `navigator-web` | Private ingress authenticated with the deployment token |
 | Per-Project git repos | Per-pod `emptyDir` scratch | `k8s/base/web/web.yaml` |
 | Secrets | Secret Manager + CSI | `examples/deploy/k8s/gke/secrets/` |
 | Image registry | Artifact Registry (`<registry-project>`) | `examples/deploy/k8s/gke/patches/web-image.yaml` |
@@ -109,18 +109,14 @@ unreachable over HTTPS for roughly half an hour between the DNS change and the e
 
 ## Data and access boundary
 
-The public edge reaches three service Deployments:
+The public edge reaches `navigator-web`, which serves the portal, Navigator MCP/API routes, and matter views. The DBOS
+executor runs in the same pods. Its authenticated ingress stays inside the deployment namespace.
 
-- `navigator-web` serves the portal, Navigator MCP/API routes, and client-facing matter views.
-- `workflows-service` hosts the Restate durable worker behind the public `workflows` host, which Restate Cloud dials
-  into to invoke a registered service; `www` remains behind the tailnet perimeter.
-
-The storage buckets sit behind those services. `NAVIGATOR_ASSETS_BUCKET` is the only public bucket.
+The storage buckets sit behind the application. `NAVIGATOR_ASSETS_BUCKET` is the only public bucket.
 `NAVIGATOR_DOCUMENTS_BUCKET` is private and holds content-addressed client documents through `cloud::StorageService`;
 clients never receive bucket IAM, object keys, or raw GCS URLs. A client sees a file only when `web` resolves their
-session to a `persons` row and finds a matching `person_project_roles` row for the Project. `NAVIGATOR_EXPORTS_BUCKET`
-is the private nightly Parquet/Iceberg lane consumed as `NAVIGATOR_STORAGE_BUCKET` by `workflows-service`;
-`NAVIGATOR_LOGS_BUCKET` is the Nearline audit-log archive.
+session to a `person` row and finds a matching `person_project_roles` row for the Project. `NAVIGATOR_EXPORTS_BUCKET`
+holds private exports; `NAVIGATOR_LOGS_BUCKET` is the Nearline audit-log archive.
 
 The `navigator-web` backend attaches a GKE `BackendConfig` that injects `X-Navigator-Client-Region:{client_region}`
 before requests reach the pod. The web app uses that bounded, edge-derived geography bucket for visitor analytics.
@@ -249,16 +245,8 @@ the cluster. Firm-specific values that are *secrets or operator toggles* (SendGr
 DKIM enforcement) stay in the `navigator-web-secrets` K8s Secret and arrive via `envFrom`. The base's inline-env
 `$patch: replace` does not touch that Secret reference, so a full apply preserves them.
 
-A key that Secret projects must reach a pod **from the Secret**, never as an inline `value`. The scheduled triggers
-under `examples/deploy/k8s/exports/` mount no CSI volume, so each reads `RESTATE_INGRESS_URL` and `RESTATE_AUTH_TOKEN`
-through an explicit `valueFrom.secretKeyRef`, marked `optional` because a deployment that does not project the key must
-get a trigger that exits naming it rather than pods stuck in `CreateContainerConfigError`. Writing either inline breaks
-far more than the trigger: a container's `env` list merges by entry name, so a literal in the rendered tree merges with
-the cluster's `valueFrom` into one entry carrying both, the API server rejects the whole object, and `kubectl diff -k`
-aborts before comparing anything — blocking **every** manifest change to that deployment, not just the trigger's. That
-is what made version rolls image-only for two releases. `triggers_source_every_projected_key_from_the_deployment_secret`
-in `deploy/src/devx/ship.rs` fails the build on the next one, and the render's own `YOUR_*` sweep fails on a placeholder
-no substitution resolves.
+The scheduled triggers under `examples/deploy/k8s/exports/` read `NAVIGATOR_DBOS_INGRESS_TOKEN` from the deployment
+Secret through `valueFrom.secretKeyRef`. The manifest checks verify the Secret name and key for each trigger.
 
 A healthy cluster's `kubectl diff -k` against the freshly rendered tree is a **near no-op** — that is the acceptance bar
 for source == cluster. `--dry-run` validates the local row and parses the rendered manifest source without contacting
@@ -282,20 +270,9 @@ These are operator-managed resources you maintain via gcloud / console, not via 
 
 1. **GCS buckets and runtime identity** — setup creates the explicitly named assets, documents, exports, and logs
    buckets plus the deployment GSA and its Workload Identity bindings. Only the assets bucket receives a public binding.
-2. **SurrealDB instance** — provisioned at the store provider, not by this repo. Its endpoint is a plaintext coordinate
-   in `deployments/<name>/config.toml`, and its root credentials go into that deployment's `secrets.enc.yaml`, which
-   `ops secrets apply` writes into that deployment's Secret Manager.
-3. **Identity Platform tenant** — configured via the console. OAuth client secret goes into Secret Manager as
-   `navigator-oauth-client-secret`.
-4. **Restate Cloud tenant** — register at <https://cloud.restate.dev>. The tenant URL and bearer token go into Secret
-   Manager as `navigator-restate-broker-url` (consumed as `RESTATE_BROKER_URL`) and `navigator-restate-auth-token`
-   (consumed as `RESTATE_AUTH_TOKEN`). Store the public request-signing key as `RESTATE_IDENTITY_KEY` in
-   `deployments/<name>/config.toml`; `ops ship` renders it inline into both workloads. It is verification material, not
-   a Secret.
-5. **DNS A records** for `www.<navigator-domain>` and `workflows.<navigator-domain>` → the static IP reserved as
-   `navigator-gateway-ip`. GitHub posts its webhooks to the `workflows` host at `/webhooks/github/{secret}`, the same
-   host Restate Cloud uses.
-6. **Cloud Logging → GCS sink** — a log router sink that archives `web` container logs to `gs://YOUR_PROJECT_ID-logs`
+2. **Identity Platform tenant** — configured via the console. The OAuth client secret goes into Secret Manager.
+3. **DNS A records** for the deployment's public hostnames point to the Gateway's reserved static IP.
+4. **Cloud Logging → GCS sink** — a log router sink that archives `web` container logs to `gs://YOUR_PROJECT_ID-logs`
    for long-horizon audit. Provisioned via `gcloud` (see "Long-term log archive" below), not Config Sync.
 
 Kubernetes manifests flow through the deployment-rendered `hudson ops ship` path. Managed services remain owned by the
@@ -342,11 +319,10 @@ gcloud logging sinks describe "$SINK_NAME" --project="$NAVIGATOR_GCP_PROJECT_ID"
 gcloud storage ls "gs://${NAVIGATOR_LOGS_BUCKET}/**"
 ```
 
-This is operator-managed state, like the SurrealDB instance and Identity Platform tenant above — it is **not** rebuilt
-by `kubectl apply -k`. The provisioner guarantees the bucket's region, private uniform access, NEARLINE storage class,
-and a 180-day expiry; see [retention](cloud-operations.md#retention-logs-and-backups). If you later get Config Connector
-reconciling, the `LoggingLogSink` CR can replace these commands; until then this section is the source of truth for the
-sink's existence.
+This is operator-managed state, like the Identity Platform tenant above — it is **not** rebuilt by `kubectl apply -k`.
+The provisioner guarantees the bucket's region, private uniform access, NEARLINE storage class, and a 180-day expiry;
+see [retention](cloud-operations.md#retention-logs-and-backups). If you later get Config Connector reconciling, the
+`LoggingLogSink` CR can replace these commands; until then this section is the source of truth for the sink's existence.
 
 ## Verifying a deploy
 

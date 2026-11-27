@@ -19,7 +19,7 @@
 //!   embedded GKE tree with the deployer's `NAVIGATOR_*` values **and the
 //!   tag** → confirm the prod Secret satisfies the new binary's boot
 //!   invariants against that rendered tree → `kubectl apply -k` it → wait
-//!   out the rollouts → re-register the worker with Restate → verify the
+//!   out the rollouts → verify the
 //!   public asset origin. Every service deployment lands on the **same** tag —
 //!   never a version skew.
 //!
@@ -3261,7 +3261,7 @@ fn print_offline_ship_plan(
     for operation in operations {
         eprintln!("  would: {operation}");
     }
-    eprintln!("  not checked: live authentication, cluster context, IAM, manifest drift, live Secret and service objects, asset availability, image availability, Restate registration, and public endpoints");
+    eprintln!("  not checked: live authentication, cluster context, IAM, manifest drift, live Secret and service objects, asset availability, image availability, and public endpoints");
     eprintln!("  no cloud or cluster commands were run; execute the live ship command to perform those checks and apply changes");
 }
 
@@ -3394,8 +3394,7 @@ fn post_roll_asset_refs(root: &Path) -> PostRollAssetRefs {
     }
 }
 
-/// Finish a lane that changed the deployed image: Restate must see the new
-/// handler list first, then the public origin must prove every asset the
+/// Finish a lane that changed the deployed image by checking every asset the
 /// rolled binary can request. Both verifiers are injected so this ordering,
 /// the choice between them, and their failure boundary stay unit-testable
 /// without a cluster or network: `verify` walks a source checkout's
@@ -3487,21 +3486,8 @@ fn restart_only_steps(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
 
 /// Move every navigator image to `tag` and change nothing else.
 ///
-/// FOUR STEPS, NOT ONE. "Set the image and wait" is the obvious reading and
-/// it is wrong twice over:
-///
-///   * The seven scheduled-job `CronJob`s carry their own image. Skip them and
-///     the web pods run the new version while every scheduled job keeps running
-///     the old one — a skew nothing reports, because `CronJob`s do not roll.
-///   * Restate resolves a worker's handler list at registration. A new
-///     `workflows-service` image that Restate has not rediscovered leaves a
-///     stale list, and `reregister`'s own error says webhook submissions then
-///     fail SILENTLY. That is a live wrong-behaviour bug, not a cosmetic gap.
-///
-/// What it deliberately does NOT do is the expensive half of a full roll: the
-/// web GSA's self-signing IAM re-assert, and `apply -k` over the whole
-/// rendered tree. Both are idempotent no-ops on a routine version bump, and
-/// both are what make the full roll's credential large.
+/// Re-pin the scheduled jobs along with the web image so both use the same
+/// release. Manifest reconciliation and IAM setup belong to the full roll.
 fn image_only(
     cfg: &ShipConfig,
     deployment: &super::deployments::Deployment,
@@ -3521,10 +3507,8 @@ fn image_only(
 
 /// The narrow lane past its preflight, split from [`image_only`] for the same
 /// reason [`restart_only_steps`] is: under `--dry-run` every step below prints
-/// its command instead of running it, so a unit test walks the whole four-step
-/// sequence — context cross-check, drift refusal, the image writes, the
-/// `CronJob` re-pin, the rollout wait, the Restate re-register — with no
-/// cluster, no `kubectl`, and no `gcloud`.
+/// its command instead of running it, so a unit test walks the context cross-check, drift refusal, image writes,
+/// scheduled-job re-pin, and rollout wait without a running cluster.
 fn image_only_steps(
     cfg: &ShipConfig,
     deployment: &super::deployments::Deployment,
@@ -3652,7 +3636,7 @@ fn drift_verdict(code: Option<i32>) -> Result<()> {
 /// CI built and published the images; this only updates the cluster:
 /// resolve the tag → confirm the Secret satisfies the new binary's boot
 /// invariants → pin service deployments AND every trigger `CronJob` to
-/// that tag → wait → re-register the worker with Restate → smoke-check.
+/// that tag → wait → smoke-check.
 /// No build, no push, no skew — every navigator image in sync at one tag.
 fn roll(
     cfg: &ShipConfig,
@@ -11530,7 +11514,7 @@ spec:
     fn an_image_only_dry_run_walks_every_step_without_a_cluster() {
         // The whole lane under `--dry-run`: the context cross-check, the drift
         // refusal, both image writes, the `CronJob` re-pin, the rollout wait,
-        // and the Restate re-register. Each one prints its command instead of
+        // and the public verification. Each one prints its command instead of
         // running it, so this proves the sequence is complete and
         // side-effect-free — a step that reached for kubectl, gcloud, the
         // deployment tree, or the network would fail right here.

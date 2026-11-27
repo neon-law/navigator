@@ -1,7 +1,8 @@
 # Agent workflows
 
 Codebase work has five actions: **create an issue**, **triage an issue**, **create a PR**, **address a PR comment**, or
-**address a failed GitHub Action**. GitOps, validation, Restate authoring, and council review support those actions.
+**address a failed GitHub Action**. GitOps, validation, DBOS workflow authoring, and council review support those
+actions.
 
 Every action starts from the same evidence: [`glossary/`](glossary/README.md), the narrowest docs from
 [`index.md`](index.md), the current source and tests, and the complete issue or PR conversation. Choose the smallest
@@ -243,9 +244,8 @@ cargo run -p hudson -- dev worktree-env up --branch pr-<N>
 ```
 
 Continue in the printed checkout. Source its `.devx/env`, boot `web` as in
-[`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md), and restart the compiled process after a fix. Host `web`
-and the in-cluster worker share that worktree's database and Restate journal; use `--demo` only when published images
-are the subject.
+[`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md), and restart the compiled process after a fix. DBOS runs
+inside `web` and uses the worktree's PostgreSQL database. Use `--demo` only when published images are the subject.
 
 ### Read the requested thread in context
 

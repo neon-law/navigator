@@ -4,7 +4,7 @@ Navigator uses one image hub, two runtime Google Cloud projects, and the deploym
 live today: `<deployment>` and the production deployment. A deployment—not a project—is the isolation unit: it owns one
 store database, four GCS buckets, one GKE Autopilot cluster, one Kubernetes namespace, one runtime Google service
 account, one delegated Workspace service-account credential, one `deployments/<name>/` config, one Google Workspace
-Drive root, one Restate environment, and one public hostname. A deployment exists because its directory exists.
+Drive root, one DBOS executor configuration, and one public hostname. A deployment exists because its directory exists.
 
 The tree lives beneath an operator-managed root outside this checkout. Set `NAVIGATOR_DEPLOYMENTS_DIR` before running
 commands; see [`deployment-secrets`](deployment-secrets.md).
@@ -59,10 +59,9 @@ holds every prerelease at staging; see [`release-automation.md`](release-automat
 by hand with [`manual-roll.md`](manual-roll.md).
 
 Its substrate is provisioned in its own project under its own prefix: the Autopilot cluster and the
-`<prefix>-gateway-ip` global address. The store is a hosted SurrealDB instance provisioned at the store provider, not by
-this repository. The gateway address is a deployment coordinate, not a fact about Navigator: it lives in the
-deployment's `config.toml` as `NAVIGATOR_GATEWAY_IP`, and `gcloud compute addresses describe <prefix>-gateway-ip
---global --format='value(address)'` prints the current value.
+`<prefix>-gateway-ip` global address. The PostgreSQL service runs in the deployment cluster. The gateway address is a
+deployment coordinate, not a fact about Navigator: it lives in the deployment's `config.toml` as `NAVIGATOR_GATEWAY_IP`,
+and `gcloud compute addresses describe <prefix>-gateway-ip --global --format='value(address)'` prints the current value.
 
 `<deployment>` and `<deployment>` both resolve to that address and are served by this deployment's Ingress, each with
 its own `ManagedCertificate` Active, and every other registered brand host the same way — the release inventory covers
@@ -107,15 +106,15 @@ the row's Parse intake address), not the visible `To:` header or original suppor
 present blank value fails boot. There is no compiled default.
 
 `NAVIGATOR_SUMMARY_ENABLED=true` opts a row into the durable review lane. It also requires `NAVIGATOR_DEPLOYMENT_ID`,
-`NAVIGATOR_SUMMARY_CHANNEL_ID`, `SENDGRID_INBOUND_PUBLIC_KEY`, the row's HTTPS `RESTATE_BROKER_URL`, and
-`NAVIGATOR_GCP_PROJECT_ID`; web and `workflows-service` must receive the same gate and coordinates. The GCP project must
-have Vertex AI enabled and the runtime service account must have `roles/aiplatform.user`. Model, location, and
-input/output limits have shared defaults and can be overridden per row. `NAVIGATOR_SUMMARY_FIRM_ID` is an optional
-override; unset, web files each receipt under the Firm wearing the `neon` brand. `NAVIGATOR_SUMMARY_PROVIDER_ACCOUNT`
-defaults to `sendgrid`. `hudson ops deployments` refuses a row that enables the lane without every key it boots with.
-Gemini is the only summary provider. Claude was removed on 2026-09-24 because Vertex Model Garden granted the deployment
-projects no request quota for `anthropic-claude-haiku-4-5` and refused the self-serve increase for lack of usage
-history; restoring it means a quota grant first, then the adapter from git history.
+`NAVIGATOR_SUMMARY_CHANNEL_ID`, `SENDGRID_INBOUND_PUBLIC_KEY`, and `NAVIGATOR_GCP_PROJECT_ID`. The DBOS executor runs
+inside `web`. The GCP project must have Vertex AI enabled and the runtime service account must have
+`roles/aiplatform.user`. Model, location, and input/output limits have shared defaults and can be overridden per row.
+`NAVIGATOR_SUMMARY_FIRM_ID` is an optional override; unset, web files each receipt under the Firm wearing the `neon`
+brand. `NAVIGATOR_SUMMARY_PROVIDER_ACCOUNT` defaults to `sendgrid`. `hudson ops deployments` refuses a row that enables
+the lane without every key it boots with. Gemini is the only summary provider. Claude was removed on 2026-09-24 because
+Vertex Model Garden granted the deployment projects no request quota for `anthropic-claude-haiku-4-5` and refused the
+self-serve increase for lack of usage history; restoring it means a quota grant first, then the adapter from git
+history.
 
 The `EmailSummary` workflow gates the model on the sender: its `check-sender` step looks up the `From:` address, or a
 text's phone number, in `person` (a phone matches ignoring punctuation and a leading US `1`). A known person gets the
@@ -127,9 +126,9 @@ Every hosted row uses `NAVIGATOR_ENVIRONMENT=production` and `NAVIGATOR_CREDENTI
 `<deployment>` remains the proving release ring through its config, namespace, data plane, and hostname—not through a
 weaker runtime profile. The same `NAVIGATOR_SIMULATED_MATTERS=true` coordinate that discloses the synthetic data plane
 also appends a final `from Staging` line to every Slack body that deployment posts (ops notices, Project-channel bot,
-and Firm-private notices). Restate jobs do not rewrite their bodies with a second staging parenthetical. Local KIND is
-`NAVIGATOR_ENVIRONMENT=dev` and does not. Set `GOOGLE_OAUTH_REQUIRED_HD=<deployment>` on both rows. This value is the
-selected Workspace login domain, not necessarily the site's public hostname.
+and Firm-private notices). DBOS jobs preserve the simulated-matter labels. Local KIND is `NAVIGATOR_ENVIRONMENT=dev` and
+does not. Set `GOOGLE_OAUTH_REQUIRED_HD=<deployment>` on both rows. This value is the selected Workspace login domain,
+not necessarily the site's public hostname.
 
 The login domain names one Workspace tenant. An identity in another organization's Workspace holds none here, which is
 why the value is the selected login domain rather than the site's public hostname.
@@ -139,20 +138,18 @@ why the value is the selected login domain rather than the site's public hostnam
 Every hosted row gets the same GKE setup; only the pod count differs, and `hudson ops ship` reads it from
 `NAVIGATOR_SIMULATED_MATTERS` in the row's `config.toml`:
 
-| `NAVIGATOR_SIMULATED_MATTERS` | `navigator-web` | `workflows-service` | PodDisruptionBudget |
-| --- | --- | --- | --- |
-| `"true"` (staging) | 1 | 1 | none |
-| `"false"` or unset (production) | 2 | 2 | `minAvailable: 1` for each |
+| `NAVIGATOR_SIMULATED_MATTERS` | `navigator-web` | PodDisruptionBudget |
+| --- | --- | --- |
+| `"true"` (staging) | 1 | none |
+| `"false"` or unset (production) | 2 | `minAvailable: 1` |
 
 Any other value stops the ship before render. A one-pod row carries no budget, because `minAvailable: 1` over one pod
-would block every node drain. `web` rolls with a surge pod (`maxSurge: 1`, `maxUnavailable: 0`) on either row. The
-worker keeps `maxSurge: 0`, so at two pods it replaces one pod at a time.
+would block every node drain. `web` rolls with a surge pod (`maxSurge: 1`, `maxUnavailable: 0`) on either row.
 
 Two pods are safe on both tiers. `web` keeps no single-writer disk: its `NAVIGATOR_GIT_REPO_ROOT` directory is per-pod
-scratch (`emptyDir`). Project repositories live on the forge, so nothing in `web` commits there. The Restate handlers in
-`workflows-service` are stateless HTTP. Each DBOS host takes its pod name as `NAVIGATOR_DBOS_EXECUTOR_ID`, and every
-schedule keys its workflow id on its slot, so a second pod joins the same scheduled run instead of starting another one.
-See [DBOS durability](dbos-durability.md#several-replicas).
+scratch (`emptyDir`). Project repositories live on the forge, so nothing in `web` commits there. Each DBOS host takes
+its pod name as `NAVIGATOR_DBOS_EXECUTOR_ID`, and every schedule keys its workflow id on its slot, so a second pod joins
+the same scheduled run instead of starting another one. See [DBOS durability](dbos-durability.md#several-replicas).
 
 ## Why the brand is the image
 
@@ -165,7 +162,7 @@ misconfigured deployment cannot serve one entity's pages under another entity's 
 each key is compiled in rather than read from config.
 
 Staging and production keep their own data planes. A reset, secret rotation, version rollback, or failed certificate in
-one row cannot cross a database, bucket, cluster, runtime principal, or Restate journal boundary. Staging proves the
+one row cannot cross a database, bucket, cluster, runtime principal, or DBOS database boundary. Staging proves the
 shared application through its sample-matter lane, while the build and route suites prove both public faces the one
 image serves.
 

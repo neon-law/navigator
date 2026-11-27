@@ -20,10 +20,6 @@ use crate::postgres::matter;
 use serde_json::json;
 
 /// What can go wrong reading or writing the audit trail.
-///
-/// A typed error rather than a bare [`surrealdb::Error`] because `portal`
-/// and `webapp` consume this module and do not depend on the SurrealDB
-/// crate — the same shape [`crate::persons::PersonError`] uses.
 #[derive(Debug, Error)]
 pub enum ExpungeRecordError {
     #[error(transparent)]

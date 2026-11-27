@@ -1,78 +1,4 @@
-//! The person directory: the [`Role`] authorization tier and every query
-//! that reads or writes a `person` row.
-//!
-//! # PostgreSQL identity authority
-//!
-//! The People facade requires PostgreSQL configuration and completed historical
-//! enrollment. Configuration, history, and database failures reach the caller.
-//! Explicit import readers retain their narrowly scoped compatibility context.
-//! Sign-in resolves against PostgreSQL: the OIDC callback looks up the
-//! row by the presenting provider's subject or by email and reads `role` from it.
-//!
-//! [`Role`] is the system-wide tier every authorization gate evaluates
-//! against. It is read from the database row at callback time, never
-//! trusted from the OIDC token: the Rauthy (or Google) id_token carries
-//! only `sub` and `email`. Authorization stays *above* the database
-//! (#1145) — the table keeps `PERMISSIONS NONE` and this module is the
-//! only thing that reads or writes it. See
-//! [`docs/access-model.md`](../../../docs/access-model.md).
-//!
-//! # Five engine facts this module is shaped around
-//!
-//! **An index cannot be defined over an expression.** `DEFINE INDEX …
-//! FIELDS string::lowercase(email)` is refused as the statement runs —
-//! the engine evaluates the expression at define time and reports
-//! `string::lowercase()` receiving `NONE`. So one email per person is
-//! enforced by the stored `email_lower` field
-//! (`VALUE string::lowercase(email)`) with a plain UNIQUE index on it.
-//! Every case-insensitive email match therefore filters that stored
-//! field rather than lowercasing `email` in the predicate, so the lookup
-//! and the constraint agree by construction.
-//!
-//! **A unique violation carries no typed detail.** It arrives as
-//! [`surrealdb::types::ErrorDetails::Internal`] with the index name in
-//! the message and nothing structured to match on, so
-//! [`crate::surreal::retry::unique_violation`] discriminates on the index
-//! name — the one part of
-//! the text the schema pins — and
-//! [`a_duplicate_email_is_reported_as_the_email_being_taken`] holds it
-//! against a real engine.
-//!
-//! **A UNIQUE index does not enforce across concurrent transactions,
-//! and reading the value first does not help.** The optimistic layer
-//! conflicts on *record* keys; index entries are not part of conflict
-//! detection, so racers writing distinct `person` ids both commit the
-//! same `email_lower`. Probing first does not close it either — a
-//! `WHERE email_lower = $v` predicate is a scan, and a scan is not
-//! tracked in the transaction's read set the way a direct record read
-//! is. So one person per mailbox is enforced by the `person_mailbox`
-//! claim table, whose record id *is* `email_lower`, taken as its own
-//! committed statement before the person row is written — see [`CLAIM`]
-//! and [`find_or_create`]. The UNIQUE index remains the backstop for a
-//! fork that is not a race.
-//!
-//! //! **`IF … THEN … ELSE … END` does not parse inside `ORDER BY`.** The
-//! authority ladder is therefore ranked in Rust via
-//! [`Role::authority_rank`] rather than written a second time in
-//! SurrealQL — see [`default_firm_dri`].
-//!
-//! **The key-value layer is optimistic, so a write can lose a race.**
-//! Two writers touching one record conflict, the loser is rolled back,
-//! and the engine reports `QueryError::TransactionConflict` — this one
-//! typed, unlike the unique violation above. Nothing was wrong with the
-//! statement, so [`writing`] re-runs it rather than letting a
-//! simultaneous save read as a database fault. How long it re-runs for is
-//! not this module's decision — [`crate::surreal::retry`] holds that
-//! policy for the whole crate, and `person` is only its most contended
-//! caller.
-//!
-//! # A link is not validated
-//!
-//! `person_project_role`, `notation`, and the rest reference a person
-//! through a `record<person>` link, and the engine accepts one naming a
-//! row that was never written. A caller that needs the person behind a
-//! link resolves it here, which is what [`find_by_id`] and
-//! [`find_by_ids`] exist for.
+//! The PostgreSQL person directory and the authorization tier read at sign-in.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -600,17 +526,6 @@ pub async fn search(
 }
 
 /// Write a new person row.
-///
-/// The record id is minted from a fresh v7 `Uuid` through
-/// [`crate::surreal::record_id`], so the key stays the native UUID
-/// spelling every cross-engine `person_id` still addresses.
-///
-/// Minting its own key is also why this takes the mailbox claim first.
-/// Two concurrent `create` calls for one mailbox collide on no shared
-/// record key, so the UNIQUE `person_email_lower` index alone admits both
-/// — the same fork [`find_or_create`] guards against, differing only in
-/// that a loser here wants the refusal rather than the winner's row. See
-/// [`CLAIM`].
 ///
 /// # Errors
 ///

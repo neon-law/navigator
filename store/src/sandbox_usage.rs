@@ -1,60 +1,5 @@
-//! The metered-credit ledger behind the Same Day Legal sandbox.
-//!
-//! A Same Day Legal subscriber's Legal Sandbox includes $5 of model usage per
-//! billing month; usage beyond that is priced à la carte. This module owns
-//! the ledger that makes that promise enforceable: one row per subscriber
-//! per billing month — the month's grant (500 cents), the running debit
-//! across completions, and the overage flag. Money is integer cents, the
-//! `billing` crate's convention; a float never enters this table.
-//!
-//! # The record id is the concurrency boundary
-//!
-//! One row per (subscriber, period) sounds like a UNIQUE index on the
-//! pair. It is not, for the reason `store/tests/person_mailbox_race.rs`
-//! demonstrated and `store::xero_invoices` re-learned: a UNIQUE index does
-//! not serialize racers that each mint their own record id, because the
-//! optimistic layer conflicts on record keys, not on index entries. The
-//! row's own record id is therefore the compound natural key
-//! `⟨<person uuid>:<period>⟩`, so a second `CREATE` for the same month
-//! collides on that key and reports a typed
-//! [`surrealdb::types::AlreadyExistsError::Record`] — which the optimistic
-//! layer does serialize.
-//!
-//! The same reasoning puts the record address directly inside the debit.
-//! A metered debit is an `UPDATE` of that one record whose `WHERE` holds
-//! the whole decision (a scan predicate would never enter the read set),
-//! so two parallel tabs of the same subscriber contend on the same record
-//! key: the optimistic layer serializes them, and each debit applies
-//! exactly once. What a read-then-write could lose — a completion charged
-//! twice, or a debit silently dropped — the single conditional statement
-//! cannot.
-//!
-//! # The crossing completion completes
-//!
-//! The Legal Sandbox's own rule: the completion that crosses zero succeeds
-//! and is billed, and the next one waits for consent. A debit is therefore
-//! refused only when the row is *already* flagged `overage`. The debit
-//! that pushes the balance negative applies in full and sets the flag;
-//! every debit after it reports [`MeterDecision::Exhausted`] until the à
-//! la carte charge is settled. Spending to exactly zero is not crossing —
-//! the next completion is the one that does.
-//!
-//! # Rollover never rewrites history
-//!
-//! A period's credit is a row of its own, created on first use of that
-//! period (or by the monthly rollover job calling [`grant`], which
-//! converges — an existing row is returned untouched, never re-granted).
-//! A closed period's row is never rewritten or deleted, so an overage row
-//! survives exactly as the overage-invoice job needs to read it: [`find`]
-//! and [`overage_rows`] are the only reads it requires.
-//!
-//! # PostgreSQL
-//!
-//! PostgreSQL holds the ledger whenever `NAVIGATOR_POSTGRES_HOST` is set
-//! ([`PostgresDb::configured`]); there `UNIQUE (person_id, period)` and one
-//! conditional `UPDATE` play the record id's part. Without a PostgreSQL host
-//! the same calls use the SurrealDB table. Rows SurrealDB still holds reach
-//! PostgreSQL through the Mirror Backfill's born-in-PostgreSQL arm.
+//! The Legal Sandbox ledger grants and debits integer cents. PostgreSQL enforces
+//! one row per Person and billing period and applies debits with a conditional update.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -129,10 +74,6 @@ pub enum MeterDecision {
 }
 
 /// Errors reading or writing the sandbox usage ledger.
-///
-/// This is deliberately not a bare [`surrealdb::Error`]: `web`, `webapp`,
-/// and `billing-workflows` consume this module without depending on the
-/// SurrealDB crate.
 #[derive(Debug, Error)]
 pub enum SandboxUsageError {
     /// A database operation failed.

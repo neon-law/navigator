@@ -180,7 +180,7 @@ jobs:
   # publish half runs in `project-publish.yml` after this gate and is not
   # known yet, so no publish outcome is sent. `continue-on-error` and the
   # required `ci` job not depending on this one keep a notice failure — a
-  # Slack outage, a deployment without a Restate ingress — from failing `cd`.
+  # Slack outage, a deployment without the optional delivery integration — from failing `cd`.
   notify:
     needs: [read-manifest, verify, documents, seeds]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.read-manifest.result == 'success'
