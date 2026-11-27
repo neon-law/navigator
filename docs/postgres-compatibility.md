@@ -24,7 +24,7 @@ dispatch. Workspace CI uses the pinned image for SQLx, migration and application
 The image pins are read from the recipe and overlay:
 
 - Base digest: `sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4`
-- Target digest: `sha256:e9e013fb71f4f6f999debedbda22f3163e80d7e99a028c47b4609a69ddb096de`
+- Target digest: `sha256:977ff28cdc30648612b50c7a25963670b867f9aa03d361db1baf45a64e01621b`
 
 Run the focused Rust tests with `NAVIGATOR_TEST_POSTGRES_PORT` set to the isolated fixture's loopback port. Build the
 test application, then run:
