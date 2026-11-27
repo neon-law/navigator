@@ -35,6 +35,53 @@ pub struct SendFlowContext<'a> {
     pub acting: Option<Uuid>,
 }
 
+/// Advance an existing draft when the Project's provider confirms dispatch.
+/// This records the send without issuing a provider write.
+pub(crate) async fn record_observed_dispatch(
+    db: &store::application_store::ApplicationStore,
+    runtime: &dyn StateMachineRuntime,
+    notation: &store::notations::Notation,
+) -> Result<(), WorkflowDriveError> {
+    use workflows::MachineKind;
+
+    let current = runtime
+        .current_state(MachineKind::Workflow, notation.id)
+        .await;
+    let next = match current.as_ref().map(StateName::prefix) {
+        Some("generate_pdf") => {
+            match crate::retainer_walk::signal_workflow(
+                runtime,
+                notation.id,
+                "pdf_persisted",
+                None,
+                None,
+            )
+            .await
+            {
+                Ok(next) => next,
+                Err(error) => {
+                    // An overlapping return or dispatch may already have advanced the workflow.
+                    runtime
+                        .current_state(MachineKind::Workflow, notation.id)
+                        .await
+                        .filter(|state| state.prefix() == "sent_for_signature")
+                        .ok_or(error)?
+                }
+            }
+        }
+        Some("sent_for_signature") => current.ok_or(
+            workflows::WorkflowRuntimeError::UnknownNotation(notation.id),
+        )?,
+        _ => return Ok(()),
+    };
+    if next.prefix() == "sent_for_signature"
+        && (notation.state == "lawyer_review" || notation.state.starts_with("generate_pdf"))
+    {
+        store::notations::reconcile_state(db, notation.id, &notation.state, next.as_str()).await?;
+    }
+    Ok(())
+}
+
 /// Dispatch a notation's rendered document for signature — the deliberate,
 /// authenticated "send" half of the pipeline, keyed off the notation's
 /// template declarations rather than any one template. Confirms the

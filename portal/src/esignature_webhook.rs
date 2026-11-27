@@ -444,6 +444,24 @@ pub(crate) async fn consume_receipt(
     // fixed conditions) has consumed this signal — the tail below is
     // what a replay re-runs.
     if signature.state == store::signatures::SignatureState::Requested {
+        if matches!(
+            terminal_state,
+            store::signatures::SignatureState::Completed
+                | store::signatures::SignatureState::Declined
+        ) {
+            let notation = store::notations::find_by_id(&state.application_store, notation_id)
+                .await
+                .map_err(|e| ConsumeFailure(format!("reading notation for dispatch: {e}")))?;
+            if let Some(notation) = notation {
+                crate::signature_flow::record_observed_dispatch(
+                    &state.application_store,
+                    state.workflow_runtime.as_ref(),
+                    &notation,
+                )
+                .await
+                .map_err(|e| ConsumeFailure(format!("recording dispatch: {e}")))?;
+            }
+        }
         let condition = if terminal_state == store::signatures::SignatureState::Completed {
             SIGNATURE_RECEIVED
         } else {

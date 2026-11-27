@@ -314,6 +314,7 @@ fn review_body(view: &IntakeReviewView) -> Element {
 /// The envelope's lifecycle state as the lawyer reads it.
 fn state_label(state: &str) -> &'static str {
     match state {
+        "draft" => "Draft: not sent",
         "requested" => "Sent — waiting for signatures.",
         "completed" => "Completed — every signer has executed the envelope.",
         "declined" => "Declined — a signer refused the envelope.",

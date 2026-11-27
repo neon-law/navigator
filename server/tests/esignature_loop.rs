@@ -22,7 +22,9 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::signature::DocuSignSignatureProvider;
+use portal::signature::{
+    DocuSignSignatureProvider, FakeSignatureProvider, SignatureProvider, SignatureRequestId,
+};
 use portal::webhook_auth::sign_hmac_sha256_b64;
 use portal::AppState;
 use store::application_store::ApplicationStore;
@@ -74,10 +76,15 @@ struct SentLoop {
     _storage_directory: tempfile::TempDir,
 }
 
-#[allow(clippy::too_many_lines)]
 async fn sent_loop() -> SentLoop {
+    signature_loop(None).await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn signature_loop(fake: Option<Arc<FakeSignatureProvider>>) -> SentLoop {
     // Exercise the real provider's draft, status read and dispatch calls.
     let docusign = MockServer::start().await;
+    let calls = |real| if fake.is_none() { real } else { 0 };
     let envelope_path = format!("/v2.1/accounts/acct-guid/envelopes/{ENVELOPE_ID}");
     let draft = serde_json::json!({
         "envelopeId": ENVELOPE_ID,
@@ -91,24 +98,24 @@ async fn sent_loop() -> SentLoop {
             r#""status":"created""#,
         ))
         .respond_with(ResponseTemplate::new(201).set_body_json(&draft))
-        .expect(1)
+        .expect(calls(1))
         .mount(&docusign)
         .await;
     Mock::given(method("GET"))
         .and(path(envelope_path.clone()))
         .respond_with(ResponseTemplate::new(200).set_body_json(draft))
-        .expect(3)
+        .expect(calls(4))
         .mount(&docusign)
         .await;
     Mock::given(method("GET"))
         .and(path(format!("{envelope_path}/recipients")))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "signers": [
-                {"recipientId": "1", "routingOrder": "1", "name": "Libra", "email": "libra@example.com"},
-                {"recipientId": "2", "routingOrder": "2", "name": "Signer", "email": "signer@example.com"},
+                {"recipientId": "1", "routingOrder": "1", "name": "Libra", "email": "libra@example.com", "status": "created"},
+                {"recipientId": "2", "routingOrder": "2", "name": "Signer", "email": "signer@example.com", "status": "created"},
             ],
         })))
-        .expect(2)
+        .expect(calls(3))
         .mount(&docusign)
         .await;
     Mock::given(method("PUT"))
@@ -117,7 +124,7 @@ async fn sent_loop() -> SentLoop {
             serde_json::json!({"status": "sent"}),
         ))
         .respond_with(ResponseTemplate::new(200))
-        .expect(1)
+        .expect(calls(1))
         .mount(&docusign)
         .await;
     let sender_url = "https://example.com/draft-review";
@@ -128,7 +135,7 @@ async fn sent_loop() -> SentLoop {
         .respond_with(
             ResponseTemplate::new(201).set_body_json(serde_json::json!({"url": sender_url})),
         )
-        .expect(1)
+        .expect(calls(1))
         .mount(&docusign)
         .await;
     // The completion webhook downloads the signed PDF + Certificate of
@@ -174,12 +181,28 @@ async fn sent_loop() -> SentLoop {
     )
     .await
     .unwrap();
+    let brand = if fake.is_some() {
+        views::brand::BrandKey::Vesta
+    } else {
+        views::brand::BrandKey::Neon
+    };
+    let firm_id = if fake.is_some() {
+        store::brands::find_by_key(&application_store, brand.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .firm_id
+    } else {
+        None
+    };
     let proj = store::projects::create(
         &application_store,
         &store::projects::NewProject {
             code: format!("libra-retainer-{}", Uuid::now_v7()),
             name: "Libra retainer".into(),
             status: "open".into(),
+            brand: brand.as_str().into(),
+            firm_id,
             entity_id: store::test_support::seed_entity(&application_store).await,
             ..Default::default()
         },
@@ -229,11 +252,16 @@ async fn sent_loop() -> SentLoop {
     let workflow_runtime: Arc<dyn StateMachineRuntime> = Arc::new(
         workflows::DispatchingRuntime::new(runtime.clone(), email.clone(), storage.clone()),
     );
+    let signature_provider: Arc<dyn SignatureProvider> = match fake.as_ref() {
+        Some(fake) => fake.clone(),
+        None => Arc::new(provider),
+    };
     let state = AppState {
         storage,
         workflow_runtime,
         questionnaire_runtime: runtime.clone(),
-        signature_provider: Arc::new(provider),
+        signature_provider,
+        fake_signature_dir: fake.as_ref().map(|fake| fake.root().to_owned()),
         esignature_hmac_key: Some(HMAC_KEY.to_string()),
         email,
         ..portal::test_support::app_state(application_store.clone()).await
@@ -289,6 +317,9 @@ async fn sent_loop() -> SentLoop {
     // completion request. Lawyer then approves (renders + persists the PDF at
     // `generate_pdf__*`) and sends (creates the real provider's envelope).
     for action in ["approve-send", "send"] {
+        if fake.is_some() && action == "send" {
+            break;
+        }
         let resp = app
             .clone()
             .oneshot(
@@ -311,6 +342,7 @@ async fn sent_loop() -> SentLoop {
             "{action} redirect target",
         );
         if action == "approve-send" {
+            let mut request_id = String::new();
             // The CLI prepares and reopens one provider draft before the lawyer sends it.
             for _ in 0..2 {
                 let prepared = app
@@ -330,7 +362,11 @@ async fn sent_loop() -> SentLoop {
                 let body = body_string(prepared).await;
                 assert_eq!(status, StatusCode::OK, "{body}");
                 let result: serde_json::Value = serde_json::from_str(&body).unwrap();
-                assert_eq!(result["signature_request_id"], ENVELOPE_ID);
+                let id = result["signature_request_id"].as_str().unwrap();
+                if request_id.is_empty() {
+                    request_id = id.to_owned();
+                }
+                assert_eq!(id, request_id);
                 assert!(result["state"]
                     .as_str()
                     .unwrap()
@@ -341,6 +377,7 @@ async fn sent_loop() -> SentLoop {
                 .oneshot(
                     Request::builder()
                         .uri(format!("/app/lawyer/notations/{nid}/sender-view"))
+                        .header("host", brand.canonical_host())
                         .header("authorization", &lawyer_bearer)
                         .body(Body::empty())
                         .unwrap(),
@@ -348,7 +385,83 @@ async fn sent_loop() -> SentLoop {
                 .await
                 .unwrap();
             assert!(review.status().is_redirection());
-            assert_eq!(review.headers()["location"], sender_url);
+            let mut return_url = if fake.is_some() {
+                let location =
+                    url::Url::parse(review.headers()["location"].to_str().unwrap()).unwrap();
+                let sender = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(location.path())
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(sender.status(), StatusCode::OK);
+                let body = body_string(sender).await;
+                let html = scraper::Html::parse_document(&body);
+                let selector = scraper::Selector::parse("a").unwrap();
+                let href = html
+                    .select(&selector)
+                    .filter_map(|link| link.attr("href"))
+                    .find(|href| href.contains("?returned=1"))
+                    .unwrap();
+                url::Url::parse(href).unwrap()
+            } else {
+                assert_eq!(request_id, ENVELOPE_ID);
+                assert_eq!(review.headers()["location"], sender_url);
+                let requests = docusign.received_requests().await.unwrap();
+                let sender = requests
+                    .iter()
+                    .find(|request| request.url.path().ends_with("/views/sender"))
+                    .unwrap();
+                let payload: serde_json::Value = serde_json::from_slice(&sender.body).unwrap();
+                url::Url::parse(payload["returnUrl"].as_str().unwrap()).unwrap()
+            };
+            assert_eq!(return_url.host_str(), Some(brand.canonical_host()));
+            return_url.query_pairs_mut().append_pair("event", "send");
+            let return_request = || {
+                Request::builder()
+                    .uri(&return_url[url::Position::BeforePath..])
+                    .header("host", brand.canonical_host())
+                    .header("authorization", &lawyer_bearer)
+                    .body(Body::empty())
+                    .unwrap()
+            };
+            let returned = app.clone().oneshot(return_request()).await.unwrap();
+            assert_eq!(returned.status(), StatusCode::OK);
+            assert!(body_string(returned).await.contains("Draft: not sent"));
+
+            if let Some(fake) = fake.as_ref() {
+                fake.dispatch_prepared(&SignatureRequestId(request_id.clone()))
+                    .await
+                    .unwrap();
+                for _ in 0..2 {
+                    let returned = app.clone().oneshot(return_request()).await.unwrap();
+                    assert_eq!(returned.status(), StatusCode::OK);
+                    let html = body_string(returned).await;
+                    assert!(html.contains("Sent at"));
+                    assert!(html.contains("Libra"));
+                }
+                let status = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("/app/api/notations/{nid}/signature"))
+                            .header("host", brand.canonical_host())
+                            .header("authorization", &lawyer_bearer)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(status.status(), StatusCode::OK);
+                let response: serde_json::Value =
+                    serde_json::from_str(&body_string(status).await).unwrap();
+                assert_eq!(response["state"], "sent");
+                assert_eq!(response["signature_request_id"], request_id);
+            }
         }
     }
 
@@ -358,13 +471,15 @@ async fn sent_loop() -> SentLoop {
         .unwrap()
         .unwrap();
     assert_eq!(row.state, "sent_for_signature__pending");
-    assert_eq!(
-        store::signatures::request_id_for_notation(&application_store, nid)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some(ENVELOPE_ID)
-    );
+    if fake.is_none() {
+        assert_eq!(
+            store::signatures::request_id_for_notation(&application_store, nid)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(ENVELOPE_ID)
+        );
+    }
 
     SentLoop {
         app,
@@ -376,6 +491,19 @@ async fn sent_loop() -> SentLoop {
         runtime,
         _storage_directory: storage_directory,
     }
+}
+
+#[tokio::test]
+async fn sender_return_tracks_a_draft_and_a_send_on_the_project_brand() {
+    with_postgres(async {
+        let directory = tempfile::tempdir().unwrap();
+        let fake = Arc::new(
+            FakeSignatureProvider::new_in(directory.path())
+                .with_signing_base_url("http://127.0.0.1:3001/fake-signature".into()),
+        );
+        signature_loop(Some(fake)).await;
+    })
+    .await;
 }
 
 #[tokio::test]

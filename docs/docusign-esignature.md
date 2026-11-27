@@ -144,6 +144,11 @@ printed by creation for the final commands. After approval, check `navigator sit
 true`. Use `navigator site notation document` to download the PDF for review. Preparation creates the unsent provider
 draft. The CLI opens the sender view only with `--open`.
 
+Continue in the sender view to return to the Project's Brand host. Navigator reads the recorded envelope from the
+Project's DocuSign account and shows its current status, including a draft that is still unsent. If the provider
+confirms dispatch, Navigator advances the Notation to its signature wait. The return page links to Notation review,
+where the lawyer can send a prepared draft.
+
 ## Prepare a pleading for consent signatures
 
 Run `navigator site notation create <draft-code> --client-email <email> --project <code>` from the Project checkout.

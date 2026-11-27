@@ -5280,7 +5280,7 @@ async fn notation_envelope_status_in(
         for signer in &envelope.signers {
             let step = if signer.signed {
                 "signed"
-            } else if state == "requested" {
+            } else if matches!(state.as_str(), "requested" | "sent") {
                 "waiting"
             } else {
                 "not signed"

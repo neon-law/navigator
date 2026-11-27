@@ -294,6 +294,12 @@ const ONBOARDING_EMAIL_SUBJECT: &str = "Onboarding retainer for signature";
 
 pub use store::project_envelopes::{ExternalEnvelope, ExternalSigner};
 
+pub struct SenderEnvelopeStatus {
+    pub state: String,
+    pub sent_at: Option<String>,
+    pub signers: Vec<ExternalSigner>,
+}
+
 #[async_trait]
 pub trait SignatureProvider: Send + Sync {
     /// Resolve a real provider before making any requests for a Project.
@@ -335,6 +341,21 @@ pub trait SignatureProvider: Send + Sync {
         Err(SignatureError::Provider(
             "DocuSign envelope adoption is unavailable".into(),
         ))
+    }
+
+    /// Read the delivery state of the recorded envelope after a sender view returns.
+    async fn sender_envelope_status(
+        &self,
+        request_id: &SignatureRequestId,
+    ) -> Result<SenderEnvelopeStatus, SignatureError> {
+        let id = Uuid::parse_str(&request_id.0)
+            .map_err(|_| SignatureError::Provider("Invalid DocuSign envelope ID".into()))?;
+        let envelope = self.read_external_envelope(id).await?;
+        Ok(SenderEnvelopeStatus {
+            state: envelope.status,
+            sent_at: envelope.sent_date_time.map(|sent| sent.to_rfc3339()),
+            signers: envelope.signers,
+        })
     }
 
     /// Submit the rendered retainer PDF for the given notation, placing
@@ -484,8 +505,11 @@ pub struct FakeEnvelope {
     /// The prepared PDF, base64-encoded. Anchors were validated against
     /// this text before the envelope was accepted.
     pub pdf_base64: String,
-    /// RFC 3339 timestamp of the send.
+    /// RFC 3339 timestamp when the provider created the envelope.
     pub created_at: String,
+    /// RFC 3339 timestamp when the provider dispatched the envelope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at: Option<String>,
     /// Recipients who have signed, in signing order. A recipient appears
     /// at most once — `sign` is idempotent per email.
     #[serde(default)]
@@ -1212,24 +1236,31 @@ which records your signature with the fake signature provider.</p>\
             || "no delivery configured — the loop reads completion directly".to_string(),
             str::to_string,
         );
+        let delivery = match envelope.status {
+            EnvelopeStatus::Prepared => "Draft: not sent".to_owned(),
+            _ => format!(
+                "{} (sent {})",
+                envelope.status,
+                envelope.sent_at.as_deref().unwrap_or(&envelope.created_at)
+            ),
+        };
         let page = format!(
             "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
-<title>Sent envelope {0} — {1}</title>\
+<title>Signature envelope {0}</title>\
 <style>body{{font-family:system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#1a1a2e}}\
 table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ddd;padding:.4rem;text-align:left}}\
 code{{background:#f4f4f6;padding:.1rem .3rem}}</style></head><body>\
-<h1>Sent envelope</h1>\
-<p>Envelope <code>{0}</code> is <strong>{1}</strong> (sent {2}).</p>\
+<h1>Signature envelope</h1>\
+<p>Envelope <code>{0}</code> · <strong>{1}</strong></p>\
 <p><a href=\"document.pdf\">document.pdf</a> is the prepared document; \
-<a href=\"{3}\">return to Navigator</a>.</p>\
+<a href=\"{2}\">Continue to Navigator</a>.</p>\
 <h2>Recipients</h2>\
-<table><tr><th>Name</th><th>Email</th><th>Role</th><th>Signed</th></tr>{4}</table>\
+<table><tr><th>Name</th><th>Email</th><th>Role</th><th>Signed</th></tr>{3}</table>\
 <h2>Webhook delivery</h2>\
-<p>{5}</p>\
+<p>{4}</p>\
 </body></html>\n",
             html_escape(&envelope.id),
-            html_escape(&envelope.status.to_string()),
-            html_escape(&envelope.created_at),
+            html_escape(&delivery),
             html_escape(return_url),
             recipient_rows,
             html_escape(&webhook),
@@ -1348,6 +1379,7 @@ impl FakeSignatureProvider {
                     // The deliberate dispatch: the draft leaves `Prepared`,
                     // and only now do the signers' pages exist to open.
                     envelope.status = EnvelopeStatus::Sent;
+                    envelope.sent_at = Some(chrono::Utc::now().to_rfc3339());
                     self.persist(&envelope)?;
                     for recipient in &envelope.recipients {
                         self.write_signing_page(&envelope, &recipient.email)?;
@@ -1357,6 +1389,7 @@ impl FakeSignatureProvider {
             }
             (mode, None) => {
                 let id = format!("fake-{notation_id}-{seq}");
+                let created_at = chrono::Utc::now().to_rfc3339();
                 let envelope = FakeEnvelope {
                     id: id.clone(),
                     notation_id,
@@ -1369,7 +1402,8 @@ impl FakeSignatureProvider {
                     email_subject: onboarding.then(|| ONBOARDING_EMAIL_SUBJECT.to_owned()),
                     email_blurb: onboarding.then(|| ONBOARDING_EMAIL_BLURB.to_owned()),
                     pdf_base64: Engine::encode(&base64::engine::general_purpose::STANDARD, pdf),
-                    created_at: chrono::Utc::now().to_rfc3339(),
+                    sent_at: (mode == SendMode::Send).then(|| created_at.clone()),
+                    created_at,
                     signed: Vec::new(),
                     webhook_status: None,
                 };
@@ -1404,6 +1438,25 @@ impl FakeSignatureProvider {
 impl SignatureProvider for FakeSignatureProvider {
     fn configured_signer(&self) -> Option<(&str, &str)> {
         Some(("Example Signing Lawyer", "firm-signer@example.com"))
+    }
+
+    async fn sender_envelope_status(
+        &self,
+        request_id: &SignatureRequestId,
+    ) -> Result<SenderEnvelopeStatus, SignatureError> {
+        let envelope = self
+            .envelope(request_id)?
+            .ok_or_else(|| SignatureError::Provider("Unknown fake envelope".into()))?;
+        let draft = envelope.status == EnvelopeStatus::Prepared;
+        Ok(SenderEnvelopeStatus {
+            state: if draft {
+                "created".into()
+            } else {
+                envelope.status.to_string()
+            },
+            sent_at: (!draft).then(|| envelope.sent_at.unwrap_or(envelope.created_at)),
+            signers: self.notation_signers(request_id).await?,
+        })
     }
 
     async fn notation_signers(
@@ -1481,6 +1534,7 @@ impl SignatureProvider for FakeSignatureProvider {
                 self.write_signing_page(&envelope, &recipient.email)?;
             }
             envelope.status = EnvelopeStatus::Sent;
+            envelope.sent_at = Some(chrono::Utc::now().to_rfc3339());
             self.persist(&envelope)?;
         }
         Ok(())
