@@ -767,6 +767,7 @@ mod tests {
                     .unwrap()
                     .calendar_id
                     .unwrap();
+                let sharing = calendar.sharing(&recorded);
                 let mut existing_ids = Vec::new();
                 for index in 0..count {
                     let mut input = internal_task(project_id);
@@ -802,7 +803,7 @@ mod tests {
                 assert!(existing_ids
                     .iter()
                     .all(|id| events.iter().any(|event| &event.id == id)));
-                assert!(calendar.sharing(&recorded).is_empty());
+                assert_eq!(calendar.sharing(&recorded), sharing);
                 assert_eq!(calendar.created(), 1);
             })
             .await;
