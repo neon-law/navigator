@@ -132,7 +132,8 @@ fn is_rail(word: &Word) -> bool {
 /// The numbered rail restarts at 1 on every page, runs 1 through 28, and
 /// holds a 24pt pitch (CRC 2.108: at least three numbers per inch).
 fn assert_rail(page_number: usize, words: &[Word]) {
-    let rail: Vec<&Word> = words.iter().filter(|w| is_rail(w)).collect();
+    let mut rail: Vec<&Word> = words.iter().filter(|w| is_rail(w)).collect();
+    rail.sort_by(|left, right| left.y0.total_cmp(&right.y0));
     let numbers: Vec<u32> = rail.iter().map(|w| w.text.parse().unwrap()).collect();
     assert_eq!(
         numbers,
@@ -360,7 +361,8 @@ fn the_california_library_drafts_preview_and_refuse_unfinished_final_export() {
             let result = command().arg("--preview").output().unwrap();
             assert!(
                 result.status.success(),
-                "{}",
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
                 String::from_utf8_lossy(&result.stderr)
             );
             if format == "word" {

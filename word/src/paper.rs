@@ -63,7 +63,7 @@ pub fn document_events(markdown: &str) -> Parser<'_> {
     )
 }
 
-/// Parse filing Markdown with CommonMark footnotes enabled.
+/// Parse filing Markdown with `CommonMark` footnotes enabled.
 #[must_use]
 pub fn filing_events(markdown: &str) -> Parser<'_> {
     Parser::new_ext(
