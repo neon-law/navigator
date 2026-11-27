@@ -691,7 +691,7 @@ mod tests {
     };
     use crate::application_store::ApplicationStore;
     use crate::project_deadlines::{self, NewDeadline};
-    use chrono::TimeZone;
+    use chrono::{DateTime, TimeZone};
     use cloud::calendar::{CalendarService, FakeCalendar};
     use uuid::Uuid;
 
