@@ -244,7 +244,7 @@ const DEPLOYED_RUNTIME_VARS: &[&str] = &[
     "NAVIGATOR_IDENTITY_PLATFORM_ENDPOINT",
     "NAVIGATOR_GCP_METADATA_ENDPOINT",
     "NAVIGATOR_RATE_LIMIT_PER_MIN",
-    "WORKFLOWS_SERVICE_LISTEN",
+    "WORKFLOWS_SERVICE_HEALTH_LISTEN",
     "NAVIGATOR_EMAIL_BACKEND",
     "SENDGRID_FROM_EMAIL",
     "SENDGRID_INBOUND_PUBLIC_KEY",
@@ -305,7 +305,6 @@ const PROVISION_AND_SHIP_VARS: &[&str] = &[
     "NAVIGATOR_OAUTH_CLIENT_ID_BROWSER",
     "NAVIGATOR_PRIMARY_DOMAIN",
     "NAVIGATOR_WEB_SECRET_NAME",
-    "NAVIGATOR_WORKFLOWS_URL",
 ];
 
 #[test]
@@ -336,10 +335,7 @@ fn operating_workshop_lists_environment_variables_for_its_topology() {
     let env_example = repo_file(".env.example");
     let variables = environment_keys(&env_example);
 
-    for variable in variables
-        .iter()
-        .filter(|variable| !variable.contains("SURREAL") && !variable.contains("RESTATE"))
-    {
+    for variable in &variables {
         assert!(
             workshop.contains(variable),
             "Operating workshop Environment Matrix must list `{variable}` from .env.example",
