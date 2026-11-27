@@ -175,7 +175,7 @@ impl GuiebShookSite {
 /// Serve the Guieb & Shook site on its host; pass everything else to Navigator.
 pub async fn serve(
     State(site): State<Option<GuiebShookSite>>,
-    mut req: Request,
+    req: Request,
     next: Next,
 ) -> Response {
     let Some(site) = site.filter(|_| {
