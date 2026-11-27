@@ -1,45 +1,21 @@
-head_title: "{site_name} | Flat-fee divorce representation"
+head_title: "{site_name} | Divorce representation"
 meta_description: >-
-  Daybridge Divorce Law charges $500 if you agree. $5,000 for up to two years if you do not. After two years,
-  continued representation costs $5 a day. Court fees and discovery expenses, including expert fees, are
-  separate.
+  Talk with a lawyer about your next steps in an agreed or contested divorce.
   Attorney advertisement.
 heading: Talk through your next steps in a divorce.
 lead: >-
-  Whether you and your spouse agree or still have decisions to make, you can
-  talk with a lawyer about what matters to you. We use software and AI for
-  routine paperwork so your lawyer has more time to listen and explain your options.
-contact_label: Book Consultation
+  You can talk with a lawyer whether you and your spouse agree or still
+  have decisions to make.
+contact_label: Contact us to learn more
 lead_heading: Prefer to write first?
 lead_intro: >-
-  Leave your email so we can reply about your divorce. A phone number is
-  optional. To talk sooner, call us or book a time.
+  Leave your email so we can reply about your divorce. A phone number is optional.
 practices_heading: ""
 practices: []
 daybridge:
-  eyebrow: Daybridge Divorce Law
-  fee_label: What a divorce costs with us
-  agreed_label: If you agree
-  agreed_price: "$500"
-  agreed_unit: flat fee
-  agreed_body: >-
-    If you and your spouse agree on the terms, we prepare and file your papers
-    and guide you through the court’s decision. Court fees and discovery expenses, including expert fees, are
-    separate.
-  contested_label: If you do not agree
-  contested_price: "$5,000"
-  contested_unit: flat fee for up to two years, then $5 a day while we represent you
-  contested_body: >-
-    Your lawyer represents you individually when there are issues to resolve.
-    Court fees and discovery expenses, including expert
-    fees, are separate.
   testimonials_heading: What our clients say
   signup_label: Create your account
-  signin_label: Already have an account? Sign in
-  closing_heading: What would you like to ask a lawyer?
-  closing_body: >-
-    You can come to a consultation with questions still open. Tell us what you and your
-    spouse have settled and what feels uncertain. We can explain the next step and what the fee covers.
+  signin_label: Sign in
   sibling_practices:
     - brand: vesta
       eyebrow: After the divorce is final

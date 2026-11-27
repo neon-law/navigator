@@ -3229,7 +3229,8 @@ async fn llms_txt_indexes_the_markdown_corpus_with_absolute_urls() {
     assert!(body.contains("## Pages"));
     assert!(body.contains("estate plans tailored to each person"));
     assert!(body.contains("Nevada asset protection planning"));
-    assert!(body.contains("$500 if you agree"));
+    assert!(body.contains("Talk with a lawyer about agreed or contested divorce"));
+    assert!(!body.contains("$500 if you agree"));
     assert!(body.contains("agentic lawyering"));
     assert!(!body.contains("from $50/day") && !body.contains("example.com/business"));
     assert!(!body.contains("$500 setup fee") && !body.contains("$5,000 per trial day"));

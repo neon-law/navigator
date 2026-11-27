@@ -1,14 +1,11 @@
-/* Daybridge stays calm and direct: a crossing at sunrise, two plain prices, one way to start. */
+/* Daybridge homepage */
 .daybridge-home {
   --daybridge-rule: #E7CF9C;
-  --daybridge-ink: var(--nav-color-text);
-  --daybridge-sun: #FFC861;
 }
 
 .daybridge-home h1,
 .daybridge-home h2,
-.daybridge-home h3,
-.daybridge-price {
+.daybridge-home h3 {
   font-family: var(--brand-font-display);
   font-weight: 500;
   letter-spacing: -.035em;
@@ -16,28 +13,19 @@
 
 .daybridge-home p { line-height: 1.65; }
 
-.daybridge-eyebrow {
-  color: var(--nav-color-primary);
-  font-family: var(--nav-font-family);
-  font-size: .76rem;
-  font-weight: 700;
-  letter-spacing: .15em;
-  text-transform: uppercase;
-}
-
 .daybridge-hero {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(18rem, .75fr);
   align-items: center;
   gap: clamp(2rem, 7vw, 7rem);
-  padding: clamp(4rem, 9vw, 8rem) 0;
+  padding: clamp(2.5rem, 6vw, 5rem) 0;
   background: radial-gradient(closest-side at 78% 45%, rgb(255 200 97 / 32%), transparent);
 }
 
 .daybridge-hero h1 {
-  max-width: 10ch;
+  max-width: 15ch;
   margin: 1rem 0 1.5rem;
-  font-size: clamp(4rem, 8vw, 7.5rem);
+  font-size: clamp(2.8rem, 6vw, 5.5rem);
   line-height: .92;
   text-wrap: balance;
 }
@@ -50,41 +38,11 @@
 
 .daybridge-cta { margin: 1.4rem .75rem 0 0; border-radius: 999px; }
 
-.daybridge-fee { container-type: inline-size; }
+.daybridge-crossing { display: block; width: 100%; max-width: 26rem; height: auto; justify-self: center; }
+.daybridge-account { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; font-size: .95rem; }
+.daybridge-account a { color: var(--nav-color-link); }
 
-.daybridge-fee__crossing { display: block; width: 100%; height: auto; }
-
-.daybridge-price {
-  margin: 1.5rem 0 .35rem;
-  color: var(--daybridge-ink);
-  font-size: clamp(1.6rem, 9cqi, 2.25rem);
-  line-height: 1;
-}
-
-.daybridge-price span {
-  margin-left: .6rem;
-  font-family: var(--nav-font-family);
-  font-size: 1rem;
-  font-weight: 650;
-  letter-spacing: 0;
-}
-
-
-.daybridge-prices {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  border-block: 1px solid var(--daybridge-rule);
-}
-
-.daybridge-prices > div { padding: 3rem clamp(1.25rem, 3vw, 2.5rem); }
-.daybridge-prices > div + div { border-left: 1px solid var(--daybridge-rule); }
-.daybridge-prices .daybridge-price { margin-top: .75rem; font-size: clamp(3.5rem, 7vw, 6rem); }
-.daybridge-prices .daybridge-price span { display: block; margin: .6rem 0 0; font-size: 1.05rem; }
-.daybridge-prices p:last-child { margin: 1rem 0 0; color: var(--nav-color-text-muted); }
-
-.daybridge-signin { margin: 1rem 0 0; font-size: .95rem; }
-.daybridge-signin a { color: var(--nav-color-link); font-weight: 650; }
-
+.daybridge-home .testimonial-section { border-top: 1px solid var(--daybridge-rule); padding: 3rem 0; }
 .daybridge-home .sibling-practices {
   margin-bottom: clamp(3rem, 6vw, 5rem);
   padding-top: 2.5rem;
@@ -97,26 +55,6 @@
 .daybridge-home .sibling-practice p { margin: 0 0 1rem; color: var(--nav-color-text-muted); }
 .daybridge-home .sibling-practice__link { color: var(--nav-color-link); font-weight: 650; }
 
-.daybridge-closing {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 3rem;
-  padding: clamp(3rem, 6vw, 5rem);
-  border-radius: 1.25rem;
-  background: linear-gradient(135deg, #FFE9A8, var(--daybridge-sun));
-}
-
-.daybridge-closing h2 { margin: 0 0 .75rem; font-size: clamp(2.3rem, 4vw, 3.5rem); }
-.daybridge-closing p { max-width: 38rem; margin: 0; color: var(--daybridge-ink); }
-.daybridge-closing__actions { display: flex; flex: none; flex-wrap: wrap; gap: .75rem; }
-.daybridge-closing .daybridge-cta { margin: 0; }
-.daybridge-closing .nav-btn--secondary { background: #FFFAF0; }
-
 @media (max-width: 760px) {
   .daybridge-hero { grid-template-columns: 1fr; }
-  .daybridge-prices { grid-template-columns: 1fr; }
-  .daybridge-prices > div + div { border-top: 1px solid var(--daybridge-rule); border-left: 0; }
-  .daybridge-closing { align-items: flex-start; flex-direction: column; }
 }
-.daybridge-hero .home-call { margin-right: .75rem; }

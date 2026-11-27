@@ -194,7 +194,7 @@ pub struct HomeContent {
     /// The monthly privacy product, authored in the brand catalog.
     #[serde(default)]
     pub privacy: Option<PrivacyContent>,
-    /// The Daybridge one-time mutual-split divorce offer.
+    /// The Daybridge divorce practice homepage.
     #[serde(default)]
     pub daybridge: Option<DaybridgeContent>,
     /// `CyberInjuryLaw` campaign.

@@ -9,13 +9,11 @@ lead: >-
   the people in your orbit, and the legacy you want to leave.
   Together, we put your wishes for property, care, and the people you love
   into an estate plan that reaches beyond your lifetime.
-contact_label: Book a meet & greet
+contact_label: Contact us to learn more
 estate:
-  eyebrow: Vesta Estate Planning
   process_link: Explore your estate plan
   plan_label: Your estate plan
-  price: From $1,111
-  plan_description: For a basic estate plan for one person, shaped around your life.
+  plan_description: A basic estate plan for one person includes the following.
   features:
     - A get-to-know-you session with an optional astrology reading
     - A will and financial power of attorney
@@ -61,7 +59,7 @@ estate:
   video_updates_label: Video updates
   video_updates_body: Swipe or scroll sideways through our latest five videos, newest first.
   video_updates_blog_label: All blog posts
-  testimonials_label: Testimonials
+  testimonials_label: What our clients say
   video_label: Meet Vesta
   video_src: img/vesta-home/vesta-explainer.mp4
   astrology_label: Astrology & your legacy
@@ -175,10 +173,9 @@ estate:
       eyebrow: Your privacy, now and after
       heading: Pair your plan with DeleteYourData.com.
       body: >-
-        DeleteYourData.com is a non-legal service that helps you ask companies to
-        delete the personal data they hold about you, for $29/mo or $290/year prepaid. Basic form filings, such as forming an LLC, are included. Government fees are separate. The subscription
-        is also called Same Day Legal. When we write your estate plan, we
-        set its triggers together. While your subscription is active, an
-        optional death check sets those triggers in motion on your behalf, such
-        as starting a life insurance claim.
+        DeleteYourData.com is a non-legal service that helps you ask companies
+        to delete your personal data. When we write your estate plan, we set
+        its triggers together.
+        While your subscription is active, an optional death check can set
+        those triggers in motion, such as starting a life insurance claim.
       cta_label: Visit DeleteYourData.com

@@ -1031,10 +1031,8 @@ fn estate_content(
     deployment_host: Option<&str>,
 ) -> webapp::home::EstateContent {
     webapp::home::EstateContent {
-        eyebrow: copy.eyebrow,
         process_link: copy.process_link,
         plan_label: copy.plan_label,
-        price: copy.price,
         plan_description: copy.plan_description,
         features: copy.features,
         fee_note: copy.fee_note,
@@ -1238,21 +1236,9 @@ fn daybridge_content(
     deployment_host: Option<&str>,
 ) -> webapp::home::DaybridgeContent {
     webapp::home::DaybridgeContent {
-        eyebrow: copy.eyebrow,
-        fee_label: copy.fee_label,
-        agreed_label: copy.agreed_label,
-        agreed_price: copy.agreed_price,
-        agreed_unit: copy.agreed_unit,
-        agreed_body: copy.agreed_body,
-        contested_label: copy.contested_label,
-        contested_price: copy.contested_price,
-        contested_unit: copy.contested_unit,
-        contested_body: copy.contested_body,
         testimonials_heading: copy.testimonials_heading,
         signup_label: copy.signup_label,
         signin_label: copy.signin_label,
-        closing_heading: copy.closing_heading,
-        closing_body: copy.closing_body,
         sibling_practices: sibling_practices(copy.sibling_practices, deployment_host),
     }
 }
@@ -1325,12 +1311,14 @@ pub fn home_for_host(
                 webapp::components::site_footer::tel_href(branding.published_phone())
             }
             BrandKey::CyberInjuryLaw => "/consultation".to_string(),
+            BrandKey::Daybridge | BrandKey::Vesta => "/contact".to_string(),
             _ => branding.consultation_url.to_string(),
         },
         contact_label: copy.contact_label,
         // Filled from the request's chrome at render.
         phone: String::new(),
-        signup: Some(signup_prompt(branding)),
+        signup: (!matches!(branding.brand_key, BrandKey::Daybridge | BrandKey::Vesta))
+            .then(|| signup_prompt(branding)),
         lead_heading: copy.lead_heading,
         lead_intro: copy.lead_intro,
         photo: copy.photo.map(|photo| webapp::home::HomePhoto {
@@ -1864,10 +1852,8 @@ mod tests {
     use views::locales::parse_locale_file;
     use webapp::marketing_page::Band as RenderedBand;
 
-    /// Every catalog page's `<title>` and `og:title` lead with the brand, then a
-    /// pipe, then the page: `{site_name} | Home`.
     #[test]
-    fn every_brand_home_carries_the_account_invitation() {
+    fn contact_first_homepages_skip_the_signup_prompt() {
         // Lex Tecnica, IEP Defenders, and Same Day Legal have band-built marketing-page
         // homes, not the legacy home schema this invariant polices.
         for key in views::brand::BrandKey::ALL.iter().filter(|key| {
@@ -1877,7 +1863,11 @@ mod tests {
             )
         }) {
             let content = home(key.resolve_branding(&views::brand::DEFAULT_BRANDING));
-            assert!(content.signup.is_some(), "{}", key.as_str());
+            assert_eq!(
+                content.signup.is_none(),
+                matches!(key, BrandKey::Daybridge | BrandKey::Vesta),
+                "{key:?}"
+            );
         }
     }
 
@@ -2195,22 +2185,14 @@ mod tests {
     }
 
     #[test]
-    fn firm_brand_consultation_actions_use_the_booking_calendar() {
-        for key in [
-            BrandKey::Neon,
-            BrandKey::DeleteYourData,
-            BrandKey::Vesta,
-            BrandKey::Abhaya,
-            BrandKey::Daybridge,
-        ] {
+    fn firm_brand_consultation_actions_use_the_configured_contact_door() {
+        for key in [BrandKey::Neon, BrandKey::DeleteYourData, BrandKey::Abhaya] {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             let content = home(branding);
             assert_eq!(content.contact_href, branding.consultation_url, "{key:?}");
             assert_eq!(
                 content.contact_label,
-                if key == BrandKey::Vesta {
-                    "Book a meet & greet"
-                } else if key == BrandKey::DeleteYourData {
+                if key == BrandKey::DeleteYourData {
                     "Get privacy protection"
                 } else {
                     "Book Consultation"
@@ -2236,18 +2218,16 @@ mod tests {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             let services = legal_services(branding);
             let cta = services.hero_cta.expect("services hero CTA");
-            assert_eq!(cta.href, branding.consultation_url, "{key:?}");
-            assert_eq!(
-                cta.label,
-                if key == BrandKey::Vesta {
-                    "Book a meet & greet"
-                } else if key == BrandKey::DeleteYourData {
-                    "Get privacy protection"
-                } else {
-                    "Book Consultation"
-                },
-                "{key:?}"
-            );
+            if key == BrandKey::Abhaya {
+                assert_eq!(cta.href, branding.consultation_url);
+                assert_eq!(cta.label, "Book Consultation");
+            } else {
+                let content = home(branding);
+                assert_eq!(cta.href, "/contact", "{key:?}");
+                assert_eq!(content.contact_href, cta.href, "{key:?}");
+                assert_eq!(cta.label, "Contact us to learn more", "{key:?}");
+                assert_eq!(content.contact_label, cta.label, "{key:?}");
+            }
             assert!(
                 !catalog_yaml(key, "services")
                     .expect("services catalog")
@@ -2528,21 +2508,6 @@ mod tests {
     }
 
     #[test]
-    fn vesta_offer_publishes_starting_price_and_separates_administration() {
-        let content = home(&views::brand::VESTA_BRANDING);
-        let estate = content.estate.expect("estate offer");
-        assert_eq!(estate.price, "From $1,111");
-        assert!(estate.fee_note.starts_with("Fees depend on the scope"));
-        assert!(estate
-            .plan_description
-            .starts_with("For a basic estate plan"));
-        assert!(estate
-            .fee_note
-            .contains("trust administration, and later updates require a separate quote"));
-        assert_eq!(content.heading, "Your life is part of a larger story.");
-    }
-
-    #[test]
     fn iep_staging_home_places_its_photo_before_results() {
         let brand = &views::brand::IEP_DEFENDERS_BRANDING;
         let page = super::iep_home(brand, Some(brand.brand_key.staging_host()));
@@ -2639,7 +2604,6 @@ mod tests {
                 "Same Day Legal",
                 include_str!("../locales/en/same-day-legal/mobile-app.yaml"),
             ),
-            ("Vesta", include_str!("../locales/en/vesta/home.yaml")),
             (
                 "Cyber Injury Law",
                 include_str!("../locales/en/cyber-injury-law/home.yaml"),
@@ -2925,8 +2889,7 @@ mod tests {
                 "{host}"
             );
             assert_eq!(vesta[0].cta_label, "Visit DeleteYourData.com", "{host}");
-            assert!(vesta[0].body.contains("$29/mo"), "{host}");
-            assert!(vesta[0].body.contains("$290/year"), "{host}");
+            assert!(!vesta[0].body.contains('$'), "{host}");
             assert!(!vesta[0].body.contains("additional member"), "{host}");
             assert!(vesta[0].body.contains("death check"), "{host}");
 
@@ -3432,10 +3395,9 @@ mod tests {
     }
 
     /// The `/divorce` gateway's CTA resolves per deployment, names Daybridge
-    /// Divorce Law, preserves the one-time mutual-split fee, and never
-    /// promises a result or timeline.
+    /// Divorce Law, and avoids advertised prices or outcome promises.
     #[test]
-    fn divorce_gateway_preserves_pricing_and_promises_no_outcome() {
+    fn divorce_gateway_names_the_practice_and_promises_no_outcome() {
         let production = divorce_gateway(&views::brand::DEFAULT_BRANDING, Some("www.neonlaw.com"));
         assert_eq!(
             production
@@ -3466,43 +3428,12 @@ mod tests {
         );
         let text = content.hero_lead.to_lowercase();
         assert!(text.contains("daybridge divorce law"), "{text}");
-        assert!(text.contains("$500 if you agree"), "{text}");
-        assert!(
-            text.contains("$5,000 for up to two years if you do not"),
-            "{text}"
-        );
-        for stale_fee in [
-            "$333",
-            "mutual split",
-            "$500 setup",
-            "$10 a day",
-            "$5,000 per day",
-        ] {
-            assert!(!text.contains(stale_fee), "{text}");
-        }
+        assert!(!text.contains('$'), "{text}");
         assert!(!text.contains("we guarantee"), "{text}");
         assert!(
             text.contains("no result or timeline is promised"),
             "and says so plainly: {text}"
         );
-    }
-
-    /// Daybridge's home states both prices in plain words, sends a visitor to
-    /// sign up or book, and promises no speed the court does not control.
-    #[test]
-    fn daybridge_home_states_both_prices_and_the_ways_to_start() {
-        let branding =
-            views::brand::BrandKey::Daybridge.resolve_branding(&views::brand::DEFAULT_BRANDING);
-        let home = home(branding);
-        let d = home.daybridge.as_ref().expect("Daybridge offer");
-        assert_eq!(d.agreed_price, "$500");
-        assert_eq!(d.contested_price, "$5,000");
-        assert!(d.contested_unit.contains("two years"));
-        assert!(!d.signup_label.is_empty() && !d.signin_label.is_empty());
-        let text = home.lead.to_lowercase();
-        for promise in ["we guarantee", "guaranteed", "fast divorce"] {
-            assert!(!text.contains(promise), "{text}");
-        }
     }
 
     // --- ENG-744…749: the practice brands, and the lines that bind them ---

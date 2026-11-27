@@ -604,14 +604,11 @@ async fn prepared_practice_brands_have_responsive_pages_and_a_working_mobile_men
 async fn assert_vesta_layout(c: &Client, width: u32, capture_dir: &std::path::Path) {
     assert_video_rail(c, width, capture_dir).await;
     let layout = c.execute(
-        "const p=document.querySelector('.vesta-plan__term'); const r=p.getBoundingClientRect(); const a=p.parentElement.getBoundingClientRect(); return {fits:r.left>=a.left&&r.right<=a.right, priced:document.querySelector('.vesta-plan__price')?.textContent.trim()==='From $1,111', themeColumns:getComputedStyle(document.querySelector('.vesta-themes')).gridTemplateColumns.split(' ').length, lastRow:[...document.querySelectorAll('.vesta-theme summary span:last-child')].slice(-2).map(e=>e.textContent), bottomPair:(()=>{const r=[...document.querySelectorAll('.vesta-theme')].map(e=>e.getBoundingClientRect());return r.length===8&&r[6].top===r[7].top&&r[6].top>r[5].top;})(), columns:getComputedStyle(document.querySelector('.vesta-hero')).gridTemplateColumns.split(' ').length};",
+        "const p=document.querySelector('.vesta-plan__term'); const r=p.getBoundingClientRect(); const a=p.parentElement.getBoundingClientRect(); const contact=document.querySelector('.vesta-hero .nav-btn--primary'); return {fits:r.left>=a.left&&r.right<=a.right, contact:contact?.getAttribute('href'), themeColumns:getComputedStyle(document.querySelector('.vesta-themes')).gridTemplateColumns.split(' ').length, lastRow:[...document.querySelectorAll('.vesta-theme summary span:last-child')].slice(-2).map(e=>e.textContent), bottomPair:(()=>{const r=[...document.querySelectorAll('.vesta-theme')].map(e=>e.getBoundingClientRect());return r.length===8&&r[6].top===r[7].top&&r[6].top>r[5].top;})(), columns:getComputedStyle(document.querySelector('.vesta-hero')).gridTemplateColumns.split(' ').length};",
         vec![],
     ).await.expect("Vesta plan layout");
     assert_eq!(layout["fits"], true, "plan fits its column at {width}px");
-    assert_eq!(
-        layout["priced"], true,
-        "Vesta keeps its approved starting price"
-    );
+    assert_eq!(layout["contact"], "/contact", "Vesta leads with contact");
     assert_eq!(layout["columns"], if width < 768 { 1 } else { 2 });
     assert_eq!(
         layout["themeColumns"], 2,
@@ -627,9 +624,9 @@ async fn assert_vesta_layout(c: &Client, width: u32, capture_dir: &std::path::Pa
         vec![],
     )
     .await
-    .expect("show Vesta pricing");
+    .expect("show the estate plan");
     std::fs::write(
-        capture_dir.join(format!("vesta-pricing-{width}.png")),
+        capture_dir.join(format!("vesta-plan-{width}.png")),
         c.screenshot().await.expect("Vesta capture"),
     )
     .expect("save Vesta capture");

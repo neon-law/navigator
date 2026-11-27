@@ -14,12 +14,6 @@ hero_lead: >-
   Your get-to-know-you session can begin with an optional astrology reading
   to reflect on purpose, relationships, and what you want to carry forward.
   Readings are for personal reflection; your choices guide the legal plan.
-  Basic estate plans for one person start from $1,111 and include a will, financial
-  power of attorney, health-care directive, health-care power of attorney, a planning
-  meeting, attorney preparation and review, one round of revisions before signing,
-  and signing guidance. We confirm the services and signing arrangements in writing.
-  Living trusts, advanced asset protection or tax planning, property transfers,
-  probate, trust administration, and later updates require a separate quote.
   A Nevada asset protection trust may be the right path; we assess that
   with you under the laws that apply. We work with people across the
   country when the matter and applicable law permit. We also help with
@@ -27,8 +21,8 @@ hero_lead: >-
   Guieb & Shook PC is the law firm you retain. Attorney responsible for this
   page: Nicholas Shook.
 hero_cta:
-  href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
-  label: Book a meet & greet
+  href: /contact
+  label: Contact us to learn more
 skin: practice
 bands:
   - kind: cards
@@ -74,6 +68,8 @@ bands:
       - title: Your property
         body:
           - - text: Decide who receives what, and discuss whether a will or living trust fits your plans.
+          - - text: See what a basic estate plan includes
+              href: /#estate-plan
       - title: Your finances and care
         body:
           - - text: Name the people who can act for you and record your wishes for medical care.
@@ -108,8 +104,8 @@ bands:
                 others are ready to close after their duties are fulfilled.
   - kind: cards
     anchor: administration-engagement
-    overline: Start with a conversation
-    heading: Custom scope and fees
+    overline: ""
+    heading: Start your administration engagement
     description: >-
       Contact us for an individual assessment of administration work. We
       identify who we represent,
@@ -123,7 +119,7 @@ bands:
                 which records to gather and how to share them after the
                 initial review. You do not need every answer to reach out.
           - - text: Contact us about trust administration
-              href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+              href: /contact
       - title: Know who your lawyer represents
         body:
           - - text: >-
