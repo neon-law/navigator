@@ -1918,43 +1918,6 @@ jobs:
           done
           echo "::error::GHCR mirror of ${target}:${RELEASE_TAG} failed after retries"
           exit 1
-      # The retained Source exporter uses an explicit compatibility repository.
-      # Copy this build's digest, verify the copied bytes, and sign each registry
-      # identity instead of compiling Hudson twice or falling back to an old tag.
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        if: matrix.alias != ''
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "publish-triggers ${{ matrix.image }}"
-          step: "publish retained Source operator alias"
-      - name: publish retained Source operator alias
-        timeout-minutes: 5
-        if: matrix.alias != ''
-        env:
-          ALIAS: ${{ matrix.alias }}
-          IMAGE_REF: ${{ steps.img.outputs.name }}
-          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
-          GHCR_REGISTRY: ghcr.io/${{ github.repository_owner }}/navigator
-          RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          test -n "${ALIAS}"
-          for target in "${IMAGE_REF%/*}/${ALIAS}" "${GHCR_REGISTRY}/${ALIAS}"; do
-              copied=false
-              for attempt in 1 2 3 4 5; do
-                  if docker buildx imagetools create --prefer-index=false --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
-                      && target_digest="$(docker buildx imagetools inspect --raw "${target}:${RELEASE_TAG}" | sha256sum | cut -d' ' -f1)" \
-                      && [ "sha256:${target_digest}" = "${IMAGE_DIGEST}" ]; then
-                      copied=true
-                      break
-                  fi
-                  sleep "$((attempt * 2))"
-              done
-              test "${copied}" = true
-              scripts/cosign-sign.sh "${target}@${IMAGE_DIGEST}"
-          done
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -1966,10 +1929,8 @@ jobs:
         env:
           IMAGE_NAME: ${{ matrix.image }}
           IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
-          ALIAS: ${{ matrix.alias }}
         run: |
-          jq -n --arg image "${IMAGE_NAME}" --arg digest "${IMAGE_DIGEST}" --arg alias "${ALIAS}" \
-            'if $alias == "" then {($image): $digest} else {($image): $digest, ($alias): $digest} end' > image-digest.json
+          jq -n --arg image "${IMAGE_NAME}" --arg digest "${IMAGE_DIGEST}" '{($image): $digest}' > image-digest.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-digest-${{ matrix.image }}
