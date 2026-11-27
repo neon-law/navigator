@@ -16,4 +16,8 @@ record of work already performed. - Vocabulary: [`store::time_entries`](../../st
 
 - Vocabulary: [`store::time_entries`](../../store/src/time_entries.rs)
 
+A lawyer reviewing staged work can select a [Legal Plan Claim](legal-plan-claim.md) with verified terms. Approval prices
+and links the Time Entry in the same transaction. The link replaces an equal attestation for the same service date and
+keeps the work out of direct invoices.
+
 The table is `time_entry`.

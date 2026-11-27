@@ -105,6 +105,7 @@ pub(crate) async fn pending_for_billing(
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
     Bill,
+    PlanClaim,
     NoCharge,
     Deny,
 }
@@ -118,6 +119,19 @@ pub async fn review(
     decision: Decision,
     note: &str,
 ) -> Result<(), TimeEntryError> {
+    review_with_claim(pg, project, actor, id, decision, note, None).await
+}
+
+/// Review staged time with an explicit Legal Plan Claim selection.
+pub async fn review_with_claim(
+    pg: &PostgresDb,
+    project: Uuid,
+    actor: Uuid,
+    id: Uuid,
+    decision: Decision,
+    note: &str,
+    claim_id: Option<Uuid>,
+) -> Result<(), TimeEntryError> {
     let note = note.trim();
     if note.is_empty() || note.len() > 2000 {
         return Err(TimeEntryError::Invalid("review note"));
@@ -126,7 +140,7 @@ pub async fn review(
         .bind(project).bind(id).fetch_optional(&pg.0).await?.ok_or(TimeEntryError::Conflict)?;
     let attorney = source.get("attorney_id");
     let date = source.get("performed_on");
-    let rate = if matches!(decision, Decision::Bill) {
+    let mut rate = if matches!(decision, Decision::Bill) {
         match crate::contingency_terms::resolve_unchecked(pg, project, date)
             .await
             .map_err(|_| TimeEntryError::Invalid("contingency terms unavailable"))?
@@ -148,6 +162,16 @@ pub async fn review(
     if claimed.is_none() {
         return Err(TimeEntryError::Conflict);
     }
+    let minutes = source.get::<i32, _>("tenths") * 6;
+    let claim = if matches!(decision, Decision::PlanClaim) {
+        let claim_id = claim_id.ok_or(TimeEntryError::Invalid("select a legal plan claim"))?;
+        let (claim, claim_rate) =
+            crate::plan_claims::for_annotation(&mut tx, project, claim_id, date, minutes).await?;
+        rate = claim_rate;
+        Some(claim)
+    } else {
+        None
+    };
     let entry = if matches!(decision, Decision::Deny) {
         None
     } else {
@@ -159,7 +183,7 @@ pub async fn review(
                 &NewTimeEntry {
                     attorney_id: attorney,
                     performed_on: date,
-                    minutes: source.get::<i32, _>("tenths") * 6,
+                    minutes,
                     description: note.to_owned(),
                     billable: matches!(decision, Decision::Bill),
                     rate_cents_per_hour: rate,
@@ -169,6 +193,9 @@ pub async fn review(
             .await?,
         )
     };
+    if let (Some(claim), Some(entry)) = (claim, entry) {
+        crate::plan_claims::link_annotation(&mut tx, claim, actor, entry, minutes).await?;
+    }
     sqlx::query("UPDATE billing_annotation SET reviewed_by=$1,reviewed_at=now(),review_note=$2,entry_id=$3 WHERE project_id=$4 AND id=$5")
         .bind(actor).bind(note).bind(entry).bind(project).bind(id).execute(&mut *tx).await?;
     tx.commit().await?;

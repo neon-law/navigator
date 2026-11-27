@@ -333,6 +333,7 @@ pub async fn mark_invoiced(
     if before.len() != entry_ids.len() {
         return Err(TimeEntryError::NotFound);
     }
+    refuse_claim_time(&mut tx, entry_ids).await?;
     let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
     for entry in &rows {
         match &entry.billing_status {
@@ -457,6 +458,7 @@ pub(crate) async fn reserve_in_tx(
     if before.len() != entry_ids.len() {
         return Err(TimeEntryError::NotFound);
     }
+    refuse_claim_time(tx, entry_ids).await?;
     let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
     for entry in &rows {
         // Reserved (already drawn by a live batch) or resolved work: the
@@ -474,6 +476,23 @@ pub(crate) async fn reserve_in_tx(
     .bind(Utc::now())
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+/// Invoice writers call this after locking their Time Entries.
+async fn refuse_claim_time(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    entry_ids: &[Uuid],
+) -> Result<(), TimeEntryError> {
+    let allocated: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM time_entry t JOIN legal_plan_claim c ON c.project_id=t.project_id
+         WHERE t.id=ANY($1) AND (c.state->'work'->'time_entry_ids') ? t.id::text)",
+    ).bind(entry_ids).fetch_one(&mut **tx).await?;
+    if allocated {
+        return Err(TimeEntryError::Invalid(
+            "time is allocated to a legal plan claim",
+        ));
+    }
     Ok(())
 }
 
@@ -518,8 +537,10 @@ pub async fn wip_billable(
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
          rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
-         inserted_at,updated_at FROM time_entry \
+         inserted_at,updated_at FROM time_entry t \
          WHERE project_id=$1 AND billable AND billing_status IN ('unbilled','reserved') \
+         AND NOT EXISTS (SELECT 1 FROM legal_plan_claim c WHERE c.project_id=t.project_id \
+             AND (c.state->'work'->'time_entry_ids') ? t.id::text) \
          ORDER BY performed_on, id",
     )
     .bind(project_id)
@@ -537,8 +558,10 @@ pub async fn unbilled_billable(
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
          rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
-         inserted_at,updated_at FROM time_entry \
+         inserted_at,updated_at FROM time_entry t \
          WHERE project_id=$1 AND billable AND billing_status='unbilled' \
+         AND NOT EXISTS (SELECT 1 FROM legal_plan_claim c WHERE c.project_id=t.project_id \
+             AND (c.state->'work'->'time_entry_ids') ? t.id::text) \
          ORDER BY performed_on, id",
     )
     .bind(project_id)
