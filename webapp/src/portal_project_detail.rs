@@ -589,7 +589,8 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
                 shared_notion_page_url: project.shared_notion_page_url.clone(),
                 calendar_id: project.calendar_id.clone(),
                 booking_url: project.booking_url.clone(),
-            },
+            }
+            .for_firm(crate::project_resources::firm_integrations(project.firm_id).await),
             role,
         ),
         // A client never configures a resource; the affordance is a lawyer's.

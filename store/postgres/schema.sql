@@ -5970,3 +5970,16 @@ ALTER TABLE durable_object_handover DROP CONSTRAINT durable_object_handover_orig
 ALTER TABLE durable_object_handover DROP CONSTRAINT durable_object_handover_check;
 ALTER TABLE durable_object_handover ADD CONSTRAINT durable_object_handover_origin_check CHECK (origin IN ('captured_source', 'fresh_native', 'source_discarded'));
 ALTER TABLE durable_object_handover ADD CONSTRAINT durable_object_handover_check CHECK ((origin = 'captured_source' AND source_environment IS NOT NULL AND capture_sha256 IS NOT NULL) OR (origin = 'fresh_native' AND source_environment IS NULL AND capture_sha256 IS NULL AND notation_machines = 0 AND slack_projects = 0 AND slack_posted_events = 0) OR (origin = 'source_discarded' AND source_environment IS NOT NULL AND capture_sha256 IS NULL AND notation_machines = 0 AND slack_posted_events = 0));
+
+-- Migration: 20261127010000_add_firm_drive_settings.sql
+CREATE TABLE firm_drive_settings (
+    firm_id uuid PRIMARY KEY REFERENCES firm(id) ON DELETE CASCADE,
+    google_drive boolean NOT NULL
+);
+
+-- Firms already filing into Drive keep it; every other Firm starts with Drive off.
+DO $$
+BEGIN
+INSERT INTO firm_drive_settings (firm_id, google_drive)
+SELECT DISTINCT firm_id, true FROM project WHERE firm_id IS NOT NULL AND drive_folder_id IS NOT NULL;
+END $$;

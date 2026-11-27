@@ -927,6 +927,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         crate::sections::page::stored_page_tabs(&surreal, id, &project.code, viewer).await;
     let (verified_drive_root, verified_submissions) =
         crate::project_resources::verified_drive_links(&surreal, person_id, role, id).await;
+    let integrations = crate::project_resources::firm_integrations(project.firm_id).await;
 
     Ok(LawyerDetailView {
         client_preview_new_tab: crate::brand_website::client_preview_elsewhere(&project).await,
@@ -961,10 +962,11 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                     shared_notion_page_url: project.shared_notion_page_url,
                     calendar_id: project.calendar_id,
                     booking_url: project.booking_url,
-                },
+                }
+                .for_firm(integrations),
                 role,
             ),
-            can_configure: viewer.is_firm_side(),
+            can_configure: viewer.is_firm_side() && integrations.drive,
             project_code: code_for_resources,
         },
         trust,

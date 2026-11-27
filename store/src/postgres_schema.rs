@@ -1765,6 +1765,7 @@ mod tests {
             ("20261125200000_attorney_booking_calendar.sql", include_str!("../postgres/migrations/20261125200000_attorney_booking_calendar.sql")),
             ("20261126033000_project_plan_benefit_terms.sql", include_str!("../postgres/migrations/20261126033000_project_plan_benefit_terms.sql")),
             ("20261126230000_allow_durable_object_cutover_without_capture.sql", include_str!("../postgres/migrations/20261126230000_allow_durable_object_cutover_without_capture.sql")),
+            ("20261127010000_add_firm_drive_settings.sql", include_str!("../postgres/migrations/20261127010000_add_firm_drive_settings.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

@@ -16,8 +16,10 @@
 //! changes; it names the Firm's Forgejo organization ([`forgejo`]).
 
 mod calendar;
+mod drive;
 pub(crate) use calendar::calendar_owners_query;
 pub use calendar::{calendar_owner, with_google_calendar};
+pub use drive::{google_drive, set_google_drive};
 
 pub mod forgejo;
 pub mod forgejo_organization;
@@ -285,6 +287,8 @@ pub enum FirmError {
     WriteReturnedNothing,
     #[error("Firm Calendar settings storage is unavailable")]
     CalendarSettingsUnavailable,
+    #[error("Firm Drive settings storage is unavailable")]
+    DriveSettingsUnavailable,
     #[error("Enter a valid Google Workspace mailbox address.")]
     InvalidCalendarOwner,
     #[error("Gmail addresses are not supported. Choose a Google Workspace mailbox on the Firm's own domain.")]
@@ -414,6 +418,7 @@ impl FirmError {
                 "The portal theme must be one of this firm's own brands.".to_string()
             }
             Self::CalendarSettingsUnavailable
+            | Self::DriveSettingsUnavailable
             | Self::InvalidCalendarOwner
             | Self::GmailCalendarOwner
             | Self::InvalidEsignProvider => self.to_string(),
