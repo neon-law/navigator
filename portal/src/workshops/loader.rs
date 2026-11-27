@@ -111,12 +111,12 @@ const NAVIGATOR_MANIFEST: &[ManifestEntry] = &[
     },
     ManifestEntry {
         category: "presentations",
-        slug: "portland-cloud-native",
-        title: "Navigator: open-source cloud-native services for justice",
-        description: "Follow a fictional probate workflow through Navigator and see how its infrastructure decisions become reusable.",
-        audience: "For cloud-native practitioners",
-        benefit: "See how a law firm's open-source stack captures engineering decisions that other teams and agents can reuse.",
-        filename: "PORTLAND_CLOUD_NATIVE.md",
+        slug: "agentic-lawyering",
+        title: "Agentic Lawyering",
+        description: "Follow a fictional Oregon probate from retainer to court filing as Claude works through Navigator's MCP tools.",
+        audience: "For lawyers and engineers building with agents",
+        benefit: "See how lawyer-reviewed work becomes the templates, playbooks, and automation the next agent run starts from.",
+        filename: "AGENTIC_LAWYERING.md",
     },
 ];
 

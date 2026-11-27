@@ -156,7 +156,7 @@ The fixture seeds three matters, each with its own client, its own practice, and
 | --- | --- | --- |
 | `sample-litigation` | *Cruller v. Prine* | `neon-law/sample-litigation` |
 | `sample-transactional` | *Widget Works — Outside Counsel* | `neon-law/sample-transactional` |
-| `sample-estate` | *Estate of Cornelius Montgomery* | `neon-law/sample-estate` |
+| `sample-estate` | *Estate of Bigfoot* | `neon-law/sample-estate` |
 
 Each GitHub repository is a public, read-only snapshot that local development seeds from, named for the Project code it
 mounts on. Staging's source of truth is its Forgejo installation, under the owning Firm's current `<firm-slug>/<code>`.

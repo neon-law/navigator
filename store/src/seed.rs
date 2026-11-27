@@ -2065,10 +2065,10 @@ const SAMPLE_MATTERS: &[SampleMatter] = &[
     },
     SampleMatter {
         code: SAMPLE_ESTATE_CODE,
-        name: "Estate of Cornelius Montgomery",
-        client_entity: "Cornelius Montgomery",
+        name: "Estate of Bigfoot",
+        client_entity: "Littlefoot",
         client_kind: SampleClientKind::Human,
-        description: "estate plan dividing the residue among nieces and nephews",
+        description: "probate of an estate with no will, brought by one of four children",
         repository_url: "https://github.com/neon-law/sample-estate",
         brand: "vesta",
     },

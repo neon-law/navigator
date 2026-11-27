@@ -31,6 +31,7 @@ const DOCS: &[&str] = &[
     "server/content/workshops/navigator/README.md",
     "server/content/workshops/navigator/DEPLOY.md",
     "server/content/workshops/navigator/CONTRIBUTE.md",
+    "server/content/workshops/navigator/AGENTIC_LAWYERING.md",
     "cli/README.md",
 ];
 

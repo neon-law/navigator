@@ -214,7 +214,7 @@ Navigator is running on this machine.
 
 Sign in at {web}/auth/login as owner@, lawyer@, clerk@, or client@neonlaw.com
 with the password `password`. The seeded firm is Guieb & Shook PC with three sample
-matters: Cruller v. Prine, Widget Works, and the Estate of Cornelius Montgomery.
+matters: Cruller v. Prine, Widget Works, and the Estate of Bigfoot.
 
 Make it yours: copy .env.example to .env and add your own Meta, TikTok, or other
 provider keys, then re-run `hudson quickstart`. Use your own brand, not ours.

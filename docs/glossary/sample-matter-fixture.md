@@ -13,7 +13,7 @@ The three are deliberately different shapes of legal work, because one matter ca
 | --- | --- | --- | --- |
 | `sample-litigation` | *Cruller v. Prine* | trespass and rescission | an individual plaintiff |
 | `sample-transactional` | *Widget Works — Outside Counsel* | employment and contract review | a Nevada C-Corp |
-| `sample-estate` | *Estate of Cornelius Montgomery* | an estate plan | an individual testator |
+| `sample-estate` | *Estate of Bigfoot* | a probate | an heir of the decedent |
 
 Each Project names its own repository, and the seed reads its `pages:` and `drafts/` from it. Local development clones a
 public, read-only snapshot at `neon-law/<code>` on GitHub, so `hudson quickstart` clones it without credentials; the
