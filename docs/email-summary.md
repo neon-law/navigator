@@ -44,58 +44,11 @@ The weekday pilot previews pending Navigator Inbox messages from that mailbox an
 same Firm and Brand. Its report contains message IDs, proposed Project IDs, and reasons when there is no unique match.
 It leaves mail and Projects untouched. Review each proposal in Navigator and confirm each filing individually.
 
-## End-to-end status
+## Testing
 
-The `hudson dev email-summary-e2e` command still exercises the real intake and durable workflow topology on a worktree
-KIND cluster. Its model-success and Gemini-failure expectations are not satisfied while the worker admission gate
-requires verified Firm/provider-account approvals. The model-success scenario still needs an approved, email-confirmed
-sender fixture for its synthetic provider account. Do not treat the command as a passing proof until the KIND scenario
-succeeds.
-
-The remaining topology contract is:
-
-- Docker's *selected* engine must be OrbStack. The command reads it and never changes the global context.
-- The worktree's cluster must exist (`hudson dev worktree-env up --runtime kind`) with the `workflows-service`
-  `RestateDeployment` present.
-- The command builds the worker image from the checked-out source under an immutable tag
-  (`navigator-workflows-service:e2e-<12 hex>`, a hash of the commit plus every tracked change and untracked file), loads
-  it into the cluster, points the `RestateDeployment` at it, and fails unless Restate discovery lists `EmailSummary` and
-  every running worker pod uses that image.
-
-What is real: the host `web` listener built from this branch, the in-cluster Restate broker and worker, SurrealDB,
-SeaweedFS, and ClamAV. What is synthetic and owned by the command: the Vertex metadata token endpoint, Gemini
-`generateContent`, and the Slack Web API, served by one host HTTP fixture. The worker reaches the fixture at
-`host.docker.internal` through three overrides that are honoured only under `NAVIGATOR_CI_HARNESS=1` and refused
-otherwise: `GOOGLE_METADATA_URL`, `NAVIGATOR_SUMMARY_VERTEX_BASE_URL`, and `SLACK_API_BASE_URL`.
-
-Two CLI-owned TCP proxies sit between `web` and the Restate ingress and ClamAV so a scenario can make either unavailable
-without touching the cluster.
-
-Requests are signed with a synthetic P-256 key whose public half `web` is given as `SENDGRID_INBOUND_PUBLIC_KEY`. Every
-message, sender, and identifier is synthetic.
-
-- **Current admission:** an unapproved sender causes no Gemini request. The ordinary inbound message and Slack alert
-  remain available through their independent paths.
-- **Concurrent redelivery:** four POSTs with different multipart boundaries yield one receipt, letter, invocation, model
-  request, and Slack post.
-- **Rejected requests:** a tampered body, missing signature, wrong path secret, invalid envelope, and a ClamAV outage
-  return 401, 401, 401, 400, and 503, with no receipt, model call, or Slack call.
-- **Restate unavailable:** a 503 and a retained archived receipt; the replay returns 202 and reuses the receipt, letter,
-  and archive.
-- **Provider outcomes:** 429 then 5xx then success takes 3 requests; three 5xx take 3 requests and post a failure
-  notice; a 400 takes 1 request; an invalid object, a truncated candidate, and repeated timeouts each post a named
-  failure notice.
-- **Slack drops the response:** the post is recorded once, the delivery becomes `unknown`, nothing is resent, and an
-  explicit reconciliation confirms it.
-- **Worker killed after the model step:** the journaled model step is not invoked again and the interrupted post is not
-  resent. The delivery is recorded `unknown`, because an admitted send with no recorded outcome is listed by `ops
-  email-summary quarantined`, and reconciliation confirms it.
-- **Worker restart after confirmed delivery:** the redelivered message reposts nothing and calls no model.
-- **Non-support mail:** the existing inbound path answers 200 and creates no summary receipt, model call, or Slack call.
-
-There is one provider (Gemini), so "independent provider outcomes" reduces to the failure notice a failed provider
-produces. The disabled-feature configuration is covered by the non-harness configuration and route tests, not by this
-command.
+`server/tests/twilio_summary.rs` exercises intake and the DBOS workflow against synthetic PostgreSQL data and local
+provider doubles. The worker's tests cover sender approval, provider outcomes, and recovery. The KIND release gate
+checks DBOS workflow continuity across an application restart.
 
 ## Live Vertex
 

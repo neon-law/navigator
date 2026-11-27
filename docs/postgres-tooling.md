@@ -44,15 +44,12 @@ cargo run -p store --bin navigator-migrate -- --through <version>   # pending mi
 cargo run -p store --bin navigator-migrate -- --dir <path>          # a directory instead of the compiled set
 ```
 
-Run it as a Job, with a migration role's credentials, and start services only after it succeeds. `hudson journal
-migrate` calls the same runner. Every migration lets SQLx own its transaction, lock and `_sqlx_migrations` row: no file
-contains `BEGIN`/`COMMIT` or writes a ledger of its own.
+Run it as a Job, with a migration role's credentials, and start services only after it succeeds. Every migration lets
+SQLx own its transaction, lock and `_sqlx_migrations` row: no file contains `BEGIN`/`COMMIT` or writes a ledger of its
+own.
 
-Ordinary web and worker startup requires activated PostgreSQL history. It neither opens SurrealDB nor applies schema or
-imports Journal Entries. To import one Firm's timestamped Journal Entries, run `hudson journal --firm <uuid>
-import-legacy` with operator PostgreSQL and read-only SurrealDB source credentials. The bounded import retains
-identities and insertion timestamps, refuses conflicting content, and reports timestamp or reversal triage without
-inventing evidence. `journal migration-triage` remains an authenticated, Firm-authorized read of that explicit source.
+Startup verifies application admission in PostgreSQL before serving requests. The Firm-authorized Journal
+migration-triage endpoint reports outstanding work for an admitted database.
 
 ## Adopting a database installed from `schema.sql`
 

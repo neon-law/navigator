@@ -33,10 +33,8 @@ threads a person id (a follow-up).
 
 ## The request-side store
 
-PostgreSQL is the system of record for `sent_email` whenever `NAVIGATOR_POSTGRES_HOST` is set (`store::sent_emails`); a
-configured but unreachable server fails the audit insert, never falls back. Without a host (a bare dev run, the
-in-memory tests) the same calls use SurrealDB. Historical SurrealDB rows reach PostgreSQL through `hudson ops postgres
-mirror reconcile`, which inserts only what PostgreSQL lacks.
+PostgreSQL stores `sent_email` through `store::sent_emails`. Every process that records delivery attempts requires an
+admitted application database.
 
 The table is **append-only in the database**. A trigger refuses every `UPDATE` and `TRUNCATE`, and refuses a `DELETE`
 unless all three hold: the session set `navigator.sent_email_purge`, the row is more than a year old, and its UTC day is
@@ -71,15 +69,11 @@ committing twice. Every snapshot carries earlier days forward, so the current sn
 PostgreSQL has purged a day. The table lives apart from the full-table `postgres/navigator/sent_email` coverage lineage
 and is never pruned.
 
-Enable it on `web`, beside `NAVIGATOR_DBOS_ENABLED=true`, with `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED=true` (only
-`true` opts in; any other non-empty value fails the boot). It runs in `web` because that is the process `ops ship` gives
-the `navigator_app` PostgreSQL login and the DBOS login, and it keeps the export off Restate. It also needs
-`NAVIGATOR_ARCHIVES_BUCKET` and write access to that bucket for `web`'s service account. An enabled schedule fails the
-boot without PostgreSQL or the bucket. Until the flag is on, nothing is exported, so nothing is ever purged.
+Enable it in `web` with `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED=true` and set `NAVIGATOR_ARCHIVES_BUCKET`. The
+application identity needs write access to that bucket. The purge only removes days recorded in the export ledger.
 
 Every process that records outbound attempts needs the `navigator_app` PostgreSQL login and completed application
-history. Missing PostgreSQL or history fails audit recording after delivery has been attempted. Mirror reconciliation is
-an operator import tool; it does not replace direct recording.
+history. Missing PostgreSQL or history fails audit recording after delivery has been attempted.
 
 Register the table in BigQuery once, as a BigLake Iceberg table over the current metadata file:
 
