@@ -211,16 +211,6 @@ pub(crate) async fn create_deadline(
     ) {
         return Err(ApiError::DeadlineInvalid("Queue this court date with navigator project deadline review queue and confirm its evidence in Navigator.".into()));
     }
-    if input.category == Some(Category::Deposition)
-        && input
-            .hearing
-            .as_ref()
-            .is_none_or(|details| details.prep.is_none())
-    {
-        return Err(ApiError::DeadlineInvalid(
-            "Review the deposition and explicitly accept or drop its preparation Deadlines.".into(),
-        ));
-    }
     let (due_at, due_on) = store::project_deadlines::resolve_due(
         &state.application_store,
         id,

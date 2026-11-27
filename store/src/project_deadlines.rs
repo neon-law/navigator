@@ -686,6 +686,16 @@ pub async fn create(
         normalized.category =
             settle_category(&normalized.calendar_role, &normalized.authority_kind)?;
     }
+    if normalized.category.as_deref() == Some("deposition")
+        && normalized
+            .hearing
+            .as_ref()
+            .is_none_or(|details| details.prep.is_none())
+    {
+        return Err(DeadlineError::Invalid(
+            "review the deposition and explicitly accept or drop its preparation Deadlines".into(),
+        ));
+    }
     require_links(
         application_store,
         new.project_id,
