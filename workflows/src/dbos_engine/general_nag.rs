@@ -8,10 +8,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::dri_digest::{open_matters_message, slack_firm_open_pitch_counts};
+use crate::firm_slack::{DeploymentSlackFirm, SLACK_FIRM_ENV};
 use crate::SlackBot;
 use chrono::{DateTime, NaiveDate, Utc};
 use dbos::{CancellationToken, StepOptions, WorkflowHandle, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
+use store::projects::BrandOpenPitch;
 
 pub const WORKFLOW: &str = "GeneralNag";
 /// Separate from the general DBOS executor switch so a staged executor can
@@ -49,7 +52,7 @@ pub enum GeneralNagError {
 
 #[async_trait::async_trait]
 pub trait CountSource: Send + Sync {
-    async fn read(&self) -> Result<(usize, usize), GeneralNagError>;
+    async fn read(&self) -> Result<Vec<BrandOpenPitch>, GeneralNagError>;
 }
 
 #[derive(Clone)]
@@ -60,12 +63,12 @@ pub struct Context {
     pub counts: Arc<dyn CountSource>,
 }
 
-struct SurrealCounts(store::surreal::SurrealDb);
+struct SurrealCounts(store::surreal::SurrealDb, DeploymentSlackFirm);
 
 #[async_trait::async_trait]
 impl CountSource for SurrealCounts {
-    async fn read(&self) -> Result<(usize, usize), GeneralNagError> {
-        store::projects::matter_open_pitch_counts(&self.0)
+    async fn read(&self) -> Result<Vec<BrandOpenPitch>, GeneralNagError> {
+        slack_firm_open_pitch_counts(&self.0, self.1)
             .await
             .map_err(|_| GeneralNagError::Counts)
     }
@@ -78,10 +81,10 @@ struct ApplicationCounts {
 
 #[async_trait::async_trait]
 impl CountSource for ApplicationCounts {
-    async fn read(&self) -> Result<(usize, usize), GeneralNagError> {
+    async fn read(&self) -> Result<Vec<BrandOpenPitch>, GeneralNagError> {
         store::postgres::PostgresDb::with_application_db(
             self.postgres.clone(),
-            store::projects::matter_open_pitch_counts(&self.surreal),
+            slack_firm_open_pitch_counts(&self.surreal, DeploymentSlackFirm::DefaultBrand),
         )
         .await
         .map_err(|_| GeneralNagError::Counts)?
@@ -107,7 +110,8 @@ impl Context {
     }
 
     /// Post with the deployment's bot to `SLACK_GENERAL_CHANNEL_ID`, which an
-    /// enabled schedule requires.
+    /// enabled schedule requires, counting the matters of every Brand the
+    /// deployment's Slack Firm owns.
     pub fn from_lookup<F>(
         surreal: store::surreal::SurrealDb,
         slack: Arc<dyn SlackBot>,
@@ -117,12 +121,14 @@ impl Context {
     where
         F: Fn(&str) -> Option<String>,
     {
+        let firm = DeploymentSlackFirm::from_lookup(&lookup)
+            .map_err(|_| super::SettingsError::Invalid(SLACK_FIRM_ENV))?;
         let channel_id = super::required_channel(lookup, "SLACK_GENERAL_CHANNEL_ID")?;
         Ok(Self {
             slack,
             channel_id,
             simulated,
-            counts: Arc::new(SurrealCounts(surreal)),
+            counts: Arc::new(SurrealCounts(surreal, firm)),
         })
     }
 }
@@ -198,12 +204,12 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<GeneralNagWorkflo
             let mut posted_followup = false;
             if !context.simulated {
                 let counts = Arc::clone(&context.counts);
-                let (open, pitches) = dbos::step("counts", move || {
+                let brands = dbos::step("counts", move || {
                     let counts = Arc::clone(&counts);
                     async move { counts.read().await.map_err(dbos::Error::Application) }
                 })
                 .await?;
-                let followup = format!("Total open matters: {open}, pitches: {pitches}");
+                let followup = open_matters_message(&brands);
                 let channel_id = context.channel_id.clone();
                 let slack = Arc::clone(&context.slack);
                 dbos::step_with(
@@ -278,8 +284,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl super::CountSource for EmptyCounts {
-        async fn read(&self) -> Result<(usize, usize), super::GeneralNagError> {
-            Ok((0, 0))
+        async fn read(
+            &self,
+        ) -> Result<Vec<store::projects::BrandOpenPitch>, super::GeneralNagError> {
+            Ok(Vec::new())
         }
     }
 

@@ -21,10 +21,10 @@
 //! steps a simulated run never runs, because the count they post is a
 //! real-matter-only signal:
 //!
-//! 3. `ctx.run("counts")` — [`store::projects::matter_open_pitch_counts`]:
-//!    how many of the firm's own `"neon"`-brand matters are open, and how
-//!    many of those are still pitches.
-//! 4. `ctx.run("notify_counts")` — post those counts as a second, separate
+//! 3. `ctx.run("counts")` — [`workflows::dri_digest::slack_firm_open_pitch_counts`]:
+//!    per Brand the deployment's Slack Firm owns, how many matters are open
+//!    and how many of those are still pitches.
+//! 4. `ctx.run("notify_counts")` — post the total and each Brand's line as a second, separate
 //!    Slack message, journaled independently from steps 1-2 so a retry of
 //!    either pair never re-runs the other.
 //!
@@ -61,7 +61,8 @@ pub struct DriDigestReport {
     pub projects: usize,
 }
 
-/// The nightly open-matters/pitches follow-up post, or `None` when this
+/// The nightly open-matters/pitches follow-up post — the total, then each
+/// Brand's line — or `None` when this
 /// deployment discloses simulated matters — that count is a real-matter-only
 /// signal, so a staging run posts nothing here rather than a number nobody
 /// should read as real.
@@ -70,11 +71,11 @@ pub struct DriDigestReport {
 /// without a workflow context, the same seam [`dri_digest_message`] uses for
 /// its own header text.
 #[must_use]
-pub fn open_matters_followup(simulated: bool, open: usize, pitches: usize) -> Option<String> {
-    if simulated {
-        return None;
-    }
-    Some(format!("Total open matters: {open}, pitches: {pitches}"))
+pub fn open_matters_followup(
+    simulated: bool,
+    brands: &[store::projects::BrandOpenPitch],
+) -> Option<String> {
+    (!simulated).then(|| workflows::dri_digest::open_matters_message(brands))
 }
 
 /// Service registered with the Restate endpoint. Holds a `SurrealDB` clone (the
@@ -192,14 +193,17 @@ impl DriDigestService {
         // real-matter-only signal, so there is nothing to query or post.
         if !self.simulated {
             let surreal = self.surreal.clone();
-            let (open, pitches) = ctx
+            let brands = ctx
                 .run(move || async move {
-                    store::projects::matter_open_pitch_counts(&surreal)
-                        .await
-                        .map(Json)
-                        .map_err(|error| {
-                            HandlerError::from(TerminalError::new(format!("counts: {error}")))
-                        })
+                    workflows::dri_digest::slack_firm_open_pitch_counts(
+                        &surreal,
+                        workflows::firm_slack::DeploymentSlackFirm::DefaultBrand,
+                    )
+                    .await
+                    .map(Json)
+                    .map_err(|error| {
+                        HandlerError::from(TerminalError::new(format!("counts: {error}")))
+                    })
                 })
                 .name("counts")
                 .await?
@@ -208,7 +212,7 @@ impl DriDigestService {
             // `simulated` is `false` in this branch, so this is always `Some`;
             // the shared helper still owns the decision so its own unit tests
             // are the single place that predicate is pinned.
-            if let Some(followup) = open_matters_followup(self.simulated, open, pitches) {
+            if let Some(followup) = open_matters_followup(self.simulated, &brands) {
                 let notifier = Arc::clone(&self.notifier);
                 ctx.run(move || async move {
                     notifier.notify(followup).await.map_err(HandlerError::from)
@@ -329,29 +333,23 @@ mod tests {
         );
     }
 
-    /// The whole point of the follow-up: a simulated deployment's open/pitch
-    /// count is not a real-matter signal, so it must post nothing.
+    /// A simulated deployment's open/pitch count is not a real-matter
+    /// signal, so it posts nothing; a real one always posts, zero or not.
     #[test]
-    fn a_simulated_deployment_posts_no_open_matters_followup() {
-        assert_eq!(open_matters_followup(true, 3, 1), None);
-    }
-
-    /// A real deployment always posts the follow-up, with both counts named.
-    #[test]
-    fn a_real_deployment_posts_the_open_matters_followup() {
+    fn only_a_real_deployment_posts_the_open_matters_followup() {
+        let brands = [store::projects::BrandOpenPitch {
+            brand: "Neon Law".into(),
+            open: 3,
+            pitches: 1,
+        }];
+        assert_eq!(open_matters_followup(true, &brands), None);
         assert_eq!(
-            open_matters_followup(false, 3, 1),
-            Some("Total open matters: 3, pitches: 1".to_string())
+            open_matters_followup(false, &brands).as_deref(),
+            Some("Total open matters: 3, pitches: 1\n• Neon Law: 3 open, pitches: 1")
         );
-    }
-
-    /// Zero open matters (and so zero pitches) still posts — a quiet
-    /// portfolio is still a real answer, not the simulated no-op.
-    #[test]
-    fn a_real_deployment_with_no_open_matters_still_posts_zero_counts() {
         assert_eq!(
-            open_matters_followup(false, 0, 0),
-            Some("Total open matters: 0, pitches: 0".to_string())
+            open_matters_followup(false, &[]).as_deref(),
+            Some("Total open matters: 0, pitches: 0")
         );
     }
 }

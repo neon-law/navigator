@@ -371,6 +371,8 @@ pub enum ProjectStoreError {
     NoSuchEntity(Uuid),
     #[error(transparent)]
     Tenancy(#[from] crate::postgres::tenancy::TenancyError),
+    #[error(transparent)]
+    Brand(Box<crate::brands::BrandError>),
     /// Under tenancy authority, PostgreSQL did not accept a Project write that
     /// committed through the SurrealDB transaction path.
     #[error("PostgreSQL did not accept the Project write: {0}")]
@@ -5047,39 +5049,76 @@ pub async fn matter_lifecycle_sets(
         .map_err(|error| error.to_string())
 }
 
-/// From each matter's `(brand, status, missing_onboarding)`, how many
-/// `"neon"`-brand matters are open (`status != "closed"`), and how many of
-/// those are still pitches — the [`MatterLifecycle::NeedsOnboarding`]
-/// subset, no onboarding artifact on file yet. Scoped to the firm's own root
-/// brand: never another house brand, and never another firm's matters on a
-/// licensed fork.
-///
-/// Pure and exposed so the nightly `DriDigest` follow-up post's counts are
-/// unit-tested without a database — see [`matter_open_pitch_counts`] for the
-/// database-backed caller that supplies `missing_onboarding` from
-/// [`matter_lifecycle_sets`].
-#[must_use]
-pub fn open_pitch_counts(rows: &[(&str, &str, bool)]) -> (usize, usize) {
-    rows.iter().fold(
-        (0, 0),
-        |(open, pitches), (brand, status, missing_onboarding)| {
-            if *brand != "neon" || *status == "closed" {
-                return (open, pitches);
-            }
-            (open + 1, pitches + usize::from(*missing_onboarding))
-        },
-    )
+/// One Brand's line in the nightly open-matters notice.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BrandOpenPitch {
+    /// The Brand's display name.
+    pub brand: String,
+    /// Matters wearing the Brand whose status is not `closed`.
+    pub open: usize,
+    /// The open matters still pitches: the [`MatterLifecycle::NeedsOnboarding`]
+    /// subset, no onboarding artifact on file yet.
+    pub pitches: usize,
 }
 
-/// Every `"neon"`-brand matter's open/pitch counts for the nightly
-/// `DriDigest` follow-up post, using the shared verified onboarding evidence.
+/// From a Firm's Brands as `(key, name)` and each matter's
+/// `(brand, status, missing_onboarding)`, one [`BrandOpenPitch`] per Brand:
+/// how many of its matters are open (`status != "closed"`) and how many of
+/// those are still pitches. Every Brand gets a line, zero or not; a matter
+/// wearing a Brand outside the list never counts. Lines sort by open count,
+/// busiest first, then by name.
+///
+/// Pure and exposed so the nightly follow-up post's counts are unit-tested
+/// without a database — see [`matter_open_pitch_counts`] for the
+/// database-backed caller.
+#[must_use]
+pub fn open_pitch_counts(
+    brands: &[(&str, &str)],
+    rows: &[(&str, &str, bool)],
+) -> Vec<BrandOpenPitch> {
+    let mut lines: Vec<BrandOpenPitch> = brands
+        .iter()
+        .map(|(key, name)| {
+            let (open, pitches) = rows
+                .iter()
+                .filter(|(brand, status, _)| brand == key && *status != "closed")
+                .fold((0, 0), |(open, pitches), (_, _, missing_onboarding)| {
+                    (open + 1, pitches + usize::from(*missing_onboarding))
+                });
+            BrandOpenPitch {
+                brand: (*name).to_owned(),
+                open,
+                pitches,
+            }
+        })
+        .collect();
+    lines.sort_by(|left, right| {
+        right
+            .open
+            .cmp(&left.open)
+            .then_with(|| left.brand.cmp(&right.brand))
+    });
+    lines
+}
+
+/// The open/pitch counts of every Brand the Firm owns, for the nightly
+/// follow-up post in that Firm's Slack, using the shared verified onboarding
+/// evidence.
 pub async fn matter_open_pitch_counts(
     surreal: &SurrealDb,
-) -> Result<(usize, usize), ProjectStoreError> {
+    firm_id: Uuid,
+) -> Result<Vec<BrandOpenPitch>, ProjectStoreError> {
+    let brands = crate::brands::for_firm(surreal, firm_id)
+        .await
+        .map_err(|error| ProjectStoreError::Brand(Box::new(error)))?;
     let projects = all(surreal).await?;
     let has_engagement = onboarding_official_sets(surreal, &projects)
         .await
         .map_err(ProjectStoreError::Lifecycle)?;
+    let brands: Vec<(&str, &str)> = brands
+        .iter()
+        .map(|brand| (brand.key.as_str(), brand.name.as_str()))
+        .collect();
     let rows: Vec<(&str, &str, bool)> = projects
         .iter()
         .map(|project| {
@@ -5090,7 +5129,7 @@ pub async fn matter_open_pitch_counts(
             )
         })
         .collect();
-    Ok(open_pitch_counts(&rows))
+    Ok(open_pitch_counts(&brands, &rows))
 }
 
 #[cfg(test)]
@@ -5411,32 +5450,49 @@ mod surreal_read_tests {
             .expect("designating a DRI must not fail on a project row that predates `brand`");
     }
 
-    /// An empty portfolio counts nothing.
-    #[test]
-    fn open_pitch_counts_of_an_empty_slice_is_zero_and_zero() {
-        assert_eq!(open_pitch_counts(&[]), (0, 0));
+    fn line(brand: &str, open: usize, pitches: usize) -> super::BrandOpenPitch {
+        super::BrandOpenPitch {
+            brand: brand.to_owned(),
+            open,
+            pitches,
+        }
     }
 
-    /// Every matter closed: none of them are open, so there is nothing left
-    /// to call a pitch either.
+    /// Every Brand the Firm owns gets a line, busiest first; closed matters
+    /// count for nothing, and a quiet Brand still reads as zero.
     #[test]
-    fn open_pitch_counts_with_every_matter_closed_is_zero_and_zero() {
-        let rows = [("neon", "closed", true), ("neon", "closed", false)];
-        assert_eq!(open_pitch_counts(&rows), (0, 0));
-    }
-
-    /// Only `"neon"`-brand rows count, whatever their status or onboarding
-    /// state — a `"delete-your-data"` matter (or any other house brand) never
-    /// moves either number.
-    #[test]
-    fn open_pitch_counts_ignores_every_brand_but_neon() {
-        let rows = [
-            ("neon", "open", true),  // open + pitch
-            ("neon", "open", false), // open, not a pitch
-            ("delete-your-data", "open", true),
-            ("delete-your-data", "closed", false),
+    fn open_pitch_counts_give_every_firm_brand_a_line_busiest_first() {
+        let brands = [
+            ("neon", "Neon Law"),
+            ("same-day", "Same Day Legal"),
+            ("quiet", "Quiet Brand"),
         ];
-        assert_eq!(open_pitch_counts(&rows), (2, 1));
+        let rows = [
+            ("neon", "open", true),
+            ("neon", "closed", true),
+            ("same-day", "open", true),
+            ("same-day", "open", false),
+            ("quiet", "closed", false),
+        ];
+        assert_eq!(
+            open_pitch_counts(&brands, &rows),
+            vec![
+                line("Same Day Legal", 2, 1),
+                line("Neon Law", 1, 1),
+                line("Quiet Brand", 0, 0),
+            ]
+        );
+    }
+
+    /// A matter wearing another Firm's Brand never moves this Firm's numbers.
+    #[test]
+    fn open_pitch_counts_ignore_brands_outside_the_firm() {
+        let rows = [("neon", "open", false), ("other-firm", "open", true)];
+        assert_eq!(
+            open_pitch_counts(&[("neon", "Neon Law")], &rows),
+            vec![line("Neon Law", 1, 0)]
+        );
+        assert!(open_pitch_counts(&[], &rows).is_empty());
     }
 
     /// A repository URL may name any forge, in any organization.
