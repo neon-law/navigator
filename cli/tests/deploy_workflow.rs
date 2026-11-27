@@ -978,20 +978,16 @@ fn every_kubectl_apply_reads_a_vendored_manifest() {
          Found: {remote:#?}"
     );
 
-    // The CLI owns these paths; the native runner delegates provisioning to it.
-    for named in ["k8s/vendor/ingress-nginx-controller-v1.11.2.yaml"] {
-        assert!(
-            orchestration.contains(named),
-            "the CLI must resolve its vendored manifest {named} locally"
-        );
-    }
-
-    for vendored in ["k8s/vendor/ingress-nginx-controller-v1.11.2.yaml"] {
-        assert!(
-            root.join(vendored).exists(),
-            "the CLI's vendored manifest `{vendored}` is missing from the tree"
-        );
-    }
+    // The CLI owns this path. The native runner delegates provisioning to it.
+    let manifest = "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml";
+    assert!(
+        orchestration.contains(manifest),
+        "the CLI must resolve its vendored manifest {manifest} locally"
+    );
+    assert!(
+        root.join(manifest).exists(),
+        "the CLI's vendored manifest `{manifest}` is missing from the tree"
+    );
 }
 
 #[test]
