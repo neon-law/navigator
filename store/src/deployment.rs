@@ -47,7 +47,6 @@ fn parse_capability_flag<F: Fn(&str) -> Option<String>>(
 pub enum RequirementScope {
     #[default]
     EveryDeployment,
-    GithubAutomationHome,
     SmsTestRecipientsHome,
 }
 
@@ -56,7 +55,6 @@ impl RequirementScope {
     pub const fn applies(self, capabilities: DeploymentCapabilities) -> bool {
         match self {
             Self::EveryDeployment => true,
-            Self::GithubAutomationHome => capabilities.github_automation_home,
             Self::SmsTestRecipientsHome => capabilities.sms_test_recipients_home,
         }
     }
@@ -104,7 +102,6 @@ macro_rules! required {
 
 /// Web boot requirements whose key shape is also consumed by `ops ship`.
 pub static WEB_REQUIREMENTS: &[Requirement] = &[
-    required!("RESTATE_BROKER_URL"),
     required!("NAVIGATOR_STORAGE_BACKEND"),
     // The private bucket each Project's published Portal bundle lives in,
     // streamed same-origin through `/app/projects/{code}/portal`. Mandatory like
@@ -175,22 +172,7 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     // which is GitHub-App-specific. Integration-tier, so the staging CI
     // harness may skip it.
     required!(integration "NAVIGATOR_GITHUB_ORG"),
-    // The Restate ingress endpoint + bearer that every `*-trigger` CronJob
-    // submits a one-way invocation through. Still project-scoped to the
-    // automation home here, matching this row's pre-existing scope; other
-    // deployments are not preflighted for it by this table. Integration-tier:
-    // the staging CI harness runs no trigger.
-    Requirement {
-        any_of: &[&["RESTATE_INGRESS_URL", "RESTATE_AUTH_TOKEN"]],
-        trigger: None,
-        integration: true,
-        scope: RequirementScope::GithubAutomationHome,
-    },
     required!(integration "NAVIGATOR_CREDENTIAL_ENVIRONMENT"),
-    // Restate Cloud signs requests to the production worker. The public key
-    // is deployment configuration, not secret material, and KIND remains
-    // keyless through the CI-harness integration relaxation.
-    required!(integration "RESTATE_IDENTITY_KEY"),
     // Runtime KMS stands alone: it seals Firm integration secrets (the Slack
     // bot token every Slack call uses among them) and Brand social account
     // tokens, and `web` and `workflows-service` each build it
@@ -339,20 +321,6 @@ pub fn harness_relaxations_apply<F: Fn(&str) -> Option<String>>(
     environment == DeploymentEnvironment::Dev && ci_harness_enabled(get)
 }
 
-/// Exact engine-specific requirements shared by startup and manifest preflight.
-/// No larger conjunction or alternative is discarded because it contains one of these keys.
-#[must_use]
-pub fn is_restate_requirement(requirement: &Requirement) -> bool {
-    if requirement.any_of.len() != 1 {
-        return false;
-    }
-    matches!(
-        requirement.any_of[0],
-        ["RESTATE_BROKER_URL" | "RESTATE_IDENTITY_KEY"]
-            | ["RESTATE_INGRESS_URL", "RESTATE_AUTH_TOKEN"]
-    )
-}
-
 pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
     environment: DeploymentEnvironment,
     get: &F,
@@ -361,7 +329,6 @@ pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
     let capabilities = DeploymentCapabilities::from_lookup(get)?;
     Ok(WEB_REQUIREMENTS
         .iter()
-        .filter(|requirement| !is_restate_requirement(requirement))
         .filter(|requirement| !harness || !requirement.integration)
         .filter(|requirement| requirement.scope.applies(capabilities))
         .filter(|requirement| {
@@ -388,56 +355,6 @@ pub fn is_signer_mailbox(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn native_admission_preserves_requirements_with_additional_obligations_or_alternatives() {
-        let mut requirement = super::Requirement {
-            any_of: &[&["RESTATE_BROKER_URL", "SESSION_SECRET"]],
-            trigger: None,
-            integration: false,
-            scope: super::RequirementScope::EveryDeployment,
-        };
-        assert!(!super::is_restate_requirement(&requirement));
-        requirement.any_of = &[&["RESTATE_BROKER_URL"], &["SESSION_SECRET"]];
-        assert!(!super::is_restate_requirement(&requirement));
-    }
-
-    #[test]
-    fn broker_admission_follows_complete_native_caller_selection() {
-        use crate::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
-        use std::collections::BTreeMap;
-        let mut values: BTreeMap<_, String> = WORKFLOWS
-            .iter()
-            .map(|row| (row.flag, "true".into()))
-            .collect();
-        values.extend([
-            (COHOST_ENV, "true".into()),
-            (DBOS_ENABLED_ENV, "true".into()),
-            (ENGINE_ENV, "dbos".into()),
-        ]);
-        let needs_broker = |values: &BTreeMap<&str, String>| {
-            super::applicable_web_requirements(super::DeploymentEnvironment::Production, &|key| {
-                values.get(key).cloned()
-            })
-            .unwrap()
-            .iter()
-            .any(|requirement| {
-                requirement
-                    .any_of
-                    .iter()
-                    .any(|alternative| alternative.contains(&"RESTATE_BROKER_URL"))
-            })
-        };
-        assert!(!needs_broker(&values));
-        values.insert(
-            "NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED",
-            "false".into(),
-        );
-        assert!(
-            needs_broker(&values),
-            "social reconciliation may still send an inbound notice through Restate"
-        );
-        assert!(needs_broker(&BTreeMap::new()));
-    }
 
     #[test]
     fn a_malformed_capability_flag_names_the_value_and_the_fix() {
@@ -570,15 +487,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_marked_deployment_is_asked_for_webhook_credentials() {
-        let marked = demanded(&[(super::GITHUB_AUTOMATION_HOME_FLAG, "true")]);
-        assert!(marked.contains(&"RESTATE_INGRESS_URL".to_owned()));
-        assert!(marked.contains(&"RESTATE_AUTH_TOKEN".to_owned()));
-        let ordinary = demanded(&[("NAVIGATOR_GCP_PROJECT_ID", "example-project")]);
-        assert!(!ordinary.contains(&"RESTATE_INGRESS_URL".to_owned()));
-    }
-
-    #[test]
     fn capability_flags_must_be_exact_booleans() {
         let get = |key: &str| (key == super::GITHUB_AUTOMATION_HOME_FLAG).then(|| "yes".to_owned());
         let error = applicable_web_requirements(DeploymentEnvironment::Production, &get)
@@ -594,7 +502,6 @@ mod tests {
             (super::GITHUB_AUTOMATION_HOME_FLAG, "false"),
             (super::SMS_TEST_RECIPIENTS_FLAG, "false"),
         ]);
-        assert!(!demanded.contains(&"RESTATE_INGRESS_URL".to_owned()));
         assert!(!demanded.contains(&"NAVIGATOR_SMS_TEST_RECIPIENTS".to_owned()));
     }
 

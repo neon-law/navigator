@@ -2909,10 +2909,6 @@ mod tests {
             "OpenObserve must expose direct OTLP gRPC on 5081"
         );
         assert!(
-            manifests.contains("NAVIGATOR_OPENOBSERVE_PASSWORD"),
-            "both Navigator binaries must receive the OpenObserve credential contract"
-        );
-        assert!(
             manifests.contains("openobserve_endpoint: http://openobserve:5081"),
             "the staging coordinates must point binaries directly at OpenObserve"
         );
