@@ -219,9 +219,7 @@ pub async fn list_all(_db: &ApplicationStore) -> Result<Vec<Question>, QuestionE
     Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?)
 }
 
-/// Write a new question row. The record id is minted from a fresh v7
-/// `Uuid` through [`crate::surreal::record_id`], so the key stays the
-/// native UUID spelling `answers.question_id` addresses.
+/// Write a new question row.
 ///
 /// # Errors
 ///

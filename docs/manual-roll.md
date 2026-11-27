@@ -35,7 +35,6 @@ location; a value stored in the record always wins over the derived one:
 | `NAVIGATOR_GCP_SERVICE_ACCOUNT_ID`, `_DRIVE_GCP_SERVICE_ACCOUNT_ID` | `<project>-web`, `<project>-drive` |
 | `NAVIGATOR_WEB_SECRET_NAME` | `<project>-web-secrets` |
 | `NAVIGATOR_{ASSETS,DOCUMENTS,EXPORTS,LOGS,APPLICATIONS,TELEMETRY,ARCHIVES}_BUCKET` | `<project>-assets`, … |
-| `NAVIGATOR_SURREAL_ARCHIVES_BUCKET` | `<project>-archives` |
 | `NAVIGATOR_GKE_CONTEXT` | `gke_<project>_<location>_<cluster>` |
 | KMS key | `projects/<project>/locations/<location>/keyRings/navigator-secrets/cryptoKeys/deployment-config` |
 

@@ -1,48 +1,4 @@
-//! The jurisdiction reference table — US states (plus DC) and foreign
-//! sovereigns an Entity can be organized under — and every query that
-//! reads or writes a `jurisdiction` row.
-//!
-//! # Where this table lives
-//!
-//! PostgreSQL holds it wherever it is configured: every read and write
-//! here goes to PostgreSQL
-//! ([`crate::postgres::catalog`]). There the unique `name` stops a racing
-//! duplicate ([`JurisdictionError::NameTaken`]) and the
-//! `jurisdiction_type_closed` check holds the closed type set.
-//!
-//! `jurisdictions` moved with its slice of #1093 (ENG-20). It is a leaf
-//! lookup table — no outbound references — so the port could not cascade
-//! further, and it closes the one cross-engine reference the persons
-//! slice knowingly left behind: `credential.jurisdiction_id` is a real
-//! `record<jurisdiction>` link now instead of a bare UUID resolved in
-//! Rust.
-//!
-//! # Engine facts this module is shaped around
-//!
-//! **A unique violation carries no typed detail.** It arrives as
-//! [`surrealdb::types::ErrorDetails::Internal`] with the index name in
-//! the message, so the shared classifier discriminates on
-//! `jurisdiction_code` — a `DEFINE INDEX` identifier this workspace
-//! chose in `store/src/schema/navigator.surql`, not prose.
-//!
-//! **The key-value layer is optimistic, so a write can lose a race.**
-//! Two writers touching one record conflict, the loser is rolled back,
-//! and the engine reports a typed `TransactionConflict`; [`writing`]
-//! re-runs the statement under the crate's one retry policy,
-//! [`crate::surreal::retry`].
-//!
-//! **`code` needs no stored lowercase twin.** `person.email_lower`
-//! exists because an IdP may present any casing of a mailbox; a
-//! jurisdiction code is a canonical spelling from
-//! `store/seeds/Jurisdiction.yaml` that every lookup matches exactly, so
-//! the plain UNIQUE index is the whole constraint.
-//!
-//! # A link is not validated
-//!
-//! `entity.jurisdiction_id` is a `record<jurisdiction>` link, and the
-//! engine accepts one naming a row that was never written. A caller that
-//! needs the jurisdiction behind a link resolves it here, which is what
-//! [`find_by_id`] exists for.
+//! PostgreSQL reference data for US states and foreign jurisdictions.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -229,10 +185,7 @@ pub async fn list_by_type(
     Ok(catalog::all(&pg, PG_BY_TYPE, kind, from_pg).await?)
 }
 
-/// Write a new jurisdiction row. The record id is minted from a fresh v7
-/// `Uuid` through [`crate::surreal::record_id`], so the key stays the
-/// native UUID spelling every cross-engine `jurisdiction_id` still
-/// addresses.
+/// Write a new jurisdiction row.
 ///
 /// # Errors
 ///

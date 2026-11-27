@@ -1,35 +1,4 @@
-//! The `entity_types` reference table — the kinds of legal entity a
-//! firm forms (LLC, Corporation, Trust, …) — and every query that reads
-//! or writes an `entity_type` row.
-//!
-//! # Where this table lives
-//!
-//! PostgreSQL holds it wherever it is configured: every read and write
-//! here goes to PostgreSQL
-//! ([`crate::postgres::catalog`]).
-//!
-//! `entity_types` is a leaf lookup table — one `name` column, no
-//! outbound references. `entity.entity_type_id` is a
-//! `record<entity_type>` link into it, and the engine does not validate a
-//! link, so `entity_commands::require_entity_type` reads a row
-//! back here before any write that stores one, which is what
-//! [`find_by_id`] exists for.
-//!
-//! # Engine facts this module is shaped around
-//!
-//! **A unique violation carries no typed detail.** It arrives as
-//! [`surrealdb::types::ErrorDetails::Internal`] with the index name in
-//! the message, so the shared classifier discriminates on
-//! `entity_type_name` — a `DEFINE INDEX` identifier this workspace
-//! chose in `store/src/schema/navigator.surql`, not prose.
-//!
-//! **The key-value layer is optimistic, so a write can lose a race.**
-//! [`writing`] re-runs the statement under the crate's one retry policy,
-//! [`crate::surreal::retry`].
-//!
-//! **`name` needs no stored lowercase twin.** The names are canonical
-//! spellings from `store/seeds/EntityType.yaml` that every lookup
-//! matches exactly, so the plain UNIQUE index is the whole constraint.
+//! PostgreSQL reference data for entity types and their jurisdiction links.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -151,10 +120,7 @@ pub async fn list(
     Ok(catalog::all(&pg, sql, None::<String>, from_pg).await?)
 }
 
-/// Write a new entity type row. The record id is minted from a fresh v7
-/// `Uuid` through [`crate::surreal::record_id`], so the key stays the
-/// native UUID spelling the cross-engine `entity_type_id` still
-/// addresses.
+/// Write a new entity type row.
 ///
 /// # Errors
 ///

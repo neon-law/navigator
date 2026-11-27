@@ -40,16 +40,6 @@ inputs:
       for a caller that wants to pass its own token rather than the run's.
     required: false
     default: ${{ github.token }}
-  question_codes_from_store:
-    description: >-
-      Set to "true" to load the stored question registry so N104 rejects
-      question codes outside it. The registry lives in SurrealDB, so the job
-      must also set NAVIGATOR_SURREAL_ENDPOINT, NAVIGATOR_SURREAL_NAMESPACE,
-      and NAVIGATOR_SURREAL_DATABASE. An unreachable store warns and falls
-      back to the canonical codes; without this input that one check is
-      skipped and everything else still runs.
-    required: false
-    default: "false"
 
 runs:
   using: composite
@@ -143,16 +133,4 @@ runs:
     # in a checkout that is about to be thrown away.
     - name: navigator project gate
       shell: bash
-      env:
-        QUESTION_CODES_FROM_STORE: ${{ inputs.question_codes_from_store }}
-      run: |
-        set -euo pipefail
-        case "${QUESTION_CODES_FROM_STORE}" in
-            true|false)
-                navigator project gate --ci
-                ;;
-            *)
-                echo "::error::'question_codes_from_store' must be 'true' or 'false'."
-                exit 1
-                ;;
-        esac
+      run: navigator project gate --ci

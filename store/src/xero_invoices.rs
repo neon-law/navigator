@@ -133,10 +133,6 @@ impl From<PgXeroInvoiceRow> for XeroInvoice {
 }
 
 /// Errors reading or writing a Xero invoice mirror.
-///
-/// This is deliberately not a bare [`surrealdb::Error`]: `portal`, `webapp`,
-/// and `billing-workflows` consume this module without depending on the
-/// SurrealDB crate.
 #[derive(Debug, Error)]
 pub enum XeroInvoiceError {
     /// A database operation failed.

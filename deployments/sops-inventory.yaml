@@ -15,9 +15,6 @@ common:
   OAUTH_APPLE_PRIVATE_KEY: Sign in with Apple ES256 private key (PKCS#8 PEM, multiline)
   HCAPTCHA_SECRET: hCaptcha account secret redeeming the public lead forms' challenge
   LINEAR_BACKLOG_READ_KEY: Read-only Linear key for the daily backlog digest
-  RESTATE_BROKER_URL: Restate workflow broker URL
-  RESTATE_INGRESS_URL: Restate invocation ingress URL
-  RESTATE_AUTH_TOKEN: Restate invocation bearer token
   SENDGRID_API_KEY: restricted outbound mail API key
   SENDGRID_FROM_EMAIL: authenticated sender address
   SENDGRID_INBOUND_SECRET: inbound parse webhook path secret
@@ -26,8 +23,6 @@ common:
   SENDGRID_EVENTS_PUBLIC_KEY: event webhook signature verification key
   NAVIGATOR_GITHUB_APP_PRIVATE_KEY: deployment GitHub App private key
   NAVIGATOR_GIT_WRITER_TOKEN: internal Git writer bearer token
-  NAVIGATOR_SURREAL_USER: SurrealDB administrator user
-  NAVIGATOR_SURREAL_PASSWORD: SurrealDB administrator password
   DASH0_TOKEN: Dash0 ingest-only auth token scoped to each row's dataset
   TWILIO_ACCOUNT_SID: Twilio account SID the admin inbox sends texts as
   TWILIO_AUTH_TOKEN: Twilio auth token verifying inbound SMS webhook signatures
@@ -66,13 +61,6 @@ staging_only:
   NAVIGATOR_GITHUB_WEBHOOK_SECRET: GitHub webhook HMAC secret
   NAVIGATOR_NOTION_DATABASE_ID: parent database in the staging Notion workspace
   NAVIGATOR_SMS_TEST_RECIPIENTS: personal numbers simulated-matters staging may text; production has real matters
-
-# These values are consumed by the human-operated `ops ship` registration
-# step, not by either pod. Keep them out of secrets.enc.yaml and Secret
-# Manager's runtime projection.
-operator_only:
-  RESTATE_ADMIN_URL: Restate administration endpoint
-  RESTATE_ADMIN_TOKEN: Restate administration bearer token
 
 # These files are opt-in service inputs, never part of secrets.enc.yaml and
 # never projected through the web/workflow envFrom Secret.

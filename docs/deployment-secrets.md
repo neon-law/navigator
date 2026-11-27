@@ -142,8 +142,8 @@ Two properties are load-bearing rather than incidental:
 If publishing the value in a pull request would be a disclosure, it is key material. Otherwise it is a coordinate.
 
 Project IDs, cluster and namespace names, bucket names, hostnames, the Workspace login domain, Drive folder and shared
-Drive IDs, the GitHub App ID and bot login, and the SurrealDB namespace and database are coordinates. Database URLs,
-session and webhook signing secrets, OAuth client secrets, API keys, and private keys are key material.
+Drive IDs, the GitHub App ID and bot login, and PostgreSQL database names are coordinates. Database URLs, session and
+webhook signing secrets, OAuth client secrets, API keys, and private keys are key material.
 
 Four boot-required keys are in neither file. `NAVIGATOR_CLAMD_ADDR`, `NAVIGATOR_STORAGE_BACKEND`,
 `NAVIGATOR_EMAIL_BACKEND`, and `GOOGLE_OAUTH_CLIENT_IDS` ship as inline Deployment env — `ship::INLINE_ENV_WEB_KEYS`

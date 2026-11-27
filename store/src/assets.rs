@@ -20,7 +20,7 @@
 //!
 //! **The key-value layer is optimistic, so a write can lose a race.**
 //! [`writing`] re-runs the statement under the crate's one retry policy,
-//! [`crate::surreal::retry`]. The seed and `cli import` both ingest template
+//! `crate::surreal::retry`. The seed and `cli import` both ingest template
 //! bodies on every boot, and the cucumber suite shares one engine across
 //! concurrent scenarios, so idempotence under contention is the contract.
 //!

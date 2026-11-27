@@ -9,7 +9,7 @@ Neon Law Navigator talks to a handful of external services. They fall into two k
   webhooks, and data partitions are never copied between deployments.
 - **Platform services** are the cloud infrastructure the app runs on — durable execution, object storage, the database,
   identity, the agent-router LLM, and outbound/inbound email. They follow the same deployment boundary: one database,
-  bucket set, OAuth client pair, Restate environment, mail credential, and webhook configuration per deployment.
+  bucket set, OAuth client pair, PostgreSQL database, mail credential, and webhook configuration per deployment.
 
 The [full catalog](#current-integrations) below lists every external service the application code itself dials. Purely
 operational layers that sit *above* the env-var interface — the SOPS-encrypted `deployments/` tree (secret values),
@@ -176,17 +176,15 @@ joins. The setup command retries each resource independently and exits nonzero f
 
 The persistent staging deployment (`NAVIGATOR_ENVIRONMENT=production` and `NAVIGATOR_SIMULATED_MATTERS=true`) appends a
 final `from Staging` line to every outbound Slack body: ops notices, the per-Project bot, and Firm-private
-`chat.postMessage` calls. Restate jobs do not add a second staging parenthetical to those bodies. Production holding
-real matters does not. Local KIND is `dev` and does not. GitHub Actions deploy narration is a workflow secret, not this
-runtime path.
+`chat.postMessage` calls. Production omits the staging label. Local KIND is `dev` and does not. GitHub Actions deploy
+narration is a workflow secret, not this runtime path.
 
 Inbound summary matching reads `NAVIGATOR_SUMMARY_ENVELOPE_RECIPIENTS` from the deployment config (comma-separated SMTP
 envelope recipients). Set it to the final recipient SendGrid receives after any Google Workspace routing rewrite
 (normally the Parse intake address), not the visible `To:` header or original support mailbox. There is no compiled
 default. Unset leaves the signed summary lane off; a present blank value fails boot. The lane is enabled only by
-`NAVIGATOR_SUMMARY_ENABLED=true`, which also requires SendGrid's signed Inbound Parse public key, a Slack channel, the
-HTTPS Restate broker, and Vertex AI access for the runtime service account. The web process captures the immutable
-provider settings in the Restate request; the worker reads the same gate before registering provider adapters.
+`NAVIGATOR_SUMMARY_ENABLED=true`, which also requires SendGrid's signed Inbound Parse public key, a Slack channel, and
+Vertex AI access for the runtime service account. DBOS runs the summary workflow inside the web process.
 
 Texts enter the Firm Inbox through the Twilio number's "A message comes in" webhook (HTTP POST) at
 `https://<NAVIGATOR_PUBLIC_HOST>/webhook/twilio/sms`. Set `NAVIGATOR_SMS_NUMBER` in E.164 format and put
@@ -244,7 +242,6 @@ explicit `NAVIGATOR_CI_HARNESS=1` staging test surface may use in-process fakes;
 | Xero | Accounting / billing (`ACCREC` invoices) | binding | `XERO_*` |
 | Notion | Project pages, meeting transcripts, Calendar booking, firm planning | firm-owned | resolved by `firm_id` |
 | Slack | Firm-private Project channels and mechanism notices | firm-owned | resolved by `firm_id` |
-| Restate Cloud | Durable workflow execution (`workflows-service`) | platform | `RESTATE_*` |
 | Google Cloud | Storage, OIDC, archive | platform | `NAVIGATOR_*`, `GOOGLE_OAUTH_*` |
 | Vertex AI | A2A agent-router LLM (Gemini Flash in prod) | platform | `NAVIGATOR_GCP_*` |
 | SendGrid | Outbound + inbound email | platform | `SENDGRID_*` |
@@ -256,10 +253,9 @@ Notes:
   evidence. Other banks, including Bank of Montreal IOLTA accounts, use provider-neutral entries and statement evidence.
   Navigator initiates no payments or transfers. See [Firm journal](firm-journal.md).
 - **Google Cloud is several spec-compliant touchpoints, not one SDK.** Object storage goes through the `cloud`
-  crate's `StorageService` trait (GCS in prod, SeaweedFS in dev); the store is SurrealDB over
-  `NAVIGATOR_SURREAL_ENDPOINT` (Surreal Cloud in prod); OIDC is Google Identity validated against `GOOGLE_OAUTH_*`;
-  Drive REST v3 is import-only, never a live store or archive. See [`cloud/README.md`](../cloud/README.md) for the full
-  resource map.
+  crate's `StorageService` trait (GCS in prod, SeaweedFS in dev). PostgreSQL stores application data. Google Identity
+  validates OIDC against `GOOGLE_OAUTH_*`, and Drive REST v3 imports files. See [`cloud/README.md`](../cloud/README.md)
+  for the resource map.
 - **Vertex AI is pluggable.** The router is the `portal::agent_router::AgentRouter` trait — `GeminiRouter` (Vertex AI)
   in prod, `NullRouter` in KIND. Swapping to another LLM means a new `impl`, not a new vendor account.
 - **Contract review is a second, independent Vertex AI consumer.** `portal::contract_review::GeminiContractReviewer`
@@ -313,8 +309,7 @@ account convention does not apply to them:
   application code, not a vendor account or separately operated service. See [`rego-policy.md`](rego-policy.md).
 - **OIDC identity is already the Google Cloud row.** In production, sign-in is **Google Identity** (validated against
   `GOOGLE_OAUTH_*`) — counted under Google Cloud above, not as a separate vendor. **Rauthy** is its **non-production
-  stand-in** (the staging/KIND OIDC provider), exactly as SeaweedFS stands in for GCS and the in-cluster store for
-  Surreal SQL. The identity provider is pluggable and spec-compliant either way.
+  stand-in** for KIND. SeaweedFS supplies object storage in KIND. Both development and deployments use PostgreSQL.
 - **The `deployments/` tree and DNSimple** sit *above* the env-var interface — the repository holds each deployment's
   coordinates and SOPS-encrypted secret *values* (the app reads plain env vars; see
   [`deployment-secrets.md`](deployment-secrets.md)), DNSimple holds DNS records. Neither is a code dependency, and a

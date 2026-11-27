@@ -12,7 +12,7 @@
 //!
 //! The unique `git_repository_remote_hash` index is what enforces one row
 //! per remote; a violation has no typed detail, so
-//! [`crate::surreal::retry::unique_violation`] discriminates on that index
+//! `crate::surreal::retry::unique_violation` discriminates on that index
 //! name.
 
 use chrono::{DateTime, Utc};

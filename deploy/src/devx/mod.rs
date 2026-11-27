@@ -1,12 +1,12 @@
 // devx — developer-experience tool that brings up Neon Law Navigator
-// dependency stack (SeaweedFS, Rauthy, Restate, SurrealDB, OpenObserve, and
+// dependency stack (SeaweedFS, Rauthy, PostgreSQL, OpenObserve, and
 // ClamAV) inside a KIND cluster while leaving the `web` binary on the host so
 // it can be restarted in-process during a Rust edit-compile
 // loop.
 //
 // The KIND cluster + manifests are also what `devx deploy` uses.
 // Both flows drive Kustomize overlays under `k8s/overlays/`:
-//   - `kind-deps` — base + deps + workflows-service (no `web`),
+//   - `kind-deps` — base + dependencies (no `web`),
 //                   used by `devx up` for host-side iteration
 //   - `kind`      — full local stack including `web`,
 //                   used by `devx deploy`
@@ -96,28 +96,6 @@ const INGRESS_MANIFEST: &str = "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml
 const INGRESS_MANIFEST_SHA256: &str =
     "dc850e38ca4abcb08625f1601f0656c81b6b5e34cc23d5458c332060732c14e0";
 
-// Restate Operator — same chart drives KIND and GKE. Release notes:
-// https://github.com/restatedev/restate-operator/releases. Kept aligned
-// with the server image in `k8s/staging/restate.yaml` and
-// `RESTATE_CLI_VERSION` below (2.8.1 / 1.7.2), and with the chart
-// version in `.github/workflows/deploy.yml`. NOTE: the local "restate
-// won't provision" wedge was NOT a version skew — it was the operator's
-// own `deny-all` NetworkPolicy being enforced by recent kindnet, which
-// blocked the operator→node `:5122` provisioning dial. The fix lives in
-// `restate.yaml` (`security.disableNetworkPolicies: true`), not here.
-
-// The Operator's CRDs, applied explicitly by `install_restate_operator`.
-//
-// Chart 2.8.1 moved these into a native Helm `crds/` directory (gated by
-// the chart's `installCrds`, default on). Helm installs a native CRD once
-// and never touches it again on `helm upgrade` — a deliberately
-// conservative lifecycle — so the chart alone would freeze a long-lived
-// cluster's CRD schema at whatever version first created it while a fresh
-// cluster got the current one. That silent split is exactly the drift the
-// pinned constants exist to prevent, so apply the release's CRD artifacts
-// on every `up` and let both converge.
-// Exact v2.8.1 release artifact SHA-256 digests.
-#[cfg(test)]
 #[cfg(test)]
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::Digest;
@@ -160,26 +138,6 @@ mod ingress_manifest_tests {
     }
 }
 
-// Restate CLI — pinned so operator-laptop and CI-runner versions
-// don't drift. The CLI talks to Restate Cloud's admin API; a
-// mismatch silently desyncs `deployments register`. 1.6.x renamed
-// `deployment` to `deployments` and `--env` to `--environment`.
-// Tracks the server line (see `RESTATE_OPERATOR_VERSION` above and
-// the server image in `restate.yaml`) — keep all three on 1.7.x.
-// Only `check_restate_cli_version` reads this: it warns when the CLI
-// on PATH drifts. There is no CI env to keep in step.
-
-// Last-resort public HTTPS endpoint Restate Cloud uses to reach the
-// `workflows-service` worker. Backed by the ingress + managed cert
-// under `examples/deploy/k8s/gke/ingress/workflows-*.yaml`. This is a
-// placeholder of *last* resort: the URL is resolved by
-// [`resolve_workflows_url`], which prefers an explicit `--url` /
-// `NAVIGATOR_WORKFLOWS_URL`, then derives `https://workflows.<domain>/`
-// from the resolved `brand.primary_domain` (Neon Law by default, or a custom
-// bundle's), and only falls back to this constant when none of those are set.
-// Hitting this constant in prod means the
-// re-register silently no-ops (the 2026-06-10 ship symptom).
-
 // Local `:dev` image tags KIND loads. CI publishes the real images to
 // the private Artifact Registry (`YY.M.D`); `pull_retag_load` pulls one
 // and retags it to the `:dev` name the manifests reference, so the
@@ -211,12 +169,6 @@ const DEFAULT_RAUTHY_HOST_PORT: u16 = 30080;
 const LOCAL_RAUTHY_CLIENT_SECRET: &str =
     "navigatorwebsecretnavigatorwebsecretnavigatorwebsecretnavigatorw";
 const DEFAULT_SEAWEEDFS_S3_HOST_PORT: u16 = 30900;
-// SurrealDB (the `surreal` Service in `navigator`), the store the
-// workspace is porting onto (#1093). Its own port 8000 is a crowded
-// default on a developer's machine, and 8080 is already KIND's ingress,
-// so the host mapping is 18000 — clear of every other port this module
-// binds.
-
 // Local `web` defaults — matches `cargo run -p neon` defaults.
 const DEFAULT_LOCAL_WEB_PORT: u16 = 3001;
 // The shared `dev up` tier's fixed second port: DeleteYourData.com,
@@ -641,7 +593,7 @@ pub enum GcpCmd {
         /// `NAVIGATOR_GITHUB_ORG`.
         #[arg(long, env = "NAVIGATOR_GITHUB_ORG")]
         applications_publisher_org: Option<String>,
-        /// Long-term Iceberg archive of this deployment's Surreal store
+        /// Long-term Iceberg archive for this deployment
         /// (`<archives-prefix><deployment>`). No lifecycle rule: this is where
         /// long-term storage lives. Omit to skip the lane entirely — there is
         /// no derived default, because the name is prefix-shaped rather than
@@ -2569,7 +2521,7 @@ mod tests {
                 }
                 let body = std::fs::read_to_string(&path).expect("read overlay manifest");
                 // Only the navigator-web Deployment patch matters; the
-                // dependency manifests (SeaweedFS, Rauthy, Surreal) legitimately
+                // dependency manifests (SeaweedFS, Rauthy, PostgreSQL) legitimately
                 // pin their own upstream images.
                 if !body.contains("name: navigator-web") {
                     continue;

@@ -60,7 +60,7 @@ spec:
           for: 15m
           annotations:
             summary: "Nightly Project Update has not finished in 26 hours"
-            description: "Start with `navigator ops doctor`, then the Restate Invocations view for NightlyProjectUpdate."
+            description: "Start with `navigator ops doctor`, then inspect the DBOS execution and web logs for NightlyProjectUpdate."
             dash0-enabled: "true"
           labels:
             workflow: nightly_project_update

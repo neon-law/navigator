@@ -294,8 +294,7 @@ jobs:
     # before any label goes here.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # A wedge detector, not a duration budget: a hung build must not hold a
-    # metered runner for hours. Without SurrealDB the run is the build (~25 min
-    # cold) plus a short test pass.
+    # metered runner for hours. The run includes the instrumented build and PostgreSQL test pass.
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
@@ -886,7 +885,7 @@ jobs:
           # counter-file location into this shell only, so a later step would
           # not find the profile data.
           #
-          # The required floor is 92.0%, measured without SurrealDB. ENG-1375
+          # The required floor is 92.0%. ENG-1375
           # raises it to 95.0% as domains and tests move to PostgreSQL.
           #
           # Raising the floor means moving four constants together — the
@@ -937,8 +936,7 @@ jobs:
           # Anything here that grows a decision belongs on the other side of
           # that seam, not in this regex. `email_summary_e2e/harness.rs` and
           # `scenarios.rs` are the same kind of file: they drive the host web
-          # process, the Restate broker and the branch worker on a KIND
-          # cluster. Its fixture server and worker-patch logic stay counted.
+          # process and its DBOS workflows on a KIND cluster. Its fixture server and worker-patch logic stay counted.
           # `forgejo/cluster.rs`, `oidc.rs`, and `smoke.rs` drive kubectl, git,
           # and HTTP against a KIND Forgejo; `forgejo-postgres.yml` runs them,
           # and `forgejo/mod.rs` keeps their decisions and their tests here.
