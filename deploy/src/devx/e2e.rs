@@ -62,6 +62,7 @@ fn seed_counts_ok(questions: i64, templates: i64) -> bool {
 /// The local Rauthy fixture's Lawyer login, seeded so the browser gate's
 /// admin-gated walk can run.
 const LAWYER_EMAIL: &str = "lawyer@neonlaw.com";
+const LAWYER_NAME: &str = "Lawrence Lawyer";
 
 /// Find or promote the synthetic Lawyer through the authoritative Person accessor.
 async fn grant_lawyer_in(surreal: &store::surreal::SurrealDb) -> Result<()> {
@@ -70,15 +71,30 @@ async fn grant_lawyer_in(surreal: &store::surreal::SurrealDb) -> Result<()> {
         .context("look up the lawyer person")?
     {
         Some(existing) => {
-            store::persons::set_role(surreal, existing.id, store::persons::Role::Lawyer)
-                .await
-                .context("promote the lawyer person")?;
+            // A Rauthy sign-in without a name claim can leave the mailbox as
+            // the display name. The retainer fixture needs a named signer.
+            let name = existing
+                .name
+                .trim()
+                .eq_ignore_ascii_case(&existing.email)
+                .then(|| LAWYER_NAME.to_owned());
+            store::persons::edit(
+                surreal,
+                existing.id,
+                &store::persons::PersonEdit {
+                    name,
+                    role: Some(store::persons::Role::Lawyer),
+                    ..Default::default()
+                },
+            )
+            .await
+            .context("prepare the lawyer person")?;
         }
         None => {
             store::persons::create(
                 surreal,
                 &store::persons::NewPerson::with_role(
-                    "Lawyer",
+                    LAWYER_NAME,
                     LAWYER_EMAIL,
                     store::persons::Role::Lawyer,
                 ),
@@ -598,6 +614,34 @@ mod tests {
         .await;
     }
 
+    #[tokio::test]
+    async fn grant_lawyer_replaces_the_fixture_mailbox_display_name() {
+        store::test_support::with_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            let fixture = store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::with_role(
+                    LAWYER_EMAIL,
+                    LAWYER_EMAIL,
+                    store::persons::Role::Client,
+                ),
+            )
+            .await
+            .unwrap();
+
+            grant_lawyer_in(&surreal).await.unwrap();
+
+            let row = store::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
+                .await
+                .unwrap()
+                .expect("the existing fixture remains");
+            assert_eq!(row.id, fixture.id);
+            assert_eq!(row.role, store::persons::Role::Lawyer);
+            assert_eq!(row.name, "Lawrence Lawyer");
+        })
+        .await;
+    }
+
     /// …and promotes it when it is already there, at whatever casing.
     ///
     /// `person_email_lower` holds one row per mailbox, so a Lawyer row stored
@@ -611,7 +655,7 @@ mod tests {
             store::persons::create(
                 &surreal,
                 &store::persons::NewPerson::with_role(
-                    "Lawyer",
+                    "Fixture Counsel",
                     "Lawyer@NeonLaw.com",
                     store::persons::Role::Client,
                 ),
@@ -632,6 +676,7 @@ mod tests {
                 "the stored casing is preserved"
             );
             assert_eq!(rows[0].role, store::persons::Role::Lawyer);
+            assert_eq!(rows[0].name, "Fixture Counsel");
         })
         .await;
     }
