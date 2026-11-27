@@ -79,9 +79,10 @@ fn render(body: &str) -> Vec<u8> {
 fn a_california_caption_continues_on_the_next_numbered_page() {
     let mut source = caption(&SEVEN_COUNSEL);
     let closing_fence = source.rfind("```").unwrap();
-    let parties: String = (1..=46)
-        .map(|n| format!("parties: RESPONDENT{n:02},\n"))
-        .collect();
+    let mut parties = String::new();
+    for n in 1..=46 {
+        writeln!(parties, "parties: RESPONDENT{n:02},").unwrap();
+    }
     source.insert_str(closing_fence, &format!("california: true\n{parties}"));
     source.push_str("# COMPLAINT\n\nThe pleading body begins here.\n");
 
