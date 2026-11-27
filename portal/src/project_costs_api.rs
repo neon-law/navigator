@@ -19,9 +19,9 @@ fn error(
 ) -> Response {
     let status = match error {
         costs::ProjectCostError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
-        costs::ProjectCostError::Conflict | costs::ProjectCostError::ReceiptTaken => {
-            StatusCode::CONFLICT
-        }
+        costs::ProjectCostError::Conflict
+        | costs::ProjectCostError::ReceiptTaken
+        | costs::ProjectCostError::SourceTaken => StatusCode::CONFLICT,
         costs::ProjectCostError::NotFound => StatusCode::NOT_FOUND,
         costs::ProjectCostError::Postgres(_) => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -178,6 +178,57 @@ pub(crate) async fn create(
         Ok(row) => Ok((StatusCode::CREATED, Json(row)).into_response()),
         Err(e) => Ok(error(&e, "create", project_id, None)),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReceiptInput {
+    receipt_document_id: Uuid,
+    occurred_on: chrono::NaiveDate,
+}
+
+/// `POST /app/api/projects/{id}/costs/from-receipt`.
+pub(crate) async fn create_from_receipt(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path(project_id): Path<Uuid>,
+    Json(input): Json<ReceiptInput>,
+) -> Result<Response, ApiError> {
+    let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
+    let viewer = store::access::matter_viewer(
+        &state.application_store,
+        Some(actor_id),
+        session.role,
+        project_id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
+    if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match postgres("create_from_receipt", project_id, None).await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let result = Box::pin(costs::create_from_receipt(
+        &state.application_store,
+        &pg,
+        project_id,
+        actor_id,
+        input.receipt_document_id,
+        input.occurred_on,
+    ))
+    .await;
+    Ok(match result {
+        Ok((row, true)) => (StatusCode::CREATED, Json(row)).into_response(),
+        Ok((row, false)) => Json(row).into_response(),
+        Err(costs::ProjectCostError::Invalid(reason)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error":"project_cost_command_refused", "reason":reason})),
+        )
+            .into_response(),
+        Err(e) => error(&e, "create_from_receipt", project_id, None),
+    })
 }
 
 #[derive(Deserialize)]

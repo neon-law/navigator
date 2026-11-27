@@ -423,6 +423,17 @@ route_allow if {
     input.path[1] == "api"
     input.path[2] == "projects"
     input.path[4] == "costs"
+    input.path[5] == "from-receipt"
+    count(input.path) == 6
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "costs"
     input.path[6] in {"confirm", "invoice", "resolve"}
     count(input.path) == 7
     input.method == "POST"
