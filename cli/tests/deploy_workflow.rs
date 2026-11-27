@@ -979,22 +979,14 @@ fn every_kubectl_apply_reads_a_vendored_manifest() {
     );
 
     // The CLI owns these paths; the native runner delegates provisioning to it.
-    for named in [
-        "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml",
-        "k8s/vendor/restate-operator-v2.8.1",
-    ] {
+    for named in ["k8s/vendor/ingress-nginx-controller-v1.11.2.yaml"] {
         assert!(
             orchestration.contains(named),
             "the CLI must resolve its vendored manifest {named} locally"
         );
     }
 
-    for vendored in [
-        "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml",
-        "k8s/vendor/restate-operator-v2.8.1/restateclusters.yaml",
-        "k8s/vendor/restate-operator-v2.8.1/restatedeployments.yaml",
-        "k8s/vendor/restate-operator-v2.8.1/restatecloudenvironments.yaml",
-    ] {
+    for vendored in ["k8s/vendor/ingress-nginx-controller-v1.11.2.yaml"] {
         assert!(
             root.join(vendored).exists(),
             "the CLI's vendored manifest `{vendored}` is missing from the tree"
@@ -1046,11 +1038,6 @@ fn build_exports_an_actions_cache_scope_only_where_publish_service_reads_it() {
     let exported = scopes("build");
     let read_back = scopes("publish-service");
 
-    assert!(
-        !exported.is_empty(),
-        "at least one build leg must still export a scope publish-service reads, or a release \
-         compiles the same crates twice"
-    );
     for scope in &exported {
         assert!(
             read_back.contains(scope),

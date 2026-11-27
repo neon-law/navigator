@@ -2361,7 +2361,6 @@ fn shared_web_requirements(
     store::deployment::WEB_REQUIREMENTS
         .iter()
         .filter(|requirement| requirement.scope.applies(capabilities))
-        .filter(|requirement| !store::deployment::is_restate_requirement(requirement))
         .map(|requirement| SecretRequirement {
             any_of: requirement
                 .any_of
@@ -7590,6 +7589,7 @@ mod tests {
             .encrypted_keys
             .insert(workflows::trigger::DBOS_INGRESS_TOKEN_ENV.into());
 
+        deployment.encrypted_keys.remove(RUNTIME_KMS_KEY);
         for key in ["LINEAR_BACKLOG_READ_KEY", RUNTIME_KMS_KEY] {
             let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
             assert!(error.to_string().contains(key), "{error}");

@@ -374,7 +374,6 @@ fn dev_help_lists_local_loop_members() {
             "flake-hunt",
             "forgejo",
             "grant-lawyer",
-            "install",
             "kind",
             "kustomize",
             "logs",
@@ -387,7 +386,6 @@ fn dev_help_lists_local_loop_members() {
             "status",
             "undeploy",
             "up",
-            "worker-reload",
             "worktree-env",
             "help",
         ]
@@ -928,11 +926,9 @@ fn ops_help_lists_operator_members() {
             "rebrand",
             "release",
             "release-default-tag",
-            "restate",
             "sas",
             "secrets",
             "ship",
-            "surreal-archive",
             "surreal-free-tests",
             "help",
         ]

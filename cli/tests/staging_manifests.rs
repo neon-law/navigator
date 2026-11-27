@@ -62,23 +62,6 @@ fn resource<'a>(resources: &'a [Value], kind: &str, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{kind}/{name} must be rendered"))
 }
 
-/// The store endpoint both workloads must resolve to the same `ConfigMap`.
-///
-/// `web` and the worker journal to one database: a Notation `web` commits
-/// has to be visible to the worker that advances it, so a manifest that
-/// points them at different coordinates is a `RecordNotFound` on every
-/// Restate-backed flow rather than a config nit.
-fn store_endpoint(resource: &Value) -> &str {
-    resource["spec"]["template"]["spec"]["containers"]
-        .as_sequence()
-        .expect("workload containers")
-        .iter()
-        .flat_map(|container| container["env"].as_sequence().into_iter().flatten())
-        .find(|entry| entry["name"].as_str() == Some("NAVIGATOR_SURREAL_ENDPOINT"))
-        .and_then(|entry| entry["valueFrom"]["configMapKeyRef"]["name"].as_str())
-        .expect("NAVIGATOR_SURREAL_ENDPOINT must be ConfigMap-backed")
-}
-
 fn env_entry<'a>(resource: &'a Value, name: &str) -> &'a Value {
     resource["spec"]["template"]["spec"]["containers"]
         .as_sequence()
@@ -133,27 +116,10 @@ fn staging_contracts_keep_secrets_lanes_brand_and_store_coordinates_aligned() {
                         .is_some_and(|name| name.ends_with("navigator-web"))
             })
             .expect("staging web deployment");
-        let worker = resources
-            .iter()
-            .find(|resource| resource["kind"].as_str() == Some("RestateDeployment"))
-            .expect("staging worker");
-        assert_eq!(store_endpoint(web), store_endpoint(worker));
-        assert_eq!(
-            config_map_key(worker, "NAVIGATOR_DOCUMENTS_BUCKET"),
-            "documents_bucket"
-        );
-        assert_eq!(
-            config_map_key(worker, "NAVIGATOR_STORAGE_BUCKET"),
-            "exports_bucket"
-        );
-        assert_eq!(
-            config_map_key(worker, "NAVIGATOR_ARCHIVES_BUCKET"),
-            "archives_bucket"
-        );
-        // The second half of the two-bucket proof: a worker where the
-        // Iceberg-archive and exports keys resolve to the same ConfigMap
-        // value would pass the key-name assertion above while proving
-        // nothing about a two-bucket change (ENG-214).
+        assert!(resources.iter().all(|resource| {
+            let name = resource["metadata"]["name"].as_str().unwrap_or_default();
+            !name.contains("surreal") && !name.contains("restate") && name != "workflows-service"
+        }));
         let seaweedfs_config_map = resource(&resources, "ConfigMap", "navigator-seaweedfs");
         let archives_bucket_value = seaweedfs_config_map["data"]["archives_bucket"]
             .as_str()
@@ -182,11 +148,6 @@ fn staging_contracts_keep_secrets_lanes_brand_and_store_coordinates_aligned() {
             env_entry(web, "NAVIGATOR_ENVIRONMENT")["value"].as_str(),
             Some("dev"),
             "{overlay} web must emit NAVIGATOR_ENVIRONMENT=dev"
-        );
-        assert_eq!(
-            env_entry(worker, "NAVIGATOR_ENVIRONMENT")["value"].as_str(),
-            Some("dev"),
-            "{overlay} worker must emit NAVIGATOR_ENVIRONMENT=dev"
         );
         assert!(text.contains("readOnly: true"));
         for lane in ["documents", "assets", "exports", "archives", "lfs"] {
@@ -456,74 +417,6 @@ fn gke_web_rolls_with_a_surge_pod_on_per_pod_repository_scratch() {
 }
 
 #[test]
-fn workflows_service_resources_rollout_and_probes_are_rendered() {
-    let Some(resources) = render(GKE) else {
-        return;
-    };
-    let deployment = resource(&resources, "Deployment", "workflows-service");
-
-    for (name, cpu, memory) in [("worker", "100m", "256Mi"), ("envoy", "50m", "128Mi")] {
-        let container = container(deployment, name);
-        assert_eq!(
-            container["resources"]["requests"]["cpu"].as_str(),
-            Some(cpu),
-            "{name} CPU request"
-        );
-        assert_eq!(
-            container["resources"]["requests"]["memory"].as_str(),
-            Some(memory),
-            "{name} memory request"
-        );
-    }
-
-    assert_eq!(
-        deployment["spec"]["strategy"]["type"].as_str(),
-        Some("RollingUpdate")
-    );
-    assert_eq!(
-        deployment["spec"]["strategy"]["rollingUpdate"]["maxSurge"].as_u64(),
-        Some(0)
-    );
-    assert_eq!(
-        deployment["spec"]["strategy"]["rollingUpdate"]["maxUnavailable"].as_u64(),
-        Some(1)
-    );
-
-    let worker = container(deployment, "worker");
-    assert_eq!(
-        worker["readinessProbe"]["httpGet"]["path"].as_str(),
-        Some("/readyz"),
-        "readiness renders the DBOS-aware endpoint; liveness stays on /healthz"
-    );
-    assert_eq!(
-        worker["readinessProbe"]["httpGet"]["port"].as_u64(),
-        Some(9083)
-    );
-    assert_eq!(
-        worker["livenessProbe"]["httpGet"]["path"].as_str(),
-        Some("/healthz")
-    );
-    assert_eq!(
-        worker["livenessProbe"]["httpGet"]["port"].as_u64(),
-        Some(9083)
-    );
-
-    let envoy = container(deployment, "envoy");
-    assert_eq!(
-        envoy["readinessProbe"]["httpGet"]["path"].as_str(),
-        Some("/restate/health")
-    );
-    assert_eq!(
-        envoy["readinessProbe"]["httpGet"]["port"].as_u64(),
-        Some(9081)
-    );
-    assert_eq!(
-        envoy["livenessProbe"]["tcpSocket"]["port"].as_u64(),
-        Some(9081)
-    );
-}
-
-#[test]
 fn postgres_gke_overlays_target_the_deployment_namespace_and_retain_storage() {
     for (environment, namespace, capacity) in [
         ("staging", "navigator", "100Gi"),
@@ -586,41 +479,6 @@ fn postgres_gke_overlays_target_the_deployment_namespace_and_retain_storage() {
             Some("regional-pd")
         );
     }
-}
-
-/// Once a real `RESTATE_IDENTITY_KEY` is configured, the worker's Restate SDK
-/// endpoint requires a valid Restate Cloud signature on every request it
-/// serves, including its own `/restate/health`. Neither kubelet's readiness
-/// probe nor the GCE LB's `BackendConfig` health check ever carries that
-/// signature, so a health check proxied through to the worker 401s forever.
-/// Envoy must answer this specific path itself instead of forwarding it.
-#[test]
-fn workflows_service_envoy_answers_the_health_probe_without_proxying_to_the_worker() {
-    let Some(resources) = render(GKE) else {
-        return;
-    };
-    let config_map = resource(&resources, "ConfigMap", "workflows-service-envoy");
-    let envoy_yaml = config_map["data"]["envoy.yaml"]
-        .as_str()
-        .expect("envoy.yaml embedded config");
-    let envoy_config: Value = serde_yaml::from_str(envoy_yaml).expect("valid envoy config YAML");
-    let routes = envoy_config["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]
-        ["typed_config"]["route_config"]["virtual_hosts"][0]["routes"]
-        .as_sequence()
-        .expect("configured routes");
-    let health_route = routes
-        .iter()
-        .find(|route| route["match"]["path"].as_str() == Some("/restate/health"))
-        .expect("a dedicated /restate/health route");
-    assert!(
-        health_route["direct_response"]["status"].as_u64() == Some(200),
-        "envoy must answer /restate/health itself with a direct_response, not a proxy"
-    );
-    assert_ne!(
-        health_route["route"]["cluster"].as_str(),
-        Some("restate_worker"),
-        "the health check must never reach the identity-gated worker endpoint"
-    );
 }
 
 const POSTGRES_OVERLAYS: [(&str, &str); 2] =
@@ -898,7 +756,7 @@ fn postgres_mirror_reconcile_job_runs_once_as_the_runtime_login() {
 /// Normal operator workloads require Hudson from the neutral image; the Source
 /// exporter retains a same-build alias rather than a separate compilation.
 #[test]
-fn operator_image_carries_hudson_and_retains_the_explicit_source_alias() {
+fn operator_image_carries_hudson() {
     let workflow: Value = serde_yaml::from_str(
         &std::fs::read_to_string(workspace().join(".github/workflows/deploy.yml")).unwrap(),
     )
@@ -911,7 +769,7 @@ fn operator_image_carries_hudson_and_retains_the_explicit_source_alias() {
         .find(|entry| entry["image"] == "navigator-ops")
         .unwrap();
     assert_eq!(entry["dockerfile"], "images/Containerfile.trigger");
-    assert_eq!(entry["alias"], "navigator-surreal-archive");
+    assert!(entry["alias"].is_null());
     let arguments = entry["build-args"].as_str().unwrap();
     assert!(arguments.lines().any(|line| line == "CRATE=hudson"));
     assert!(arguments.lines().any(|line| line == "BIN=hudson"));
@@ -934,10 +792,6 @@ fn operator_image_carries_hudson_and_retains_the_explicit_source_alias() {
         (
             "examples/deploy/k8s/gke/forgejo/runner-controller/runner-controller.yaml",
             "image: YOUR_IMAGE_REGISTRY/navigator-ops:YY.M.D",
-        ),
-        (
-            "examples/deploy/k8s/exports/cron-surreal-archive.yaml",
-            "image: YOUR_IMAGE_REGISTRY/navigator-surreal-archive:YY.M.D",
         ),
     ] {
         assert!(
