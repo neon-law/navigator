@@ -34,10 +34,10 @@ GeoJSON round trips. It also checks restart persistence, a spatial database rest
 
 ## Application graph permissions
 
-The PostgreSQL compatibility gate also runs `tests/runtime-graph-roles.sh` against the current published digest. It
-creates an isolated cluster, applies genuine native migrations and the deployment role initializer, and connects as
-`navigator_app` over TCP through application admission. It exercises both migration-before-role and
-role-before-migration ordering, including initializer reapplication.
+The PostgreSQL persistence workflow runs `tests/runtime-graph-roles.sh` against the current published digest. It creates
+an isolated cluster, applies native migrations and the deployment role initializer, and connects as `navigator_app` over
+TCP through application admission. It exercises both migration-before-role and role-before-migration ordering, including
+initializer reapplication.
 
 Canonical wrappers derive vertices and relationship provenance from relational rows. The role proof checks new vertices
 and edges, atomic refusal of forged batches, and refusal of direct AGE writes, private loaders, catalog reads, and
@@ -61,15 +61,14 @@ authorization, or production recovery.
 5. **Publish.** The tested candidates are promoted together without rebuilding and signed with cosign. Tags are
    `16.16-age1.6.0-vector0.8.7` (moving), `16.16-age1.6.0-vector0.8.7-YYYYMMDD`, and
    `16.16-age1.6.0-vector0.8.7-<commit>`. Consumers pin the digest, never a tag.
-6. **Dogfood.** [`scripts/postgres-image-pin.sh`](../../scripts/postgres-image-pin.sh) moves every Navigator pin to
-   the new digest, and the workflow opens a pull request as the automerge App. That pull request runs [PostgreSQL
-   compatibility](../../.github/workflows/postgres-compatibility.yml) and [PVC
-   persistence](../../.github/workflows/postgres-persistence.yml) against the published digest. After merge, staging
-   takes it with the next release, following the [staging-first
+6. **Dogfood.** [`scripts/postgres-image-pin.sh`](../../scripts/postgres-image-pin.sh) moves every Navigator pin to the
+   new digest, and the workflow opens a pull request as the automerge App. That pull request runs [PVC persistence and
+   recovery](../../.github/workflows/postgres-persistence.yml) against the published digest. After merge, staging takes
+   it with the next release, following the [staging-first
    rollout](../../docs/postgres-kubernetes.md#postgresql-image-updates).
 
-The package must be public: the compatibility gate and the clusters pull it anonymously. A new GHCR package starts
-private, so its visibility is set once in the package settings after its first publish.
+The persistence workflow and the clusters pull the package anonymously. Set its visibility to public in the GHCR package
+settings after its first publish.
 
 Verify a published image's signature:
 

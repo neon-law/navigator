@@ -7,6 +7,12 @@ defaults:
 jobs:
   persistence:
     runs-on: ubuntu-24.04
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      NAVIGATOR_FORBID_SURREAL: '1'
+      RUST_MIN_STACK: '33554432'
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5
@@ -125,22 +131,74 @@ jobs:
         printf '%s\n' navigator_app:falsefalsefalsefalse navigator_backup:falsefalsefalsetrue navigator_owner:falsefalsefalsefalse | diff -u - /tmp/roles.txt
         test "$(sql "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'persistence_proof'")" = navigator_owner
         echo 'PASS: idempotent roles, runtime DML only, no DDL, backup login cannot read data'
+    - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      with:
+        toolchain: '1.98.0'
+    - name: Verify schema and restricted App graph writers
+      run: |
+        cargo test --locked -p store --lib postgres_schema::tests
+        python3 images/postgres/tests/test-runtime-graph-cleanup.py
+        POSTGRES_IMAGE=$(kubectl kustomize k8s/overlays/postgres-spike | awk '/image:/ {print $2}')
+        [[ "$POSTGRES_IMAGE" =~ ^ghcr\.io/neon-law/navigator/postgres@sha256:[a-f0-9]{64}$ ]]
+        docker pull "$POSTGRES_IMAGE"
+        POSTGRES_IMAGE="$POSTGRES_IMAGE" bash images/postgres/tests/runtime-graph-roles.sh
+    - name: Verify pinned-image application schema and DBOS recovery
+      run: |
+        kubectl apply -k k8s/overlays/postgres-spike
+        kubectl -n navigator rollout status statefulset/postgres-spike --timeout=180s
+        kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
+          < store/postgres/schema.sql
+        kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
+          < store/postgres/tests/astrocartography_reference.sql
+        cargo build --locked --manifest-path images/postgres/tests/dbos/Cargo.toml
+        worker="$PWD/images/postgres/tests/dbos/target/debug/dbos-image-smoke"
+        bash store/postgres/tests/integrated_recovery.sh kind-postgres-persistence "$worker" 25433
+        bash images/postgres/tests/dbos-pod-recovery.sh kind-postgres-persistence "$worker"
+    - name: Verify retained Restate request identity and host admission
+      env:
+        NAVIGATOR_TEST_POSTGRES_PORT: '25432'
+      run: |
+        kubectl -n navigator port-forward --address 127.0.0.1 service/postgres-spike 25432:5432 > "$RUNNER_TEMP/postgres-port-forward.log" 2>&1 &
+        forward_pid=$!
+        trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
+        ready=false
+        for attempt in $(seq 1 30); do
+          kill -0 "$forward_pid"
+          if bash -c 'echo > /dev/tcp/127.0.0.1/25432' 2>/dev/null; then ready=true; break; fi
+          sleep 1
+        done
+        test "$ready" = true
+        cargo test --locked -p workflows-service --features restate-compatibility --test request_identity_signature
+        cargo test --locked -p workflows-service --features restate-compatibility --lib host::host_mode_tests
+        cargo test --locked -p workflows-service --features restate-compatibility,jwt-provider-regression \
+          --test crypto_provider_health_check
+        cargo test --locked -p workflows-service --features restate-compatibility,jwt-provider-regression \
+          --lib request_identity::tests
     - name: Cleanup task cluster
       if: always()
       run: kind delete cluster --name postgres-persistence
 'on':
   pull_request:
+    branches: [main]
     paths:
     - k8s/postgres/**
     - k8s/overlays/kind-postgres-persistence/**
+    - k8s/overlays/postgres-spike/**
     - examples/deploy/k8s/gke/postgres/**
+    - images/postgres/tests/dbos/**
+    - images/postgres/tests/dbos-pod-recovery.sh
+    - images/postgres/tests/runtime-graph-*
+    - images/postgres/tests/test-runtime-graph-cleanup.py
+    - store/examples/runtime_graph_roles.rs
+    - store/postgres/**
+    - store/src/postgres_schema.rs
+    - store/src/postgres/native_origin.rs
+    - store/src/postgres/native_origin/**
     - .github/workflows/postgres-persistence.yml
-  push:
-    branches:
-    - main
-    paths:
-    - k8s/postgres/**
-    - k8s/overlays/kind-postgres-persistence/**
-    - examples/deploy/k8s/gke/postgres/**
-    - .github/workflows/postgres-persistence.yml
+    - workflows-service/Cargo.toml
+    - workflows-service/src/host.rs
+    - workflows-service/src/host/**
+    - workflows-service/src/request_identity.rs
+    - workflows-service/tests/crypto_provider_health_check.rs
+    - workflows-service/tests/request_identity_signature.rs
   workflow_dispatch: null

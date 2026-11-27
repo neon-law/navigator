@@ -1,10 +1,11 @@
 # PostgreSQL compatibility evidence
 
-The compatibility workflow uses the same immutable PostgreSQL image as the KIND overlay. The matrix is PostgreSQL 16.16,
+The PostgreSQL persistence workflow uses the immutable image pinned by the KIND overlay. The matrix is PostgreSQL 16.16,
 Apache AGE 1.6.0, pgvector 0.8.7, SQLx 0.9.0, and the native DBOS 0.6.0 synthetic test application in
 [`images/postgres/tests/dbos`](../images/postgres/tests/dbos). The image is built and published weekly from
 [`images/postgres`](../images/postgres/README.md). The image workflow tests candidate builds on amd64 and arm64. The
-compatibility workflow tests the pinned digest and recovery on pull requests to `main` and by manual dispatch.
+persistence workflow checks claims, TLS, application roles and recovery on storage-related pull requests and by manual
+dispatch. Workspace CI uses the pinned image for SQLx, migration and application storage tests.
 
 | Boundary | Evidence |
 | --- | --- |
@@ -39,8 +40,8 @@ synthetic databases and deletes them at exit, restores the pinned image, and sto
 it after other tests using this fixture because it replaces the database pod. The Rust type tests use their own
 disposable databases.
 
-CI uses `k8s/kind-postgres-config.yaml`, with no ingress host-port mappings. The pinned DBOS test application can bind
-its readiness listener on port 8080 while the database uses an explicit port-forward.
+The KIND persistence workflow creates a cluster without ingress host-port mappings. The pinned DBOS test application
+binds its readiness listener on port 8080 while the database uses an explicit port-forward.
 
 This evidence covers the partial application schema, same-major image replacement, logical dump/restore and physical
 backup recovery with streamed WAL. Full domain parity, a production DBOS adapter, major-version upgrades, GKE recovery,

@@ -95,9 +95,8 @@
     <p>The disposable spike lock is <code>k8s/overlays/postgres-spike/kustomization.yaml</code>;
     the retained database uses <code>k8s/postgres/kustomization.yaml</code>. Both carry the same published digest.
     The optional <code>kind-postgres-spike</code> overlay includes that resource alongside the normal Surreal/Restate
-    dependency tier. Navigator's <code>postgres-compatibility.yml</code> renders the same lock, rejects a mutable tag,
-    anonymously pulls the resulting digest, and runs the exact pinned public smoke source.
-    It also verifies extension data survives PVC-backed pod replacement in KIND.
+    dependency tier. Navigator's <code>postgres-persistence.yml</code> checks the same immutable digest,
+    rehearses PostgreSQL and DBOS recovery, and verifies extension data survives PVC-backed pod replacement in KIND.
     <a href="https://github.com/neon-law/navigator/actions/runs/38103859981">Corrected consumer CI</a>
     proves the SDK fixture actually ran; earlier green runs that masked a Cargo workspace error are not recovery evidence.
     The image lane switches no Navigator reads or writes.</p>
