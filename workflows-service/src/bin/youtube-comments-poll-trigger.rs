@@ -3,9 +3,10 @@
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    workflows::trigger::run_cron_trigger(
+    workflows::trigger::run_dbos_cron(
         "navigator-youtube-comments-poll-trigger",
-        workflows_service::cron_triggers::youtube_comments_poll(chrono::Utc::now()),
+        "/internal/dbos/youtube-comments-poll",
+        &workflows_service::cron_triggers::youtube_comments_poll(chrono::Utc::now()),
     )
     .await
 }

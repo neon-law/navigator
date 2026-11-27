@@ -6,8 +6,7 @@
 //! brand crate is a `Site` value and nothing else. [`build_from_env`]
 //! assembles the runtime and [`run`] owns the boot: telemetry, that assembly,
 //! composition through [`crate::bootstrap`], bind, serve, and drain.
-//! [`run_with_dbos`] is the same boot hosting the DBOS executor beside the
-//! server when `NAVIGATOR_DBOS_ENABLED=true` ([`with_dbos`]).
+//! The application hosts the DBOS executor beside the HTTP server.
 //!
 //! Both halves live here because they are one boot sequence. Splitting the
 //! bind/serve tail into a separate crate would put a fourth dependency between
@@ -96,11 +95,9 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     let postgres = store::postgres::PostgresDb::application()
         .await
         .context("verify PostgreSQL application authority")?;
-    store::durable_object_handover::require_runtime_selection(&postgres, |key| {
-        std::env::var(key).ok()
-    })
-    .await
-    .context("verify durable object engine ownership")?;
+    store::durable_object_handover::verify_runtime_ownership(&postgres)
+        .await
+        .context("verify durable object ownership")?;
     let surreal = store::surreal::SurrealDb::uninitialized();
 
     // Object storage is created before the seed because template bodies
@@ -702,114 +699,21 @@ pub struct Site {
 /// Propagates a failure to assemble the runtime (configuration, database,
 /// storage, content) or to bind and serve the configured port.
 pub async fn run(brand: Site) -> anyhow::Result<()> {
-    Box::pin(boot(brand, true)).await
+    Box::pin(boot(brand)).await
 }
 
-/// Boot one brand like [`run`], hosting the DBOS executor in this process when
-/// `NAVIGATOR_DBOS_ENABLED=true`.
-///
-/// Unset or `false` is exactly [`run`]. With the flag on, the executor
-/// launches after the listeners bind and before they serve, and shuts down
-/// after every listener has drained on `SIGTERM` or Ctrl-C. See [`with_dbos`].
-///
-/// # Errors
-///
-/// Everything [`run`] propagates, plus an invalid flag, incomplete DBOS
-/// settings, or a failed DBOS launch: with the flag on, the boot fails closed
-/// rather than serving without the executor.
-pub async fn run_with_dbos(brand: Site) -> anyhow::Result<()> {
-    run(brand).await
-}
-
-/// Run `serve`, hosting the DBOS executor beside it when `lookup` sets
-/// `NAVIGATOR_DBOS_ENABLED=true`.
-///
-/// With the flag on this reads the DBOS login and release
-/// (`workflows::dbos_engine::Settings`), registers every ported workflow,
-/// launches DBOS (which re-enqueues this version's pending runs), and starts
-/// each schedule before `serve` is polled. Once `serve` returns — the HTTP
-/// server's graceful shutdown — it stops the schedules and shuts DBOS down;
-/// work cut off there stays pending for the next launch of the same version.
-/// Unset or `false` only awaits `serve`.
-///
-/// # Errors
-///
-/// An invalid flag, incomplete settings, or a failed launch, before `serve`
-/// runs; otherwise whatever `serve` returns.
+/// Launch the DBOS executor before serving a mounted application.
 pub async fn with_dbos<T>(
     lookup: impl Fn(&str) -> Option<String>,
     notifier: Arc<dyn Notifier>,
     serve: impl Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {
-    with_dbos_and_general_nag(lookup, notifier, None, serve).await
-}
-
-/// Like [`with_dbos`], with an explicitly enabled GeneralNag context.
-pub async fn with_dbos_and_general_nag<T>(
-    lookup: impl Fn(&str) -> Option<String>,
-    notifier: Arc<dyn Notifier>,
-    general_nag: Option<workflows::dbos_engine::general_nag::Context>,
-    serve: impl Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T> {
-    with_dbos_and_schedules(lookup, notifier, general_nag, None, serve).await
-}
-
-/// Like [`with_dbos`], with explicitly enabled daily operations schedules.
-pub async fn with_dbos_and_schedules<T>(
-    lookup: impl Fn(&str) -> Option<String>,
-    notifier: Arc<dyn Notifier>,
-    general_nag: Option<workflows::dbos_engine::general_nag::Context>,
-    dri_digest: Option<workflows::dbos_engine::dri_digest::Context>,
-    serve: impl Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T> {
-    with_dbos_hosting(
-        lookup,
-        notifier,
-        dbos_engine::Schedules {
-            general_nag,
-            dri_digest,
-            ..dbos_engine::Schedules::default()
-        },
-        serve,
-    )
-    .await
-}
-
-/// Like [`with_dbos`], with every optional schedule the host enabled.
-pub async fn with_dbos_hosting<T>(
-    lookup: impl Fn(&str) -> Option<String>,
-    notifier: Arc<dyn Notifier>,
-    schedules: dbos_engine::Schedules,
-    serve: impl Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T> {
-    with_dbos_hosting_and_external(lookup, notifier, schedules, |_| Ok(Vec::new()), serve).await
-}
-
-/// Like [`with_dbos_hosting`], allowing the application host to register
-/// workflows owned by service crates which depend on `workflows`.
-///
-/// The registration callback runs before DBOS launches, and its schedule
-/// starters run only after a successful launch. When DBOS is disabled the
-/// callback is not evaluated and `serve` retains the existing behavior.
-pub async fn with_dbos_hosting_and_external<T, F>(
-    lookup: impl Fn(&str) -> Option<String>,
-    notifier: Arc<dyn Notifier>,
-    schedules: dbos_engine::Schedules,
-    register_external: F,
-    serve: impl Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T>
-where
-    F: FnOnce(&dbos::DBOS) -> dbos::Result<Vec<dbos_engine::ScheduleStarter>>,
-{
-    if !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return serve.await;
-    }
     let settings = dbos_engine::Settings::from_lookup(&lookup).context("configure DBOS")?;
     let executor = dbos_engine::Executor::launch_hosting_with(
         &settings,
         notifier,
-        schedules,
-        register_external,
+        dbos_engine::Schedules::default(),
+        |_| Ok(Vec::new()),
     )
     .await
     .context("launch the DBOS executor")?;
@@ -851,7 +755,7 @@ fn spawn_journal_replay(state: &crate::AppState) {
 
 mod cohost;
 
-async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
+async fn boot(brand: Site) -> anyhow::Result<()> {
     // Load `.env` / `.devx/env` before any env read; in cluster the
     // environment is injected and both calls are no-ops.
     let _ = dotenvy::dotenv();
@@ -860,8 +764,6 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     // One observability seam per binary, named for the deployment.
     let telemetry_guard = telemetry::init(brand.service_name);
 
-    let lookup = |key: &str| std::env::var(key).ok();
-    let combined = cohost::enabled(host_dbos, lookup)?;
     let mut rt = build_from_env(brand.seed).await?;
 
     // The tenant shape lights the existing portal-only mode rather than adding
@@ -904,13 +806,8 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     // would 404 its own home page.
     let host_dioxus = (brand.public_dioxus)(&rt.state);
     let lookup = |key: &str| std::env::var(key).ok();
-    let dbos_schedules = dbos_schedules(&rt, host_dbos, combined, lookup).await?;
-    let sent_email_export = sent_email_export_source(host_dbos, lookup).await?;
-    // The combined worker registers Archives; this host still supplies Sent Email Export.
-    let (slack, _) = deployment_slack(&rt, lookup)?;
-    let ops_notifier = workflows::notify::ops_notifier(slack.clone(), lookup);
-    let archives = archives_context(host_dbos && !combined, rt.config.environment, slack, lookup)?;
-    let local_archives = (!combined).then(crate::cron_schedules::LocalArchives::default);
+    let dbos_schedules = dbos_schedules(&rt, lookup).await?;
+    let sent_email_export = sent_email_export_source(lookup).await?;
     let router = crate::bootstrap(
         rt.state,
         &rt.public_dir,
@@ -918,11 +815,6 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
         brand.public_paths,
         host_dioxus,
     )?;
-
-    let router = match &local_archives {
-        Some(local) => router.layer(axum::Extension(local.clone())),
-        None => router,
-    };
 
     #[cfg(debug_assertions)]
     let reload = crate::dev_reload::enabled();
@@ -972,18 +864,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
         }
         anyhow::Ok(())
     };
-    let served = Box::pin(cohost::run(
-        host_dbos,
-        combined,
-        ops_notifier,
-        dbos_schedules,
-        sent_email_export,
-        archives,
-        local_archives,
-        stop,
-        serve,
-    ))
-    .await;
+    let served = Box::pin(cohost::run(dbos_schedules, sent_email_export, stop, serve)).await;
     telemetry_guard.shutdown();
     served
 }
@@ -993,24 +874,12 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
 fn register_archive_schedules(
     dbos: &dbos::DBOS,
     sent_email_export: Option<Arc<dyn archives::sent_email_export::ExportSource>>,
-    archives: Option<archives::workflow::DbosContext>,
-    local: Option<crate::cron_schedules::LocalArchives>,
 ) -> dbos::Result<Vec<dbos_engine::ScheduleStarter>> {
     let mut starters: Vec<dbos_engine::ScheduleStarter> = Vec::new();
     if let Some(source) = sent_email_export {
         let workflow = archives::sent_email_export::register(dbos, source)?;
         starters.push(Box::new(move |stop| {
             tokio::spawn(archives::sent_email_export::schedule(workflow, stop))
-        }));
-    }
-    if let Some(context) = archives {
-        let workflow =
-            archives::workflow::register_dbos(dbos, context.slack, context.channel_id, true)?;
-        if let Some(local) = local {
-            local.register(workflow.clone())?;
-        }
-        starters.push(Box::new(move |stop| {
-            tokio::spawn(archives::workflow::schedule_dbos(workflow, stop))
         }));
     }
     Ok(starters)
@@ -1021,12 +890,8 @@ fn register_archive_schedules(
 /// is opened, and an enabled schedule fails the boot without either: the
 /// export is what lets the one-year purge run, so it never starts half-wired.
 async fn sent_email_export_source(
-    host_dbos: bool,
     lookup: impl Fn(&str) -> Option<String> + Copy,
 ) -> anyhow::Result<Option<Arc<dyn archives::sent_email_export::ExportSource>>> {
-    if !host_dbos || !dbos_engine::enabled(lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(None);
-    }
     if !archives::sent_email_export::enabled(lookup)
         .map_err(anyhow::Error::msg)
         .context("read NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED")?
@@ -1038,47 +903,6 @@ async fn sent_email_export_source(
             .await
             .context("configure DBOS SentEmailExport")?,
     )))
-}
-
-/// The Archives schedule's digest context, when this host runs DBOS and the
-/// schedule's own switch is on. `web` holds the PostgreSQL login, so each run
-/// also exports the paired PostgreSQL coverage generation; the switch is read
-/// first, and an enabled schedule with any of that configuration missing fails
-/// the boot rather than its first scheduled run.
-fn archives_context(
-    host_dbos: bool,
-    environment: store::DeploymentEnvironment,
-    slack: Arc<dyn workflows::SlackBot>,
-    lookup: impl Fn(&str) -> Option<String> + Copy,
-) -> anyhow::Result<Option<archives::workflow::DbosContext>> {
-    if !host_dbos || !dbos_engine::enabled(lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(None);
-    }
-    if !archives::workflow::dbos_enabled(lookup)
-        .map_err(anyhow::Error::msg)
-        .context("read NAVIGATOR_DBOS_ARCHIVES_ENABLED")?
-    {
-        return Ok(None);
-    }
-    let simulated = store::sample_matters_from(environment, lookup)
-        .context("resolve simulated-matters deployment")?;
-    archives::workflow::DbosContext::from_lookup(slack, simulated, lookup)
-        .map(Some)
-        .context("configure DBOS Archives")
-}
-
-/// Evaluate selection even in the combined host, while only the schedule's
-/// owner constructs its provider context. The worker owns these contexts when cohosted.
-fn worker_schedule<T>(
-    combined: bool,
-    selected: anyhow::Result<bool>,
-    build: impl FnOnce() -> anyhow::Result<T>,
-) -> anyhow::Result<Option<T>> {
-    if selected? && !combined {
-        build().map(Some)
-    } else {
-        Ok(None)
-    }
 }
 
 /// The deployment's Slack bot every hosted schedule posts with, and whether
@@ -1102,19 +926,9 @@ fn deployment_slack(
 #[allow(clippy::too_many_lines)] // One gate per hosted schedule.
 async fn dbos_schedules(
     rt: &HostRuntime,
-    host_dbos: bool,
-    combined: bool,
     lookup: impl Fn(&str) -> Option<String> + Copy,
 ) -> anyhow::Result<dbos_engine::Schedules> {
-    let (slack, _) = deployment_slack(rt, lookup)?;
-    let general_nag =
-        worker_schedule(combined, should_host_general_nag(host_dbos, lookup), || {
-            general_nag_context(rt).context("configure DBOS GeneralNag")
-        })?;
-    let dri_digest = worker_schedule(combined, should_host_dri_digest(host_dbos, lookup), || {
-        dri_digest_context(rt, lookup).context("configure DBOS DriDigest")
-    })?;
-    let project_recovery = if should_host_project_recovery(host_dbos, lookup)? {
+    let project_recovery = if should_host_project_recovery(lookup)? {
         Some(
             project_recovery_context(rt, lookup)
                 .await
@@ -1123,8 +937,8 @@ async fn dbos_schedules(
     } else {
         None
     };
-    let source_imports = source_imports_schedule(rt, host_dbos, lookup).await?;
-    let retention_purge = if should_host_retention_purge(host_dbos, lookup)? {
+    let source_imports = source_imports_schedule(rt, lookup).await?;
+    let retention_purge = if should_host_retention_purge(lookup)? {
         Some(
             retention_purge_context(rt, lookup)
                 .await
@@ -1133,9 +947,8 @@ async fn dbos_schedules(
     } else {
         None
     };
-    let deadline_mirror =
-        should_host_deadline_mirror(host_dbos, lookup)?.then(|| deadline_mirror_context(rt));
-    let purchase_activation = if should_host_purchase_activation(host_dbos, lookup)? {
+    let deadline_mirror = should_host_deadline_mirror(lookup)?.then(|| deadline_mirror_context(rt));
+    let purchase_activation = if should_host_purchase_activation(lookup)? {
         let pg = store::postgres::PostgresDb::from_env()
             .await
             .context("connect PostgreSQL for purchase activation")?;
@@ -1149,68 +962,31 @@ async fn dbos_schedules(
     } else {
         None
     };
-    let billing_canary = worker_schedule(
-        combined,
-        should_host_billing_canary(host_dbos, lookup),
-        || {
-            workflows::dbos_engine::billing_canary::Context::from_lookup(slack.clone(), lookup)
-                .context("configure DBOS BillingCanary")
-        },
-    )?;
-    let billing_digest = worker_schedule(
-        combined,
-        should_host_billing_digest(host_dbos, lookup),
-        || {
-            workflows::dbos_engine::billing_digest::Context::from_lookup(slack.clone(), lookup)
-                .context("configure DBOS BillingDigest")
-        },
-    )?;
-    let notation_reset = worker_schedule(
-        combined,
-        should_host_notation_reset(host_dbos, lookup),
-        || notation_reset_context(rt, lookup).context("configure DBOS NotationReset"),
-    )?;
-    let profit_digest = if combined {
-        None
-    } else {
-        profit_digest_context(rt, host_dbos, lookup).await?
-    };
-    let enabled = host_dbos && dbos_engine::enabled(lookup)?;
-    let (linear_backlog, daily_cost_export) = if enabled {
-        (
-            dbos_engine::linear_backlog::Context::from_lookup(slack.clone(), lookup)?,
-            workflows::flags::daily_cost_export(lookup)?,
-        )
-    } else {
-        (None, None)
-    };
+    let (slack, _) = deployment_slack(rt, lookup)?;
+    let linear_backlog = dbos_engine::linear_backlog::Context::from_lookup(slack, lookup)?;
+    let daily_cost_export = workflows::flags::daily_cost_export(lookup)?;
 
     Ok(dbos_engine::Schedules {
-        forge_parity: enabled,
+        forge_parity: true,
         daily_cost_export,
         linear_backlog,
-        general_nag,
-        dri_digest,
         project_recovery,
         source_imports,
         retention_purge,
         deadline_mirror,
-        plan_retainers: enabled.then(|| {
+        plan_retainers: Some({
             Arc::new(crate::plan_retainers::PlanRetainers(rt.state.clone()))
                 as Arc<dyn dbos_engine::plan_retainers::Source>
         }),
-        project_calendar: enabled.then(|| {
+        project_calendar: Some({
             Arc::new(crate::calendar_mirror::MembershipSource {
                 surreal: rt.state.surreal.clone(),
                 providers: Arc::clone(&rt.state.integration_providers),
             }) as Arc<dyn dbos_engine::project_calendar::Source>
         }),
         purchase_activation,
-        billing_canary,
-        billing_digest,
-        notation_reset,
-        profit_digest,
-        ceo_digest: ceo_digest_schedule(rt, host_dbos, lookup).await?,
+        ceo_digest: ceo_digest_schedule(rt, lookup).await?,
+        ..Default::default()
     })
 }
 
@@ -1218,10 +994,9 @@ async fn dbos_schedules(
 /// unused schedule never requires PostgreSQL or KMS credentials.
 async fn source_imports_schedule(
     rt: &HostRuntime,
-    host_dbos: bool,
     lookup: impl Fn(&str) -> Option<String> + Copy,
 ) -> anyhow::Result<Option<workflows::dbos_engine::source_imports::Context>> {
-    if !should_host_source_imports(host_dbos, lookup)? {
+    if !should_host_source_imports(lookup)? {
         return Ok(None);
     }
     let pg = store::postgres::PostgresDb::from_env()
@@ -1242,10 +1017,9 @@ async fn source_imports_schedule(
 /// unused schedule never requires Vertex, email, or PostgreSQL credentials.
 async fn ceo_digest_schedule(
     rt: &HostRuntime,
-    host_dbos: bool,
     lookup: impl Fn(&str) -> Option<String> + Copy,
 ) -> anyhow::Result<Option<workflows::dbos_engine::ceo_digest::Context>> {
-    if !should_host_ceo_digest(host_dbos, lookup)? {
+    if !should_host_ceo_digest(lookup)? {
         return Ok(None);
     }
     let context = ceo_digest_context(rt, lookup)
@@ -1254,110 +1028,16 @@ async fn ceo_digest_schedule(
     Ok(Some(context))
 }
 
-/// Resolve the independent BillingCanary gate.
-fn should_host_billing_canary(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
-    workflows::dbos_engine::billing_canary::enabled(lookup)
-        .context("read NAVIGATOR_DBOS_BILLING_CANARY_ENABLED")
-}
-
-/// Resolve the independent BillingDigest gate before constructing its context.
-fn should_host_billing_digest(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
-    workflows::dbos_engine::billing_digest::enabled(lookup)
-        .context("read NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED")
-}
-
-/// Resolve the independent NotationReset gate before constructing its
-/// context, so an unused schedule never requires Slack credentials.
-fn should_host_notation_reset(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
-    workflows::dbos_engine::notation_reset::enabled(lookup)
-        .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")
-}
-
-/// Configure ProfitDigest on a DBOS host with its PostgreSQL and Slack coordinates.
-async fn profit_digest_context(
-    rt: &HostRuntime,
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String> + Copy,
-) -> anyhow::Result<Option<workflows::dbos_engine::profit_digest::Context>> {
-    use workflows::dbos_engine::profit_digest;
-    if !host_dbos || !dbos_engine::enabled(lookup)? {
-        return Ok(None);
-    }
-    let simulated = store::sample_matters(rt.config.environment)
-        .context("resolve simulated-matters deployment")?;
-    if !profit_digest::configured(simulated, lookup) {
-        return Ok(None);
-    }
-    let pg = store::postgres::PostgresDb::from_env()
-        .await
-        .context("connect PostgreSQL for the profit digest")?;
-    profit_digest::Context::from_lookup(
-        Arc::new(profit_digest::StoreProfitSource::new(
-            rt.state.surreal.clone(),
-            pg,
-        )),
-        deployment_slack(rt, lookup)?.0,
-        simulated,
-        lookup,
-    )
-    .map(Some)
-    .context("configure DBOS ProfitDigest")
-}
-
-fn notation_reset_context(
-    rt: &HostRuntime,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<workflows::dbos_engine::notation_reset::Context> {
-    let simulated = store::sample_matters(rt.config.environment)
-        .context("resolve simulated-matters deployment")?;
-    workflows::dbos_engine::notation_reset::Context::from_lookup(
-        rt.state.surreal.clone(),
-        deployment_slack(rt, &lookup)?.0,
-        workflows::notation_reset::environment_label(rt.config.environment, simulated),
-        simulated,
-        lookup,
-    )
-    .context("validate NotationReset delivery configuration")
-}
-
 /// Resolve the independent PurchaseActivation gate.
 fn should_host_purchase_activation(
-    host_dbos: bool,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
     workflows::dbos_engine::purchase_activation::enabled(lookup)
         .context("read NAVIGATOR_DBOS_PURCHASE_ACTIVATION_ENABLED")
 }
 
 /// Resolve the independent RetentionPurge gate.
-fn should_host_retention_purge(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
+fn should_host_retention_purge(lookup: impl Fn(&str) -> Option<String>) -> anyhow::Result<bool> {
     workflows::dbos_engine::retention_purge::enabled(lookup)
         .context("read NAVIGATOR_DBOS_RETENTION_PURGE_ENABLED")
 }
@@ -1391,13 +1071,7 @@ async fn retention_purge_context(
 }
 
 /// Resolve the independent DeadlineMirror gate.
-fn should_host_deadline_mirror(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
+fn should_host_deadline_mirror(lookup: impl Fn(&str) -> Option<String>) -> anyhow::Result<bool> {
     workflows::dbos_engine::deadline_mirror::enabled(lookup)
         .context("read NAVIGATOR_DBOS_DEADLINE_MIRROR_ENABLED")
 }
@@ -1415,26 +1089,14 @@ fn deadline_mirror_context(rt: &HostRuntime) -> workflows::dbos_engine::deadline
 }
 
 /// Resolve the independent SourceImport gate.
-fn should_host_source_imports(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
+fn should_host_source_imports(lookup: impl Fn(&str) -> Option<String>) -> anyhow::Result<bool> {
     workflows::dbos_engine::source_imports::enabled(lookup)
         .context("read NAVIGATOR_DBOS_SOURCE_IMPORT_ENABLED")
 }
 
 /// Resolve the independent ProjectRecovery gate before opening any archive
 /// lane, so an unused schedule never requires its storage.
-fn should_host_project_recovery(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
+fn should_host_project_recovery(lookup: impl Fn(&str) -> Option<String>) -> anyhow::Result<bool> {
     workflows::dbos_engine::project_recovery::enabled(lookup)
         .context("read NAVIGATOR_DBOS_PROJECT_RECOVERY_ENABLED")
 }
@@ -1478,34 +1140,6 @@ async fn project_recovery_context(
     ))
 }
 
-fn dri_digest_context(
-    rt: &HostRuntime,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<workflows::dbos_engine::dri_digest::Context> {
-    let simulated = store::sample_matters(rt.config.environment)
-        .context("resolve simulated-matters deployment")?;
-    workflows::dbos_engine::dri_digest::Context::from_lookup(
-        rt.state.surreal.clone(),
-        deployment_slack(rt, &lookup)?.0,
-        simulated,
-        lookup,
-    )
-    .context("validate DriDigest delivery configuration")
-}
-
-/// Resolve the independent DriDigest gate before constructing a delivery
-/// context, so an unused schedule never requires Slack credentials.
-fn should_host_dri_digest(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
-    workflows::dbos_engine::dri_digest::enabled(lookup)
-        .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")
-}
-
 async fn ceo_digest_context(
     rt: &HostRuntime,
     lookup: impl Fn(&str) -> Option<String> + Copy,
@@ -1534,44 +1168,9 @@ async fn ceo_digest_context(
 /// Resolve the independent CEO digest gate before constructing a delivery
 /// context, so an unused schedule never requires Slack credentials or a
 /// Vertex project.
-fn should_host_ceo_digest(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
+fn should_host_ceo_digest(lookup: impl Fn(&str) -> Option<String>) -> anyhow::Result<bool> {
     workflows::dbos_engine::ceo_digest::enabled(lookup)
         .context("read NAVIGATOR_DBOS_CEO_DIGEST_ENABLED")
-}
-
-fn general_nag_context(
-    rt: &HostRuntime,
-) -> anyhow::Result<workflows::dbos_engine::general_nag::Context> {
-    let lookup = |key: &str| std::env::var(key).ok();
-    let simulated = store::sample_matters(rt.config.environment)
-        .context("resolve simulated-matters deployment")?;
-    workflows::dbos_engine::general_nag::Context::from_lookup(
-        rt.state.surreal.clone(),
-        deployment_slack(rt, lookup)?.0,
-        simulated,
-        lookup,
-    )
-    .context("validate GeneralNag delivery configuration")
-}
-
-/// Resolve the independent DBOS and GeneralNag gates before constructing the
-/// delivery context. A disabled DBOS host must not validate an unused workflow
-/// flag or require Slack credentials.
-fn should_host_general_nag(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
-    workflows::dbos_engine::general_nag::enabled(lookup)
-        .context("read NAVIGATOR_DBOS_GENERAL_NAG_ENABLED")
 }
 
 /// Every port this boot binds: the primary configured port plus every extra
@@ -1598,12 +1197,7 @@ fn preflight(brand: &Site, rt: &HostRuntime) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        archives_context, bind_ports, sent_email_export_source, should_host_billing_canary,
-        should_host_deadline_mirror, should_host_dri_digest, should_host_general_nag,
-        should_host_notation_reset, should_host_project_recovery, should_host_purchase_activation,
-        should_host_retention_purge, should_host_source_imports, voice_numbers_by_brand,
-    };
+    use super::{bind_ports, sent_email_export_source, voice_numbers_by_brand};
 
     /// Voice numbers are optional and per Brand, and every listed one must
     /// name a real Brand once with a dialable number.
@@ -1629,140 +1223,15 @@ mod tests {
         }
     }
 
-    /// The export opens PostgreSQL and the archive bucket only when the
-    /// executor and its own switch are both on, and a malformed switch fails
-    /// the boot instead of leaving the trail unexported.
     #[tokio::test]
-    async fn the_sent_email_export_needs_dbos_and_its_own_switch() {
-        let export = archives::sent_email_export::ENABLED_ENV;
-        let dbos = workflows::dbos_engine::ENABLED_ENV;
-        assert!(sent_email_export_source(false, |_| Some("true".into()))
-            .await
-            .unwrap()
-            .is_none());
+    async fn sent_email_export_requires_an_explicit_valid_schedule_setting() {
+        let key = archives::sent_email_export::ENABLED_ENV;
+        assert!(sent_email_export_source(|_| None).await.unwrap().is_none());
         assert!(
-            sent_email_export_source(true, |key| (key == dbos).then(|| "true".into()))
+            sent_email_export_source(|name| (name == key).then(|| "yes".into()))
                 .await
-                .unwrap()
-                .is_none()
+                .is_err()
         );
-        let malformed = |key: &str| match key {
-            key if key == dbos => Some("true".into()),
-            key if key == export => Some("yes".into()),
-            _ => None,
-        };
-        assert!(sent_email_export_source(true, malformed).await.is_err());
-    }
-
-    /// Archives reads its configuration only when the executor and its own
-    /// switch are both on; a malformed switch or an incomplete configuration
-    /// fails the boot instead of leaving the archive unscheduled.
-    #[test]
-    fn archives_needs_dbos_its_own_switch_and_complete_coverage() {
-        let bot = || {
-            std::sync::Arc::new(workflows::CapturingSlackBot::new())
-                as std::sync::Arc<dyn workflows::SlackBot>
-        };
-        let environment = store::DeploymentEnvironment::Production;
-        let dbos = workflows::dbos_engine::ENABLED_ENV;
-        let switch = archives::workflow::DBOS_ENABLED_ENV;
-        let on = |key: &str| (key == dbos || key == switch).then(|| "true".to_owned());
-        assert!(archives_context(false, environment, bot(), on)
-            .unwrap()
-            .is_none());
-        let dbos_only = |key: &str| (key == dbos).then(|| "true".to_owned());
-        assert!(archives_context(true, environment, bot(), dbos_only)
-            .unwrap()
-            .is_none());
-        let malformed = |key: &str| match key {
-            key if key == dbos => Some("true".to_owned()),
-            key if key == switch => Some("yes".to_owned()),
-            _ => None,
-        };
-        assert!(archives_context(true, environment, bot(), malformed).is_err());
-        let Err(error) = archives_context(true, environment, bot(), on) else {
-            panic!("an enabled schedule without its coverage settings must fail the boot");
-        };
-        assert!(
-            format!("{error:#}").contains("NAVIGATOR_ARCHIVES_BUCKET"),
-            "{error:#}"
-        );
-    }
-
-    type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;
-
-    /// The schedules gated only by DBOS and their own flag.
-    fn recovery_gates() -> [(Gate, &'static str); 6] {
-        [
-            (
-                |host, lookup| should_host_purchase_activation(host, lookup),
-                workflows::dbos_engine::purchase_activation::ENABLED_ENV,
-            ),
-            (
-                |host, lookup| should_host_project_recovery(host, lookup),
-                workflows::dbos_engine::project_recovery::ENABLED_ENV,
-            ),
-            (
-                |host, lookup| should_host_source_imports(host, lookup),
-                workflows::dbos_engine::source_imports::ENABLED_ENV,
-            ),
-            (
-                |host, lookup| should_host_retention_purge(host, lookup),
-                workflows::dbos_engine::retention_purge::ENABLED_ENV,
-            ),
-            (
-                |host, lookup| should_host_deadline_mirror(host, lookup),
-                workflows::dbos_engine::deadline_mirror::ENABLED_ENV,
-            ),
-            (
-                |host, lookup| should_host_notation_reset(host, lookup),
-                workflows::dbos_engine::notation_reset::ENABLED_ENV,
-            ),
-        ]
-    }
-
-    /// A recovery-lane schedule runs only when this host serves DBOS, DBOS is
-    /// on, and the schedule's own flag is on.
-    #[test]
-    fn recovery_schedules_require_every_host_gate() {
-        for (gate, flag) in recovery_gates() {
-            let all_on = |key: &str| {
-                (key == workflows::dbos_engine::ENABLED_ENV || key == flag).then(|| "true".into())
-            };
-            assert!(gate(true, &all_on).unwrap(), "{flag}");
-            assert!(!gate(false, &all_on).unwrap(), "{flag}");
-            assert!(!gate(true, &|_| None).unwrap(), "{flag}");
-            let schedule_off =
-                |key: &str| (key == workflows::dbos_engine::ENABLED_ENV).then(|| "true".into());
-            assert!(!gate(true, &schedule_off).unwrap(), "{flag}");
-        }
-    }
-
-    /// With DBOS off, a schedule's malformed flag is never read; with DBOS on,
-    /// a malformed flag, the schedule's or DBOS's own, fails the boot.
-    #[test]
-    fn recovery_schedule_flags_fail_closed() {
-        for (gate, flag) in recovery_gates() {
-            let dbos_off = |key: &str| {
-                if key == workflows::dbos_engine::ENABLED_ENV {
-                    Some("false".into())
-                } else {
-                    Some("typo".into())
-                }
-            };
-            assert!(!gate(true, &dbos_off).unwrap(), "{flag}");
-            let typo = |key: &str| {
-                if key == workflows::dbos_engine::ENABLED_ENV {
-                    Some("true".into())
-                } else {
-                    (key == flag).then(|| "typo".into())
-                }
-            };
-            assert!(gate(true, &typo).is_err(), "{flag}");
-            let dbos_typo =
-                |key: &str| (key == workflows::dbos_engine::ENABLED_ENV).then(|| "typo".into());
-            assert!(gate(true, &dbos_typo).is_err(), "{flag}");
-        }
     }
 
     #[test]
@@ -1782,116 +1251,5 @@ mod tests {
     #[test]
     fn bind_ports_dedupes_and_sorts() {
         assert_eq!(bind_ports(3011, [3001, 3011, 3001]), vec![3001, 3011]);
-    }
-
-    #[test]
-    fn general_nag_requires_both_host_gates() {
-        let both_enabled = |key: &str| match key {
-            workflows::dbos_engine::ENABLED_ENV
-            | workflows::dbos_engine::general_nag::ENABLED_ENV => Some("true".into()),
-            _ => None,
-        };
-        assert!(!should_host_general_nag(false, both_enabled).unwrap());
-        assert!(should_host_general_nag(true, both_enabled).unwrap());
-        assert!(!should_host_general_nag(true, |_| None).unwrap());
-    }
-
-    #[test]
-    fn dri_digest_requires_both_host_gates() {
-        let both_enabled = |key: &str| match key {
-            workflows::dbos_engine::ENABLED_ENV
-            | workflows::dbos_engine::dri_digest::ENABLED_ENV => Some("true".into()),
-            _ => None,
-        };
-        assert!(!should_host_dri_digest(false, both_enabled).unwrap());
-        assert!(should_host_dri_digest(true, both_enabled).unwrap());
-        assert!(!should_host_dri_digest(true, |_| None).unwrap());
-    }
-
-    #[test]
-    fn billing_canary_stays_disabled_with_both_host_gates_on() {
-        let both_enabled = |key: &str| match key {
-            workflows::dbos_engine::ENABLED_ENV
-            | workflows::dbos_engine::billing_canary::ENABLED_ENV => Some("true".into()),
-            _ => None,
-        };
-        assert!(!should_host_billing_canary(false, both_enabled).unwrap());
-        assert!(!should_host_billing_canary(true, both_enabled).unwrap());
-        assert!(!should_host_billing_canary(true, |_| None).unwrap());
-    }
-
-    #[test]
-    fn general_nag_gate_is_not_read_when_dbos_host_is_off() {
-        let invalid_nag_flag = |key: &str| match key {
-            workflows::dbos_engine::ENABLED_ENV => Some("false".into()),
-            workflows::dbos_engine::general_nag::ENABLED_ENV => Some("typo".into()),
-            _ => None,
-        };
-        assert!(!should_host_general_nag(true, invalid_nag_flag).unwrap());
-        assert!(!should_host_general_nag(false, |_| Some("typo".into())).unwrap());
-    }
-
-    #[test]
-    fn invalid_enabled_host_flags_fail_closed() {
-        let invalid_dbos =
-            |key: &str| (key == workflows::dbos_engine::ENABLED_ENV).then(|| "typo".into());
-        assert!(should_host_general_nag(true, invalid_dbos).is_err());
-        let invalid_nag = |key: &str| match key {
-            workflows::dbos_engine::ENABLED_ENV => Some("true".into()),
-            workflows::dbos_engine::general_nag::ENABLED_ENV => Some("typo".into()),
-            _ => None,
-        };
-        assert!(should_host_general_nag(true, invalid_nag).is_err());
-        let invalid_digest = |key: &str| match key {
-            workflows::dbos_engine::ENABLED_ENV => Some("true".into()),
-            workflows::dbos_engine::dri_digest::ENABLED_ENV => Some("typo".into()),
-            _ => None,
-        };
-        assert!(should_host_dri_digest(true, invalid_digest).is_err());
-        let invalid_billing_canary = |key: &str| match key {
-            workflows::dbos_engine::ENABLED_ENV => Some("true".into()),
-            workflows::dbos_engine::billing_canary::ENABLED_ENV => Some("typo".into()),
-            _ => None,
-        };
-        assert!(!should_host_billing_canary(true, invalid_billing_canary).unwrap());
-    }
-}
-
-#[cfg(test)]
-mod schedule_owner_tests {
-    use super::*;
-
-    #[test]
-    fn combined_boot_defers_worker_providers_but_keeps_selection_and_standalone_strict() {
-        let lookup = |key: &str| match key {
-            dbos_engine::ENABLED_ENV | dbos_engine::general_nag::ENABLED_ENV => Some("true".into()),
-            _ => None,
-        };
-        let build = || {
-            dbos_engine::general_nag::Context::from_lookup(
-                store::surreal::SurrealDb::uninitialized(),
-                Arc::new(workflows::CapturingSlackBot::new()),
-                true,
-                lookup,
-            )
-            .map_err(anyhow::Error::from)
-        };
-        assert!(
-            worker_schedule(true, should_host_general_nag(true, lookup), build)
-                .unwrap()
-                .is_none()
-        );
-        let error = worker_schedule(false, should_host_general_nag(true, lookup), build)
-            .err()
-            .unwrap();
-        assert!(error.to_string().contains("SLACK_GENERAL_CHANNEL_ID"));
-        let invalid = |key: &str| {
-            if key == dbos_engine::general_nag::ENABLED_ENV {
-                Some("invalid".into())
-            } else {
-                lookup(key)
-            }
-        };
-        assert!(worker_schedule(true, should_host_general_nag(true, invalid), build).is_err());
     }
 }

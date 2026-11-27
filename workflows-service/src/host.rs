@@ -9,7 +9,6 @@ use std::sync::Arc;
 mod local_providers;
 
 use crate::email_summary::SummaryProviders;
-use crate::engine::Engine;
 
 use crate::firm_slack::{FirmSlackBots, ProjectSlackBots};
 
@@ -61,10 +60,6 @@ pub async fn run_embedded<F>(
 where
     F: FnOnce(&dbos::DBOS) -> dbos::Result<Vec<dbos_engine::ScheduleStarter>> + Send + 'static,
 {
-    anyhow::ensure!(
-        Engine::from_lookup(|key| std::env::var(key).ok())? == Engine::Dbos,
-        "Embedded workflows require NAVIGATOR_WORKFLOW_ENGINE=dbos"
-    );
     Box::pin(run_host(
         Box::pin(shutdown),
         Some(schedules),
@@ -79,22 +74,6 @@ where
 enum HostMode {
     Standalone,
     Embedded,
-}
-
-fn require_native_routes(
-    engine: Engine,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(engine == Engine::Dbos, "the workflow host requires DBOS");
-    for workflow in store::workflow_engine::WORKFLOWS {
-        anyhow::ensure!(
-            dbos_engine::flag_enabled(workflow.flag, lookup(workflow.flag).as_deref())?,
-            "{} requires {}=true in the native worker",
-            workflow.name,
-            workflow.flag
-        );
-    }
-    Ok(())
 }
 
 // Erase host callbacks at the crate boundary so both roles share one compiled
@@ -116,17 +95,9 @@ async fn run_host(
     let postgres = store::postgres::PostgresDb::application()
         .await
         .context("verify PostgreSQL worker authority")?;
-    let object_selection =
-        store::durable_object_handover::require_runtime_selection(&postgres, |key| {
-            std::env::var(key).ok()
-        })
+    store::durable_object_handover::verify_runtime_ownership(&postgres)
         .await
-        .context("verify durable object engine ownership")?;
-
-    anyhow::ensure!(
-        !object_selection.legacy_objects(),
-        "the workflow host requires verified DBOS ownership"
-    );
+        .context("verify durable object ownership")?;
     // Drives `DriDigest` and `GeneralNag` staging disclosure and the
     // production-only open-matters follow-up — the same flag the site-wide
     // "simulated projects" banner reads.
@@ -134,24 +105,10 @@ async fn run_host(
         store::sample_matters(environment).context("resolve NAVIGATOR_SIMULATED_MATTERS")?;
     let lookup = |key: &str| std::env::var(key).ok();
     let enabled = |flag| dbos_engine::flag_enabled(flag, lookup(flag).as_deref());
-    let triage_dbos_enabled = enabled(workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV)?;
     let inbox_attachment_dbos_enabled =
         enabled(workflows::trigger::INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV)?;
-    anyhow::ensure!(
-        !inbox_attachment_dbos_enabled || triage_dbos_enabled,
-        "Inbox attachment filing requires the DBOS Inbox triage workflow"
-    );
-    let youtube_dbos_enabled = enabled(workflows::trigger::YOUTUBE_COMMENTS_DBOS_ENABLED_ENV)?;
     let sandbox_credit_reset_enabled =
         enabled(workflows::trigger::SANDBOX_CREDIT_RESET_DBOS_ENABLED_ENV)?;
-    let engine = Engine::from_lookup(lookup).context("select the durable engine")?;
-    anyhow::ensure!(
-        engine == Engine::Dbos
-            || !(youtube_dbos_enabled || triage_dbos_enabled || sandbox_credit_reset_enabled),
-        "The enabled DBOS workflow routes require the DBOS executor"
-    );
-
-    require_native_routes(engine, lookup)?;
     // Runtime KMS unseals Firm integration secrets, including the Slack Firm's
     // bot token every deployment notice posts with.
     let kms = social_runtime_kms_from_env().await;
@@ -163,7 +120,7 @@ async fn run_host(
     .map_err(anyhow::Error::msg)
     .context("configure the deployment's Slack bot")?;
     let ops_notifier = workflows::notify::ops_notifier(slack_bot.clone(), lookup);
-    let dbos_hosting = if engine == Engine::Dbos {
+    let dbos_hosting = {
         let local_providers = local_providers::LocalProviders::from_lookup(
             mode,
             environment,
@@ -172,109 +129,20 @@ async fn run_host(
         )
         .context("select native local providers")?;
         let settings = dbos_engine::Settings::from_lookup(lookup).context("configure DBOS")?;
-        let general_nag_enabled = workflows::dbos_engine::general_nag::enabled(lookup)
-            .context("read NAVIGATOR_DBOS_GENERAL_NAG_ENABLED")?;
-        let dri_digest_enabled = workflows::dbos_engine::dri_digest::enabled(lookup)
-            .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")?;
-        let notation_reset_enabled = workflows::dbos_engine::notation_reset::enabled(lookup)
-            .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")?;
         let profit_digest_enabled =
             workflows::dbos_engine::profit_digest::configured(simulated_matters, lookup);
-        let archives_enabled = archives::workflow::dbos_enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_ARCHIVES_ENABLED")?;
         let reconcile_enabled = crate::dbos_reconcile::enabled(lookup)
             .map_err(anyhow::Error::msg)
             .context("read NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED")?;
-        let finance_aggregate_enabled = crate::dbos_finance_aggregate::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED")?;
-        let nightly_project_update_enabled = crate::dbos_nightly_project_update::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED")?;
-        let email_summary_enabled = crate::dbos_email_summary::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED")?;
-        let inbound_message_alert_enabled = crate::dbos_inbound_message_alert::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED")?;
-        // The Project Slack lane posts with each Project's owning Firm's bot
-        // (ENG-392) rather than the deployment's Slack Firm bot.
-        let project_slack_enabled = crate::dbos_project_slack::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED")?;
-        let project_slack_postgres = if project_slack_enabled {
-            Some(
-                store::postgres::PostgresDb::from_env()
-                    .await
-                    .context("connect PostgreSQL for the DBOS Project Slack lane")?,
-            )
-        } else {
-            None
-        };
-        let notation_enabled = crate::dbos_notation::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_NOTATION_ENABLED")?;
-        let (social_publisher_enabled, social_reconciler_enabled) =
-            crate::dbos_social_publisher::enabled(lookup)
-                .map_err(anyhow::Error::msg)
-                .context("validate DBOS social registration flags")?;
-        let finance_claim_postgres =
-            if finance_aggregate_enabled || notation_enabled || email_summary_enabled {
-                Some(
-                    store::postgres::PostgresDb::from_env()
-                        .await
-                        .context("connect PostgreSQL for DBOS request identity claims")?,
-                )
-            } else {
-                None
-            };
-        let dbos_ingress_token = if finance_aggregate_enabled
-            || reconcile_enabled
-            || nightly_project_update_enabled
-            || email_summary_enabled
-            || inbound_message_alert_enabled
-            || project_slack_enabled
-            || notation_enabled
-            || social_publisher_enabled
-            || social_reconciler_enabled
-            || youtube_dbos_enabled
-            || triage_dbos_enabled
-            || sandbox_credit_reset_enabled
-        {
-            let token = lookup("NAVIGATOR_DBOS_INGRESS_TOKEN")
-                .filter(|token| !token.trim().is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "NAVIGATOR_DBOS_INGRESS_TOKEN is required when an authenticated DBOS ingress is enabled"
-                    )
-                })?;
-            crate::dbos_ingress::FinanceIngress::validate_token(&token)
-                .map_err(anyhow::Error::msg)?;
-            Some(token)
-        } else {
-            None
-        };
-        let surreal = if general_nag_enabled
-            || dri_digest_enabled
-            || notation_reset_enabled
-            || profit_digest_enabled
-            || reconcile_enabled
-            || finance_aggregate_enabled
-            || nightly_project_update_enabled
-            || email_summary_enabled
-            || inbound_message_alert_enabled
-            || project_slack_enabled
-            || notation_enabled
-            || social_publisher_enabled
-            || social_reconciler_enabled
-        {
-            let surreal = store::surreal::SurrealDb::uninitialized();
-            Some(surreal)
-        } else {
-            None
-        };
-        let general_nag = if general_nag_enabled {
+        let project_slack_postgres = Some(postgres.clone());
+        let finance_claim_postgres = Some(postgres.clone());
+        let token = lookup(workflows::trigger::DBOS_INGRESS_TOKEN_ENV)
+            .filter(|token| !token.trim().is_empty())
+            .context("NAVIGATOR_DBOS_INGRESS_TOKEN is required for DBOS ingress")?;
+        crate::dbos_ingress::FinanceIngress::validate_token(&token).map_err(anyhow::Error::msg)?;
+        let dbos_ingress_token = Some(token);
+        let surreal = Some(store::surreal::SurrealDb::uninitialized());
+        let general_nag = {
             let source = surreal
                 .clone()
                 .context("GeneralNag database not configured")?;
@@ -289,10 +157,8 @@ async fn run_host(
                 )
                 .context("validate GeneralNag delivery configuration")?
             })
-        } else {
-            None
         };
-        let notation_reset = if notation_reset_enabled {
+        let notation_reset = {
             let source = surreal
                 .clone()
                 .context("NotationReset database not configured")?;
@@ -310,8 +176,6 @@ async fn run_host(
                 )
                 .context("validate NotationReset delivery configuration")?
             })
-        } else {
-            None
         };
         let profit_digest = if profit_digest_enabled {
             use workflows::dbos_engine::profit_digest;
@@ -357,26 +221,24 @@ async fn run_host(
             None
         };
         let dri_digest = if let Some(local) = &local_providers {
-            if dri_digest_enabled {
-                Some(
-                    local.dri_digest(
-                        surreal
-                            .clone()
-                            .context("DriDigest database not configured")?,
-                        postgres.clone(),
-                    ),
-                )
-            } else {
-                None
-            }
-        } else {
-            crate::dri_digest::dbos_context(
-                surreal.clone(),
-                slack_bot.clone(),
-                simulated_matters,
-                lookup,
+            Some(
+                local.dri_digest(
+                    surreal
+                        .clone()
+                        .context("DriDigest database not configured")?,
+                    postgres.clone(),
+                ),
             )
-            .context("configure DBOS DriDigest")?
+        } else {
+            Some(
+                workflows::dbos_engine::dri_digest::Context::from_lookup(
+                    store::surreal::SurrealDb::uninitialized(),
+                    slack_bot.clone(),
+                    simulated_matters,
+                    lookup,
+                )
+                .context("configure DBOS DriDigest")?,
+            )
         };
         let billing_canary = if workflows::dbos_engine::billing_canary::enabled(lookup)
             .context("read NAVIGATOR_DBOS_BILLING_CANARY_ENABLED")?
@@ -406,22 +268,7 @@ async fn run_host(
         } else {
             None
         };
-        let archives_context = if archives_enabled {
-            Some(if let Some(local) = &local_providers {
-                local.archives()
-            } else {
-                let channel_id = dbos_engine::messages_channel(lookup, simulated_matters)
-                    .context("DBOS Archives requires its messages channel")?;
-                anyhow::ensure!(
-                    slack_bot_enabled,
-                    "DBOS Archives requires the deployment's Slack bot"
-                );
-                (slack_bot.clone(), channel_id, slack_bot_enabled)
-            })
-        } else {
-            None
-        };
-        Some((
+        (
             settings,
             dbos_engine::Schedules {
                 forge_parity: true,
@@ -433,13 +280,8 @@ async fn run_host(
                 profit_digest,
                 ..Default::default()
             },
-            archives_context,
             reconcile_context,
-            if finance_aggregate_enabled {
-                surreal.clone()
-            } else {
-                None
-            },
+            surreal.clone(),
             if reconcile_enabled {
                 surreal.clone()
             } else {
@@ -447,27 +289,10 @@ async fn run_host(
             },
             dbos_ingress_token,
             finance_claim_postgres,
-            nightly_project_update_enabled,
-            email_summary_enabled,
-            inbound_message_alert_enabled,
-            if email_summary_enabled || inbound_message_alert_enabled {
-                surreal.clone()
-            } else {
-                None
-            },
-            project_slack_enabled,
+            surreal.clone(),
             project_slack_postgres,
-            notation_enabled,
-            if social_publisher_enabled {
-                surreal
-                    .clone()
-                    .map(|surreal| (surreal, social_reconciler_enabled))
-            } else {
-                None
-            },
-        ))
-    } else {
-        None
+            surreal,
+        )
     };
 
     // Branding is Neon Law by default; NAVIGATOR_CUSTOM_BRANDING opts into a
@@ -567,8 +392,10 @@ async fn run_host(
         .await
         .context("configure public assets storage")?;
     let dbos_social_kms = kms.clone();
-    let youtube_dbos = youtube_dbos_enabled
-        .then(|| YoutubeCommentsPollerService::new(surreal.clone(), kms.clone()));
+    let youtube_dbos = Some(YoutubeCommentsPollerService::new(
+        surreal.clone(),
+        kms.clone(),
+    ));
     let dbos_social_assets_storage = assets_storage.clone();
     let repository_forge = RepositoryForge::ByProject {
         default: cloud::ForgeBackend::from_lookup(|key| std::env::var(key).ok())
@@ -617,7 +444,7 @@ async fn run_host(
     // registered and every message still gets a triage row, from rules alone.
     let triage_providers = TriageProviders::from_env().context("configure triage providers")?;
     let inbound_triage = InboundTriageService::new(surreal.clone(), triage_providers);
-    let triage_dbos = triage_dbos_enabled.then(|| inbound_triage.clone());
+    let triage_dbos = Some(inbound_triage.clone());
     let inbox_attachment_dbos = if inbox_attachment_dbos_enabled {
         let address = lookup("NAVIGATOR_CLAMD_ADDR")
             .filter(|address| !address.trim().is_empty())
@@ -630,18 +457,6 @@ async fn run_host(
         None
     };
 
-    // One endpoint hosts every workflow: the `Notation` virtual object,
-    // `EmailSummary`, and the `Archives` nightly-export, `BillingCanary`,
-    // `BillingDigest`
-    // (daily GCP cost email), `ReconcileInvoices`, `DriDigest` (nightly
-    // project-DRI notice), `GeneralNag` (daily `#general` jab), and
-    // `NightlyProjectUpdate` (daily parent DAG over every Project, with one
-    // child workflow per tag), and `NotationReset` (daily draft reset)
-    // workflows, each with a thin CronJob trigger. All run against this one
-    // worker — there is no per-workflow pod. The exact set of service names
-    // bound here is mirrored in `crate::registry`, which the
-    // registry tests guard against drift (count + PascalCase naming).
-
     let health_listener = bind_health_listener().await?;
     let manual_token = std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV)
         .ok()
@@ -652,30 +467,24 @@ async fn run_host(
     let dbos_ingress = Arc::new(std::sync::RwLock::new(
         crate::dbos_ingress::WorkerIngress::default(),
     ));
-    let dbos_executor = if let Some((
+    let (
         settings,
         schedules,
-        archives_context,
         reconcile_context,
         finance_aggregate_surreal,
         reconcile_surreal,
         dbos_ingress_token,
         finance_claim_postgres,
-        nightly_project_update_enabled,
-        email_summary_enabled,
-        inbound_message_alert_enabled,
         event_surreal,
-        project_slack_enabled,
         project_slack_postgres,
-        notation_enabled,
         social_surreal,
-    )) = dbos_hosting
-    {
+    ) = dbos_hosting;
+    let dbos_executor = {
         let finance_aggregate_surreal_for_ingress = finance_aggregate_surreal.clone();
         let finance_aggregate_context = finance_aggregate_surreal.map(|surreal| {
             crate::dbos_finance_aggregate::Context::new(surreal, dbos_finance_storage)
         });
-        let email_summary_context = if email_summary_enabled {
+        let email_summary_context = {
             let surreal = event_surreal
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("EmailSummary database not configured"))?;
@@ -685,10 +494,8 @@ async fn run_host(
                 Arc::clone(&dbos_email_slack),
                 summary_providers.clone(),
             ))
-        } else {
-            None
         };
-        let alert_context = if inbound_message_alert_enabled {
+        let alert_context = {
             let surreal = event_surreal
                 .ok_or_else(|| anyhow::anyhow!("InboundMessageAlert database not configured"))?;
             Some(crate::dbos_inbound_message_alert::Context::new(
@@ -703,332 +510,294 @@ async fn run_host(
                 ),
                 postgres.clone(),
             ))
-        } else {
-            None
         };
         let dbos_notation_postgres = finance_claim_postgres.clone();
         // Both stores, resolved before the executor launch so a misconfigured
         // notation flag fails boot with a clear message rather than inside
         // the registration closure (whose error type is the engine's).
-        let dbos_notation_stores = if notation_enabled {
+        let dbos_notation_stores = {
             Some((
                 dbos_notation_surreal.clone(),
                 dbos_notation_postgres
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("notation port requires PostgreSQL"))?,
             ))
-        } else {
-            None
         };
         let recovery_version = settings.config().app_version.ok_or_else(|| {
             anyhow::anyhow!("summary recovery requires the configured DBOS version")
         })?;
         let review_postgres = postgres.clone();
         let dbos_ingress_for_registration = Arc::clone(&dbos_ingress);
-        Some(
-            dbos_engine::Executor::launch_hosting_with(
-                &settings,
-                ops_notifier,
-                match app_schedules {
-                    Some(application) => schedules.with_application_schedules(application),
-                    None => schedules,
-                },
-                move |dbos| {
-                    let mut launchers = register_external(dbos)?;
-                    let mut registered_ingress = crate::dbos_ingress::WorkerIngress {
-                        manual_schedules: manual_token.map(|token| {
-                            crate::dbos_ingress::ManualIngress {
-                                token: token.into(),
-                                builtin: dbos_engine::ManualSchedules::default(),
-                                archives: None,
-                            }
-                        }),
-                        ..Default::default()
+        dbos_engine::Executor::launch_hosting_with(
+            &settings,
+            ops_notifier,
+            match app_schedules {
+                Some(application) => schedules.with_application_schedules(application),
+                None => schedules,
+            },
+            move |dbos| {
+                let mut launchers = register_external(dbos)?;
+                let mut registered_ingress = crate::dbos_ingress::WorkerIngress {
+                    manual_schedules: manual_token.map(|token| {
+                        crate::dbos_ingress::ManualIngress {
+                            token: token.into(),
+                            builtin: dbos_engine::ManualSchedules::default(),
+                        }
+                    }),
+                    ..Default::default()
+                };
+                {
+                    let outcome_channel = if simulated_matters {
+                        dbos_nightly_staging_messages_channel.clone()
+                    } else {
+                        dbos_nightly_messages_channel.clone()
                     };
-                    if nightly_project_update_enabled {
-                        let outcome_channel = if simulated_matters {
-                            dbos_nightly_staging_messages_channel.clone()
-                        } else {
-                            dbos_nightly_messages_channel.clone()
-                        };
-                        let token = dbos_ingress_token
-                            .clone()
-                            .expect("enabled DBOS ingress has a validated token");
-                        let workflow = crate::dbos_nightly_project_update::register(
-                            dbos,
-                            crate::dbos_nightly_project_update::Context::new(
-                                dbos_nightly_surreal,
-                                dbos_nightly_slack,
-                                dbos_nightly_bots,
-                                outcome_channel,
-                                simulated_matters,
-                                crate::dbos_nightly_project_update::Providers {
-                                    repository_forge: dbos_nightly_repository_forge,
-                                    runtime_version:
-                                        crate::nightly_project_update::repository::RUNTIME_VERSION
-                                            .into(),
-                                    portal_origin: dbos_nightly_portal_origin,
-                                },
-                            ),
-                        )?;
-                        registered_ingress.nightly_project_update =
-                            Some(crate::dbos_ingress::NightlyIngress::new(token, workflow));
+                    let token = dbos_ingress_token
+                        .clone()
+                        .expect("enabled DBOS ingress has a validated token");
+                    let workflow = crate::dbos_nightly_project_update::register(
+                        dbos,
+                        crate::dbos_nightly_project_update::Context::new(
+                            dbos_nightly_surreal,
+                            dbos_nightly_slack,
+                            dbos_nightly_bots,
+                            outcome_channel,
+                            simulated_matters,
+                            crate::dbos_nightly_project_update::Providers {
+                                repository_forge: dbos_nightly_repository_forge,
+                                runtime_version:
+                                    crate::nightly_project_update::repository::RUNTIME_VERSION
+                                        .into(),
+                                portal_origin: dbos_nightly_portal_origin,
+                            },
+                        ),
+                    )?;
+                    registered_ingress.nightly_project_update =
+                        Some(crate::dbos_ingress::NightlyIngress::new(token, workflow));
+                }
+                if let Some(context) = reconcile_context {
+                    let schedule_enabled = context.schedule_enabled();
+                    let workflow = crate::dbos_reconcile::register(dbos, context)?;
+                    if let (Some(token), Some(_surreal)) =
+                        (dbos_ingress_token.clone(), reconcile_surreal)
+                    {
+                        registered_ingress.reconcile = Some(
+                            crate::dbos_ingress::ReconcileIngress::new(token, workflow.clone()),
+                        );
                     }
-                    if let Some((slack, channel_id, slack_enabled)) = archives_context {
-                        let workflow = archives::workflow::register_dbos(
-                            dbos,
-                            slack,
-                            channel_id,
-                            slack_enabled,
-                        )?;
-                        if let Some(manual) = &mut registered_ingress.manual_schedules {
-                            manual.archives = Some(workflow.clone());
-                        }
-                        launchers.push(Box::new(move |stop| {
-                            tokio::spawn(archives::workflow::schedule_dbos(workflow, stop))
-                        }));
+                    launchers.extend(crate::dbos_reconcile::schedule_starter(
+                        workflow,
+                        schedule_enabled,
+                    ));
+                }
+                if let Some(context) = email_summary_context {
+                    let postgres = finance_claim_postgres.clone().ok_or_else(|| {
+                        dbos::Error::Config("summary recovery requires PostgreSQL".into())
+                    })?;
+                    let recovery = crate::dbos_email_summary::recovery::register(
+                        dbos,
+                        postgres.clone(),
+                        recovery_version.clone(),
+                    )?;
+                    if let Some(token) = dbos_ingress_token.as_ref() {
+                        registered_ingress.email_summary_recovery =
+                            Some(crate::dbos_email_summary::recovery::RecoveryIngress::new(
+                                token.clone(),
+                                dbos.clone(),
+                                postgres,
+                                recovery,
+                                recovery_version.clone(),
+                            ));
                     }
-                    if let Some(context) = reconcile_context {
-                        let schedule_enabled = context.schedule_enabled();
-                        let workflow = crate::dbos_reconcile::register(dbos, context)?;
-                        if let (Some(token), Some(_surreal)) =
-                            (dbos_ingress_token.clone(), reconcile_surreal)
-                        {
-                            registered_ingress.reconcile = Some(
-                                crate::dbos_ingress::ReconcileIngress::new(token, workflow.clone()),
-                            );
-                        }
-                        launchers.extend(crate::dbos_reconcile::schedule_starter(
-                            workflow,
-                            schedule_enabled,
-                        ));
+                    let workflow = crate::dbos_email_summary::register(dbos, context)?;
+                    if let Some(token) = dbos_ingress_token.as_ref() {
+                        registered_ingress.email_summary = Some(
+                            crate::dbos_ingress::EmailSummaryIngress::new(token.clone(), workflow),
+                        );
                     }
-                    if let Some(context) = email_summary_context {
-                        let postgres = finance_claim_postgres.clone().ok_or_else(|| {
-                            dbos::Error::Config("summary recovery requires PostgreSQL".into())
-                        })?;
-                        let recovery = crate::dbos_email_summary::recovery::register(
-                            dbos,
-                            postgres.clone(),
-                            recovery_version.clone(),
-                        )?;
-                        if let Some(token) = dbos_ingress_token.as_ref() {
-                            registered_ingress.email_summary_recovery =
-                                Some(crate::dbos_email_summary::recovery::RecoveryIngress::new(
-                                    token.clone(),
-                                    dbos.clone(),
-                                    postgres,
-                                    recovery,
-                                    recovery_version.clone(),
-                                ));
-                        }
-                        let workflow = crate::dbos_email_summary::register(dbos, context)?;
-                        if let Some(token) = dbos_ingress_token.as_ref() {
-                            registered_ingress.email_summary =
-                                Some(crate::dbos_ingress::EmailSummaryIngress::new(
-                                    token.clone(),
-                                    workflow,
-                                ));
-                        }
+                }
+                if let Some(context) = alert_context {
+                    let workflow = crate::dbos_inbound_message_alert::register(dbos, context)?;
+                    if let Some(token) = dbos_ingress_token.as_ref() {
+                        registered_ingress.inbound_message_alert = Some(
+                            crate::dbos_ingress::AlertIngress::new(token.clone(), workflow),
+                        );
                     }
-                    if let Some(context) = alert_context {
-                        let workflow = crate::dbos_inbound_message_alert::register(dbos, context)?;
-                        if let Some(token) = dbos_ingress_token.as_ref() {
-                            registered_ingress.inbound_message_alert = Some(
-                                crate::dbos_ingress::AlertIngress::new(token.clone(), workflow),
-                            );
-                        }
-                    }
-                    if project_slack_enabled {
-                        // Registered before Finance consumes the shared
-                        // startup values, so the lane is live ahead of any
-                        // sibling workflow that may want it later.
-                        let workflow = crate::dbos_project_slack::register(
-                            dbos,
-                            crate::dbos_project_slack::Context::new(
-                                dbos_project_slack_surreal.clone(),
-                                dbos_project_slack_bots.clone(),
-                                project_slack_postgres
-                                    .clone()
-                                    .expect("ProjectSlack lane has no PostgreSQL connection"),
-                                simulated_matters,
-                            ),
-                        )?;
-                        if let (Some(token), Some(postgres)) =
-                            (dbos_ingress_token.clone(), project_slack_postgres.clone())
-                        {
-                            registered_ingress.project_slack =
-                                Some(crate::dbos_ingress::ProjectSlackIngress::new(
-                                    token,
-                                    workflow,
-                                    dbos.clone(),
-                                    dbos_project_slack_surreal.clone(),
-                                    postgres,
-                                ));
-                        }
-                    }
-                    if let Some(context) = finance_aggregate_context {
-                        let workflow = crate::dbos_finance_aggregate::register(dbos, context)?;
-                        if let (Some(token), Some(surreal), Some(postgres)) = (
-                            dbos_ingress_token.clone(),
-                            finance_aggregate_surreal_for_ingress,
-                            finance_claim_postgres,
-                        ) {
-                            let ingress = crate::dbos_ingress::FinanceIngress::new(
+                }
+                {
+                    // Registered before Finance consumes the shared
+                    // startup values, so the lane is live ahead of any
+                    // sibling workflow that may want it later.
+                    let workflow = crate::dbos_project_slack::register(
+                        dbos,
+                        crate::dbos_project_slack::Context::new(
+                            dbos_project_slack_surreal.clone(),
+                            dbos_project_slack_bots.clone(),
+                            project_slack_postgres
+                                .clone()
+                                .expect("ProjectSlack lane has no PostgreSQL connection"),
+                            simulated_matters,
+                        ),
+                    )?;
+                    if let (Some(token), Some(postgres)) =
+                        (dbos_ingress_token.clone(), project_slack_postgres.clone())
+                    {
+                        registered_ingress.project_slack =
+                            Some(crate::dbos_ingress::ProjectSlackIngress::new(
                                 token,
                                 workflow,
                                 dbos.clone(),
-                                surreal,
+                                dbos_project_slack_surreal.clone(),
                                 postgres,
-                            );
-                            registered_ingress.finance = Some(ingress);
-                        }
+                            ));
                     }
-                    if let Some((surreal, postgres)) = dbos_notation_stores.clone() {
-                        let context = crate::dbos_notation::Context::new(
+                }
+                if let Some(context) = finance_aggregate_context {
+                    let workflow = crate::dbos_finance_aggregate::register(dbos, context)?;
+                    if let (Some(token), Some(surreal), Some(postgres)) = (
+                        dbos_ingress_token.clone(),
+                        finance_aggregate_surreal_for_ingress,
+                        finance_claim_postgres,
+                    ) {
+                        let ingress = crate::dbos_ingress::FinanceIngress::new(
+                            token,
+                            workflow,
+                            dbos.clone(),
                             surreal,
-                            postgres.clone(),
-                            Arc::clone(&dbos_notation_email),
-                            Arc::clone(&dbos_notation_storage),
+                            postgres,
                         );
-                        let workflow = crate::dbos_notation::register(dbos, context)?;
-                        if let Some(token) = dbos_ingress_token.clone() {
-                            registered_ingress.notation =
-                                Some(crate::dbos_ingress::NotationIngress::new(
-                                    token,
-                                    dbos.clone(),
-                                    postgres,
-                                    workflow,
-                                ));
-                        }
+                        registered_ingress.finance = Some(ingress);
                     }
-                    if let Some((social_surreal, social_reconciler_enabled)) = social_surreal {
-                        let social_publisher = SocialPublisherService::new(
-                            social_surreal.clone(),
-                            dbos_social_kms.clone(),
-                            dbos_social_assets_storage.clone(),
-                        )
-                        .publisher();
-                        let social_workflow = crate::dbos_social_publisher::register_publisher(
+                }
+                if let Some((surreal, postgres)) = dbos_notation_stores.clone() {
+                    let context = crate::dbos_notation::Context::new(
+                        surreal,
+                        postgres.clone(),
+                        Arc::clone(&dbos_notation_email),
+                        Arc::clone(&dbos_notation_storage),
+                    );
+                    let workflow = crate::dbos_notation::register(dbos, context)?;
+                    if let Some(token) = dbos_ingress_token.clone() {
+                        registered_ingress.notation =
+                            Some(crate::dbos_ingress::NotationIngress::new(
+                                token,
+                                dbos.clone(),
+                                postgres,
+                                workflow,
+                            ));
+                    }
+                }
+                if let Some(social_surreal) = social_surreal {
+                    let social_publisher = SocialPublisherService::new(
+                        social_surreal.clone(),
+                        dbos_social_kms.clone(),
+                        dbos_social_assets_storage.clone(),
+                    )
+                    .publisher();
+                    let social_workflow = crate::dbos_social_publisher::register_publisher(
+                        dbos,
+                        crate::dbos_social_publisher::PublisherContext::new(
+                            social_publisher.clone(),
+                        ),
+                    )?;
+                    if let Some(token) = dbos_ingress_token.clone() {
+                        registered_ingress.social_publisher =
+                            Some(crate::dbos_ingress::SocialPublisherIngress::new(
+                                token,
+                                social_workflow.clone(),
+                            ));
+                    }
+                    {
+                        let reconciler = crate::dbos_social_publisher::register_reconciler(
                             dbos,
-                            crate::dbos_social_publisher::PublisherContext::new(
-                                social_publisher.clone(),
-                            ),
+                            crate::dbos_social_publisher::ReconcilerContext::from_lookup(
+                                social_surreal,
+                                social_publisher,
+                                social_workflow.clone(),
+                                lookup,
+                            )
+                            .map_err(|error| dbos::Error::Config(error.to_string()))?,
                         )?;
                         if let Some(token) = dbos_ingress_token.clone() {
-                            registered_ingress.social_publisher =
-                                Some(crate::dbos_ingress::SocialPublisherIngress::new(
+                            registered_ingress.social_reconciler =
+                                Some(crate::dbos_ingress::SocialReconcilerIngress::new(
                                     token,
-                                    social_workflow.clone(),
+                                    reconciler.clone(),
                                 ));
                         }
-                        if social_reconciler_enabled {
-                            let reconciler = crate::dbos_social_publisher::register_reconciler(
-                                dbos,
-                                crate::dbos_social_publisher::ReconcilerContext::from_lookup(
-                                    social_surreal,
-                                    social_publisher,
-                                    social_workflow.clone(),
-                                    lookup,
-                                )
-                                .map_err(|error| dbos::Error::Config(error.to_string()))?,
-                            )?;
-                            if let Some(token) = dbos_ingress_token.clone() {
-                                registered_ingress.social_reconciler =
-                                    Some(crate::dbos_ingress::SocialReconcilerIngress::new(
-                                        token,
-                                        reconciler.clone(),
-                                    ));
-                            }
-                            launchers.push(Box::new(move |stop| {
-                                let clock: crate::dbos_social_publisher::Clock =
-                                    Arc::new(chrono::Utc::now);
-                                tokio::spawn(async move {
-                                    crate::dbos_social_publisher::schedule(
-                                        &reconciler,
-                                        clock,
-                                        stop,
-                                    )
-                                    .await;
-                                })
-                            }));
-                        }
-                    }
-                    if let (Some(service), Some(token)) =
-                        (youtube_dbos.clone(), dbos_ingress_token.as_ref())
-                    {
-                        registered_ingress.youtube_comments =
-                            Some(crate::dbos_ingress::YoutubeIngress {
-                                token: token.as_str().into(),
-                                workflow: crate::youtube_comments::register_dbos(dbos, service)?,
-                            });
-                    }
-                    if let (Some(service), Some(token)) =
-                        (triage_dbos.clone(), dbos_ingress_token.as_ref())
-                    {
-                        registered_ingress.inbound_triage =
-                            Some(crate::dbos_ingress::TriageIngress {
-                                token: token.as_str().into(),
-                                workflow: crate::inbound_triage::register_dbos(
-                                    dbos,
-                                    service.clone(),
-                                )?,
-                                filing: crate::inbound_triage::register_filing_dbos(dbos, service)?,
-                            });
-                    }
-                    let review =
-                        crate::dbos_deadline_proposal::register(dbos, review_postgres.clone())?;
-                    let review_engine = dbos.clone();
-                    launchers.push(Box::new(move |stop| {
-                        tokio::spawn(crate::dbos_deadline_proposal::schedule(
-                            review_engine,
-                            review_postgres,
-                            review,
-                            stop,
-                        ))
-                    }));
-                    if let Some((db, storage, scanner)) = inbox_attachment_dbos {
-                        let workflow = crate::inbox_attachment_filing::register_dbos(
-                            dbos, db, storage, scanner,
-                        )?;
                         launchers.push(Box::new(move |stop| {
-                            tokio::spawn(crate::inbox_attachment_filing::schedule(workflow, stop))
+                            let clock: crate::dbos_social_publisher::Clock =
+                                Arc::new(chrono::Utc::now);
+                            tokio::spawn(async move {
+                                crate::dbos_social_publisher::schedule(&reconciler, clock, stop)
+                                    .await;
+                            })
                         }));
                     }
-                    if let (Some((postgres, surreal)), Some(token)) = (
-                        sandbox_credit_reset_stores.clone(),
-                        dbos_ingress_token.as_ref(),
-                    ) {
-                        registered_ingress.sandbox_credit_reset =
-                            Some(crate::dbos_ingress::SandboxResetIngress {
-                                token: token.as_str().into(),
-                                workflow: crate::dbos_sandbox_reset::register(
-                                    dbos, postgres, surreal,
-                                )?,
-                            });
-                    }
-                    *dbos_ingress_for_registration
-                        .write()
-                        .expect("DBOS ingress lock poisoned") = registered_ingress;
-                    Ok(launchers)
-                },
-            )
-            .await
-            .context("launch the DBOS worker")?,
+                }
+                if let (Some(service), Some(token)) =
+                    (youtube_dbos.clone(), dbos_ingress_token.as_ref())
+                {
+                    registered_ingress.youtube_comments =
+                        Some(crate::dbos_ingress::YoutubeIngress {
+                            token: token.as_str().into(),
+                            workflow: crate::youtube_comments::register_dbos(dbos, service)?,
+                        });
+                }
+                if let (Some(service), Some(token)) =
+                    (triage_dbos.clone(), dbos_ingress_token.as_ref())
+                {
+                    registered_ingress.inbound_triage = Some(crate::dbos_ingress::TriageIngress {
+                        token: token.as_str().into(),
+                        workflow: crate::inbound_triage::register_dbos(dbos, service.clone())?,
+                        filing: crate::inbound_triage::register_filing_dbos(dbos, service)?,
+                    });
+                }
+                let review =
+                    crate::dbos_deadline_proposal::register(dbos, review_postgres.clone())?;
+                let review_engine = dbos.clone();
+                launchers.push(Box::new(move |stop| {
+                    tokio::spawn(crate::dbos_deadline_proposal::schedule(
+                        review_engine,
+                        review_postgres,
+                        review,
+                        stop,
+                    ))
+                }));
+                if let Some((db, storage, scanner)) = inbox_attachment_dbos {
+                    let workflow =
+                        crate::inbox_attachment_filing::register_dbos(dbos, db, storage, scanner)?;
+                    launchers.push(Box::new(move |stop| {
+                        tokio::spawn(crate::inbox_attachment_filing::schedule(workflow, stop))
+                    }));
+                }
+                if let (Some((postgres, surreal)), Some(token)) = (
+                    sandbox_credit_reset_stores.clone(),
+                    dbos_ingress_token.as_ref(),
+                ) {
+                    registered_ingress.sandbox_credit_reset =
+                        Some(crate::dbos_ingress::SandboxResetIngress {
+                            token: token.as_str().into(),
+                            workflow: crate::dbos_sandbox_reset::register(dbos, postgres, surreal)?,
+                        });
+                }
+                *dbos_ingress_for_registration
+                    .write()
+                    .expect("DBOS ingress lock poisoned") = registered_ingress;
+                Ok(launchers)
+            },
         )
-    } else {
-        None
+        .await
+        .context("launch the DBOS worker")?
     };
-    if let Some(executor) = &dbos_executor {
-        if let Some(manual) = &mut dbos_ingress
-            .write()
-            .map_err(|_| anyhow::anyhow!("workflow ingress lock poisoned"))?
-            .manual_schedules
-        {
-            manual.builtin = executor.manual_schedules();
-        }
+    if let Some(manual) = &mut dbos_ingress
+        .write()
+        .map_err(|_| anyhow::anyhow!("workflow ingress lock poisoned"))?
+        .manual_schedules
+    {
+        manual.builtin = dbos_executor.manual_schedules();
     }
-    let dbos_probe = dbos_executor.as_ref().map(dbos_engine::Executor::probe);
+    let dbos_probe = Some(dbos_executor.probe());
     let stop = dbos::CancellationToken::new();
     let mut health = serve_health_listener(health_listener, dbos_ingress, dbos_probe, stop.clone());
     if let Some(ready) = ready {
@@ -1055,9 +824,7 @@ async fn run_host(
             Err(error) => Err(error.into()),
         }
     };
-    if let Some(executor) = dbos_executor {
-        executor.shutdown().await;
-    }
+    dbos_executor.shutdown().await;
     result?;
     health_result
 }
@@ -1098,16 +865,4 @@ fn serve_health_listener(
         .with_graceful_shutdown(stop.cancelled_owned())
         .await
     })
-}
-
-#[cfg(test)]
-mod native_host_tests {
-    use super::*;
-    #[test]
-    fn native_host_refuses_missing_or_invalid_routes_before_launch() {
-        assert!(require_native_routes(Engine::Dbos, |_| Some("true".into())).is_ok());
-        assert!(require_native_routes(Engine::Dbos, |_| None).is_err());
-        assert!(require_native_routes(Engine::Dbos, |_| Some("bad".into())).is_err());
-        assert!(require_native_routes(Engine::Restate, |_| Some("true".into())).is_err());
-    }
 }

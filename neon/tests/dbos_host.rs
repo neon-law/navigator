@@ -1,6 +1,6 @@
 //! The `neon` web process hosting the DBOS executor beside its server.
 //!
-//! `neon`'s `main` boots through `portal::hosting::run_with_dbos`, which wraps
+//! `neon`'s `main` boots through `portal::hosting::run`, which wraps
 //! the bound server in [`portal::hosting::with_dbos`]. These tests drive that
 //! seam with the real `neon` router on a real listener against a disposable
 //! PostgreSQL database: with the flag on, `Heartbeat` runs from this process
@@ -26,11 +26,8 @@ struct TestDatabase {
 }
 
 impl TestDatabase {
-    fn lookup(&self, enabled: Option<&'static str>) -> impl Fn(&str) -> Option<String> + 'static {
-        let mut env = self.env.clone();
-        if let Some(enabled) = enabled {
-            env.push((dbos_engine::ENABLED_ENV, enabled.to_owned()));
-        }
+    fn lookup(&self) -> impl Fn(&str) -> Option<String> + 'static {
+        let env = self.env.clone();
         move |key| {
             env.iter()
                 .find(|(name, _)| *name == key)
@@ -143,12 +140,12 @@ async fn serve(
 }
 
 #[tokio::test]
-async fn neon_runs_the_heartbeat_with_dbos_on_and_stops_it_on_shutdown() {
+async fn neon_runs_the_heartbeat_and_stops_it_on_shutdown() {
     let Some(db) = database().await else {
         return;
     };
     let notifier = CapturingNotifier::new();
-    let (addr, stop, server) = serve(db.lookup(Some("true")), notifier.clone()).await;
+    let (addr, stop, server) = serve(db.lookup(), notifier.clone()).await;
 
     // The line posts inside `notify` before its checkpoint commits, so wait for
     // the run to finish rather than for the line.
@@ -206,55 +203,21 @@ async fn neon_runs_the_heartbeat_with_dbos_on_and_stops_it_on_shutdown() {
 }
 
 #[tokio::test]
-async fn neon_never_touches_dbos_with_the_flag_off() {
-    let Some(db) = database().await else {
-        return;
-    };
-    for flag in [None, Some("false")] {
-        let notifier = CapturingNotifier::new();
-        let (addr, stop, server) = serve(db.lookup(flag), notifier.clone()).await;
-        assert!(answers(addr).await, "the neon router serves");
-        stop.send(()).expect("the server is running");
-        server
-            .await
-            .expect("the server task panicked")
-            .expect("the server shuts down cleanly");
-        assert!(notifier.captured().is_empty(), "{flag:?}");
-    }
-    let schema: Option<String> = sqlx::query_scalar("SELECT to_regnamespace('dbos')::text")
-        .fetch_one(&db.pool)
-        .await
-        .expect("look for the dbos schema");
-    assert_eq!(schema, None, "no executor launched, so no dbos schema");
-}
-
-#[tokio::test]
-async fn neon_refuses_to_serve_with_dbos_on_and_its_login_missing() {
+async fn neon_refuses_to_serve_when_its_dbos_login_is_missing() {
     let served = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = Arc::clone(&served);
-    let result = portal::hosting::with_dbos(
-        |key| (key == dbos_engine::ENABLED_ENV).then(|| "true".to_owned()),
-        Arc::new(CapturingNotifier::new()),
-        async move {
+    let result =
+        portal::hosting::with_dbos(|_| None, Arc::new(CapturingNotifier::new()), async move {
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
-        },
-    )
-    .await;
+        })
+        .await;
     let error = format!("{:#}", result.expect_err("missing settings fail the boot"));
     assert!(error.contains(dbos_engine::HOST_ENV), "{error}");
     assert!(
         !served.load(std::sync::atomic::Ordering::SeqCst),
         "the server never starts without its executor"
     );
-
-    let typo = portal::hosting::with_dbos(
-        |key| (key == dbos_engine::ENABLED_ENV).then(|| "yes".to_owned()),
-        Arc::new(CapturingNotifier::new()),
-        async { Ok(()) },
-    )
-    .await;
-    assert!(typo.is_err(), "an unknown flag value is refused");
 }
 
 #[tokio::test]
@@ -286,7 +249,7 @@ async fn axum_drains_an_in_flight_request_before_the_dbos_host_returns() {
     let addr = listener.local_addr().expect("listener address");
     let (stop, stopped) = oneshot::channel::<()>();
     let mut server = tokio::spawn(portal::hosting::with_dbos(
-        db.lookup(Some("true")),
+        db.lookup(),
         Arc::new(CapturingNotifier::new()),
         async move {
             axum::serve(listener, router)
@@ -400,7 +363,6 @@ async fn provision_restricted_dbos_fixture(db: &TestDatabase, dbos_login: &str, 
 
 fn restricted_dbos_lookup(db: &TestDatabase, dbos_login: &str) -> impl Fn(&str) -> Option<String> {
     let mut env = db.env.clone();
-    env.push((dbos_engine::ENABLED_ENV, "true".to_owned()));
     for (key, value) in [
         (dbos_engine::USER_ENV, dbos_login.to_owned()),
         (dbos_engine::PASSWORD_ENV, "synthetic".to_owned()),

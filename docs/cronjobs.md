@@ -156,7 +156,7 @@ end-to-end after deploy.
 4. Add `cron-<name>.yaml` under `examples/deploy/k8s/exports/` with placeholders, namespace `navigator`, a UTC schedule
    with a Pacific comment.
 5. Once CI has published the image, render the manifest to the `YY.M.D` tag and apply (above). For flavor A, also
-   re-register the worker — see [durable-workflows.md](durable-workflows.md#the-registration-gotcha).
+   re-register the worker — see [Durable workflows](durable-workflows.md).
 6. Verify with `create job --from` before trusting the schedule.
 
 ## See also

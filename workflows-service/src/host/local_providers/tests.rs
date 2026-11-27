@@ -260,9 +260,6 @@ async fn detached_native_handlers_use_captured_effects_and_the_owned_postgres_st
         let _reset =
             notation_reset::register(&runtime, providers.notation_reset(source, "Development"))
                 .unwrap();
-        let (slack, channel, enabled) = providers.archives();
-        let _archives =
-            archives::workflow::register_dbos(&runtime, slack, channel, enabled).unwrap();
         let running = runtime.clone();
         let checked = tokio::spawn(async move {
             running.launch().await.unwrap();

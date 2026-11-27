@@ -635,6 +635,19 @@ pub async fn run_cron_trigger(
     Ok(())
 }
 
+/// Submit one scheduled job to authenticated DBOS ingress.
+pub async fn run_dbos_cron(
+    telemetry_name: &'static str,
+    route: &str,
+    body: &serde_json::Value,
+) -> anyhow::Result<()> {
+    let _ = dotenvy::dotenv();
+    let _ = dotenvy::from_path(".devx/env");
+    let _telemetry = telemetry::init(telemetry_name);
+    let (ingress, token) = dbos_ingress_from_env()?;
+    Ok(start_dbos_at(&ingress, &token, route, body).await?)
+}
+
 async fn start_dbos_at<B: Serialize + ?Sized>(
     ingress: &str,
     token: &str,

@@ -10,7 +10,7 @@
 //!    open-matters/pitches follow-up, posted as a **second** Slack message.
 //!    Never runs for a simulated-matters deployment: that count is a
 //!    real-matter-only signal, so there is nothing to query or post. The
-//!    copy is [`crate::dri_digest::open_matters_followup`].
+//!    copy is [`workflows::dri_digest::open_matters_message`].
 //!
 //! **Internal operations signal**, not client correspondence: the jab is a
 //! static slogan, and the follow-up counts the Slack Firm's matters per Brand

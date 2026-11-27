@@ -6,122 +6,30 @@ use std::{future::Future, sync::Arc};
 use tokio::sync::oneshot;
 use workflows::dbos_engine;
 
-/// Select the complete workflow host without changing individual workflow ownership.
-pub(super) fn enabled(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    let enabled = workflows::flags::flag_enabled(
-        "NAVIGATOR_WORKFLOWS_IN_WEB",
-        lookup("NAVIGATOR_WORKFLOWS_IN_WEB").as_deref(),
-    )?;
-    if enabled {
-        anyhow::ensure!(
-            host_dbos && dbos_engine::enabled(&lookup)?,
-            "NAVIGATOR_WORKFLOWS_IN_WEB requires NAVIGATOR_DBOS_ENABLED=true"
-        );
-        anyhow::ensure!(
-            workflows_service::engine::Engine::from_lookup(&lookup)?
-                == workflows_service::engine::Engine::Dbos,
-            "NAVIGATOR_WORKFLOWS_IN_WEB requires NAVIGATOR_WORKFLOW_ENGINE=dbos"
-        );
-    }
-    Ok(enabled)
-}
-
-#[cfg(test)]
-mod combined_workflow_tests {
-    use super::enabled;
-    #[test]
-    fn combined_host_requires_both_explicit_dbos_selections() {
-        let lookup = |values: &[(&str, &str)]| {
-            let values: Vec<_> = values
-                .iter()
-                .map(|(key, value)| (key.to_string(), value.to_string()))
-                .collect();
-            move |name: &str| {
-                values
-                    .iter()
-                    .find(|(key, _)| key == name)
-                    .map(|(_, value)| value.clone())
-            }
-        };
-        assert!(!enabled(true, |_| None).unwrap());
-        assert!(enabled(true, lookup(&[("NAVIGATOR_WORKFLOWS_IN_WEB", "typo")])).is_err());
-        let configured = [
-            ("NAVIGATOR_WORKFLOWS_IN_WEB", "true"),
-            ("NAVIGATOR_DBOS_ENABLED", "true"),
-            ("NAVIGATOR_WORKFLOW_ENGINE", "dbos"),
-        ];
-        assert!(enabled(true, lookup(&configured)).unwrap());
-        assert!(enabled(false, lookup(&configured)).is_err());
-        assert!(enabled(true, lookup(&configured[..2])).is_err());
-    }
-}
-
-#[allow(clippy::too_many_arguments)] // One boot's hosting choices and transports.
 pub(super) async fn run(
-    host_dbos: bool,
-    combined: bool,
-    ops_notifier: Arc<dyn workflows::Notifier>,
-    dbos_schedules: dbos_engine::Schedules,
+    schedules: dbos_engine::Schedules,
     sent_email_export: Option<Arc<dyn archives::sent_email_export::ExportSource>>,
-    archives: Option<archives::workflow::DbosContext>,
-    local_archives: Option<crate::cron_schedules::LocalArchives>,
     stop: CancellationToken,
-    serve: impl Future<Output = anyhow::Result<()>>,
+    server: impl Future<Output = anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
-    if combined {
-        telemetry::register_nightly_project_update();
-        self::serve(stop, super::shutdown_signal(), serve, move |stop, ready| {
+    telemetry::register_nightly_project_update();
+    serve(
+        stop,
+        super::shutdown_signal(),
+        server,
+        move |stop, ready| {
             workflows_service::host::run_embedded(
                 async move {
                     stop.cancelled().await;
                     Ok(())
                 },
-                dbos_schedules,
-                move |dbos| {
-                    super::register_archive_schedules(
-                        dbos,
-                        sent_email_export,
-                        archives,
-                        local_archives,
-                    )
-                },
+                schedules,
+                move |dbos| super::register_archive_schedules(dbos, sent_email_export),
                 ready,
             )
-        })
-        .await
-    } else if host_dbos {
-        let lookup = |key: &str| std::env::var(key).ok();
-        super::with_dbos_hosting_and_external(
-            lookup,
-            ops_notifier,
-            dbos_schedules,
-            move |dbos| {
-                super::register_archive_schedules(dbos, sent_email_export, archives, local_archives)
-            },
-            self::serve_http(stop, serve, super::shutdown_signal()),
-        )
-        .await
-    } else {
-        self::serve_http(stop, serve, super::shutdown_signal()).await
-    }
-}
-
-pub(super) async fn serve_http(
-    stop: CancellationToken,
-    serve: impl Future<Output = anyhow::Result<()>>,
-    signal: impl Future<Output = ()>,
-) -> anyhow::Result<()> {
-    tokio::pin!(serve);
-    tokio::select! {
-        result = &mut serve => result,
-        () = signal => {
-            stop.cancel();
-            serve.await
-        }
-    }
+        },
+    )
+    .await
 }
 
 pub(super) async fn serve<W, F>(
@@ -183,29 +91,6 @@ mod tests {
         atomic::{AtomicBool, Ordering},
         Arc,
     };
-
-    #[tokio::test]
-    async fn disabled_workflow_host_serves_without_an_executor() {
-        let served = Arc::new(AtomicBool::new(false));
-        let observed = served.clone();
-        Box::pin(run(
-            false,
-            false,
-            Arc::new(workflows::CapturingNotifier::new()),
-            dbos_engine::Schedules::default(),
-            None,
-            None,
-            None,
-            CancellationToken::new(),
-            async move {
-                observed.store(true, Ordering::SeqCst);
-                Ok(())
-            },
-        ))
-        .await
-        .unwrap();
-        assert!(served.load(Ordering::SeqCst));
-    }
 
     #[tokio::test]
     async fn startup_failure_never_polls_the_application() {
