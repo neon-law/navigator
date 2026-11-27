@@ -201,6 +201,30 @@ pub struct ProjectResourceLinks {
     pub booking_url: Option<String>,
 }
 
+/// The Google integrations a matter's Firm has switched on in Firm settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FirmIntegrations {
+    pub drive: bool,
+    pub calendar: bool,
+}
+
+impl ProjectResourceLinks {
+    /// Drop the Drive and Calendar coordinates of an integration the Firm has off,
+    /// so a stale folder or calendar id never renders a link.
+    #[must_use]
+    pub fn for_firm(mut self, firm: FirmIntegrations) -> Self {
+        if !firm.drive {
+            self.drive_folder_id = None;
+            self.client_submissions_folder_id = None;
+        }
+        if !firm.calendar {
+            self.calendar_id = None;
+            self.booking_url = None;
+        }
+        self
+    }
+}
+
 /// One resource row, resolved to what the panel renders.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct ProjectResource {
@@ -375,7 +399,7 @@ pub fn ProjectResourcesPanel(view: ProjectResourcesView) -> Element {
 #[cfg(test)]
 mod tests {
     use super::{
-        visible_resources, Audience, ProjectResourceLinks, ProjectResourcesPanel,
+        visible_resources, Audience, FirmIntegrations, ProjectResourceLinks, ProjectResourcesPanel,
         ProjectResourcesView, ResourceKind,
     };
     use crate::people::ViewerRole;
@@ -605,6 +629,30 @@ mod tests {
 
     /// No visible resources means no panel, rather than a heading over nothing.
     #[test]
+    fn a_firm_with_drive_and_calendar_off_shows_neither() {
+        let names = |firm| {
+            visible_resources(&every_link().for_firm(firm), ViewerRole::Lawyer)
+                .into_iter()
+                .map(|resource| resource.kind)
+                .collect::<Vec<_>>()
+        };
+        let all = names(FirmIntegrations {
+            drive: true,
+            calendar: true,
+        });
+        let off = names(FirmIntegrations::default());
+        for kind in [
+            ResourceKind::PrivateDriveFolder,
+            ResourceKind::ProjectCalendar,
+            ResourceKind::BookingLink,
+        ] {
+            assert!(all.contains(&kind), "{kind:?}");
+            assert!(!off.contains(&kind), "{kind:?}");
+        }
+        assert!(off.contains(&ResourceKind::PrivateSlackChannel));
+    }
+
+    #[test]
     fn an_empty_panel_renders_nothing() {
         let html = render(ProjectResourcesView::default());
         assert!(!html.contains("Resources"), "{html}");
@@ -647,6 +695,18 @@ mod tests {
             );
         }
         assert!(!html.contains(r#"data-resource-mark="portal""#), "{html}");
+    }
+}
+
+/// Read which Google integrations the matter's Firm has on. An unreadable setting counts as off.
+#[cfg(feature = "server")]
+pub async fn firm_integrations(firm_id: Option<uuid::Uuid>) -> FirmIntegrations {
+    let Some(firm_id) = firm_id else {
+        return FirmIntegrations::default();
+    };
+    FirmIntegrations {
+        drive: store::firms::google_drive(firm_id).await.unwrap_or(false),
+        calendar: matches!(store::firms::calendar_owner(firm_id).await, Ok(Some(_))),
     }
 }
 

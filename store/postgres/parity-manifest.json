@@ -450,6 +450,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "firm_drive_settings",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "firm_forgejo_organization",
       "missing_column": null,
       "missing_table": null,
@@ -2345,7 +2352,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 197,
+    "table_count": 198,
     "tables": {
       "address": {
         "columns": {
@@ -3828,6 +3835,22 @@
           ]
         ],
         "name": "firm_calendar_settings",
+        "references": [
+          "firm"
+        ]
+      },
+      "firm_drive_settings": {
+        "columns": {
+          "firm_id": "uuid",
+          "google_drive": "boolean"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "firm_drive_settings",
         "references": [
           "firm"
         ]

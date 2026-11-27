@@ -63,6 +63,9 @@ pub struct FirmEditView {
     /// The Firm's Portal Theme Brand key; `None` keeps each host's own look.
     #[serde(default)]
     pub google_workspace_calendar_owner: Option<String>,
+    /// Whether the Firm's Projects use Google Drive folders. Read for the Owner only.
+    #[serde(default)]
+    pub google_drive: bool,
     /// The Firm's e-signature provider key (`docusign` or `dropbox_sign`).
     #[serde(default)]
     pub esign_provider: String,
@@ -200,11 +203,16 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
     } else {
         None
     };
+    let google_drive = role == ViewerRole::Owner
+        && store::firms::google_drive(id)
+            .await
+            .map_err(|error| ServerFnError::new(error.to_string()))?;
     let esign_provider = esign_provider_key(id).await?;
     Ok(FirmEditView {
         found: true,
         esign_provider,
         google_workspace_calendar_owner,
+        google_drive,
         name: firm.name,
         status: firm.status,
         entity_id: firm.entity_id.map(|id| id.to_string()),
@@ -393,20 +401,52 @@ fn edit_form(view: &FirmEditView) -> Element {
             .help("Every brand this Firm owns sends engagement letters and other signature requests through this provider.")],
         }
         if view.role == ViewerRole::Owner {
-            FormCard {
-                title: "Google Calendar".to_string(),
-                action: format!("/app/admin/firms/{}/edit", view.id),
-                submit_label: "Save Calendar owner".to_string(),
-                heading: Heading::H2,
-                csrf_token: Some(view.csrf_token.clone()),
-                fields: vec![Field::email(
+            {integration_cards(view)}
+        }
+    }
+}
+
+/// The Owner's Google Calendar and Google Drive switches (Firm Integrations).
+fn integration_cards(view: &FirmEditView) -> Element {
+    rsx! {
+        FormCard {
+            title: "Google Calendar".to_string(),
+            action: format!("/app/admin/firms/{}/edit", view.id),
+            submit_label: "Save Google Calendar".to_string(),
+            heading: Heading::H2,
+            csrf_token: Some(view.csrf_token.clone()),
+            fields: vec![
+                on_off("Google Calendar", "google_calendar", view.google_workspace_calendar_owner.is_some())
+                    .help("On gives each Project a shared Project Calendar and shows it on the Project page. Off hides Calendar; record dates as Deadlines and hand out ICS files."),
+                Field::email(
                     "Google Workspace main email",
                     "google_workspace_calendar_owner",
                     view.google_workspace_calendar_owner.clone().unwrap_or_default(),
-                ).help("Choosing a Google Workspace mailbox makes Google the Firm’s main email and turns on Google Calendar: this mailbox creates and owns the Firm’s Project Calendars. Gmail addresses are not supported. Leave blank to turn Calendar off.")],
-            }
+                ).help("The mailbox that creates and owns the Firm’s Project Calendars, and the Firm’s main email. Required when Calendar is on. Gmail addresses are not supported."),
+            ],
         }
+        FormCard {
+            title: "Google Drive".to_string(),
+            action: format!("/app/admin/firms/{}/edit", view.id),
+            submit_label: "Save Google Drive".to_string(),
+            heading: Heading::H2,
+            csrf_token: Some(view.csrf_token.clone()),
+            fields: vec![on_off("Google Drive", "google_drive", view.google_drive)
+                .help("On gives each Project a private Drive folder and shows it on the Project page. Off hides Drive.")],
+        }
+
     }
+}
+
+/// An On/Off switch posted as `on` or `off`.
+fn on_off(label: &str, name: &str, on: bool) -> Field {
+    Field::select(
+        label,
+        name,
+        vec![Choice::new("on", "On"), Choice::new("off", "Off")],
+        Some(if on { "on" } else { "off" }.to_string()),
+    )
+    .required()
 }
 
 /// `/app/admin/firms/{id}/edit`.
@@ -477,6 +517,7 @@ mod tests {
                 name: "Guieb & Shook PC".to_string(),
             }],
             google_workspace_calendar_owner: Some("calendar@example.test".to_string()),
+            google_drive: false,
             esign_provider: "docusign".to_string(),
             portal_theme_brand_key: Some("guieb-shook".to_string()),
             owned_brands: vec![
@@ -501,6 +542,20 @@ mod tests {
             role: ViewerRole::Owner,
             logo: None,
         }
+    }
+
+    #[test]
+    fn owners_switch_google_calendar_and_drive_on_or_off() {
+        let mut fixture = view();
+        let html = render(&fixture);
+        assert!(html.contains(r#"name="google_calendar""#));
+        assert!(html.contains(r#"name="google_drive""#));
+        assert!(html.contains(r#"<option value="on" selected"#), "{html}");
+        assert!(html.contains(r#"<option value="off" selected"#), "{html}");
+        fixture.role = ViewerRole::Admin;
+        let html = render(&fixture);
+        assert!(!html.contains(r#"name="google_calendar""#));
+        assert!(!html.contains(r#"name="google_drive""#));
     }
 
     #[test]

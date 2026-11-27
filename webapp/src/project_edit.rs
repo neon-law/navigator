@@ -94,6 +94,9 @@ pub struct ProjectEditView {
     /// clears it.
     #[serde(default)]
     pub drive_folder_id: String,
+    /// Whether the Project's Firm has Google Drive on. Off hides the Drive folder card.
+    #[serde(default)]
+    pub google_drive: bool,
     /// The Project's source repository as a whole URL, on any forge. Blank when
     /// the matter records none, which is a legitimate state.
     pub repository_url: String,
@@ -303,6 +306,9 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         private_notion_page_url: project.private_notion_page_url.unwrap_or_default(),
         shared_notion_page_url: project.shared_notion_page_url.unwrap_or_default(),
         drive_folder_id: project.drive_folder_id.unwrap_or_default(),
+        google_drive: crate::project_resources::firm_integrations(project.firm_id)
+            .await
+            .drive,
         repository_url: project.repository_url.unwrap_or_default(),
         csrf_token,
         error,
@@ -572,7 +578,9 @@ fn edit_body(view: &ProjectEditView) -> Element {
                 }
                 {slack_card}
                 {notion_card}
-                {drive_card(&view.drive_folder_id, &view.project_code)}
+                if view.google_drive {
+                    {drive_card(&view.drive_folder_id, &view.project_code)}
+                }
                 {repository_field.render()}
             }),
         }
@@ -673,6 +681,7 @@ mod tests {
             private_notion_page_url: "https://www.notion.so/neonlaw/Private-abc123".to_string(),
             shared_notion_page_url: String::new(),
             drive_folder_id: "1SyntheticFolderId".to_string(),
+            google_drive: true,
             // Deliberately on a self-hosted forge whose path resembles neither
             // the matter name nor a Project code: the field renders a stored
             // value and composes nothing.
@@ -788,6 +797,14 @@ mod tests {
             2,
             "{html}"
         );
+    }
+
+    #[test]
+    fn a_firm_with_drive_off_has_no_drive_card() {
+        let mut fixture = view();
+        fixture.google_drive = false;
+        let html = render(&fixture);
+        assert!(!html.contains(r#"name="drive_folder_id""#), "{html}");
     }
 
     /// The Drive card offers the matter's existing folder, prefilled from the

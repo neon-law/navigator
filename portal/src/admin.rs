@@ -2950,9 +2950,30 @@ struct FirmUpdateInput {
     portal_theme_brand_key: Option<String>,
     #[serde(default)]
     google_workspace_calendar_owner: Option<String>,
+    /// `on` or `off` from the Google Calendar card; `off` clears the Calendar owner.
+    #[serde(default)]
+    google_calendar: Option<String>,
+    /// `on` or `off` from the Google Drive card.
+    #[serde(default)]
+    google_drive: Option<String>,
     /// The e-signature provider key; present only on the provider card's form.
     #[serde(default)]
     esign_provider: Option<String>,
+}
+
+/// Redirect after a single Firm setting save: back to the form, with the refusal named.
+fn firm_setting_saved(id: Uuid, result: Result<(), store::firms::FirmError>) -> Response {
+    match result {
+        Ok(()) => Redirect::to(&format!("/app/admin/firms/{id}/edit")).into_response(),
+        Err(store::firms::FirmError::NotAuthorized | store::firms::FirmError::NoSuchFirm(_)) => {
+            not_found_response()
+        }
+        Err(error) => {
+            let mut query = String::new();
+            push_query(&mut query, "error", &error.user_message());
+            Redirect::to(&format!("/app/admin/firms/{id}/edit?{query}")).into_response()
+        }
+    }
 }
 
 /// `POST /app/admin/firms/{id}/edit` — a descriptive edit on
@@ -2993,26 +3014,44 @@ async fn firms_update(
             }
         };
     }
-    if let Some(owner) = input.google_workspace_calendar_owner.as_deref() {
-        return match store::firms::set_calendar_owner(
-            &state.surreal,
-            session_data.role,
-            session_data.person_id,
+    if let Some(enabled) = input.google_drive.as_deref() {
+        return firm_setting_saved(
             id,
-            owner,
-        )
-        .await
-        {
-            Ok(()) => Redirect::to(&format!("/app/admin/firms/{id}/edit")).into_response(),
-            Err(
-                store::firms::FirmError::NotAuthorized | store::firms::FirmError::NoSuchFirm(_),
-            ) => not_found_response(),
-            Err(error) => {
-                let mut query = String::new();
-                push_query(&mut query, "error", &error.user_message());
-                Redirect::to(&format!("/app/admin/firms/{id}/edit?{query}")).into_response()
-            }
+            store::firms::set_google_drive(
+                &state.surreal,
+                session_data.role,
+                session_data.person_id,
+                id,
+                enabled == "on",
+            )
+            .await,
+        );
+    }
+    if let Some(owner) = input.google_workspace_calendar_owner.as_deref() {
+        let owner = if input.google_calendar.as_deref() == Some("off") {
+            ""
+        } else if input.google_calendar.as_deref() == Some("on") && owner.trim().is_empty() {
+            let mut query = String::new();
+            push_query(
+                &mut query,
+                "error",
+                "Enter the Google Workspace mailbox that owns Project Calendars, or turn Calendar off.",
+            );
+            return Redirect::to(&format!("/app/admin/firms/{id}/edit?{query}")).into_response();
+        } else {
+            owner
         };
+        return firm_setting_saved(
+            id,
+            store::firms::set_calendar_owner(
+                &state.surreal,
+                session_data.role,
+                session_data.person_id,
+                id,
+                owner,
+            )
+            .await,
+        );
     }
     let edit = store::firms::FirmEdit {
         name: Some(input.name.clone()),
@@ -6873,6 +6912,8 @@ mod tests {
                 entity_id: None,
                 admin_dri_person_id: admin,
                 google_workspace_calendar_owner: None,
+                google_calendar: None,
+                google_drive: None,
                 portal_theme_brand_key: None,
                 esign_provider: None,
             })

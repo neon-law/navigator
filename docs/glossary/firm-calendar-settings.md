@@ -9,7 +9,7 @@ In [Firm](firm.md) Settings, an Owner chooses the mailbox that owns the Firm's [
 Saving a Google Workspace mailbox is the choice of Google as the Firm's main email, and Google Calendar exists only for
 a Firm that made it: Project Calendar provisioning and every [Attorney Calendar](attorney-calendar.md) read refuse a
 Firm without it. Consumer Gmail addresses are refused because they cannot grant Workspace delegation. Clearing the
-mailbox turns Calendar off.
+mailbox, or switching Calendar off in [Firm Integrations](firm-integrations.md), turns Calendar off.
 
 The table is `firm_calendar_settings`.
 

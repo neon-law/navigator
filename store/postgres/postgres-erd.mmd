@@ -783,6 +783,10 @@ erDiagram
         string firm_id
         string google_workspace_owner
     }
+    firm_drive_settings {
+        string firm_id
+        string google_drive
+    }
     firm_forgejo_organization {
         uuid firm_id
         int forgejo_id
@@ -2408,6 +2412,7 @@ erDiagram
     brand }o--|| firm_brand : references
     firm }o--|| firm_brand : references
     firm }o--|| firm_calendar_settings : references
+    firm }o--|| firm_drive_settings : references
     firm }o--|| firm_forgejo_organization : references
     firm }o--|| firm_integration_secret : references
     person }o--|| firm_integration_secret : references
