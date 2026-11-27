@@ -78,21 +78,25 @@ async fn run_inner(dir: &Path, host: Option<&str>, dry_run: bool) -> Result<()> 
         .status
         .success()
         .then(|| String::from_utf8_lossy(&existing.stdout).trim().to_string());
-    if dry_run {
+    // A configured remote is authoritative only after the provider verifies it.
+    // Read it without creating a replacement repository at a different path.
+    let mirror = if dry_run || existing.is_some() {
         let body = call(&base, &token, project_id, reqwest::Method::GET).await?;
         let source = source_url(&body, &owner, &name)?;
-        println!("GitHub source: {source}");
-        match body["mirror_status"].as_str() {
-            Some("missing") if existing.is_none() => {
-                println!(
-                    "Forgejo mirror is missing. Repair would create it and configure the remote."
-                );
-            }
+        let verified = match body["mirror_status"].as_str() {
             Some("missing") => {
-                bail!("Forgejo mirror is missing but a local Forgejo remote is configured; verify its repository before repair");
+                ensure!(
+                    existing.is_none(),
+                    "Forgejo mirror is missing but a local Forgejo remote is configured; verify its repository before repair"
+                );
+                None
             }
-            Some("present") => {
-                let verified = mirror_url(&body, &name)?;
+            Some("present") => Some(mirror_url(&body, &name)?),
+            _ => bail!("mirror repair preview has no known outcome"),
+        };
+        if dry_run {
+            println!("GitHub source: {source}");
+            if let Some(verified) = verified {
                 match remote_action(existing.as_deref(), verified)? {
                     RemoteAction::Add => {
                         println!("Repair would configure the verified Forgejo remote.");
@@ -102,13 +106,24 @@ async fn run_inner(dir: &Path, host: Option<&str>, dry_run: bool) -> Result<()> 
                     }
                 }
                 println!("Forgejo mirror: {verified}");
+            } else {
+                println!(
+                    "Forgejo mirror is missing. Repair would create it and configure the remote."
+                );
             }
-            _ => bail!("mirror repair preview has no known outcome"),
+            println!("Repair would synchronize Forgejo main with GitHub main.");
+            return Ok(());
         }
-        println!("Repair would synchronize Forgejo main with GitHub main.");
-        return Ok(());
-    }
-    let mirror = request(&base, &token, project_id, &owner, &name).await?;
+        Mirror {
+            source: source.to_owned(),
+            url: verified
+                .context("mirror repair preview has no verified Forgejo URL")?
+                .to_owned(),
+            outcome: "adopted",
+        }
+    } else {
+        request(&base, &token, project_id, &owner, &name).await?
+    };
     let source = &mirror.source;
     let verified = &mirror.url;
     let outcome = mirror.outcome;
@@ -291,11 +306,43 @@ mod tests {
             git(&["ls-remote", ORIGIN, "refs/heads/main"])
         );
 
+        answer(&server, "GET", &door, 200, repaired("present")).await;
         let other = "https://forge.example.test/other/sample-matter";
         crate::projects::lifecycle::git_text(dir.path(), &["remote", "set-url", "forgejo", other])
             .unwrap();
         assert_eq!(run(dir.path(), Some(&host), false).await, ExitCode::FAILURE);
         assert_eq!(git(&["remote", "get-url", "forgejo"]), other);
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == reqwest::Method::POST)
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_refuses_creation_when_a_local_forgejo_remote_exists() {
+        let id = uuid::Uuid::new_v4();
+        let (server, _login) = site(json!([{"id": id, "code": "sample-matter"}])).await;
+        let door = format!("/app/api/project-forgejo-mirrors/{id}");
+        answer(&server, "GET", &door, 200, repaired("missing")).await;
+        answer(&server, "POST", &door, 200, repaired("created")).await;
+        let dir = checkout(MANIFEST, Some(ORIGIN));
+        crate::projects::lifecycle::git_text(dir.path(), &["remote", "add", "forgejo", MIRROR])
+            .unwrap();
+
+        let error = super::run_inner(dir.path(), Some(&server.uri()), false)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("a local Forgejo remote is configured"));
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests
+            .iter()
+            .all(|request| request.method == reqwest::Method::GET));
     }
 
     #[tokio::test]

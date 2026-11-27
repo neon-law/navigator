@@ -786,15 +786,15 @@ when repair creates the repository. If Forgejo rejects the token, rotate it in t
 For a GitHub-backed Project whose secondary mirror is missing, run `navigator project repository repair-mirror --dir
 <checkout> [--host <site>]`. The admin API checks the caller's `use_integrations` access on the owning Firm, then
 creates or adopts the private Forgejo repository with that Firm's credential and returns Forgejo's verified repository
-URL. The CLI confirms that `origin` is the Project's GitHub source before adding the `forgejo` remote. It refuses to
-replace a different existing `forgejo` remote. Repair fast-forwards the mirror to GitHub main and verifies both commit
-IDs. GitHub remains the source repository and CI/CD provider. Project status reports the Forgejo URL only after
-verifying the repository with the same Firm-scoped credential; `forgejo_status` distinguishes `verified`, `missing`,
-`unavailable`, `not_configured`, and `not_authorized` from the GitHub `origin`. Verification checks private visibility,
-the owning Firm, the Project code, and the URL under the configured Forgejo root. Mirror reads use the Firm's recorded
-Forgejo organization when one exists. Project status and sync display the cause and recovery step from `forgejo_issue`
-when verification fails. Repair reports the same recovery step for credential, access, and repository verification
-failures.
+URL. The CLI confirms that `origin` is the Project's GitHub source before adding the `forgejo` remote. If that remote
+already exists, repair verifies its repository before syncing. A missing repository or a different URL stops repair
+before it sends a provisioning request. Repair fast-forwards the mirror to GitHub main and verifies both commit IDs.
+GitHub remains the source repository and CI/CD provider. Project status reports the Forgejo URL only after verifying the
+repository with the same Firm-scoped credential; `forgejo_status` distinguishes `verified`, `missing`, `unavailable`,
+`not_configured`, and `not_authorized` from the GitHub `origin`. Verification checks private visibility, the owning
+Firm, the Project code, and the URL under the configured Forgejo root. Mirror reads use the Firm's recorded Forgejo
+organization when one exists. Project status and sync display the cause and recovery step from `forgejo_issue` when
+verification fails. Repair reports the same recovery step for credential, access, and repository verification failures.
 
 ## Reviewing a Project release
 
