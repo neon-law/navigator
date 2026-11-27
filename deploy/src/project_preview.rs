@@ -182,6 +182,8 @@ struct LiveDeadline {
     description: Option<String>,
     due_on: Option<store::project_deadlines::DueOn>,
     hearing: Option<store::project_deadlines::Hearing>,
+    #[serde(default)]
+    effort_minutes: i32,
     due_at: String,
     #[serde(default)]
     authority_kind: String,
@@ -222,6 +224,7 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
             description: row.description,
             due_on: row.due_on,
             hearing: row.hearing,
+            effort_minutes: row.effort_minutes,
             due_at: row.due_at,
             authority_kind: row.authority_kind,
             authority: row.authority,

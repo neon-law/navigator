@@ -281,3 +281,117 @@ pub(crate) async fn sync(
     plan.booked = true;
     Ok(plan)
 }
+
+/// Compare buffered appointments with readable Calendar events. The store checks
+/// its own Deadline rows again while committing the schedule.
+pub(crate) async fn check_appearance(
+    state: &crate::api::ApiState,
+    session: &crate::session::SessionData,
+    project: Uuid,
+    starts: &[DateTime<chrono::FixedOffset>],
+    duration: u32,
+    policy: model::project_deadlines::SchedulingPolicy,
+    replacing: bool,
+) -> Result<(), crate::api::ApiError> {
+    use crate::api::ApiError;
+    let Some(first) = starts.first() else {
+        return Ok(());
+    };
+    let windows: Vec<_> = starts
+        .iter()
+        .filter_map(|start| policy.appearance(*start, duration))
+        .collect();
+    let start = windows
+        .iter()
+        .map(|(from, _)| *from)
+        .min()
+        .unwrap_or(*first);
+    let end = windows
+        .iter()
+        .map(|(_, until)| *until)
+        .max()
+        .unwrap_or(*first);
+    if end <= start {
+        return Ok(());
+    }
+    let mut conflicts = BTreeSet::new();
+    let mut consider = |event: cloud::ProjectCalendarEvent| {
+        if crate::attorney_calendars_api::event_bounds(&event).is_some_and(|(from, until)| {
+            windows
+                .iter()
+                .any(|(start, end)| from < *end && until > *start)
+        }) {
+            conflicts.insert(
+                event
+                    .summary
+                    .unwrap_or_else(|| "Calendar appointment".into()),
+            );
+        }
+    };
+    if let Ok(Some(project)) = store::projects::find_by_id(&state.application_store, project).await
+    {
+        if let (Some(id), Ok(provider)) = (
+            project.calendar_id.as_deref(),
+            state
+                .integration_providers
+                .calendar(&state.application_store, project.id)
+                .await,
+        ) {
+            let managed = if replacing {
+                provider
+                    .mirrored_events(
+                        id,
+                        store::deadline_calendar::MARKER_KEY,
+                        store::deadline_calendar::MARKER_VALUE,
+                    )
+                    .await
+                    .ok()
+                    .map(|rows| rows.into_iter().map(|row| row.id).collect::<BTreeSet<_>>())
+            } else {
+                Some(BTreeSet::new())
+            };
+            if let (Some(managed), Ok(Some(events))) = (
+                managed,
+                provider.project_events(&project.code, id, start, end).await,
+            ) {
+                events
+                    .into_iter()
+                    .filter(|event| !managed.contains(&event.id))
+                    .for_each(&mut consider);
+            }
+        }
+    }
+    if crate::attorney_calendars_api::firm_member(state, session)
+        .await
+        .unwrap_or(false)
+    {
+        if let (Some(person), Some(email), Ok(pg)) = (
+            session.person_id,
+            session.email.as_deref(),
+            store::attorney_calendars::postgres().await,
+        ) {
+            if let Ok(recorded) = store::attorney_calendars::listed(&pg, &[person]).await {
+                if let (Some(primary), Ok(reader)) = (
+                    recorded
+                        .iter()
+                        .find(|row| row.kind == store::attorney_calendars::CalendarKind::Primary),
+                    state.integration_providers.attorney_calendars().await,
+                ) {
+                    if let Ok(cloud::EventRead::Events(events)) =
+                        reader.events(email, &primary.calendar_id, start, end).await
+                    {
+                        events.into_iter().for_each(&mut consider);
+                    }
+                }
+            }
+        }
+    }
+    if conflicts.is_empty() {
+        Ok(())
+    } else {
+        Err(ApiError::DeadlineInvalid(format!(
+            "appearance overlaps {}",
+            conflicts.into_iter().collect::<Vec<_>>().join(", ")
+        )))
+    }
+}

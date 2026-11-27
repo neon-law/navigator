@@ -121,7 +121,7 @@ async fn mirror_after_write(state: &ApiState, project_id: Uuid) {
     }
 }
 
-async fn policy(
+pub(crate) async fn policy(
     state: &ApiState,
     project_id: Uuid,
 ) -> Result<model::project_deadlines::SchedulingPolicy, ApiError> {
@@ -231,6 +231,21 @@ pub(crate) async fn create_deadline(
     .await
     .map_err(map_deadline)?;
     let policy = policy(&state, id).await?;
+    if input.category.is_some_and(Category::is_appearance) {
+        if let Ok(start) = due_at.parse() {
+            crate::deadline_scheduling::check_appearance(
+                &state,
+                &session,
+                id,
+                &[start],
+                input.hearing.as_ref().map_or(60, Hearing::minutes),
+                policy,
+                input.replay_key.is_some(),
+            )
+            .await?;
+        }
+    }
+
     let row = store::project_deadlines::create(
         &state.application_store,
         &store::project_deadlines::NewDeadline {

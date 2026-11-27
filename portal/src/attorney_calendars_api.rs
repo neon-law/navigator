@@ -779,7 +779,7 @@ async fn project_events(
     }
 }
 
-fn event_bounds(
+pub(crate) fn event_bounds(
     event: &cloud::ProjectCalendarEvent,
 ) -> Option<(DateTime<FixedOffset>, DateTime<FixedOffset>)> {
     if event.transparency.as_deref() == Some("transparent") {
@@ -807,7 +807,7 @@ async fn ensure_caller(session: &crate::session::SessionData) {
     }
 }
 
-async fn firm_member(
+pub(crate) async fn firm_member(
     state: &ApiState,
     session: &crate::session::SessionData,
 ) -> Result<bool, ApiError> {

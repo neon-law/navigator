@@ -239,11 +239,53 @@ pub(crate) async fn confirm(
     }
     if proposal.status == model::deadline_proposals::Status::Pending {
         crate::deadline_evidence::verify_confirmation(&state, project, &proposal).await?;
+        check_appearance_proposal(&state, &session, &proposal).await?;
     }
     proposals::decide(&pg, project, id, actor, input.revision, Decision::Confirm)
         .await
         .map(Json)
         .map_err(map_error)
+}
+
+async fn check_appearance_proposal(
+    state: &ApiState,
+    session: &crate::session::SessionData,
+    proposal: &Proposal,
+) -> Result<(), ApiError> {
+    use model::project_deadlines::{Appearance, CalendarRole, Category, Hearing};
+    let draft = &proposal.draft;
+    let Some(start) = draft.due_at.filter(|_| {
+        draft.category.is_some_and(Category::is_appearance)
+            || draft.calendar_role == Some(CalendarRole::Hearing)
+    }) else {
+        return Ok(());
+    };
+    let mut starts = vec![start];
+    if let Some(Appearance::TrialDay {
+        additional_starts,
+        cancel,
+        ..
+    }) = draft
+        .hearing
+        .as_ref()
+        .and_then(|details| details.appearance.as_ref())
+    {
+        if *cancel {
+            return Ok(());
+        }
+        starts.extend(additional_starts);
+    }
+    let policy = crate::deadlines_api::policy(state, proposal.project_id).await?;
+    crate::deadline_scheduling::check_appearance(
+        state,
+        session,
+        proposal.project_id,
+        &starts,
+        draft.hearing.as_ref().map_or(60, Hearing::minutes),
+        policy,
+        proposal.deadline_id.is_some(),
+    )
+    .await
 }
 
 pub(crate) async fn return_for_correction(
