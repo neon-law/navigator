@@ -129,6 +129,8 @@ pub struct Unit {
     /// module's Fragments section). Stable across re-parses of one source.
     pub fragment: String,
     pub kind: UnitKind,
+    /// ATX heading level when this unit is a Markdown heading.
+    pub heading_level: Option<u8>,
     /// Markdown of this unit (heading text without the `#` marks, or the
     /// paragraph/quote body).
     pub markdown: String,
@@ -145,9 +147,26 @@ pub struct OutlineDocument {
     /// The raw YAML between the `---` fences, with neither fence line. `None`
     /// for a document with no frontmatter.
     pub frontmatter: Option<String>,
+    body: String,
 }
 
 impl OutlineDocument {
+    /// Ordinary Markdown keeps its source block structure. A governed outline
+    /// uses its separate projection for provision anchors, holds and open terms.
+    #[must_use]
+    pub fn plain_markdown(&self) -> Option<&str> {
+        (self.numbering.is_none()
+            && self.units.iter().all(|unit| {
+                unit.kind != UnitKind::Hold
+                    && !unit.markdown.contains("{{#")
+                    && runs(&unit.markdown)
+                        .iter()
+                        .all(|run| matches!(run, Run::Text(_)))
+            })
+            && !self.body.contains("<!-- navigator-"))
+        .then_some(&self.body)
+    }
+
     /// Convert this parsed Markdown projection to the shared canonical model.
     #[must_use]
     pub fn canonical_model(&self) -> word::CanonicalDocument {
@@ -173,7 +192,11 @@ pub fn parse(src: &str) -> OutlineDocument {
 
     for block in blocks(body) {
         match block {
-            Block::Heading { text, anchor } => {
+            Block::Heading {
+                level,
+                text,
+                anchor,
+            } => {
                 let (depth, marker, path_marker, heading_text) =
                     heading_parts(text, last_letter, &mut numbering, &open, current_depth);
                 let path = if marker.is_empty() {
@@ -196,6 +219,9 @@ pub fn parse(src: &str) -> OutlineDocument {
                     UnitKind::Heading,
                     &heading_text,
                 );
+                if let Some(unit) = units.last_mut() {
+                    unit.heading_level = Some(level);
+                }
                 set_last_anchor(&mut units, anchor);
             }
             Block::Quote { paragraphs, anchor } => {
@@ -257,6 +283,7 @@ pub fn parse(src: &str) -> OutlineDocument {
         numbering,
         units,
         frontmatter: frontmatter.map(str::to_string),
+        body: body.to_owned(),
     }
 }
 
@@ -450,7 +477,10 @@ pub fn runs(markdown: &str) -> Vec<Run> {
             break;
         };
         let label = rest[open + 2..close].trim();
-        if label.is_empty() {
+        let signing_field = label.split_once('.').is_some_and(|(_, field)| {
+            rules::f107::F107SignaturePlaceholders::FIELDS.contains(&field)
+        });
+        if label.is_empty() || signing_field {
             push_text(&mut out, &rest[..close + 2]);
             rest = &rest[close + 2..];
             continue;
@@ -492,7 +522,7 @@ fn push_text(out: &mut Vec<Run>, text: &str) {
 /// `<strong>Fee.</strong> Due`.
 #[must_use]
 pub fn inline_html(markdown: &str) -> String {
-    let html = markdown::render(markdown);
+    let html = markdown::render_document(markdown);
     let trimmed = html.trim();
     trimmed
         .strip_prefix("<p>")
@@ -635,6 +665,15 @@ pub fn stage_html(doc: &OutlineDocument) -> String {
         "<p class=\"harvard-stage__hint\">Arrow keys or Space step through the document. \
          Click a paragraph to highlight it.</p>\n</header>\n<div class=\"harvard-doc\">\n",
     );
+    if let Some(body) = doc.plain_markdown() {
+        // Use the document parser so a list or blockquote remains a single
+        // structural block even when it contains several paragraphs.
+        out.push_str(&markdown::render_document_steps(body, |index| format!(
+            "<section class=\"harvard-unit\" id=\"harvard-u-{index}\" tabindex=\"-1\" data-harvard-index=\"{index}\">\n"
+        )));
+        out.push_str("</div></article>");
+        return out;
+    }
     for unit in &doc.units {
         out.push_str(&unit_html(unit));
     }
@@ -660,12 +699,13 @@ pub fn unit_html(unit: &Unit) -> String {
         out.push_str(&escape_text(&unit.marker));
         out.push_str("</span>\n");
     }
-    if unit.kind == UnitKind::Heading {
-        out.push_str("<h2>");
-        out.push_str(&escape_text(&unit.markdown));
-        out.push_str("</h2>\n");
+    if let Some(level) = unit.heading_level {
+        out.push_str(&format!(
+            "<h{level}>{}</h{level}>\n",
+            inline_html(&unit.markdown)
+        ));
     } else {
-        out.push_str(&markdown::render(&unit.markdown));
+        out.push_str(&markdown::render_document(&unit.markdown));
     }
     out.push_str("</section>\n");
     out
@@ -694,6 +734,7 @@ fn push_unit(
         // Assigned once the whole document is read; see `assign_fragments`.
         fragment: String::new(),
         kind,
+        heading_level: None,
         markdown,
     });
 }
@@ -760,6 +801,7 @@ fn unquote(value: &str) -> String {
 
 enum Block {
     Heading {
+        level: u8,
         text: String,
         anchor: Option<String>,
     },
@@ -794,9 +836,10 @@ fn blocks(body: &str) -> Vec<Block> {
             pending_anchor = None;
             continue;
         }
-        if let Some(heading) = heading_text(line) {
+        if let Some((level, text)) = heading_text(line) {
             out.push(Block::Heading {
-                text: heading,
+                level,
+                text,
                 anchor: pending_anchor.take(),
             });
             continue;
@@ -864,7 +907,7 @@ fn set_last_anchor(units: &mut [Unit], anchor: Option<String>) {
     }
 }
 
-fn heading_text(line: &str) -> Option<String> {
+fn heading_text(line: &str) -> Option<(u8, String)> {
     let trimmed = line.trim_start();
     if !trimmed.starts_with('#') {
         return None;
@@ -877,7 +920,7 @@ fn heading_text(line: &str) -> Option<String> {
     if !rest.starts_with(' ') {
         return None;
     }
-    Some(rest.trim().to_string())
+    Some((u8::try_from(hashes).ok()?, rest.trim().to_string()))
 }
 
 fn strip_quote(line: &str) -> String {

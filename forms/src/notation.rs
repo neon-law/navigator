@@ -61,11 +61,22 @@ pub fn fill_with_display(
     context: &BTreeMap<String, String>,
     display: &BTreeMap<String, String>,
 ) -> String {
+    fill_with_display_transform(body, context, display, str::to_owned)
+}
+
+/// Format inserted answers without changing the values used by conditions and loops.
+#[must_use]
+pub fn fill_with_display_transform(
+    body: &str,
+    context: &BTreeMap<String, String>,
+    display: &BTreeMap<String, String>,
+    format_value: impl Fn(&str) -> String,
+) -> String {
     let conditional = expand_conditionals(body, context);
-    let expanded = expand_loops(&conditional, context);
+    let expanded = expand_loops(&conditional, context, &format_value);
     let mut filled = expanded;
     for (key, value) in display {
-        filled = filled.replace(&format!("{{{{{key}}}}}"), value);
+        filled = filled.replace(&format!("{{{{{key}}}}}"), &format_value(value));
     }
     filled
 }
@@ -153,7 +164,11 @@ fn conditional_branches<'a>(
     None
 }
 
-fn expand_loops(body: &str, context: &BTreeMap<String, String>) -> String {
+fn expand_loops(
+    body: &str,
+    context: &BTreeMap<String, String>,
+    format_value: &impl Fn(&str) -> String,
+) -> String {
     let mut out = String::new();
     let mut rest = body;
     while let Some(start) = rest.find(FOR_OPEN) {
@@ -170,7 +185,13 @@ fn expand_loops(body: &str, context: &BTreeMap<String, String>) -> String {
         let close_end = block_start + close_rel + FOR_CLOSE.len();
         out.push_str(&rest[..start]);
         if let Some((var, state)) = header.split_once(" in ") {
-            out.push_str(&render_loop(var.trim(), state.trim(), block, context));
+            out.push_str(&render_loop(
+                var.trim(),
+                state.trim(),
+                block,
+                context,
+                format_value,
+            ));
         }
         rest = &rest[close_end..];
     }
@@ -201,7 +222,13 @@ fn matching_close(source: &str, open: &str, close: &str) -> Option<usize> {
     None
 }
 
-fn render_loop(var: &str, state: &str, block: &str, context: &BTreeMap<String, String>) -> String {
+fn render_loop(
+    var: &str,
+    state: &str,
+    block: &str,
+    context: &BTreeMap<String, String>,
+    format_value: &impl Fn(&str) -> String,
+) -> String {
     let Some(json) = context.get(state) else {
         return String::new();
     };
@@ -212,9 +239,9 @@ fn render_loop(var: &str, state: &str, block: &str, context: &BTreeMap<String, S
         let mut piece = block.to_string();
         for (part, value) in row {
             let needle = format!("{{{{{var}.{part}}}}}");
-            piece = piece.replace(&needle, &json_scalar(value));
+            piece = piece.replace(&needle, &format_value(&json_scalar(value)));
         }
-        out.push_str(&expand_loops(&piece, context));
+        out.push_str(&expand_loops(&piece, context, format_value));
     }
     out
 }

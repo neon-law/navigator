@@ -9,6 +9,117 @@ use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, T
 
 use crate::components::code;
 
+/// Render document Markdown for a browser or mail client. Only Markdown
+/// contributes markup, apart from the signing fields added by the renderer.
+#[must_use]
+pub fn render_document(src: &str) -> String {
+    render_document_events(src, None::<fn(usize) -> String>)
+}
+
+/// Render the same document with each top-level block made into a reading step.
+pub(crate) fn render_document_steps(src: &str, section: impl Fn(usize) -> String) -> String {
+    render_document_events(src, Some(section))
+}
+
+fn render_document_events(src: &str, section: Option<impl Fn(usize) -> String>) -> String {
+    let base = url::Url::parse("https://example.invalid")
+        .expect("invariant: constant document link base is a valid URL");
+    let safe_destination = |destination: &mut CowStr<'_>| {
+        if !base
+            .join(destination)
+            .is_ok_and(|url| matches!(url.scheme(), "https" | "http" | "mailto" | "tel"))
+        {
+            *destination = CowStr::Borrowed("#");
+        }
+    };
+    let mut out = String::new();
+    let events = word::paper::document_events(src)
+        .filter_map(|event| {
+            Some(match event {
+                Event::Html(raw) | Event::InlineHtml(raw) if raw.trim().starts_with("<!--") => {
+                    return None
+                }
+                Event::Html(raw) | Event::InlineHtml(raw) => Event::Text(raw),
+                Event::SoftBreak => Event::Text(CowStr::Borrowed(" ")),
+                Event::Start(mut tag) => {
+                    match &mut tag {
+                        Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
+                            safe_destination(dest_url)
+                        }
+                        _ => {}
+                    }
+                    Event::Start(tag)
+                }
+                event => event,
+            })
+        })
+        .flat_map(document_fields);
+    if let Some(section) = section {
+        let mut depth = 0;
+        let mut index = 0;
+        let mut blocks = Vec::new();
+        for event in events {
+            if depth == 0 {
+                blocks.push(Event::Html(section(index).into()));
+                index += 1;
+            }
+            match event {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => depth -= 1,
+                _ => {}
+            }
+            blocks.push(event);
+            if depth == 0 {
+                blocks.push(Event::Html("</section>\n".into()));
+            }
+        }
+        html::push_html(&mut out, blocks.into_iter());
+    } else {
+        html::push_html(&mut out, events);
+    }
+    out
+}
+
+fn document_fields(event: Event<'_>) -> Vec<Event<'_>> {
+    let Event::Text(text) = event else {
+        return vec![event];
+    };
+    let fields = rules::f107::signature_placeholders(&text);
+    if fields.is_empty() {
+        return vec![Event::Text(text)];
+    }
+    let mut result = Vec::new();
+    let mut start = 0;
+    for field in fields {
+        if !rules::f107::F107SignaturePlaceholders::FIELDS.contains(&field.field.as_str())
+            || !field
+                .signer
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        {
+            continue;
+        }
+        let role = field.signer.replace(['-', '_'], " ");
+        let mut letters = role.chars();
+        let Some(first) = letters.next() else {
+            continue;
+        };
+        result.push(Event::Text(text[start..field.offset].to_owned().into()));
+        result.push(Event::InlineHtml(
+            format!(
+                "<span class=\"notation-signing-field\">{}{} {}</span>",
+                first.to_ascii_uppercase(),
+                letters.as_str(),
+                field.field
+            )
+            .into(),
+        ));
+        start = field.end;
+    }
+    result.push(Event::Text(text[start..].to_owned().into()));
+    result
+}
+
 fn markdown_options() -> Options {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);

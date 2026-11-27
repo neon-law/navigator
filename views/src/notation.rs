@@ -59,8 +59,7 @@ pub fn fill_signer_boxes<'a>(
 
 /// Render `body` with `context` evaluated into it (bare substitution plus
 /// `{{#for …}}` iteration — see [`fill`]). The result is wrapped in an
-/// `<article class="notation">` container with one `<p>` per paragraph
-/// (blank-line-separated).
+/// `<article class="notation">` container.
 #[must_use]
 pub fn render_filled_in(body: &str, context: &BTreeMap<String, String>) -> String {
     render_filled_in_with_display(body, context, context)
@@ -77,36 +76,27 @@ pub fn render_filled_in_with_display(
     display: &BTreeMap<String, String>,
 ) -> String {
     let body = rules::frontmatter::split(body).map_or(body, |(_, body)| body);
-    let filled = fill_with_display(body, context, display);
-    let paragraphs: Vec<&str> = filled
-        .split("\n\n")
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .collect();
-    let mut html = String::from("<article class=\"notation\">");
-    for paragraph in paragraphs {
-        html.push_str("<p>");
-        html.push_str(&html_escape(&collapse_whitespace(paragraph)));
-        html.push_str("</p>");
+    let filled =
+        forms::notation::fill_with_display_transform(body, context, display, markdown_answer);
+    format!(
+        "<article class=\"notation\">{}</article>",
+        crate::markdown::render_document(&filled)
+    )
+}
+
+fn markdown_answer(value: &str) -> String {
+    use std::fmt::Write;
+    let mut escaped = String::new();
+    for character in value.chars() {
+        if character.is_ascii_punctuation() {
+            let _ = write!(escaped, "&#{};", u32::from(character));
+        } else if character.is_whitespace() {
+            escaped.push(' ');
+        } else {
+            escaped.push(character);
+        }
     }
-    html.push_str("</article>");
-    html
-}
-
-fn html_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-/// Replace any run of whitespace (spaces, newlines, tabs) with a
-/// single space so a multi-line paragraph in the template renders
-/// as one flowing paragraph in HTML.
-fn collapse_whitespace(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    escaped
 }
 
 #[cfg(test)]
@@ -116,6 +106,37 @@ mod tests {
     use super::render_filled_in;
     use rules::Rule;
     use std::path::PathBuf;
+
+    #[test]
+    fn review_preserves_markdown_structure_and_signing_fields() {
+        let source = "# Title\n\n## Section\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n\n> First\n> continued\n>\n> Second\n>\n> Third\n\n1. **Bold**\n2. *Italic*\n\n- [Link](https://example.test)\n\n{{client.signature}} {{firm.initials}} {{firm.date}}";
+        let html = render_filled_in(source, &BTreeMap::new());
+        for level in 1..=6 {
+            assert!(html.contains(&format!("<h{level}>")), "{html}");
+        }
+        let quote = html
+            .split_once("<blockquote>")
+            .unwrap()
+            .1
+            .split_once("</blockquote>")
+            .unwrap()
+            .0;
+        assert_eq!(html.matches("<blockquote>").count(), 1);
+        assert_eq!(quote.matches("<p>").count(), 3);
+        for expected in [
+            "<ol>",
+            "<ul>",
+            "<strong>",
+            "<em>",
+            "<a ",
+            "Client signature",
+            "Firm initials",
+            "Firm date",
+        ] {
+            assert!(html.contains(expected), "{html}");
+        }
+        assert!(!html.contains("{{"), "{html}");
+    }
 
     #[test]
     fn stored_template_preview_excludes_source_metadata() {

@@ -13034,7 +13034,6 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "pdf",
- "pulldown-cmark",
  "repos",
  "reqwest 0.13.5",
  "rules",

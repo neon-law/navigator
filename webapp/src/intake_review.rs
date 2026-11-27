@@ -223,6 +223,7 @@ fn review_body(view: &IntakeReviewView) -> Element {
     rsx! {
         document::Title { "{view.firm_name} | Lawyer | Notations | Review" }
         document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
+        document::Stylesheet { href: crate::components::NOTATION_DOCUMENT_STYLESHEET_HREF }
         document::Stylesheet { href: "{view.tokens_href}" }
         nav { class: "lawyer-nav",
             a { class: "nav-link", href: "/app/projects", "Portal" }

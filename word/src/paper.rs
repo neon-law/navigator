@@ -54,6 +54,15 @@ use std::fmt::Write as _;
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+/// Parse the document Markdown dialect used by the PDF and HTML renderers.
+#[must_use]
+pub fn document_events(markdown: &str) -> Parser<'_> {
+    Parser::new_ext(
+        markdown,
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES,
+    )
+}
+
 /// The longest title, in characters, the footer carries on its one line:
 /// at 10pt, about what fits the 6.5in text column.
 pub const FOOTER_TITLE_MAX_CHARS: usize = 90;

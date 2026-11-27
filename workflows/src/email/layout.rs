@@ -1,8 +1,6 @@
 //! HTML email uses inline brand colors and font stacks so the message remains
 //! legible in clients that strip stylesheets or block hosted fonts and images.
 
-use pulldown_cmark::{html, Options, Parser};
-
 /// Env var carrying the public origin the logo PNG is served from.
 /// Mirrors `portal::openapi`'s base-URL knob so a single value drives
 /// both the OpenAPI doc and email assets.
@@ -76,13 +74,8 @@ pub fn render_branded_email_html(
     let muted = scheme.text_muted.unwrap_or("#59636f");
     let border = scheme.border.unwrap_or("#dee2e6");
 
-    let mut content_html = String::new();
-    html::push_html(
-        &mut content_html,
-        Parser::new_ext(content_markdown, Options::empty()),
-    );
-    let content_html =
-        content_html.replace("<a href=", &format!(r#"<a style="color:{link};" href="#));
+    let content_html = views::markdown::render_document(content_markdown)
+        .replace("<a href=", &format!(r#"<a style="color:{link};" href="#));
     let alt = escape_attribute(brand_name());
     let support = escape_attribute(support_email());
     let uploaded = brand

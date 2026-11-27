@@ -41,6 +41,9 @@ pub const NOTATION_ANCHOR_SCRIPT_HREF: &str = "/public/js/notation-anchor.js";
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default, Debug)]
 pub struct NotationDocumentData {
     pub title: String,
+    /// Ordinary Markdown rendered with its original block structure.
+    #[serde(default)]
+    pub html: Option<String>,
     /// How depth-one units are numbered, as a reader reads it
     /// (`Roman numerals`), or `None` for a document with no outline.
     pub numbering: Option<String>,
@@ -53,7 +56,7 @@ impl NotationDocumentData {
     /// Whether the document has nothing to show.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.preamble.is_empty() && self.sections.is_empty()
+        self.html.is_none() && self.preamble.is_empty() && self.sections.is_empty()
     }
 
     /// Every block in reading order, preamble first.
@@ -120,6 +123,8 @@ pub struct NotationSection {
     pub path: String,
     /// A quoted subsection rather than a heading.
     pub quoted: bool,
+    #[serde(default)]
+    pub heading_level: Option<u8>,
     /// The caption, or the opening text of a quoted subsection.
     pub heading: Vec<NotationRun>,
     pub blocks: Vec<NotationBlock>,
@@ -213,6 +218,9 @@ pub fn NotationDocument(
                         title: "No outline yet".to_string(),
                         description: "This notation has no provisions to show.".to_string(),
                     }
+                }
+                if let Some(html) = &document.html {
+                    div { dangerous_inner_html: "{html}" }
                 }
                 for block in document.preamble.iter() {
                     {block_view(block, &open_terms)}
@@ -354,17 +362,21 @@ fn section_view(section: &NotationSection, depth: usize, links: &[OpenTermLink])
                 }
             }
         }
-    } else if depth == 1 {
-        rsx! {
-            section { class: "{class}", id: "{section.fragment}",
-                h3 { class: "notation-unit__heading", {lead} }
-                {body}
-            }
-        }
     } else {
+        let level = section
+            .heading_level
+            .unwrap_or(if depth == 1 { 3 } else { 4 });
+        let heading = match level {
+            1 => rsx! { h1 { class: "notation-unit__heading", {lead} } },
+            2 => rsx! { h2 { class: "notation-unit__heading", {lead} } },
+            3 => rsx! { h3 { class: "notation-unit__heading", {lead} } },
+            5 => rsx! { h5 { class: "notation-unit__heading", {lead} } },
+            6 => rsx! { h6 { class: "notation-unit__heading", {lead} } },
+            _ => rsx! { h4 { class: "notation-unit__heading", {lead} } },
+        };
         rsx! {
             section { class: "{class}", id: "{section.fragment}",
-                h4 { class: "notation-unit__heading", {lead} }
+                {heading}
                 {body}
             }
         }
@@ -392,6 +404,7 @@ mod tests {
     fn sample() -> NotationDocumentData {
         NotationDocumentData {
             title: "Sample Motion".to_string(),
+            html: None,
             numbering: Some("Arabic numerals".to_string()),
             preamble: vec![block(
                 "preamble-p1",
@@ -403,6 +416,7 @@ mod tests {
                 marker: "2".to_string(),
                 path: "2".to_string(),
                 quoted: false,
+                heading_level: None,
                 heading: vec![text("Argument")],
                 blocks: vec![
                     block(
@@ -421,6 +435,7 @@ mod tests {
                     marker: "A".to_string(),
                     path: "2.A".to_string(),
                     quoted: true,
+                    heading_level: None,
                     heading: vec![
                         text("Damages of "),
                         NotationRun::OpenTerm {
