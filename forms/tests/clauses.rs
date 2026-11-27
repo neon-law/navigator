@@ -421,7 +421,7 @@ fn engagement_client_duties_and_confidentiality_expand_without_inputs() {
         "**C. Prompt payment.**",
         "**The Firm discloses the Client's information only with the Client's consent**",
         "where the law allows, before responding**",
-        "**A. Email and client portal.**",
+        "**A. Email and matter page.**",
     ] {
         assert!(normalized.contains(expected), "missing {expected}");
     }
