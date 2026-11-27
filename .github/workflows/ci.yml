@@ -174,8 +174,11 @@ jobs:
           fi
           echo "changed files:"
           echo "${changed}" | sed 's/^/  /'
-          if echo "${changed}" | grep -qE \
-              '\.(rs|surql|feature)$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$|^\.cargo/|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$|^features/'; then
+          # A pipe into grep -q can SIGPIPE its producer as soon as a large
+          # diff matches. Give grep the complete input directly under pipefail.
+          if grep -qE \
+              '\.(rs|feature)$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$|^\.cargo/|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$|^features/' \
+              <<< "${changed}"; then
               echo "-> in scope: running cargo test (workspace)"
               echo "rust=true" >> "${GITHUB_OUTPUT}"
           else
