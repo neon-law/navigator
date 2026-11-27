@@ -1584,8 +1584,8 @@ mod tests {
         .expect("read DEPLOY.md");
 
         assert!(
-            cloud_operations.contains("Restate operator"),
-            "cloud-operations.md must name its compatibility-hosting owner",
+            cloud_operations.contains("DBOS starts with `web`."),
+            "cloud-operations.md must identify the DBOS host",
         );
         for (surface, prose) in [
             ("cloud-operations.md", cloud_operations.as_str()),
