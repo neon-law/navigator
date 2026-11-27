@@ -101,6 +101,8 @@ pub struct Matter {
 /// How a court lays out the caption [`compose`] builds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptionStyle {
+    /// California trial paper divides the sheet at its physical center.
+    California,
     /// Counsel block top left, `Case No.`, department, judge, and the
     /// action-filed and trial dates (California, federal).
     Trial,
@@ -118,6 +120,8 @@ pub enum CaptionStyle {
 /// frontmatter.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filing {
+    /// Use the first party on each side and indicate additional parties.
+    pub short_caption: bool,
     /// The full title in the caption's right cell.
     pub caption_title: String,
     /// The short title in the footer (CRC 2.110).
@@ -396,7 +400,7 @@ fn office_lines(counsel: &Counsel) -> Vec<String> {
     lines
 }
 
-fn party_lines(parties: &[Party], versus: &str) -> Vec<String> {
+fn party_lines(parties: &[Party], versus: &str, short: bool) -> Vec<String> {
     let mut groups: Vec<(&str, Vec<&Party>)> = Vec::new();
     for party in parties {
         match groups.last_mut() {
@@ -407,7 +411,11 @@ fn party_lines(parties: &[Party], versus: &str) -> Vec<String> {
     let last = groups.len().saturating_sub(1);
     let mut lines = Vec::new();
     for (index, (role, members)) in groups.iter().enumerate() {
-        lines.extend(members.iter().map(|party| format!("{},", party.name)));
+        if short && members.len() > 1 {
+            lines.push(format!("{}, et al.,", members[0].name));
+        } else {
+            lines.extend(members.iter().map(|party| format!("{},", party.name)));
+        }
         let plural = if members.len() > 1 { "s" } else { "" };
         let stop = if index == last { "." } else { "," };
         lines.push(format!("{role}{plural}{stop}"));
@@ -438,7 +446,9 @@ pub fn compose(matter: &Matter, filing: &Filing, style: CaptionStyle) -> Caption
         matter.case_number.as_str()
     };
     let mut case = vec![match style {
-        CaptionStyle::Trial | CaptionStyle::Nevada => format!("Case No. {number}"),
+        CaptionStyle::California | CaptionStyle::Trial | CaptionStyle::Nevada => {
+            format!("Case No. {number}")
+        }
         CaptionStyle::Washington => format!("No. {number}"),
     }];
     if style == CaptionStyle::Nevada {
@@ -449,13 +459,18 @@ pub fn compose(matter: &Matter, filing: &Filing, style: CaptionStyle) -> Caption
         };
         case.push(format!("Dept. No. {department}"));
     } else {
+        if style == CaptionStyle::California {
+            case.push(filing.caption_title.clone());
+        }
         if !blank(&matter.department) {
             case.push(format!("Dept. {}", assignment(&matter.department)));
         }
         if !blank(&matter.judicial_officer) {
             case.push(format!("Judge: {}", assignment(&matter.judicial_officer)));
         }
-        case.push(filing.caption_title.clone());
+        if style != CaptionStyle::California {
+            case.push(filing.caption_title.clone());
+        }
     }
     if filing.has_hearing() {
         let shown = |value: &Option<String>| value.clone().unwrap_or_else(|| FILL.to_string());
@@ -468,7 +483,8 @@ pub fn compose(matter: &Matter, filing: &Filing, style: CaptionStyle) -> Caption
         case.push(format!("Time: {}", shown(&filing.hearing_time)));
         case.push(format!("Reservation ID: {}", shown(&filing.reservation_id)));
     }
-    let filed = display_date(&matter.filed_on).filter(|_| style == CaptionStyle::Trial);
+    let filed = display_date(&matter.filed_on)
+        .filter(|_| matches!(style, CaptionStyle::California | CaptionStyle::Trial));
     if let Some(filed) = filed {
         case.push(format!("Action Filed: {filed}"));
         case.push(format!(
@@ -486,18 +502,25 @@ pub fn compose(matter: &Matter, filing: &Filing, style: CaptionStyle) -> Caption
         "v."
     };
     let parties = if blank(&matter.in_re) {
-        party_lines(&matter.parties, versus)
+        party_lines(
+            &matter.parties,
+            versus,
+            style == CaptionStyle::California && filing.short_caption,
+        )
     } else {
         in_re_lines(&matter.in_re, &matter.parties)
     };
     let (mut counsel, office) = match style {
-        CaptionStyle::Trial | CaptionStyle::Nevada => (counsel_lines(&matter.counsel), Vec::new()),
+        CaptionStyle::California | CaptionStyle::Trial | CaptionStyle::Nevada => {
+            (counsel_lines(&matter.counsel), Vec::new())
+        }
         CaptionStyle::Washington => (Vec::new(), office_lines(&matter.counsel)),
     };
     if let Some(code) = filing.document_code.as_deref().filter(|code| !blank(code)) {
         counsel.insert(0, code.trim().to_string());
     }
     Caption {
+        california: style == CaptionStyle::California,
         counsel,
         court: matter.court.clone(),
         parties,
@@ -555,6 +578,24 @@ mod tests {
             footer_title: "NOTICE".into(),
             ..Filing::default()
         }
+    }
+
+    #[test]
+    fn california_keeps_initial_parties_and_abbreviates_only_when_requested() {
+        let matter = matter();
+        let mut filing = filing();
+        let initial = compose(&matter, &filing, CaptionStyle::California);
+        assert!(initial.california);
+        assert_eq!(initial.case[1], filing.caption_title);
+        assert!(initial.parties.iter().any(|line| line == "C CORP,"));
+        filing.short_caption = true;
+        let later = compose(&matter, &filing, CaptionStyle::California);
+        assert!(later.parties.iter().any(|line| line.contains("et al.")));
+        assert!(later.parties.len() < initial.parties.len());
+        assert_eq!(
+            compose(&matter, &filing, CaptionStyle::Trial).parties,
+            initial.parties
+        );
     }
 
     /// LAW-243: a Clark County caption carries the filing code above the

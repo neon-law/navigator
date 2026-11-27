@@ -119,6 +119,19 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "contractor_term",    // e.g. "until the project completes"
     "disputed_reason",    // client's own words for the dispute
     "dissolution_reason", // stated grounds for dissolution
+    // Filing prose and composed labels that are authored for each case.
+    "pleading_venue_facts", // Allegations establishing jurisdiction and venue.
+    "pleading_allegations", // Material allegations supplied for the complaint.
+    "pleading_cause_of_action", // Heading identifying the claim and the parties to it.
+    "pleading_supporting_allegations", // Allegations supporting an individual claim.
+    "pleading_relief",      // The prayer for relief.
+    "motion_hearing_details", // The hearing's date, time, department, and location as noticed.
+    "motion_moving_party",  // Moving parties as they are referred to in the caption.
+    "motion_addressed_to",  // Other parties to whom the notice is addressed.
+    "motion_order_requested", // The operative relief the court is asked to order.
+    "motion_grounds",       // Summary of the bases for the requested order.
+    "motion_facts",         // Material facts and evidence for the memorandum.
+    "motion_argument",      // Counsel's reasoning and analysis of authority.
     // Court-form self-help blanks (the forms registry's court templates).
     // The typed states carry the people; the blanks also ask for geographic
     // facts the jurisdiction lookup does not seed (it carries states, not

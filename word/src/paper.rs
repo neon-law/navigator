@@ -63,6 +63,90 @@ pub fn document_events(markdown: &str) -> Parser<'_> {
     )
 }
 
+/// Parse filing Markdown with CommonMark footnotes enabled.
+#[must_use]
+pub fn filing_events(markdown: &str) -> Parser<'_> {
+    Parser::new_ext(
+        markdown,
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES,
+    )
+}
+
+/// Footnote definitions, keyed by their Markdown label and stripped of the
+/// four-space indentation that belongs to the definition rather than its body.
+#[must_use]
+pub fn footnote_definitions(markdown: &str) -> std::collections::BTreeMap<String, String> {
+    filing_events(markdown)
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            let Event::Start(Tag::FootnoteDefinition(label)) = event else {
+                return None;
+            };
+            let (_, definition) = markdown[range].split_once("]:")?;
+            let mut lines = definition.lines();
+            let mut body = lines.next().unwrap_or_default().trim_start().to_string();
+            for line in lines {
+                body.push('\n');
+                body.push_str(line.strip_prefix("    ").unwrap_or(line));
+            }
+            Some((label.into_string(), body))
+        })
+        .collect()
+}
+
+/// The generated tables a brief can request at a top-level Markdown comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BriefTable {
+    Contents,
+    Authorities,
+}
+
+impl BriefTable {
+    #[must_use]
+    pub fn from_comment(comment: &str) -> Option<Self> {
+        match comment.trim() {
+            "<!-- table-of-contents -->" => Some(Self::Contents),
+            "<!-- table-of-authorities -->" => Some(Self::Authorities),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Contents => "TABLE OF CONTENTS",
+            Self::Authorities => "TABLE OF AUTHORITIES",
+        }
+    }
+}
+
+/// A Markdown link with this title contributes its displayed text to the
+/// table of authorities. The destination stays the link to the source.
+pub const AUTHORITY_LINK_TITLE: &str = "authority";
+
+/// Referenced notes in first-use order. Unused definitions do not print.
+#[must_use]
+pub fn referenced_footnotes(markdown: &str) -> Vec<(String, String)> {
+    let mut definitions = footnote_definitions(markdown);
+    let mut in_definition = false;
+    filing_events(markdown)
+        .filter_map(|event| match event {
+            Event::Start(Tag::FootnoteDefinition(_)) => {
+                in_definition = true;
+                None
+            }
+            Event::End(TagEnd::FootnoteDefinition) => {
+                in_definition = false;
+                None
+            }
+            Event::FootnoteReference(label) if !in_definition => definitions
+                .remove(label.as_ref())
+                .map(|body| (label.into_string(), body)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The longest title, in characters, the footer carries on its one line:
 /// at 10pt, about what fits the 6.5in text column.
 pub const FOOTER_TITLE_MAX_CHARS: usize = 90;
@@ -103,6 +187,8 @@ pub struct Caption {
     pub office: Vec<String>,
     /// Print the paper's total page count at the top left of page 1.
     pub page_count: bool,
+    /// Divide the caption at the physical center of a California sheet.
+    pub california: bool,
 }
 
 impl Caption {
@@ -130,6 +216,9 @@ impl Caption {
         }
         if self.page_count {
             out.push_str("page_count: true\n");
+        }
+        if self.california {
+            out.push_str("california: true\n");
         }
         out.push_str("```\n\n");
         out
@@ -553,6 +642,10 @@ fn parse_caption(block: &str) -> Result<Caption, PaperError> {
                 caption.page_count = value.trim().eq_ignore_ascii_case("true");
                 continue;
             }
+            "california" => {
+                caption.california = value.trim().eq_ignore_ascii_case("true");
+                continue;
+            }
             _ => return Err(PaperError::UnknownField { line: line_number }),
         };
         target.push(plain_answer(value.trim()));
@@ -669,6 +762,7 @@ mod tests {
             footer: Some("NOTICE OF APPEARANCE".into()),
             office: vec!["SAMPLE LAW".into(), "1 Example Way".into()],
             page_count: true,
+            california: true,
         };
         let paper = parse(&format!("{}# Notice\n", caption.to_fence())).unwrap();
         assert_eq!(paper.caption, Some(caption));

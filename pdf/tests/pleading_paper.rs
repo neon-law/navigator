@@ -75,6 +75,51 @@ fn render(body: &str) -> Vec<u8> {
     .expect("the pleading renders")
 }
 
+#[test]
+fn a_california_caption_continues_on_the_next_numbered_page() {
+    let mut source = caption(&SEVEN_COUNSEL);
+    let closing_fence = source.rfind("```").unwrap();
+    let parties: String = (1..=46)
+        .map(|n| format!("parties: RESPONDENT{n:02},\n"))
+        .collect();
+    source.insert_str(closing_fence, &format!("california: true\n{parties}"));
+    source.push_str("# COMPLAINT\n\nThe pleading body begins here.\n");
+
+    let bytes = render(&source);
+    let page = |quote: &str| pdf::locate(&bytes, quote, 1).unwrap().rects[0].page_index;
+    assert_eq!(page("RESPONDENT01"), page("SUPERIOR COURT"));
+    assert!(page("RESPONDENT46") > page("RESPONDENT01"));
+    for n in 1..=46 {
+        assert!(page(&format!("RESPONDENT{n:02}")) <= page("The pleading body"));
+    }
+    let lines = (top(&bytes, "The pleading body", 1) - top(&bytes, "Pat Sample", 1)) / 24.0;
+    assert!(
+        (lines - lines.round()).abs() < 0.03,
+        "body restarts on the rail: {lines}"
+    );
+}
+
+#[test]
+fn a_brief_keeps_footnotes_and_builds_its_tables_from_the_body() {
+    let mut source = caption(&SEVEN_COUNSEL);
+    source.push_str(concat!(
+        "# MOTION\n\n<!-- table-of-contents -->\n\n<!-- table-of-authorities -->\n\n",
+        "<!-- pagebreak -->\n\n## 1. Synthetic argument\n\n",
+        "The motion rests on [Example Court Rule](https://example.com/rule \"authority\")[^note].\n\n",
+        "It cites the [Example Court Rule](https://example.com/rule \"authority\") again[^note].\n\n",
+        "[^note]: Unique footnote text and **emphasis**.\n",
+    ));
+    let bytes = render(&source);
+    let page = |quote, ordinal| pdf::locate(&bytes, quote, ordinal).unwrap().rects[0].page_index;
+    assert!(page("Synthetic argument", 1) < page("Synthetic argument", 2));
+    assert!(page("Example Court Rule", 1) < page("Example Court Rule", 2));
+    assert_eq!(
+        page("Unique footnote text", 1),
+        page("Synthetic argument", 2)
+    );
+    assert!(pdf::locate(&bytes, "Unique footnote text", 2).is_err());
+}
+
 /// Top edge of a located quote, in points from the page top.
 fn top(bytes: &[u8], quote: &str, ordinal: usize) -> f64 {
     let located = pdf::locate(bytes, quote, ordinal).expect("locate");

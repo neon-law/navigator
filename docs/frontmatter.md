@@ -342,6 +342,7 @@ what each code actually checks, its severity, and whether it autofixes, see the 
 | `choices` | with a custom choice state | option values and labels keyed by question code | N104 |
 | `output` | no | `letter`, `client_letter`, `contract`, `pleading`, `form`, or `resume` (omit for the default) | N109 |
 | `caption_title`, `footer_title` | `kind: pleading` | the full caption title and the short footer title | N130, Y019 |
+| `short_caption` | no | `true` to use a short case title on California papers that permit one | none |
 | `hearing_date`, `hearing_time`, `reservation_id` | no | a `YYYY-MM-DD` date, a time, a reservation ID | Y019 |
 | `document_code` | no | the court's filing code printed above the counsel block (`SAO`, `NOA`, `NEOJ`) | none |
 | `pleading_frame` | no | a frame name (see `output: pleading`); omit for the court's frame | `hudson notation frame` |

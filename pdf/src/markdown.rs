@@ -28,7 +28,10 @@
 //! — survives verbatim, wrapped in a yellow highlight, so an unfinished
 //! document is unmistakably unfinished rather than looking like prose.
 
+use std::fmt::Write as _;
+
 use pulldown_cmark::{Alignment, Event, HeadingLevel, Tag, TagEnd};
+use word::paper::{BriefTable, AUTHORITY_LINK_TITLE};
 
 /// Convert a Markdown `body` to Typst markup suitable for
 /// [`crate::render`].
@@ -37,7 +40,26 @@ use pulldown_cmark::{Alignment, Event, HeadingLevel, Tag, TagEnd};
 /// caller wraps it in an [`crate::OutputFormat`] chrome preamble.
 #[must_use]
 pub fn to_typst(body: &str) -> String {
-    let parser = word::paper::document_events(body);
+    to_typst_with_footnotes(body, true)
+}
+
+#[allow(clippy::too_many_lines)]
+fn to_typst_with_footnotes(body: &str, with_footnotes: bool) -> String {
+    let definitions = if with_footnotes {
+        word::paper::footnote_definitions(body)
+    } else {
+        std::collections::BTreeMap::new()
+    };
+    let parser = if with_footnotes {
+        word::paper::filing_events(body)
+    } else {
+        word::paper::document_events(body)
+    };
+    let mut note_ids = std::collections::BTreeMap::new();
+    let mut in_definition = false;
+    let mut authority: Option<String> = None;
+    let contents = body.contains("<!-- table-of-contents -->");
+    let authorities = body.contains("<!-- table-of-authorities -->");
 
     let mut out = String::with_capacity(body.len() + body.len() / 8);
     // Ordered-list counters, one per nesting level. `None` marks an
@@ -56,11 +78,59 @@ pub fn to_typst(body: &str) -> String {
 
     for event in parser {
         match event {
+            Event::Start(Tag::FootnoteDefinition(_)) => in_definition = true,
+            Event::End(TagEnd::FootnoteDefinition) => {
+                in_definition = false;
+                continue;
+            }
+            _ => {}
+        }
+        if in_definition {
+            continue;
+        }
+        match event {
+            Event::Start(Tag::Heading {
+                level: HeadingLevel::H1,
+                ..
+            }) if contents => {
+                out.push_str("\n#heading(level: 1, outlined: false)[");
+            }
+            Event::End(TagEnd::Heading(HeadingLevel::H1)) if contents => {
+                out.push_str("]\n\n");
+            }
+            Event::End(TagEnd::Link) if authority.is_some() => {
+                out.push(']');
+                if let Some(citation) = authority.take().filter(|text| !text.trim().is_empty()) {
+                    let _ = write!(
+                        out,
+                        "#[#metadata({}) <navigator-authority>]",
+                        typst_string(citation.trim())
+                    );
+                }
+                container_depth = container_depth.saturating_sub(1);
+            }
+            Event::FootnoteReference(label) => {
+                if let Some(id) = note_ids.get(label.as_ref()) {
+                    let _ = write!(out, "#footnote(<navigator-note-{id}>)");
+                } else if let Some(note) = definitions.get(label.as_ref()) {
+                    let id = note_ids.len() + 1;
+                    note_ids.insert(label.into_string(), id);
+                    let note = to_typst_with_footnotes(note, false);
+                    let _ = write!(out, "#[#footnote[{}] <navigator-note-{id}>]", note.trim());
+                } else {
+                    out.push_str(&escape_text_marking_placeholders(&format!("[^{label}]")));
+                }
+            }
             Event::Start(tag) => {
                 if opens_container(&tag) {
                     container_depth += 1;
                 }
                 match tag {
+                    Tag::Link { ref title, .. }
+                        if authorities && title.as_ref() == AUTHORITY_LINK_TITLE =>
+                    {
+                        authority = Some(String::new());
+                    }
                     Tag::BlockQuote(_) => quote_depth += 1,
                     Tag::Paragraph if quote_depth > 0 => hang.begin(out.len()),
                     _ => {}
@@ -79,10 +149,16 @@ pub fn to_typst(body: &str) -> String {
                 end_tag(&mut out, tag, &mut list_stack);
             }
             Event::Text(text) => {
+                if let Some(citation) = &mut authority {
+                    citation.push_str(&text);
+                }
                 let rest = hang.text(&mut out, &text);
                 out.push_str(&escape_text_marking_placeholders(rest));
             }
             Event::Code(code) => {
+                if let Some(citation) = &mut authority {
+                    citation.push_str(&code);
+                }
                 out.push_str("#raw(");
                 out.push_str(&typst_string(&code));
                 out.push(')');
@@ -90,6 +166,17 @@ pub fn to_typst(body: &str) -> String {
             Event::SoftBreak => out.push(' '),
             Event::HardBreak => out.push_str(" \\\n"),
             Event::Rule => out.push_str("\n#line(length: 100%)\n\n"),
+            Event::Html(html)
+                if container_depth == 0 && BriefTable::from_comment(&html).is_some() =>
+            {
+                if let Some(table) = BriefTable::from_comment(&html) {
+                    let _ = writeln!(out, "\n#align(center)[*{}*]", table.title());
+                    out.push_str(match table {
+                        BriefTable::Contents => "#outline(title: none)\n\n",
+                        BriefTable::Authorities => AUTHORITIES,
+                    });
+                }
+            }
             Event::Html(html) | Event::InlineHtml(html)
                 if word::paper::is_html_line_break(&html) =>
             {
@@ -122,7 +209,7 @@ pub fn to_typst(body: &str) -> String {
             // block on its own page). Inside a container (table cell, block
             // quote, …) a `#pagebreak()` is illegal and would fail the whole
             // render, so there the sentinel is dropped like any other HTML.
-            // Every other raw/inline HTML token — plus footnotes, math, and
+            // Every other raw/inline HTML token — plus math and
             // task markers — is dropped rather than leaked as literal tags.
             Event::Html(html) | Event::InlineHtml(html)
                 if container_depth == 0 && is_pagebreak_comment(&html) =>
@@ -161,6 +248,21 @@ pub fn to_typst(body: &str) -> String {
     // into the canonical paragraph break.
     normalize_blank_lines(&out)
 }
+
+const AUTHORITIES: &str = r#"#context {
+  let citations = (:)
+  for entry in query(<navigator-authority>) {
+    let page = counter(page).at(entry.location()).first()
+    let pages = citations.at(entry.value, default: ())
+    if page not in pages { citations.insert(entry.value, pages + (page,)) }
+  }
+  for citation in citations.keys().sorted(key: lower) {
+    let pages = citations.at(citation).map(str).join(", ")
+    grid(columns: (1fr, auto), column-gutter: 1em, text(citation), align(right, text(pages)))
+  }
+}
+
+"#;
 
 /// Typst for a `<!-- keep -->` group: the blocks inside stay on one page
 /// when they fit on one, and flow across pages, whole and unclipped, when

@@ -494,15 +494,15 @@ Dates are `YYYY-MM-DD` and print as a court writes them (`February 2, 2026`); `t
 set". `judicial_officer`, `department`, and `filed_on` are optional: a court that assigns no judge or department prints
 no line for it, and a blank `filed_on` drops the action-filed and trial lines. The counsel block prints the name with an
 `Esq.` suffix, then the bar number on its own line (`SBN` for California, `<jurisdiction> Bar No.` elsewhere), firm,
-address lines, telephone, email, and "Attorney for …", from line 1 (one inch down) in the left 58% of the page. Names
-print as written; nothing is capitalized on their behalf. When no lawyer has appeared, set `pro_per: true`: the bar
-fields are not required, the block opens with the bare name, and the last line reads "…, in pro per". The court prints
-centred from line 8 (at or below 3⅓ inches), per CRC 2.111; the right of the counsel block stays clear for the clerk
-through line 7. Parties print in the caption's left cell, each role once with `v.` between sides; the right cell runs
-case number, department, judge, the filing's title, any hearing, then the action-filed and trial dates. Counsel and
-caption lines are single-spaced, then padded to whole grid lines so the body after them starts on a numbered line.
-`navigator project gate` warns on an incomplete `matter:` (`Y019`), naming each missing field as `matter.<path>`, and
-`notation pdf` and `notation word` refuse the same way.
+address lines, telephone, email, and "Attorney for …", from line 1 (one inch down). On California paper, the block stays
+left of the physical center of the page. Names print as written; nothing is capitalized on their behalf. When no lawyer
+has appeared, set `pro_per: true`: the bar fields are not required, the block opens with the bare name, and the last
+line reads "…, in pro per". The court prints centred from line 8 (at or below 3⅓ inches), per CRC 2.111; the right of
+the counsel block stays clear for the clerk through line 7. Parties print in the caption's left cell, each role once
+with `v.` between sides; the right cell runs case number, the filing's title, department, judge, any hearing, then the
+action-filed and trial dates on California paper. Counsel and caption lines are single-spaced, then padded to whole grid
+lines so the body after them starts on a numbered line. `navigator project gate` warns on an incomplete `matter:`
+(`Y019`), naming each missing field as `matter.<path>`, and `notation pdf` and `notation word` refuse the same way.
 
 **Nevada paper.** A template with `jurisdiction: NV` prints a Clark County caption on the standard numbered paper: the
 right cell reads only `Case No.` and `Dept. No.` (a blank fill line until a department is assigned), the sides are
@@ -523,9 +523,11 @@ matter](../cli/tests/fixtures/synthetic_washington_matter/navigator.yaml).
 
 **The filing** is what differs per notation, in its frontmatter: `caption_title` (the full title in the right cell) and
 `footer_title` (the short title the footer prints) are required; `hearing_date` (`YYYY-MM-DD`), `hearing_time`,
-`reservation_id`, `document_code`, and `pleading_frame` are optional. A notation declaring any hearing field prints all
-three lines, a blank fill line for each unset one; one declaring none prints no hearing lines. Changing the case number
-or counsel address in `navigator.yaml` changes every pleading on its next render, with no template edit.
+`reservation_id`, `document_code`, and `pleading_frame` are optional. Set `short_caption: true` on a California filing
+that permits a short case title. The caption prints the first party in each group and indicates additional parties. The
+default lists every party on a separate line. A notation declaring any hearing field prints all three lines, a blank
+fill line for each unset one; one declaring none prints no hearing lines. Changing the case number or counsel address in
+`navigator.yaml` changes every pleading on its next render, with no template edit.
 
 **The certificate of service is composed, never typed.** A pleading that is served names the document it is filed as in
 its frontmatter, `served_document: pleadings/motion.pdf` (the slug below `documents/`), and the renderer composes its
@@ -554,6 +556,16 @@ body.
 yellow, and the Word preview highlights each unanswered placeholder and open drafting marker as the PDF does. A final
 render signs it italic `/s/ <name>` from `matter.counsel.name`. A judge's lines on a proposed order are plain text with
 a rule, which no render marks. The `court-filing-drafts` skill carries the drafting practice.
+
+**Briefs** can use Markdown footnotes such as `[^record]` and a definition beginning with `[^record]:`. Each referenced
+definition prints once, even when the body cites it more than once.
+
+Place `<!-- table-of-contents -->` and `<!-- table-of-authorities -->` on their own lines where the brief needs the
+generated tables. The contents use section headings from `##` down. An authority is a Markdown link whose visible text
+is the citation and whose optional link title is `"authority"`. Use the same citation text for repeat references to the
+same authority. PDF entries use the pages of the rendered brief. Word exports editable fields, which update when Word
+repaginates the document. Select the fields and choose **Update Field** before printing if Word does not update them
+when opening the document.
 
 Headings in a pleading are the calibration's one type size, set apart by weight, with the same space around them as
 between paragraphs, so the body under them stays on the rail. The 28-line frame is 672pt of 24pt lines starting one inch
