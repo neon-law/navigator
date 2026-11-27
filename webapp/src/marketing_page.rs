@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::components::pricing::{DayRateBadge, PricingCard, PricingSection};
 use crate::components::{
-    BillMarkGlyph, PlainCodeBlock, PlatformMark, PlatformMarkGlyph, PracticeMark,
-    PracticeMarkGlyph, PublicShell, SocialMeta, StatEntry, StatGrid, TestimonialCard,
+    is_external_href, BillMarkGlyph, ExternalLink, PlainCodeBlock, PlatformMark, PlatformMarkGlyph,
+    PracticeMark, PracticeMarkGlyph, PublicShell, SocialMeta, StatEntry, StatGrid, TestimonialCard,
     TestimonialSection,
 };
 use crate::lead_capture::{LeadCaptureContext, LeadCaptureCopy, LeadCaptureForm};
@@ -897,7 +897,15 @@ pub(crate) fn Bands(
                                             if let (Some(href), Some(label)) =
                                                 (card.href.as_ref(), card.href_label.as_ref())
                                             {
-                                                a { class: "fm-card__link", href: "{href}", "{label}" }
+                                                if is_external_href(href) {
+                                                    ExternalLink {
+                                                        href: href.clone(),
+                                                        class: "fm-card__link".to_string(),
+                                                        "{label}"
+                                                    }
+                                                } else {
+                                                    a { class: "fm-card__link", href: "{href}", "{label}" }
+                                                }
                                             }
                                         }
                                     }
@@ -1369,7 +1377,11 @@ pub(crate) fn Prose(runs: Paragraph) -> Element {
         p {
             for run in runs.iter() {
                 if let Some(href) = run.href.as_ref() {
-                    a { href: "{href}", "{run.text}" }
+                    if is_external_href(href) {
+                        ExternalLink { href: href.clone(), "{run.text}" }
+                    } else {
+                        a { href: "{href}", "{run.text}" }
+                    }
                 } else if run.emphasis {
                     strong { "{run.text}" }
                 } else if run.code {

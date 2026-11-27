@@ -65,7 +65,6 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // product links keep resolving.
     "/navigator",
     "/legal-aid",
-    "/do-i-need-a-lawyer",
     "/lawyers",
     // The Neon-hosted gateway to the DeleteYourDebt.com practice. Neon-only —
     // 404s on every other registered brand host; see
@@ -171,7 +170,6 @@ pub const PUBLIC_PATHS: &[&str] = &[
 pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTreeSet<String> {
     let mut paths = sitemap_for(state.workshops.materials(), key);
     if key == BrandKey::Neon && views::brand::firm_family().is_empty() {
-        paths.remove("/do-i-need-a-lawyer");
         paths.insert("/contact".to_string());
     }
     paths
@@ -236,7 +234,6 @@ pub fn sitemap_for(
         BrandKey::Neon => {
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
-                "/do-i-need-a-lawyer",
                 "/legal-aid",
                 "/lawyers",
                 "/delete-your-debt",
@@ -329,9 +326,6 @@ fn practice_brand_llms_txt(key: BrandKey) -> portal::LlmsTxt {
 pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
     let mut index = llms_for(state.workshops.materials(), key);
     if key == BrandKey::Neon && views::brand::firm_family().is_empty() {
-        index
-            .pages
-            .retain(|page| page.path != "/do-i-need-a-lawyer");
         index.pages.push(indexed_page(
             "Contact",
             "/contact",
@@ -514,11 +508,6 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "Notations",
             "/notations",
             "The firm's sample engagement letters and the government forms Navigator files.",
-        ),
-        indexed_page(
-            "Do I need a lawyer?",
-            "/do-i-need-a-lawyer",
-            "When to start with a template and when to seek legal advice or representation.",
         ),
     ]);
     pages

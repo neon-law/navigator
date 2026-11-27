@@ -26,7 +26,6 @@ Neon Law (`neon/`):
 | File | Page |
 | --- | --- |
 | `neon/locales/en/neon/home-marketing.yaml` | `/` consumer Navigator home |
-| `neon/locales/en/neon/do-i-need-a-lawyer.yaml` | `/do-i-need-a-lawyer` self-help and representation guide |
 | `neon/locales/en/neon/lawyers.yaml` | `/lawyers` connected Project and CLI |
 | `neon/locales/en/neon/litigation.yaml` | `/disputes` |
 | `neon/locales/en/neon/fractional-gc.yaml` | unpublished; `/business` answers a 301 to `/` |
