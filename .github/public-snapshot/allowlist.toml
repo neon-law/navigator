@@ -173,16 +173,6 @@ match = '''clerk@notuscourts\.gov'''
 paths = ["portal/src/inbound_email.rs"]
 reason = "A lookalike court domain the inbox classifier must refuse; the mailbox is invented."
 
-[[allow]]
-class = "build"
-paths = ["server/public/dioxus/assets/webapp_bg-dxh9cd41e725e6d6ad9.wasm"]
-reason = "Explicitly requested release wasm client built from repository source; inspected module has only target_features custom metadata and contains no runtime birth data."
-
-[[allow]]
-class = "binary"
-paths = ["server/public/dioxus/assets/webapp_bg-dxh9cd41e725e6d6ad9.wasm"]
-reason = "Explicitly requested release wasm client built from repository source; inspected module has only target_features custom metadata and contains no runtime birth data."
-
 # --- Guieb & Shook website (server/sites/guieb-shook) ------------------------
 
 [[allow]]

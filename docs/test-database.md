@@ -47,6 +47,14 @@ cargo run -p hudson -- dev worktree-env up --runtime kind --path "$PWD"
 set -a; source .devx/env; set +a
 ```
 
+Build the Dioxus client from the same checkout as the web server before running a hydrated browser test. The command
+stages the generated client in the ignored `server/public/dioxus` directory.
+
+```bash
+cargo run -p hudson -- dev build-webapp
+cargo run -p neon
+```
+
 Private `.devx/postgres/env` and `.devx/env` bind the application and host helpers to that exact database. The CA stays
 in `.devx/postgres/ca.crt`; server keys remain with PostgreSQL. The owned KIND node exposes the TLS NodePort on
 loopback, while its verified node-facing ingress rule and database credentials remain required. Repeated starts verify
