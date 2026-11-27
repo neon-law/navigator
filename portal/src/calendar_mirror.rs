@@ -65,6 +65,34 @@ pub(crate) struct MembershipSource {
     pub base_url: Option<String>,
 }
 
+impl MembershipSource {
+    async fn sync_deadline_work(
+        &self,
+        project_id: Option<Uuid>,
+        person_id: Uuid,
+    ) -> Result<(), SyncError> {
+        if let Some(project_id) = project_id {
+            let project = store::projects::find_by_id(&self.application_store, project_id)
+                .await
+                .map_err(|_| sync_error("reading the work schedule time zone"))?
+                .ok_or_else(|| sync_error("reading the work schedule time zone"))?;
+            let zone = store::projects::calendar_timezone(&self.application_store, &project)
+                .await
+                .map_err(|_| sync_error("reading the work schedule time zone"))?;
+            crate::deadline_scheduling::sync(
+                &self.application_store,
+                self.providers.as_ref(),
+                person_id,
+                zone,
+                self.base_url.as_deref(),
+            )
+            .await
+            .map_err(|_| sync_error("reconciling Deadline work reservations"))?;
+        }
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl Source for MembershipSource {
     async fn candidates(&self) -> Result<Vec<Uuid>, SyncError> {
@@ -179,24 +207,7 @@ impl Source for MembershipSource {
             return Err(error);
         }
         drop(_guard);
-        if let Some(project_id) = first_project {
-            let project = store::projects::find_by_id(&self.application_store, project_id)
-                .await
-                .map_err(|_| sync_error("reading the work schedule time zone"))?
-                .ok_or_else(|| sync_error("reading the work schedule time zone"))?;
-            let zone = store::projects::calendar_timezone(&self.application_store, &project)
-                .await
-                .map_err(|_| sync_error("reading the work schedule time zone"))?;
-            crate::deadline_scheduling::sync(
-                &self.application_store,
-                self.providers.as_ref(),
-                person_id,
-                zone,
-                self.base_url.as_deref(),
-            )
-            .await
-            .map_err(|_| sync_error("reconciling Deadline work reservations"))?;
-        }
+        self.sync_deadline_work(first_project, person_id).await?;
         Ok(count)
     }
 

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, NaiveTime, TimeDelta, TimeZone, Utc};
 use chrono_tz::Tz;
 use cloud::calendar::{CalendarEvent, CalendarService, EventTiming};
-use model::deadline_schedule::{allocate, working_hours, Window, WorkSchedule};
+use model::deadline_schedule::{allocate, working_hours, Window, Work, WorkSchedule};
 use store::application_store::ApplicationStore;
 use uuid::Uuid;
 
@@ -37,16 +37,6 @@ pub(crate) async fn plan(
     let pg = store::attorney_calendars::postgres()
         .await
         .map_err(|e| e.to_string())?;
-    let memberships = store::firms::memberships_for_person(db, person)
-        .await
-        .map_err(|e| e.to_string())?;
-    let firms: Vec<_> = memberships
-        .iter()
-        .map(|membership| membership.firm_id)
-        .collect();
-    let calendars = store::project_calendar::shared_freebusy_calendars(&pg, &firms, &[person])
-        .await
-        .map_err(|e| e.to_string())?;
     let finish = now + TimeDelta::days(30);
     let start = zone
         .from_local_datetime(
@@ -66,6 +56,88 @@ pub(crate) async fn plan(
     if calendars_to_read.is_empty() {
         return Err("record the attorney's calendar for Deadline scheduling".into());
     }
+    let inputs = project_schedule_inputs(db, providers, &pg, person, now, finish).await?;
+    calendars_to_read.extend(inputs.calendars);
+    let person = store::persons::find_by_id(db, person)
+        .await
+        .map_err(|e| e.to_string())?
+        .filter(|person| person.email_confirmed)
+        .ok_or_else(|| "the attorney's mailbox is unverified".to_string())?;
+    let ids: Vec<_> = calendars_to_read.into_iter().collect();
+    let provider = providers
+        .attorney_calendars()
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut windows = Vec::new();
+    for chunk in ids.chunks(50) {
+        let report = provider
+            .free_busy(
+                &person.email,
+                chunk,
+                start.fixed_offset(),
+                finish.fixed_offset(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let returned = report
+            .iter()
+            .map(|calendar| calendar.calendar_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if report.len() != chunk.len()
+            || chunk.iter().any(|id| !returned.contains(id.as_str()))
+            || report.iter().any(|calendar| calendar.gap.is_some())
+        {
+            return Err("an attorney or Project Calendar could not report availability".into());
+        }
+        windows.extend(report);
+    }
+    let mut busy: Vec<_> = windows
+        .into_iter()
+        .flat_map(|calendar| calendar.busy)
+        .map(|block| Window {
+            start: block.start.to_utc(),
+            end: block.end.to_utc(),
+        })
+        .collect();
+    busy.extend(inputs.busy);
+    let working_hours = working_hours(zone, horizon, inputs.close);
+    let schedule = allocate(inputs.work, &working_hours, &busy);
+    Ok(Plan {
+        schedule,
+        busy,
+        working_hours,
+        booked: false,
+        urls: inputs.urls,
+    })
+}
+
+struct ProjectInputs {
+    calendars: BTreeSet<String>,
+    busy: Vec<Window>,
+    work: Vec<Work>,
+    close: NaiveTime,
+    urls: BTreeMap<Uuid, String>,
+}
+
+async fn project_schedule_inputs(
+    db: &ApplicationStore,
+    providers: &dyn IntegrationProviders,
+    pg: &store::postgres::PostgresDb,
+    person: Uuid,
+    now: DateTime<Utc>,
+    finish: DateTime<Utc>,
+) -> PlanResult<ProjectInputs> {
+    let memberships = store::firms::memberships_for_person(db, person)
+        .await
+        .map_err(|e| e.to_string())?;
+    let firms: Vec<_> = memberships
+        .iter()
+        .map(|membership| membership.firm_id)
+        .collect();
+    let calendars = store::project_calendar::shared_freebusy_calendars(pg, &firms, &[person])
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut calendars_to_read = BTreeSet::new();
     let mut work = Vec::new();
     let mut project_busy = Vec::new();
     let mut close = None;
@@ -131,59 +203,13 @@ pub(crate) async fn plan(
             }
         }
     }
-    let person = store::persons::find_by_id(db, person)
-        .await
-        .map_err(|e| e.to_string())?
-        .filter(|person| person.email_confirmed)
-        .ok_or_else(|| "the attorney's mailbox is unverified".to_string())?;
-    if close.is_none() {
-        return Err("record the attorney's calendar and enable Firm Google Calendar".into());
-    }
-    let ids: Vec<_> = calendars_to_read.into_iter().collect();
-    let provider = providers
-        .attorney_calendars()
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut windows = Vec::new();
-    for chunk in ids.chunks(50) {
-        let report = provider
-            .free_busy(
-                &person.email,
-                chunk,
-                start.fixed_offset(),
-                finish.fixed_offset(),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        let returned = report
-            .iter()
-            .map(|calendar| calendar.calendar_id.as_str())
-            .collect::<BTreeSet<_>>();
-        if report.len() != chunk.len()
-            || chunk.iter().any(|id| !returned.contains(id.as_str()))
-            || report.iter().any(|calendar| calendar.gap.is_some())
-        {
-            return Err("an attorney or Project Calendar could not report availability".into());
-        }
-        windows.extend(report);
-    }
-    let mut busy: Vec<_> = windows
-        .into_iter()
-        .flat_map(|calendar| calendar.busy)
-        .map(|block| Window {
-            start: block.start.to_utc(),
-            end: block.end.to_utc(),
-        })
-        .collect();
-    busy.extend(project_busy);
-    let close = close.ok_or_else(|| "the Firm's working hours are unavailable".to_string())?;
-    let working_hours = working_hours(zone, horizon, close);
-    let schedule = allocate(work, &working_hours, &busy);
-    Ok(Plan {
-        schedule,
-        busy,
-        working_hours,
-        booked: false,
+    let close =
+        close.ok_or_else(|| "enable Firm Google Calendar for Deadline scheduling".to_string())?;
+    Ok(ProjectInputs {
+        calendars: calendars_to_read,
+        busy: project_busy,
+        work,
+        close,
         urls,
     })
 }
@@ -361,30 +387,10 @@ pub(crate) async fn check_appearance(
             }
         }
     }
-    if crate::attorney_calendars_api::firm_member(state, session)
-        .await
-        .unwrap_or(false)
+    if let Some(events) =
+        crate::attorney_calendars_api::own_events(state, session, start, end).await
     {
-        if let (Some(person), Some(email), Ok(pg)) = (
-            session.person_id,
-            session.email.as_deref(),
-            store::attorney_calendars::postgres().await,
-        ) {
-            if let Ok(recorded) = store::attorney_calendars::listed(&pg, &[person]).await {
-                if let (Some(primary), Ok(reader)) = (
-                    recorded
-                        .iter()
-                        .find(|row| row.kind == store::attorney_calendars::CalendarKind::Primary),
-                    state.integration_providers.attorney_calendars().await,
-                ) {
-                    if let Ok(cloud::EventRead::Events(events)) =
-                        reader.events(email, &primary.calendar_id, start, end).await
-                    {
-                        events.into_iter().for_each(&mut consider);
-                    }
-                }
-            }
-        }
+        events.into_iter().for_each(consider);
     }
     if conflicts.is_empty() {
         Ok(())

@@ -3045,6 +3045,7 @@ fn firm_setting_saved(id: Uuid, result: Result<(), store::firms::FirmError>) -> 
 /// form's capability gate renders, so this door discloses nothing the page
 /// does not. Every other refusal redirects back to the edit form with
 /// `?error=` naming the rule.
+#[allow(clippy::too_many_lines)] // Each Firm settings form has its own authorized write.
 async fn firms_update(
     State(state): State<AdminState>,
     Path(id): Path<Uuid>,

@@ -779,6 +779,38 @@ async fn project_events(
     }
 }
 
+/// Event details are limited to the signed-in attorney's verified primary calendar.
+pub(crate) async fn own_events(
+    state: &ApiState,
+    session: &crate::session::SessionData,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
+) -> Option<Vec<cloud::ProjectCalendarEvent>> {
+    if !firm_member(state, session).await.ok()? {
+        return None;
+    }
+    let person = session.person_id?;
+    let db = store::attorney_calendars::postgres().await.ok()?;
+    let primary = store::attorney_calendars::listed(&db, &[person])
+        .await
+        .ok()?
+        .into_iter()
+        .find(|calendar| calendar.kind == CalendarKind::Primary)?;
+    let reader = state
+        .integration_providers
+        .attorney_calendars()
+        .await
+        .ok()?;
+    match reader
+        .events(session.email.as_deref()?, &primary.calendar_id, start, end)
+        .await
+        .ok()?
+    {
+        cloud::EventRead::Events(events) => Some(events),
+        cloud::EventRead::Gap(_) => None,
+    }
+}
+
 pub(crate) fn event_bounds(
     event: &cloud::ProjectCalendarEvent,
 ) -> Option<(DateTime<FixedOffset>, DateTime<FixedOffset>)> {
@@ -807,7 +839,7 @@ async fn ensure_caller(session: &crate::session::SessionData) {
     }
 }
 
-pub(crate) async fn firm_member(
+async fn firm_member(
     state: &ApiState,
     session: &crate::session::SessionData,
 ) -> Result<bool, ApiError> {
