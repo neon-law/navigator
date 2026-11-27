@@ -190,6 +190,7 @@ data:
           # emitted.
           - forgejo.repository
           - forgejo.run_number
+          - forgejo.task_id
           - forgejo.workflow
           - forgejo.event
           - job
