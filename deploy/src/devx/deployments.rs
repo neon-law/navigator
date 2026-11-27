@@ -2347,9 +2347,10 @@ mod tests {
 
     #[test]
     fn secrets_apply_plans_the_native_ingress_token() {
+        use store::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
+
         let mut deployment = Deployment::load(&fixture_tree(), "example-deployment")
             .expect("the synthetic deployment loads");
-        use store::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
         for (key, value) in [
             (COHOST_ENV, "true"),
             (DBOS_ENABLED_ENV, "true"),
