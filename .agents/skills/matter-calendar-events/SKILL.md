@@ -68,7 +68,7 @@ give the lawyer an ICS file to open instead.
 
    ```bash
    navigator project deadline create --project acme-auto-ny \
-     --title "Status conference" --calendar-role hearing --authority-kind order \
+     --title "Status conference" --calendar-role hearing --authority-kind court_order \
      --due-at 2026-12-08T11:00:00-05:00 --due-timezone America/New_York --hearing-minutes 60 \
      --location "Zoom https://example.zoomgov.com/j/0000000000 · Meeting ID 000 0000 0000 · Passcode 000000" \
      --ics ~/Downloads/acme-auto-ny-status-conference.ics

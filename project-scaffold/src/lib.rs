@@ -109,6 +109,10 @@ pub const SYNCED_SKILLS: &[(&str, &str)] = &[
         "matter-calendar-events",
         include_str!("../../.agents/skills/matter-calendar-events/SKILL.md"),
     ),
+    (
+        "integration-fallbacks",
+        include_str!("../../.agents/skills/integration-fallbacks/SKILL.md"),
+    ),
 ];
 
 /// What the generated scaffold bytes name: the Project's coordinates and the
