@@ -66,6 +66,8 @@ pub enum TenantRole {
     Hub,
     /// `ops gcp setup` — one environment.
     Environment,
+    /// A separate project for locked archives.
+    Archive,
 }
 
 impl TenantRole {
@@ -75,6 +77,7 @@ impl TenantRole {
         match self {
             Self::Hub => "the image hub",
             Self::Environment => "an environment",
+            Self::Archive => "a separate archive project",
         }
     }
 }

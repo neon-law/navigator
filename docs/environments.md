@@ -246,6 +246,26 @@ else; an object hold is not a substitute, because an object admin can release it
 `NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` and the Iceberg bucket as `NAVIGATOR_ARCHIVES_BUCKET` ([Iceberg
 archive](iceberg-archive.md)).
 
+For an existing deployment, provision only the Git bundle bucket. Run the same command for staging and production with
+each row's runtime project, service account, and deployment name. Both can use the same archive project. Each row's
+service account gets access to its own bucket.
+
+```sh
+hudson ops gcp forgejo-archives --deployment "$deployment" \
+  --project-id "$runtime_project" --archive-project-id "$archive_project" \
+  --region "$archive_region" --google-service-account-id "$runtime_account" --dry-run
+```
+
+Apply by omitting `--dry-run` after verifying the target and retention. Google Cloud cannot shorten or remove the
+retention once the policy is locked. Record the non-secret coordinates for the same deployment row so `hudson ops ship`
+renders the bundle bucket into the web runtime.
+
+```sh
+hudson ops deployments set --project-id "$runtime_project" "$deployment" \
+  "NAVIGATOR_FORGEJO_ARCHIVES_PROJECT_ID=$archive_project" \
+  "NAVIGATOR_FORGEJO_ARCHIVES_BUCKET=$deployment-bundles"
+```
+
 ## See also
 
 - [`Operating Neon Law Navigator`](../server/content/workshops/navigator/DEPLOY.md) — exact provision, secret-audit,

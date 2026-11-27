@@ -702,6 +702,28 @@ pub enum GcpCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Provision the dedicated Git-bundle archive for one existing deployment.
+    /// Applying this command permanently locks the bucket's seven-year retention.
+    ForgejoArchives {
+        /// Deployment name used for the `<deployment>-bundles` bucket.
+        #[arg(long, value_parser = parse_archive_deployment)]
+        deployment: String,
+        /// Runtime Google Cloud project ID.
+        #[arg(long, env = "NAVIGATOR_GCP_PROJECT_ID")]
+        project_id: String,
+        /// Separate Google Cloud project that holds the archive bucket.
+        #[arg(long, env = "NAVIGATOR_FORGEJO_ARCHIVES_PROJECT_ID")]
+        archive_project_id: String,
+        /// Cloud Storage location for this bucket.
+        #[arg(long, env = "NAVIGATOR_GCP_LOCATION")]
+        region: String,
+        /// Existing runtime Google service account ID for this deployment.
+        #[arg(long, env = "NAVIGATOR_GCP_SERVICE_ACCOUNT_ID")]
+        google_service_account_id: String,
+        /// Print the storage and IAM operations without sending them.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Provision the shared image hub — the Artifact Registry every
     /// environment pulls from, the CI pusher service account, and the GitHub
     /// Workload Identity pool — and nothing else. The hub is not an
@@ -741,6 +763,20 @@ pub enum GcpCmd {
     /// backend. Run after the GKE Ingress has provisioned the LB.
     #[command(subcommand)]
     Iap(IapCmd),
+}
+
+fn parse_archive_deployment(name: &str) -> Result<String, &'static str> {
+    if name.len() <= 55
+        && name.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+    {
+        return Ok(name.to_owned());
+    }
+    Err("use a deployment name of at most 55 lowercase letters, digits, and hyphens")
 }
 
 #[derive(Subcommand)]
@@ -1116,8 +1152,27 @@ fn dispatch_with_dns_provider(
             if let Some(v) = ci_pusher_account_id {
                 config.ci_pusher_account_id = v;
             }
-            gcp_setup(project_id, dry_run, config)
+            gcp_setup(project_id, dry_run, config, GcpSetupScope::Deployment)
         }
+        crate::Command::Ops(crate::OpsCmd::Gcp(GcpCmd::ForgejoArchives {
+            deployment,
+            project_id,
+            archive_project_id,
+            region,
+            google_service_account_id,
+            dry_run,
+        })) => gcp_setup(
+            project_id,
+            dry_run,
+            gcp::SetupConfig {
+                region,
+                google_service_account_id,
+                forgejo_archives_project_id: Some(archive_project_id),
+                forgejo_archives_bucket: Some(format!("{deployment}-bundles")),
+                ..gcp::SetupConfig::default()
+            },
+            GcpSetupScope::ForgejoArchives,
+        ),
         crate::Command::Ops(crate::OpsCmd::Gcp(GcpCmd::Hub(GcpHubCmd::Setup {
             project_id,
             region,
@@ -1845,7 +1900,17 @@ fn gcp_iap_grant(project_id: &str, service: &str, member: &str) -> Result<()> {
     })
 }
 
-fn gcp_setup(project_id: String, dry_run: bool, config: gcp::SetupConfig) -> Result<()> {
+enum GcpSetupScope {
+    Deployment,
+    ForgejoArchives,
+}
+
+fn gcp_setup(
+    project_id: String,
+    dry_run: bool,
+    config: gcp::SetupConfig,
+    scope: GcpSetupScope,
+) -> Result<()> {
     use std::sync::Arc;
 
     use gcp::client::{GcpClient, StaticToken, TokenProvider};
@@ -1866,7 +1931,12 @@ fn gcp_setup(project_id: String, dry_run: bool, config: gcp::SetupConfig) -> Res
         if dry_run {
             client = client.with_dry_run();
         }
-        gcp::run(&client, &project_id, &config).await?;
+        match scope {
+            GcpSetupScope::Deployment => gcp::run(&client, &project_id, &config).await?,
+            GcpSetupScope::ForgejoArchives => {
+                gcp::run_forgejo_archives(&client, &project_id, &config).await?;
+            }
+        }
         if dry_run {
             eprintln!(
                 "--- dry run: {} call(s) would be made ---",
