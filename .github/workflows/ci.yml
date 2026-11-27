@@ -174,8 +174,11 @@ jobs:
           fi
           echo "changed files:"
           echo "${changed}" | sed 's/^/  /'
-          if echo "${changed}" | grep -qE \
-              '\.(rs|surql|feature)$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$|^\.cargo/|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$|^features/'; then
+          # A pipe into grep -q can SIGPIPE its producer as soon as a large
+          # diff matches. Give grep the complete input directly under pipefail.
+          if grep -qE \
+              '\.(rs|feature)$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$|^\.cargo/|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$|^\.github/coverage-baseline-exclusions\.txt$|^features/' \
+              <<< "${changed}"; then
               echo "-> in scope: running cargo test (workspace)"
               echo "rust=true" >> "${GITHUB_OUTPUT}"
           else
@@ -282,11 +285,6 @@ jobs:
     # ready (`ready_for_review`) runs the suite; a skipped `rust` reads as
     # success in the `ci` job below, and a draft cannot merge anyway.
     if: needs.changes.outputs.rust == 'true' && github.event.pull_request.draft == false
-    # One runner, no SurrealDB. `hudson ops surreal-free-tests` leaves out
-    # every test that starts a SurrealDB engine — about 96% of the suite's run
-    # time — so the four-way shard that kept the SurrealDB 4 suite under the
-    # job ceiling only multiplied the build by four. The application may still
-    # talk to SurrealDB; CI no longer tests it (ENG-1356..1358).
     # `neon-law-medium` does not exist in the `neon-law-source-code` org. That
     # label was a GitHub-hosted larger runner on the previous org, and a label
     # with no runner behind it does not fail the job — it queues it forever, so
@@ -299,8 +297,7 @@ jobs:
     # before any label goes here.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # A wedge detector, not a duration budget: a hung build must not hold a
-    # metered runner for hours. Without SurrealDB the run is the build (~25 min
-    # cold) plus a short test pass.
+    # metered runner for hours. The run includes the instrumented build and PostgreSQL test pass.
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
@@ -318,14 +315,7 @@ jobs:
       # while 40 GB of disk was still free, so this is memory, not space. lld
       # holds far less resident per link and is substantially faster on inputs
       # this size.
-      # `strip=symbols` is the load-bearing half. `cargo test --workspace`
-      # builds 209 integration-test binaries across 28 crates, and each one
-      # statically links the whole dependency graph — surrealdb-core alone is a
-      # 590 MB rlib. Even with debuginfo already off, their symbol tables filled
-      # a 46 GB disk to 100% ("/dev/root 72G 72G 26M 100% /") and took the
-      # Actions runner down with it. Stripping symbols is what makes the set fit;
-      # libtest still names the failing test and prints its assertion, so a red
-      # build stays readable.
+      # Strip symbols from the integration binaries to keep their linked size bounded.
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C strip=symbols"
     steps:
       # Run 38068387566 finished this job at
@@ -590,10 +580,6 @@ jobs:
         run: cargo build -p cli --bin navigator --quiet
       - name: build Hudson operator CLI
         run: cargo build -p hudson --quiet
-      # Before the clean below deletes this binary: every test that starts no
-      # SurrealDB engine, the coverage regex, and the `features` targets.
-      - name: select the SurrealDB-free tests
-        run: '"${CARGO_TARGET_DIR:-target}/debug/hudson" ops surreal-free-tests --out /tmp/surreal-free'
       - name: verify generated SendGrid adapter
         run: "${CARGO_TARGET_DIR:-target}/debug/hudson dev sendgrid-openapi --verify"
       # One content validator over the whole tree: lint every `.md` against the
@@ -837,10 +823,6 @@ jobs:
           PYTHON
       - name: cargo test with coverage
         env:
-          # A test that starts SurrealDB fails here instead of running: the
-          # selection below should have left it out. The native fixture is
-          # required here. The browser gate requires its own harness.
-          NAVIGATOR_FORBID_SURREAL: "1"
           NAVIGATOR_TEST_POSTGRES_PORT: "25432"
           RUST_BACKTRACE: full
           # Coverage-instrumented routes run deep on a test thread; 8 MiB has
@@ -887,164 +869,29 @@ jobs:
           # Tee the suite so a red run still has the panic after the log
           # stream is gone; the step after this one uploads the JUnit on every
           # outcome and the tee file on failure.
-          # Keep the primary selection and add six verified native Fi boundaries.
-          # Their original module retains legacy fixtures and its coverage exclusion.
-          native_fi='binary(=store) & test(/^postgres::inbox_tests::('
-          native_fi+='fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch|'
-          native_fi+='raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the_winner|'
-          native_fi+='identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it|'
-          native_fi+='fi_import_lock_prevents_assignment_until_destination_verification_finishes|'
-          native_fi+='fi_project_destination_is_reserved_before_any_history_commit|'
-          native_fi+='native_call_and_fi_triage_preserve_roles_billing_and_attribution'
-          native_fi+=')$/)'
-          # These cases share source files with compatibility tests but run with PostgreSQL or in memory only.
-          calendar='(package(workflows-service) & test(/::(calendar_failure_still_posts_the_open_project_notice|the_daily_trigger_runs_at_0333_utc)$/))'
+          # Finish the independent checks and report coverage even when a test fails.
+          test_status=0
           cargo nextest run --workspace --no-fail-fast --profile ci \
-              -E "($(cat /tmp/surreal-free/nextest-filter)) | ($native_fi) | ($calendar)" \
-              2>&1 | tee /tmp/navigator-workspace-tests.log
-          # The two lanes nextest does not run, kept so this gate stays exactly
-          # as wide as the `cargo test --workspace` it replaces — and so the
-          # coverage number keeps measuring the same test set.
-          #
-          #   * `features`. The cucumber suites are `harness = false` binaries
-          #     that do not speak nextest's `--list` protocol, so
-          #     `.config/nextest.toml` excludes the package and a workspace run
-          #     would otherwise abort on them. Run alone rather than alongside
-          #     the line above: these suites carry their own fixed
-          #     `max_concurrent_scenarios: Some(64)`, which is the same
-          #     concurrency they get today inside `cargo test --workspace`.
-          #   * DOCTESTS. nextest does not run them at all. They are part of
-          #     what the floor below measures — see the note there on why the
-          #     local `cargo llvm-cov --workspace` lane reads lower than this
-          #     job — so dropping them would both narrow the gate and move the
-          #     percentage it is compared against.
-          #
-          # The `features` binaries run straight out of the workspace build
-          # above, NOT through `cargo test -p features`. `-p` resolves features
-          # for that one package, which differs from the workspace's unified
-          # set, so it recompiled the dependency graph — surrealdb-core
-          # included — for 17.5 minutes (run 44371787937). `cargo test
-          # --workspace --no-run` matches the nextest build's fingerprints, so
-          # it compiles nothing and only reports where each binary is. Each is
-          # run from `features/`, the directory `cargo test` would use.
-          cargo test --workspace --no-run --message-format=json > /tmp/test-artifacts.json
-          features_bin() {
-              jq -r --arg kind "$1" --arg name "$2" '
-                  select(.reason == "compiler-artifact" and .executable != null
-                      and (.manifest_path | endswith("/features/Cargo.toml"))
-                      and (.target.kind | index($kind))
-                      and ($name == "" or .target.name == $name))
-                  | .executable' /tmp/test-artifacts.json
-          }
-          # `|| [ -n ]`: the file has no trailing newline, and a bare `read`
-          # would silently drop its last target.
-          while read -r arg || [ -n "${arg}" ]; do
-              case "${arg}" in
-                  --lib) bin="$(features_bin lib "")" ;;
-                  --test=*) bin="$(features_bin test "${arg#--test=}")" ;;
-                  "") continue ;;
-                  *) echo "::error::unknown features argument ${arg}"; exit 1 ;;
-              esac
-              if [ "$(printf '%s\n' "${bin}" | grep -c .)" -ne 1 ]; then
-                  echo "::error::features ${arg} did not resolve to exactly one binary: ${bin:-<none>}"
-                  exit 1
-              fi
-              echo "features ${arg}: ${bin}"
-              (cd features && "${bin}")
-          done < /tmp/surreal-free/features-args
-          cargo test --workspace --doc
-          # This pure source ratchet contains engine-call examples as strings,
-          # so the conservative primary selector omits it. Run its already-built
-          # instrumented binary explicitly without resolving another Cargo graph.
-          ratchet_bin="$(jq -r '
-              select(.reason == "compiler-artifact" and .executable != null
-                  and (.manifest_path | endswith("/cli/Cargo.toml"))
-                  and (.target.kind | index("test"))
-                  and .target.name == "embedded_surreal_ratchet")
-              | .executable' /tmp/test-artifacts.json)"
-          if [ "$(printf '%s\n' "${ratchet_bin}" | grep -c .)" -ne 1 ]; then
-              echo "::error::embedded SurrealDB source ratchet did not resolve to exactly one binary"
-              exit 1
-          fi
-          NAVIGATOR_FORBID_SURREAL=1 "${ratchet_bin}" --nocapture
-          # THE COVERAGE GATE. `--fail-under-lines` exits non-zero when total
-          # workspace line coverage is under the floor, which fails this job and
-          # therefore the `ci` merge gate. There is no upload, no separate
-          # required context, and no third-party service: the full per-file
-          # table printed here IS the diagnostic when it trips — read it to find
-          # which file regressed.
-          #
-          # Same step as the run above on purpose. `show-env` exported the
-          # counter-file location into this shell only, so a later step would
-          # not find the profile data.
-          #
-          # The required floor is 92.0%, measured without SurrealDB. ENG-1375
-          # raises it to 95.0% as domains and tests move to PostgreSQL.
-          #
-          # Raising the floor means moving four constants together — the
-          # `rust` job report threshold, `AGENTS.md`, `docs/agent-workflows.md`, and
-          # `docs/oss-install.md` — so raise it deliberately, in one change,
-          # never as a side effect of another. And never lower it to make a
-          # red build green.
-          #
-          # Do NOT compare this job's percentage against one measured over a
-          # different denominator, and do not set a floor from a local run. The
-          # local lane below reads BELOW this job because the workspace nextest
-          # profile excludes `features`, so the cucumber suites never run and
-          # their ~490 lines plus everything their scenarios drive count as
-          # missed:
-          #
-          #   cargo llvm-cov nextest --workspace --no-fail-fast \
-          #       --ignore-filename-regex '<the regex below>'
-          #
-          # That makes it a valid differential and a useless absolute. Use it to
-          # learn the SIGN of a change — confirmed on run 150323146, where it
-          # predicted +0.07pt and this job then measured 90.63%, up from 90.32%:
-          # same sign, 0.83pt apart on the absolute. Set the floor from this
-          # job's own printed number.
-          #
-          # The local measurement is deliberately conservative — CI should read
-          # at or above it, never below — for two reasons. `cargo llvm-cov
-          # --workspace` (the local form) runs `cargo test --tests` and so skips
-          # DOCTESTS, which this job runs as their own `cargo test --workspace
-          # --doc` lane and which can only add covered lines. That lane is why
-          # the move to nextest did not move this number: nextest does not run
-          # doctests, so dropping it would have taken those lines out of the
-          # measurement. And the local pass had one red binary,
-          # `features --test portal_admin_firm_surface`, a macOS-only
-          # runtime-drop panic that is green on Linux, so its scenarios
-          # contributed less coverage locally than they will here.
-          #
-          # `--ignore-filename-regex` excludes the live-cluster orchestrators.
-          # Every function in them shells out to kind/kubectl/helm/docker, reaps
-          # host port-forward children, or drives a real Chromium session, so
-          # none of it can execute in this job — the browser suites self-skip
-          # without a harness, and counting bodies that never run would depress
-          # the number without measuring anything. They are proven by the
-          # deploy.yml browser/e2e gates instead. The pure decision logic each
-          # one sits beside is deliberately NOT excluded and keeps its tests:
-          # `deploy/src/devx/mod.rs` (KindConfig derivation, env rendering,
-          # deploy-order guards), `deploy/src/devx/lifecycle.rs` (every staging
-          # decision, against a fake), and `harness_decision` in features.
-          # Anything here that grows a decision belongs on the other side of
-          # that seam, not in this regex. `email_summary_e2e/harness.rs` and
-          # `scenarios.rs` are the same kind of file: they drive the host web
-          # process, the Restate broker and the branch worker on a KIND
-          # cluster. Its fixture server and worker-patch logic stay counted.
-          # `forgejo/cluster.rs`, `oidc.rs`, and `smoke.rs` drive kubectl, git,
-          # and HTTP against a KIND Forgejo; `forgejo-postgres.yml` runs them,
-          # and `forgejo/mod.rs` keeps their decisions and their tests here.
-          # `scraper/browser.rs` is the same class one seam over: every
-          # function in it spawns the pinned chromedriver, connects the
-          # WebDriver client, or drives cookies into the running browser, so
-          # none of it can execute here. Its decisions — session config and
-          # redacted `Debug`, cookie/state serialization, the driver command,
-          # capability shape, port polling — stay counted in
-          # `scraper/session.rs` with their tests.
-          # The floor is 92.0% (ENG-1375 raises it to 95.0%). The per-file
-          # table this prints is the diagnostic when it trips.
-          cargo llvm-cov report --fail-under-lines 92.0 \
-              --ignore-filename-regex "(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\\.rs\$|$(cat /tmp/surreal-free/coverage-ignore)"
+              2>&1 | tee /tmp/navigator-workspace-tests.log || test_status=$?
+          # The workspace run excludes the custom Cucumber harnesses.
+          # Keep the active fixture and workflow-document checks alongside the browser gate.
+          cargo test -p features --lib --test=acroform_fill \
+              --test=compliance_filings_workflow_shapes --test=legal_workflow_shapes \
+              --test=nonprofit_workflow_shapes --test=template_validate || test_status=$?
+          cargo test --workspace --doc || test_status=$?
+          # Report all instrumented workspace paths except live KIND and browser drivers.
+          # Their behavior is verified by the release and Forgejo integration jobs.
+          live_driver_paths='(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|features/src/webdriver|deploy/src/scraper/browser)\.rs$'
+          echo 'Coverage across all measured workspace files'
+          cargo llvm-cov report --ignore-filename-regex "$live_driver_paths" || test_status=$?
+          # Preserve the 92.0% merge floor and its pre-cutover source scope. The
+          # tracked file list contains the surviving exclusions from that scope.
+          # All tests feed both reports. New source paths enter the required report.
+          prior_paths=$(sed '/^#/d; /^$/d; s/\./\\./g' .github/coverage-baseline-exclusions.txt | paste -sd '|' -)
+          echo 'Coverage for the required 92.0% source scope'
+          cargo llvm-cov report --summary-only --fail-under-lines 92.0 \
+              --ignore-filename-regex "$live_driver_paths|(^|/)($prior_paths)\$" || test_status=$?
+          exit "$test_status"
       - name: stop covered PostgreSQL fixture
         if: always()
         run: docker rm -f test-postgres

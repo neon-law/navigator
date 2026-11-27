@@ -927,7 +927,6 @@ fn ops_help_lists_operator_members() {
             "sas",
             "secrets",
             "ship",
-            "surreal-free-tests",
             "help",
         ]
     );

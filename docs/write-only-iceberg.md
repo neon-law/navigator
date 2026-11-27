@@ -116,33 +116,6 @@ GOOGLE_APPLICATION_CREDENTIALS="$WRITER_ADC" hudson ops archives capture \
 The retry preserves the original rows and cutoff. It does not open PostgreSQL or recapture an unavailable generation.
 Upload acknowledgement proves transport, not remote verification, catalog publication or restore acceptance.
 
-## Deploy with DBOS Archives
-
-Select the existing Archives schedule in the deployment's private configuration:
-
-```toml
-NAVIGATOR_DBOS_ENABLED = "true"
-NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"
-NAVIGATOR_ARCHIVE_WRITE_ONLY_CONFIG = "/var/lib/navigator/iceberg/config/archive-config.json"
-```
-
-Provision `navigator-archive-write-only` as a ConfigMap with the non-secret `archive-config.json` key. Metadata mode
-mounts configuration only and uses the existing KSA/GSA identity. For explicit-file mode, select
-`NAVIGATOR_ARCHIVE_SOURCE_AUTHENTICATION = "credentials_file"` and provision `navigator-archive-source-credentials`, key
-`credentials.json`; its separate read-only patch lets group 65532 read the credential file. Keep verifier credentials
-out of `web`. Cloud preflight requires version 2, matching identity modes and an independent destination; only file mode
-requires the mounted credential path and Secret. Local backups remain an operator CLI mode.
-
-Before enabling the PostgreSQL write-only schedule, verify admission, archive database readers, reviewed coverage,
-source-store IAM, offsite writer ADC and native worker configuration. The renderer removes the Restate Archives trigger
-when DBOS Archives is selected.
-
-The authenticated Archives **Run now** control uses the locally registered workflow in the lightweight web host. It
-freezes the same mounted configuration as a scheduled run and starts a distinct `Archives:manual-<uuid>` identity. It
-needs no worker ingress URL or bearer token. The combined host uses its authenticated DBOS ingress. A selected local
-owner that cannot admit the run refuses it; it does not fall back to another executor or Restate. A queued notice proves
-admission only. Inspect the exact workflow and completed report before verification or recovery acceptance.
-
 ## Keep storage and retry costs bounded
 
 The configured byte, row and object limits fail closed. Raw source sizes are checked inside the extraction snapshot

@@ -126,7 +126,7 @@ async fn xero(
     };
     let kms = crate::integrations::runtime_kms_from_env().await;
     let Ok(key) = resolve_firm_credential(
-        &state.surreal,
+        &state.application_store,
         firm,
         IntegrationProvider::Xero,
         IntegrationSecretKind::XeroWebhookKey,

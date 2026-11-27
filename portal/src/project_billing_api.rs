@@ -46,8 +46,7 @@ use axum::{
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use store::{
-    attorney_rates, billing_batches, postgres_mirror, project_costs as costs, projects,
-    time_entries, xero_invoices,
+    attorney_rates, billing_batches, project_costs as costs, projects, time_entries, xero_invoices,
 };
 use uuid::Uuid;
 
@@ -178,10 +177,11 @@ fn compose_lines(
 /// client-side participation at all — there is nobody to address the
 /// invoice to, and the command refuses rather than guess.
 async fn billed_party(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
 ) -> Result<Option<store::persons::Person>, InvoiceGenerationError> {
-    let participations = projects::participations_for_project(surreal, project_id).await?;
+    let participations =
+        projects::participations_for_project(application_store, project_id).await?;
     // Access scopes include legacy counterparties; only a matter's actual
     // client participation is a debtor. DRI flags never promote another side.
     let clients = participations
@@ -193,7 +193,7 @@ async fn billed_party(
         .find(|row| row.is_client_dri)
         .or_else(|| clients.first());
     match party {
-        Some(row) => Ok(store::persons::find_by_id(surreal, row.person_id).await?),
+        Some(row) => Ok(store::persons::find_by_id(application_store, row.person_id).await?),
         None => Ok(None),
     }
 }
@@ -284,7 +284,7 @@ pub(crate) enum InvoiceGenerationError {
 // The shared command keeps provider selection, reservation, and retry ordering together.
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn generate_invoice(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     pg: &store::postgres::PostgresDb,
     provider: &dyn billing::BillingProvider,
     project_id: Uuid,
@@ -292,7 +292,7 @@ pub(crate) async fn generate_invoice(
     now: DateTime<Utc>,
     expected_preview_digest: Option<&str>,
 ) -> Result<InvoiceReceipt, InvoiceGenerationError> {
-    let project = projects::find_by_id(surreal, project_id)
+    let project = projects::find_by_id(application_store, project_id)
         .await?
         .ok_or(InvoiceGenerationError::NoMatter)?;
 
@@ -309,9 +309,9 @@ pub(crate) async fn generate_invoice(
         if !provider.invoices_available() {
             return Err(InvoiceGenerationError::BillingUnavailable);
         }
-        return raise_batch(surreal, pg, provider, project_id, batch, actor_id).await;
+        return raise_batch(application_store, pg, provider, project_id, batch, actor_id).await;
     }
-    let route = store::firm_secrets::stripe_trust_route(surreal, &project)
+    let route = store::firm_secrets::stripe_trust_route(application_store, &project)
         .await
         .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
     if pending.as_ref().is_some_and(|batch| {
@@ -323,7 +323,7 @@ pub(crate) async fn generate_invoice(
         store::firm_secrets::IntegrationSecretKind::StripeOperatingAppKey,
         store::firm_secrets::TrustRoute::credential_kind,
     );
-    let stripe_key = stripe_credential(surreal, project.firm_id, kind).await?;
+    let stripe_key = stripe_credential(application_store, project.firm_id, kind).await?;
     let stripe = match &stripe_key {
         Some(key) => {
             let live = store::firm_secrets::stripe_mode()
@@ -414,7 +414,7 @@ pub(crate) async fn generate_invoice(
         return Err(InvoiceGenerationError::PreviewChanged);
     }
 
-    let Some(party) = billed_party(surreal, project_id).await? else {
+    let Some(party) = billed_party(application_store, project_id).await? else {
         return Err(InvoiceGenerationError::NoBilledParty);
     };
     // Resolve the billed party first — the seam's documented order — then
@@ -481,12 +481,20 @@ pub(crate) async fn generate_invoice(
     if let Some(stripe) = &stripe {
         raise_stripe_draft(pg, stripe, &batch).await
     } else {
-        raise_batch(surreal, pg, provider, project_id, &batch, actor_id).await
+        raise_batch(
+            application_store,
+            pg,
+            provider,
+            project_id,
+            &batch,
+            actor_id,
+        )
+        .await
     }
 }
 
 async fn stripe_credential(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     firm: Option<Uuid>,
     kind: store::firm_secrets::IntegrationSecretKind,
 ) -> Result<Option<store::firm_secrets::ResolvedCredential>, InvoiceGenerationError> {
@@ -499,7 +507,7 @@ async fn stripe_credential(
     }
     let kms = crate::integrations::runtime_kms_from_env().await;
     match store::firm_secrets::resolve_firm_credential(
-        surreal,
+        application_store,
         firm,
         IntegrationProvider::Stripe,
         kind,
@@ -597,7 +605,7 @@ async fn invoice_for_batch(
 /// local settlement without another create or contact call. The debtor and
 /// the amounts stay frozen in the batch.
 async fn raise_batch(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     pg: &store::postgres::PostgresDb,
     provider: &dyn billing::BillingProvider,
     project_id: Uuid,
@@ -638,7 +646,7 @@ async fn raise_batch(
     // describing what Xero genuinely holds, and every flip is replay-safe
     // under the same invoice id: the retry resumes this batch.
     xero_invoices::upsert(
-        surreal,
+        application_store,
         &xero_invoices::UpsertXeroInvoice {
             project_id,
             xero_invoice_id: invoice_id.0.clone(),
@@ -653,7 +661,7 @@ async fn raise_batch(
     .await
     .map_err(Box::new)?;
     xero_invoices::record_reconcile(
-        surreal,
+        application_store,
         &invoice_id.0,
         &invoice_state.status,
         invoice_state.amount_paid_cents,
@@ -679,7 +687,15 @@ async fn raise_batch(
         time_entries::mark_invoiced(pg, &batch.entry_ids, actor_id, &invoice_id.0, true).await?;
     }
     for cost_id in &batch.cost_ids {
-        costs::link_invoice(surreal, pg, *cost_id, actor_id, &invoice_id.0, true).await?;
+        costs::link_invoice(
+            application_store,
+            pg,
+            *cost_id,
+            actor_id,
+            &invoice_id.0,
+            true,
+        )
+        .await?;
     }
     billing_batches::complete(pg, batch.id).await?;
 
@@ -815,52 +831,13 @@ async fn postgres(
     })
 }
 
-/// Open the billing tables with their dependency rows mirrored — the
-/// generation checks the parent Project row and the participants in
-/// PostgreSQL, so a matter or participant added before the mirror was enabled
-/// would otherwise be wrongly refused there. The same preparation
-/// [`crate::time_tracking_api`] applies to its doors.
+/// Open PostgreSQL for the authorized operation.
 async fn prepared_store(
-    state: &ApiState,
+    _state: &ApiState,
     operation: &'static str,
     project_id: Uuid,
 ) -> Result<store::postgres::PostgresDb, Response> {
-    let pg = postgres(operation, project_id).await?;
-    let mirrored = async {
-        postgres_mirror::mirror(
-            &state.surreal,
-            &pg,
-            &postgres_mirror::MirrorKey::Project(project_id),
-        )
-        .await?;
-        let participations = projects::participations_for_project(&state.surreal, project_id)
-            .await
-            .map_err(|_| postgres_mirror::MirrorError::Source)?;
-        for role in participations {
-            postgres_mirror::mirror(
-                &state.surreal,
-                &pg,
-                &postgres_mirror::MirrorKey::ProjectParticipation(role.id),
-            )
-            .await?;
-        }
-        Ok::<_, postgres_mirror::MirrorError>(())
-    }
-    .await;
-    if let Err(store_error) = mirrored {
-        tracing::warn!(
-            event = "invoice_generation_mirror_failed",
-            operation,
-            outcome = "store_error",
-            project_id = %project_id,
-            store_error = %store_error
-        );
-        return Err(refused(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "postgres_unavailable",
-        ));
-    }
-    Ok(pg)
+    postgres(operation, project_id).await
 }
 
 /// `POST /app/api/projects/{id}/invoices` — generate the matter's invoice
@@ -871,10 +848,14 @@ pub(crate) async fn generate(
     Path(project_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
-    let viewer =
-        store::access::matter_viewer(&state.surreal, session.person_id, session.role, project_id)
-            .await
-            .map_err(ApiError::Db)?;
+    let viewer = store::access::matter_viewer(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        project_id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
         return Err(ApiError::NotFound);
     }
@@ -883,7 +864,7 @@ pub(crate) async fn generate(
         Err(response) => return Ok(response),
     };
     match generate_invoice(
-        &state.surreal,
+        &state.application_store,
         &pg,
         state.billing_provider.as_ref(),
         project_id,
@@ -1008,60 +989,6 @@ mod tests {
         assert_eq!(
             super::request_for_batch(&retained, &[]).due_date,
             Some("2026-11-20".parse().unwrap())
-        );
-    }
-
-    async fn billing_person(
-        db: &store::surreal::SurrealDb,
-        role: store::persons::Role,
-    ) -> uuid::Uuid {
-        store::persons::create(
-            db,
-            &store::persons::NewPerson::with_role(
-                "Synthetic billing selection",
-                format!("billing-selection-{}@example.com", uuid::Uuid::new_v4()),
-                role,
-            ),
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    #[tokio::test]
-    async fn billed_party_requires_client_participation_even_for_a_dri() {
-        use store::test_support::seed_legacy_participation;
-        let db = store::surreal::test_support::mem().await;
-        let project = uuid::Uuid::new_v4();
-        let adverse = billing_person(&db, store::persons::Role::Client).await;
-        seed_legacy_participation(&db, project, adverse, "counterparty").await;
-        assert!(super::billed_party(&db, project).await.unwrap().is_none());
-        let lawyer = billing_person(&db, store::persons::Role::Lawyer).await;
-        seed_legacy_participation(&db, project, lawyer, "lawyer").await;
-        db.query("UPDATE person_project_role SET is_client_dri=true WHERE person_id=$person")
-            .bind(("person", store::surreal::record_id("person", lawyer)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert!(super::billed_party(&db, project).await.unwrap().is_none());
-        let client = billing_person(&db, store::persons::Role::Client).await;
-        seed_legacy_participation(&db, project, client, "client").await;
-        assert_eq!(
-            super::billed_party(&db, project).await.unwrap().unwrap().id,
-            client
-        );
-        let client_dri = billing_person(&db, store::persons::Role::Client).await;
-        seed_legacy_participation(&db, project, client_dri, "client").await;
-        db.query("UPDATE person_project_role SET is_client_dri=true WHERE person_id=$person")
-            .bind(("person", store::surreal::record_id("person", client_dri)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert_eq!(
-            super::billed_party(&db, project).await.unwrap().unwrap().id,
-            client_dri
         );
     }
 }

@@ -21,11 +21,10 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::matter::{self, MatterAuthorityError};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 pub const TABLE: &str = "notation_draft";
 
@@ -55,40 +54,9 @@ pub struct NotationDraft {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct NotationDraftRow {
-    id: surrealdb::types::RecordId,
-    project_id: surrealdb::types::RecordId,
-    slug: String,
-    title: String,
-    source: String,
-    notation_id: Option<surrealdb::types::RecordId>,
-    inserted_at: surrealdb::types::Datetime,
-    expires_at: surrealdb::types::Datetime,
-}
-
-impl NotationDraftRow {
-    fn into_draft(self) -> Option<NotationDraft> {
-        Some(NotationDraft {
-            id: record_uuid(&self.id)?,
-            project_id: record_uuid(&self.project_id)?,
-            slug: self.slug,
-            title: self.title,
-            source: self.source,
-            notation_id: self.notation_id.as_ref().and_then(record_uuid),
-            inserted_at: self.inserted_at.into(),
-            expires_at: self.expires_at.into(),
-        })
-    }
-}
-
-const SELECT: &str = "id, project_id, slug, title, source, notation_id, inserted_at, expires_at";
-
 /// Errors from the notation-draft commands.
 #[derive(Debug, thiserror::Error)]
 pub enum NotationDraftError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Postgres(#[from] MatterAuthorityError),
     /// A write reported success but returned no row this module could read
@@ -114,54 +82,24 @@ pub struct NewNotationDraft<'a> {
 /// # Errors
 /// Propagates any database error.
 pub async fn create(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     new: &NewNotationDraft<'_>,
 ) -> Result<NotationDraft, NotationDraftError> {
     let id = Uuid::now_v7();
     let inserted_at = Utc::now();
     let expires_at = inserted_at + TTL;
-    if let Some(pg) = matter::authority().await? {
-        let draft = NotationDraft {
-            id,
-            project_id: new.project_id,
-            slug: new.slug.to_owned(),
-            title: new.title.to_owned(),
-            source: new.source.to_owned(),
-            notation_id: new.notation_id,
-            inserted_at,
-            expires_at,
-        };
-        return Ok(matter::upsert(&pg, TABLE, &draft).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             project_id = $project_id, slug = $slug, title = $title, source = $source, \
-             notation_id = $notation_id, \
-             inserted_at = $inserted_at, expires_at = $expires_at \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, new.project_id),
-        ))
-        .bind(("slug", new.slug.to_string()))
-        .bind(("title", new.title.to_string()))
-        .bind(("source", new.source.to_string()))
-        .bind((
-            "notation_id",
-            new.notation_id
-                .map(|notation_id| record_id(crate::notations::TABLE, notation_id)),
-        ))
-        .bind(("inserted_at", surrealdb::types::Datetime::from(inserted_at)))
-        .bind(("expires_at", surrealdb::types::Datetime::from(expires_at)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<NotationDraftRow> = response.take(0)?;
-    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
-    row.and_then(NotationDraftRow::into_draft)
-        .ok_or(NotationDraftError::WriteReturnedNothing)
+    let pg = matter::authority().await?;
+    let draft = NotationDraft {
+        id,
+        project_id: new.project_id,
+        slug: new.slug.to_owned(),
+        title: new.title.to_owned(),
+        source: new.source.to_owned(),
+        notation_id: new.notation_id,
+        inserted_at,
+        expires_at,
+    };
+    Ok(matter::upsert(&pg, TABLE, &draft).await?)
 }
 
 /// Fetch a draft by id — `None` when it does not exist *or has expired*,
@@ -173,19 +111,12 @@ pub async fn create(
 /// # Errors
 /// Propagates any database error.
 pub async fn find_live(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<NotationDraft>, NotationDraftError> {
-    let draft = if let Some(pg) = matter::authority().await? {
+    let draft: Option<NotationDraft> = {
+        let pg = matter::authority().await?;
         matter::find(&pg, TABLE, serde_json::json!({"id": id})).await?
-    } else {
-        let mut response = db
-            .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-            .bind(("id", record_id(TABLE, id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check)?;
-        let row: Option<NotationDraftRow> = response.take(0)?;
-        row.and_then(NotationDraftRow::into_draft)
     };
     Ok(draft.filter(|draft| draft.expires_at > Utc::now()))
 }

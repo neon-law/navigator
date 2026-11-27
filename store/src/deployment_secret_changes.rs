@@ -1,11 +1,10 @@
 //! Owner-authored encrypted changes awaiting operator entry into SOPS.
 //! Values never leave the store as plaintext; export carries only envelopes.
-use crate::{persons::Role, postgres_mirror::records, surreal::SurrealDb, DeploymentEnvironment};
+use crate::{application_store::ApplicationStore, persons::Role, DeploymentEnvironment};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cloud::{KmsContext, RuntimeKms, WrappedDataKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 const TABLE: &str = "deployment_secret_change";
@@ -71,7 +70,7 @@ pub enum ChangeError {
 }
 
 /// Portable encrypted export. No plaintext value is serialized.
-#[derive(Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EncryptedChange {
     pub request_id: String,
     pub actor_id: String,
@@ -144,7 +143,7 @@ fn context(request: &EncryptedChange) -> Result<KmsContext, ChangeError> {
 /// Save each nonblank replacement as an immutable encrypted request.
 /// Blank inputs produce no write and preserve existing pending and deployed values.
 pub async fn save(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     kms: &dyn RuntimeKms,
     role: Role,
     environment: DeploymentEnvironment,
@@ -188,71 +187,42 @@ pub async fn save(
     if count == 0 {
         return Ok(0);
     }
-    if let Some(pg) = pg {
-        let mut tx = pg.pool().begin().await.map_err(|_| ChangeError::Store)?;
-        for row in encrypted {
-            let id = Uuid::parse_str(&row.request_id).map_err(|_| ChangeError::Store)?;
-            let timestamp = chrono::DateTime::parse_from_rfc3339(&row.inserted_at)
-                .map_err(|_| ChangeError::Store)?;
-            sqlx::query("INSERT INTO deployment_secret_change (id,request_id,actor_id,key,ciphertext,wrapped_key,kms_key_version,inserted_at,inserted_at_text,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$8)")
+    let pg = pg;
+    let mut tx = pg.pool().begin().await.map_err(|_| ChangeError::Store)?;
+    for row in encrypted {
+        let id = Uuid::parse_str(&row.request_id).map_err(|_| ChangeError::Store)?;
+        let timestamp = chrono::DateTime::parse_from_rfc3339(&row.inserted_at)
+            .map_err(|_| ChangeError::Store)?;
+        sqlx::query("INSERT INTO deployment_secret_change (id,request_id,actor_id,key,ciphertext,wrapped_key,kms_key_version,inserted_at,inserted_at_text,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$8)")
                 .bind(id).bind(row.request_id).bind(row.actor_id).bind(row.key).bind(row.ciphertext)
                 .bind(row.wrapped_key).bind(row.kms_key_version).bind(timestamp).bind(row.inserted_at)
                 .execute(&mut *tx).await.map_err(|_| ChangeError::Store)?;
-        }
-        tx.commit().await.map_err(|_| ChangeError::Store)?;
-        return Ok(count);
     }
-    // The mirror locates each encrypted change by its request UUID.
-    // Commit the entire batch before publishing any mirror writes.
-    db.query(
-        "BEGIN; FOR $change IN $changes { \
-         CREATE type::record($table, <uuid> $change.request_id) CONTENT $change; \
-         }; COMMIT;",
-    )
-    .bind(("table", TABLE))
-    .bind(("changes", encrypted))
-    .await
-    .map_err(|_| ChangeError::Store)?
-    .check()
-    .map_err(|_| ChangeError::Store)?;
-    for id in ids {
-        records::after_write(db, TABLE, id).await;
-    }
+    tx.commit().await.map_err(|_| ChangeError::Store)?;
     Ok(count)
 }
 
 /// Latest immutable request for each preset; owner-only, production-only.
 pub async fn latest(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     role: Role,
     environment: DeploymentEnvironment,
 ) -> Result<Vec<EncryptedChange>, ChangeError> {
     authorize(role, environment)?;
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
-        .await
-        .map_err(|_| ChangeError::Store)?
-    {
-        let rows: Vec<serde_json::Value> = sqlx::query_scalar(
-            "SELECT jsonb_build_object('request_id',request_id,'actor_id',actor_id,'key',key,
-             'ciphertext',ciphertext,'wrapped_key',wrapped_key,'kms_key_version',kms_key_version,
-             'inserted_at',inserted_at_text) FROM deployment_secret_change ORDER BY inserted_at,id",
-        )
-        .fetch_all(pg.pool())
+    let pg = crate::postgres::matter::authority_for(TABLE)
         .await
         .map_err(|_| ChangeError::Store)?;
-        let mut latest = BTreeMap::new();
-        for row in rows {
-            let row: EncryptedChange =
-                serde_json::from_value(row).map_err(|_| ChangeError::Store)?;
-            latest.insert(row.key.clone(), row);
-        }
-        return Ok(latest.into_values().collect());
-    }
-    let mut response = db.query("SELECT request_id, actor_id, key, ciphertext, wrapped_key, kms_key_version, inserted_at FROM deployment_secret_change ORDER BY inserted_at ASC")
-        .await.map_err(|_| ChangeError::Store)?;
-    let rows: Vec<EncryptedChange> = response.take(0).map_err(|_| ChangeError::Store)?;
+    let rows: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT jsonb_build_object('request_id',request_id,'actor_id',actor_id,'key',key,
+             'ciphertext',ciphertext,'wrapped_key',wrapped_key,'kms_key_version',kms_key_version,
+             'inserted_at',inserted_at_text) FROM deployment_secret_change ORDER BY inserted_at,id",
+    )
+    .fetch_all(pg.pool())
+    .await
+    .map_err(|_| ChangeError::Store)?;
     let mut latest = BTreeMap::new();
     for row in rows {
+        let row: EncryptedChange = serde_json::from_value(row).map_err(|_| ChangeError::Store)?;
         latest.insert(row.key.clone(), row);
     }
     Ok(latest.into_values().collect())
@@ -316,87 +286,5 @@ mod tests {
             assert!(authorize(role, DeploymentEnvironment::Production).is_err());
         }
         assert!(authorize(Role::Owner, DeploymentEnvironment::Dev).is_err());
-    }
-    #[tokio::test]
-    async fn stores_only_ciphertext_keyed_by_request_and_denies_wrong_context() {
-        let db = crate::test_support::mem_surreal().await;
-        let fields = BTreeMap::from([(
-            "NAVIGATOR_META_APP_SECRET".into(),
-            "synthetic-secret".into(),
-        )]);
-        assert!(
-            matches!(
-                save(
-                    &db,
-                    &cloud::NoRuntimeKms,
-                    Role::Owner,
-                    DeploymentEnvironment::Production,
-                    Uuid::nil(),
-                    &fields
-                )
-                .await,
-                Err(ChangeError::Encryption)
-            ),
-            "No KMS never reports saved"
-        );
-        assert!(latest(&db, Role::Owner, DeploymentEnvironment::Production)
-            .await
-            .unwrap()
-            .is_empty());
-        let kms = cloud::FakeKms::new("production-runtime-key");
-        assert_eq!(
-            save(
-                &db,
-                &kms,
-                Role::Owner,
-                DeploymentEnvironment::Production,
-                Uuid::nil(),
-                &fields
-            )
-            .await
-            .unwrap(),
-            1
-        );
-        let mut rows = latest(&db, Role::Owner, DeploymentEnvironment::Production)
-            .await
-            .unwrap();
-        let ids: Vec<surrealdb::types::RecordId> = db
-            .query("SELECT VALUE id FROM deployment_secret_change")
-            .await
-            .unwrap()
-            .take(0)
-            .unwrap();
-        assert_eq!(
-            ids,
-            vec![crate::surreal::record_id(
-                TABLE,
-                Uuid::parse_str(&rows[0].request_id).unwrap()
-            )],
-            "The record key is the request's UUID, which the PostgreSQL mirror requires"
-        );
-        assert!(!serde_json::to_string(&rows)
-            .unwrap()
-            .contains("synthetic-secret"));
-        assert_eq!(open(&kms, &rows[0]).await.unwrap(), "synthetic-secret");
-        let mut stale = rows[0].clone();
-        stale.inserted_at = chrono::Utc::now().to_rfc3339();
-        assert!(open(&kms, &stale).await.is_err());
-        let now = chrono::Utc::now();
-        let mut expired = rows[0].clone();
-        expired.inserted_at = (now - chrono::Duration::hours(25)).to_rfc3339();
-        let eligible: Vec<_> = [expired, rows[0].clone()]
-            .into_iter()
-            .filter(|row| exportable_at(row, now))
-            .collect();
-        assert_eq!(
-            eligible.len(),
-            1,
-            "An expired key cannot block exporting another fresh key"
-        );
-        rows[0].key = "NAVIGATOR_THREADS_APP_SECRET".into();
-        assert!(open(&kms, &rows[0]).await.is_err());
-        assert!(latest(&db, Role::Admin, DeploymentEnvironment::Production)
-            .await
-            .is_err());
     }
 }

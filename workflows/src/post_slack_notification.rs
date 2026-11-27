@@ -125,13 +125,11 @@ pub enum PostNoticeAttempt {
 /// Lost replies can follow successful writes. Never blindly resend them.
 #[must_use]
 pub fn classify_post_notice_attempt(
-    identity: &PostNoticeIdentity,
+    channel_id: &str,
     result: &Result<SlackMessageReceipt, SlackBotError>,
 ) -> PostNoticeAttempt {
     match result {
-        Ok(receipt)
-            if receipt.channel_id == identity.channel_id && !receipt.timestamp.is_empty() =>
-        {
+        Ok(receipt) if receipt.channel_id == channel_id && !receipt.timestamp.is_empty() => {
             PostNoticeAttempt::Confirmed
         }
         Err(SlackBotError::HttpStatus(400 | 401 | 403 | 404)) => PostNoticeAttempt::Rejected,
@@ -259,7 +257,7 @@ mod tests {
             SlackBotError::RetryableHttpStatus(502),
         ] {
             assert_eq!(
-                classify_post_notice_attempt(&notice, &Err(error)),
+                classify_post_notice_attempt(&notice.channel_id, &Err(error)),
                 PostNoticeAttempt::ReconcileBeforeResend
             );
         }
@@ -269,7 +267,7 @@ mod tests {
             correlation_id: None,
         };
         assert_eq!(
-            classify_post_notice_attempt(&notice, &Ok(receipt)),
+            classify_post_notice_attempt(&notice.channel_id, &Ok(receipt)),
             PostNoticeAttempt::ReconcileBeforeResend
         );
     }
@@ -283,17 +281,17 @@ mod tests {
             correlation_id: None,
         };
         assert_eq!(
-            classify_post_notice_attempt(&notice, &Ok(receipt.clone())),
+            classify_post_notice_attempt(&notice.channel_id, &Ok(receipt.clone())),
             PostNoticeAttempt::Confirmed
         );
         receipt.channel_id = "COTHER".into();
         assert_eq!(
-            classify_post_notice_attempt(&notice, &Ok(receipt)),
+            classify_post_notice_attempt(&notice.channel_id, &Ok(receipt)),
             PostNoticeAttempt::ReconcileBeforeResend
         );
         assert_eq!(
             classify_post_notice_attempt(
-                &notice,
+                &notice.channel_id,
                 &Err(SlackBotError::RateLimited {
                     retry_after_seconds: Some(30)
                 })
@@ -302,7 +300,7 @@ mod tests {
         );
         assert_eq!(
             classify_post_notice_attempt(
-                &notice,
+                &notice.channel_id,
                 &Err(SlackBotError::Api("channel_not_found".into()))
             ),
             PostNoticeAttempt::Rejected

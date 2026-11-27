@@ -28,9 +28,13 @@ const INDEX_HTML: &str = "<!DOCTYPE html>\n\
 <body><div id=\"main\"></div></body></html>\n";
 
 /// Insert a person with a given display name and email.
-async fn insert_person(surreal: &store::surreal::SurrealDb, name: &str, email: &str) {
+async fn insert_person(
+    application_store: &store::application_store::ApplicationStore,
+    name: &str,
+    email: &str,
+) {
     store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::new(name.to_string(), email.to_string()),
     )
     .await
@@ -40,13 +44,13 @@ async fn insert_person(surreal: &store::surreal::SurrealDb, name: &str, email: &
 /// Insert a person with an explicit role, for asserting the directory renders
 /// the user-facing role label rather than the internal `Role::as_str()` token.
 async fn insert_person_with_role(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     name: &str,
     email: &str,
     role: Role,
 ) {
     store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role(name.to_string(), email.to_string(), role),
     )
     .await
@@ -59,14 +63,14 @@ async fn insert_person_with_role(
 /// process-global `DIOXUS_PUBLIC_PATH` (safe under nextest's process-per-test
 /// isolation).
 async fn render_people_as(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     uri: &str,
     role: webapp::people::ViewerRole,
 ) -> (StatusCode, String) {
     let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(dir.path().join("index.html"), INDEX_HTML).expect("write index.html");
     std::env::set_var("DIOXUS_PUBLIC_PATH", dir.path());
-    let provider_surreal = surreal.clone();
+    let provider_surreal = application_store.clone();
     let cfg = ServeConfig::new().context_providers(Arc::new(vec![
         // The people surfaces read `persons` from the other engine
         // (#1093; ENG-19); a server fn only reaches what this list
@@ -112,11 +116,11 @@ async fn render_people_as(
 #[tokio::test]
 async fn admin_people_component_ssrs_directory_from_the_database() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        store::test_support::dri_person(&surreal).await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        store::test_support::dri_person(&application_store).await;
 
         let (status, html) = render_people_as(
-            &surreal,
+            &application_store,
             "/app/admin/people",
             webapp::people::ViewerRole::Owner,
         )
@@ -134,11 +138,17 @@ async fn admin_people_component_ssrs_directory_from_the_database() {
 #[tokio::test]
 async fn admin_people_renders_role_display_labels_not_raw_tokens() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        insert_person_with_role(&surreal, "Cleo Clerk", "cleo@test.invalid", Role::Clerk).await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        insert_person_with_role(
+            &application_store,
+            "Cleo Clerk",
+            "cleo@test.invalid",
+            Role::Clerk,
+        )
+        .await;
 
         let (status, html) = render_people_as(
-            &surreal,
+            &application_store,
             "/app/admin/people",
             webapp::people::ViewerRole::Owner,
         )
@@ -162,12 +172,12 @@ async fn admin_people_renders_role_display_labels_not_raw_tokens() {
 #[tokio::test]
 async fn admin_people_honors_jsonapi_sort_descending_by_name() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        insert_person(&surreal, "Aaa Person", "aaa@test.invalid").await;
-        insert_person(&surreal, "Zzz Person", "zzz@test.invalid").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        insert_person(&application_store, "Aaa Person", "aaa@test.invalid").await;
+        insert_person(&application_store, "Zzz Person", "zzz@test.invalid").await;
 
         let (status, html) = render_people_as(
-            &surreal,
+            &application_store,
             "/app/admin/people?sort=-name",
             webapp::people::ViewerRole::Owner,
         )
@@ -195,11 +205,11 @@ async fn admin_people_honors_jsonapi_sort_descending_by_name() {
 #[tokio::test]
 async fn admin_people_without_membership_renders_no_rows() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        insert_person(&surreal, "Hidden Person", "hidden@test.invalid").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        insert_person(&application_store, "Hidden Person", "hidden@test.invalid").await;
 
         let (status, html) = render_people_as(
-            &surreal,
+            &application_store,
             "/app/admin/people",
             webapp::people::ViewerRole::Admin,
         )
@@ -216,8 +226,8 @@ async fn admin_people_without_membership_renders_no_rows() {
 #[tokio::test]
 async fn list_admin_people_refuses_a_non_admin_viewer() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        insert_person(&surreal, "Secret Person", "secret@test.invalid").await;
+        let application_store = store::application_store::ApplicationStore::uninitialized();
+        insert_person(&application_store, "Secret Person", "secret@test.invalid").await;
 
         // A direct hit on the generated `#[server]` endpoint need not carry the
         // route's auth + embedded Rego policy gate, so the injected tier defaults to
@@ -236,7 +246,8 @@ async fn list_admin_people_refuses_a_non_admin_viewer() {
             ("clerk", webapp::people::ViewerRole::Clerk),
             ("lawyer", webapp::people::ViewerRole::Lawyer),
         ] {
-            let (status, html) = render_people_as(&surreal, "/app/admin/people", role).await;
+            let (status, html) =
+                render_people_as(&application_store, "/app/admin/people", role).await;
 
             assert_eq!(
                 status,

@@ -50,9 +50,9 @@ pub struct StepDeps {
     /// unit tests stay store-free. The document steps need it: a
     /// `generate_pdf` writes the asset row through it and reads the
     /// pinned template's declared kind from it. Set via
-    /// [`StepDeps::with_surreal`]; a document step reached without one
+    /// [`StepDeps::with_application_store`]; a document step reached without one
     /// errors clearly rather than silently skipping the write.
-    pub surreal: Option<store::surreal::SurrealDb>,
+    pub application_store: Option<store::application_store::ApplicationStore>,
     /// On-chain attestor for the `onchain__record_attestation` step.
     /// Optional — like `surreal`, it is only needed by one step family, so
     /// callers that never reach an on-chain step (the email/document unit
@@ -69,7 +69,7 @@ impl StepDeps {
         Self {
             email,
             storage,
-            surreal: None,
+            application_store: None,
             attestor: None,
         }
     }
@@ -77,8 +77,11 @@ impl StepDeps {
     /// Attach the SurrealDB handle the document steps need — `assets` and
     /// `templates` live there since ENG-121.
     #[must_use]
-    pub fn with_surreal(mut self, surreal: store::surreal::SurrealDb) -> Self {
-        self.surreal = Some(surreal);
+    pub fn with_application_store(
+        mut self,
+        application_store: store::application_store::ApplicationStore,
+    ) -> Self {
+        self.application_store = Some(application_store);
         self
     }
 
@@ -108,9 +111,9 @@ pub enum StepDispatchError {
         #[source]
         source: serde_json::Error,
     },
-    /// A step was reached without the SurrealDB handle it needs.
-    #[error("{0} step requires a SurrealDB handle (StepDeps::surreal)")]
-    MissingSurreal(&'static str),
+    /// A step was reached without an application store.
+    #[error("{0} step requires a PostgreSQL application store")]
+    MissingStore(&'static str),
     /// An on-chain step was reached without an attestor configured.
     #[error("{0} step requires an attestor (StepDeps::with_attestor)")]
     MissingAttestor(&'static str),
@@ -166,17 +169,22 @@ pub async fn dispatch_step(
         }
         Some(StepKind::GeneratePdf) => {
             let payload = decode::<DocumentPayload>("generate_pdf", payload)?;
-            dispatch_generate_pdf(&deps.storage, deps.surreal.as_ref(), notation_id, &payload)
-                .await
-                .map_err(|e| StepDispatchError::Dispatch(e.to_string()))
+            dispatch_generate_pdf(
+                &deps.storage,
+                deps.application_store.as_ref(),
+                notation_id,
+                &payload,
+            )
+            .await
+            .map_err(|e| StepDispatchError::Dispatch(e.to_string()))
         }
         Some(StepKind::DocumentIntake) => {
             let payload = decode::<IntakePayload>("document_intake", payload)?;
-            let surreal = deps
-                .surreal
+            let application_store = deps
+                .application_store
                 .as_ref()
-                .ok_or(StepDispatchError::MissingSurreal("document_intake"))?;
-            dispatch_document_intake(surreal, &deps.storage, notation_id, &payload)
+                .ok_or(StepDispatchError::MissingStore("document_intake"))?;
+            dispatch_document_intake(application_store, &deps.storage, notation_id, &payload)
                 .await
                 .map(|_| None)
                 .map_err(|e| StepDispatchError::Dispatch(e.to_string()))
@@ -187,14 +195,14 @@ pub async fn dispatch_step(
                 .attestor
                 .as_ref()
                 .ok_or(StepDispatchError::MissingAttestor("onchain_record"))?;
-            let surreal = deps
-                .surreal
+            let application_store = deps
+                .application_store
                 .as_ref()
-                .ok_or(StepDispatchError::MissingSurreal("onchain_record"))?;
+                .ok_or(StepDispatchError::MissingStore("onchain_record"))?;
             dispatch_onchain_record(
                 deps.storage.as_ref(),
                 attestor.as_ref(),
-                surreal,
+                application_store,
                 notation_id,
                 &payload,
             )
@@ -204,11 +212,11 @@ pub async fn dispatch_step(
         }
         _ if is_dispatched_submission(next) => {
             let payload = decode::<CompliancePayload>("compliance submission", payload)?;
-            let surreal = deps
-                .surreal
+            let application_store = deps
+                .application_store
                 .as_ref()
-                .ok_or(StepDispatchError::MissingSurreal("compliance submission"))?;
-            dispatch_compliance(surreal, notation_id, next, &payload)
+                .ok_or(StepDispatchError::MissingStore("compliance submission"))?;
+            dispatch_compliance(application_store, notation_id, next, &payload)
                 .await
                 .map(|()| None)
                 .map_err(|e| StepDispatchError::Dispatch(e.to_string()))
@@ -361,9 +369,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compliance_step_without_surreal_errors_clearly() {
+    async fn compliance_step_without_store_errors_clearly() {
         // StepDeps::surreal is None here (the email/document tests' default),
-        // so a submission step must fail with MissingSurreal rather than panic.
+        // so a submission step must fail with MissingStore rather than panic.
         let deps = deps_with(Arc::new(CapturingEmail::new()), fs_storage("nodb").await);
         let payload = serde_json::to_string(&crate::compliance::CompliancePayload {
             office: "Nevada Secretary of State".into(),
@@ -381,7 +389,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            StepDispatchError::MissingSurreal("compliance submission")
+            StepDispatchError::MissingStore("compliance submission")
         ));
     }
 }

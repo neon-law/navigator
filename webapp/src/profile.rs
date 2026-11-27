@@ -247,7 +247,7 @@ async fn load_ssh_keys(person_id: uuid::Uuid, query: ProfileQuery) -> SshKeysCar
 /// form that would overwrite a block the card could not read.
 #[cfg(feature = "server")]
 async fn load_signature(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: uuid::Uuid,
     query: ProfileQuery,
 ) -> SignatureCard {
@@ -261,7 +261,7 @@ async fn load_signature(
         .as_deref()
         .map(|code| signature_error_sentence(code).to_string());
     let stored = match store::postgres::PostgresDb::from_env().await {
-        Ok(pg) => store::mail_signatures::for_person(surreal, &pg, person_id)
+        Ok(pg) => store::mail_signatures::for_person(application_store, &pg, person_id)
             .await
             .ok()
             .flatten(),
@@ -318,8 +318,8 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
         });
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let person = store::persons::find_by_id(&surreal, person_id)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let person = store::persons::find_by_id(&application_store, person_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let Some(person) = person else {
@@ -344,7 +344,7 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
         .unwrap_or_default();
         (
             Some(load_ssh_keys(person_id, query.clone()).await),
-            Some(load_signature(&surreal, person_id, query).await),
+            Some(load_signature(&application_store, person_id, query).await),
         )
     } else {
         (None, None)

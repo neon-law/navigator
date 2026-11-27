@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use uuid::Uuid;
 use workflows::{CapturingSlackBot, SlackBot, SlackBotError, SlackChannel, SlackMessageReceipt};
 use workflows_service::nightly_project_update::{membership, repository::RepositoryForge, slack};
@@ -104,7 +104,7 @@ impl SlackBot for RosterSlack {
 async fn complete_native_roster_removes_only_stale_members_and_notices_mention_recorded_identities()
 {
     store::test_support::with_postgres(Box::pin(async {
-        let source = SurrealDb::uninitialized();
+        let source = ApplicationStore::uninitialized();
         let (project, _) = Box::pin(native_project::matter(&source)).await;
         store::projects::set_internal_slack_channel_id(&source, project.id, "COWNED")
             .await
@@ -198,7 +198,7 @@ async fn complete_native_roster_removes_only_stale_members_and_notices_mention_r
 #[tokio::test]
 async fn unmatched_and_empty_native_rosters_cannot_remove_channel_members_or_invent_mentions() {
     store::test_support::with_postgres(Box::pin(async {
-        let source = SurrealDb::uninitialized();
+        let source = ApplicationStore::uninitialized();
         let (project, _) = Box::pin(native_project::matter(&source)).await;
         store::projects::set_internal_slack_channel_id(&source, project.id, "CINCOMPLETE")
             .await

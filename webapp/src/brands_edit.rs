@@ -168,7 +168,7 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
     .map(|axum::Extension(token)| token.0)
     .unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let actor_person_id = crate::admin_listing::injected_person_id().await;
     let Some(actor_person_id) = actor_person_id else {
         return Err(ServerFnError::new(
@@ -215,7 +215,7 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
     };
 
     let brand = match store::brands::find_by_key_for_actor(
-        &surreal,
+        &application_store,
         store_role(role),
         Some(actor_person_id),
         &key,
@@ -238,7 +238,7 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
     };
 
     let social_accounts =
-        store::social_accounts::for_actor(&surreal, store_role(role), actor_person_id)
+        store::social_accounts::for_actor(&application_store, store_role(role), actor_person_id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
             .into_iter()
@@ -292,7 +292,7 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
         })
         .map(|face| face.label.to_string());
     let worn_by_firm = match brand.firm_id {
-        Some(firm_id) => store::firms::brand_keys_for_firm(&surreal, firm_id)
+        Some(firm_id) => store::firms::brand_keys_for_firm(&application_store, firm_id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
             .contains(&key),
@@ -322,7 +322,7 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
             default_typeface_label,
         }),
         social_accounts,
-        social_selections: store::social_account_selections::for_brand(&surreal, &key)
+        social_selections: store::social_account_selections::for_brand(&application_store, &key)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
             .into_iter()

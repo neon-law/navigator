@@ -28,7 +28,7 @@ pub use crate::signature::SendMode;
 /// signature provider but not the government-form registry / assets bucket.
 pub struct SendFlowContext<'a> {
     /// The other store — the notation's client is a `persons` row.
-    pub surreal: &'a store::surreal::SurrealDb,
+    pub application_store: &'a store::application_store::ApplicationStore,
     pub runtime: &'a dyn StateMachineRuntime,
     pub storage: &'a Arc<dyn cloud::StorageService>,
     /// The authenticated actor attributed to the transitions this send fires.
@@ -52,7 +52,7 @@ pub(crate) async fn send_notation_for_signature(
     provider: &dyn crate::signature::SignatureProvider,
     mode: SendMode,
 ) -> Result<(StateName, crate::signature::SignatureRequestId), WorkflowDriveError> {
-    let notation_row = store::notations::find_by_id(ctx.surreal, notation_id)
+    let notation_row = store::notations::find_by_id(ctx.application_store, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
     let current_state = ctx
@@ -73,10 +73,10 @@ pub(crate) async fn send_notation_for_signature(
         notation_id,
     ))?;
     let scoped = provider
-        .for_project(ctx.surreal, notation_row.project_id)
+        .for_project(ctx.application_store, notation_row.project_id)
         .await?;
     let provider = crate::firm_docusign::resolved(scoped.as_ref(), provider);
-    let existing = store::signatures::request_id_for_notation(ctx.surreal, notation_id)
+    let existing = store::signatures::request_id_for_notation(ctx.application_store, notation_id)
         .await?
         .map(crate::signature::SignatureRequestId);
 
@@ -95,7 +95,7 @@ pub(crate) async fn send_notation_for_signature(
             .await?;
         if notation_row.state == "lawyer_review" || notation_row.state.starts_with("generate_pdf") {
             store::notations::reconcile_state(
-                ctx.surreal,
+                ctx.application_store,
                 notation_id,
                 &notation_row.state,
                 current_state.as_str(),
@@ -125,7 +125,12 @@ pub(crate) async fn send_notation_for_signature(
             ctx.acting,
         )
         .await?;
-        crate::retainer_walk::sync_notation_state(ctx.surreal, notation_id, next.as_str()).await?;
+        crate::retainer_walk::sync_notation_state(
+            ctx.application_store,
+            notation_id,
+            next.as_str(),
+        )
+        .await?;
         provider
             .dispatch_notation_draft(&id, firm.as_ref(), onboarding)
             .await?;
@@ -201,11 +206,13 @@ async fn record_signature_draft(
     // the fee-clause gate reads them here: the walk parks at
     // `sent_for_signature__pending` once `pdf_persisted` fires, so a refusal
     // has to land before that transition rather than unwind it.
-    let template_row = store::templates::find_by_id(ctx.surreal, notation_row.template_id)
-        .await?
-        .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let raw_template_body = store::templates::body(ctx.surreal, ctx.storage, &template_row).await?;
-    let clauses = store::notation_clauses::for_notation(ctx.surreal, notation_id)
+    let template_row =
+        store::templates::find_by_id(ctx.application_store, notation_row.template_id)
+            .await?
+            .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
+    let raw_template_body =
+        store::templates::body(ctx.application_store, ctx.storage, &template_row).await?;
+    let clauses = store::notation_clauses::for_notation(ctx.application_store, notation_id)
         .await
         .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
 
@@ -225,9 +232,12 @@ async fn record_signature_draft(
     // carries nothing a person is still meant to complete. Signing anchors
     // (`{{client.signature}}`) are the provider's and pass.
     let template_body = store::notation_clauses::splice(&raw_template_body, &clauses);
-    let (keys, answer_ctx) =
-        crate::retainer_walk::build_answer_context(ctx.surreal, Some(ctx.storage), notation_id)
-            .await?;
+    let (keys, answer_ctx) = crate::retainer_walk::build_answer_context(
+        ctx.application_store,
+        Some(ctx.storage),
+        notation_id,
+    )
+    .await?;
     let unfinished = rules::final_document::scan(&crate::retainer_walk::substitute_template_body(
         &template_body,
         &keys,
@@ -256,7 +266,7 @@ async fn record_signature_draft(
 
     let set = signer_set(&template_row.code, &raw_template_body)?;
     let firm = resolve_firm_recipient(
-        ctx.surreal,
+        ctx.application_store,
         notation_row.project_id,
         provider,
         firm_routing_order(
@@ -281,7 +291,7 @@ async fn record_signature_draft(
         .get(&store::notations::document_pdf_storage_key(notation_id))
         .await?
         .bytes;
-    let client = store::persons::find_by_id(ctx.surreal, notation_row.person_id).await?;
+    let client = store::persons::find_by_id(ctx.application_store, notation_row.person_id).await?;
     // `emailed` delivery → non-captive client (DocuSign emails the signing
     // link); anything else (`embedded`, the default) keeps the captive
     // embedded-signing recipient. Read off the notation so the single send
@@ -305,7 +315,7 @@ async fn record_signature_draft(
             .send_for_signature(notation_id, &pdf_bytes, &manifest, SendMode::Prepare)
             .await?
     };
-    persist_signature_request_id(ctx.surreal, notation_id, &id.0).await?;
+    persist_signature_request_id(ctx.application_store, notation_id, &id.0).await?;
     Ok((id, firm, onboarding))
 }
 
@@ -320,7 +330,7 @@ fn firm_routing_order(set: &rules::SignerSet, no_fields: bool, firm_field: bool)
 }
 
 async fn resolve_firm_recipient(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     project_id: Uuid,
     provider: &dyn SignatureProvider,
     order: Option<u32>,
@@ -615,12 +625,12 @@ fn signer_answer(ctx: &BTreeMap<String, String>, key: &str) -> Option<String> {
 /// later completion webhook can resolve its callback by `(provider,
 /// provider_id)`. See [`crate::esignature_webhook`].
 async fn persist_signature_request_id(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
     request_id: &str,
 ) -> Result<(), store::signatures::SignatureError> {
     store::signatures::record_request(
-        surreal,
+        application_store,
         notation_id,
         store::signatures::SignatureProvider::DocuSign,
         request_id,

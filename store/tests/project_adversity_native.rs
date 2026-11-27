@@ -1,9 +1,9 @@
 //! An adversity command commits its audit trail and conflict edge together.
+use store::application_store::ApplicationStore;
 use store::postgres::PostgresDb;
 use store::project_references::{
     self, AdversityError, AdversitySubject, Party, RecordAdversityCommand,
 };
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 #[path = "support/native_project.rs"]
@@ -45,7 +45,7 @@ async fn fail_after_loading_edge(pg: &PostgresDb) {
 #[tokio::test]
 async fn age_failure_rolls_back_the_whole_adversity_command_without_touching_another_project() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = PostgresDb::application().await.unwrap();
         let target = native_project::create("synthetic-adversity-target").await;
         let other = native_project::create("synthetic-adversity-other").await;

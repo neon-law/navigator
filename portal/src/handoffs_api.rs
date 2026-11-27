@@ -75,7 +75,7 @@ pub(crate) async fn prepare(
     };
     let archive = cloud::archived_projects_from_env().await.ok();
     match handoffs::prepare(
-        &state.surreal,
+        &state.application_store,
         &pg,
         &state.storage,
         archive.as_ref(),
@@ -111,7 +111,7 @@ async fn readable(
         Err(error) => return refused(&error).map(Err),
     };
     let lawyer = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         session.person_id,
         session.role,
         project_id,
@@ -151,7 +151,14 @@ pub(crate) async fn bundle(
         Err(response) => return Ok(response),
     };
     let archive = cloud::archived_projects_from_env().await.ok();
-    match handoffs::bundle(&state.surreal, &state.storage, archive.as_ref(), &handoff).await {
+    match handoffs::bundle(
+        &state.application_store,
+        &state.storage,
+        archive.as_ref(),
+        &handoff,
+    )
+    .await
+    {
         Ok(bytes) => Ok(Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/zip")

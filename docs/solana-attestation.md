@@ -15,12 +15,10 @@ chain natively. The binding engagement letter is `templates/notations/neon_law/o
 The vertical is implemented end-to-end except the chain write, mirroring how `cloud::StorageService` keeps GCS out of
 the generic layer:
 
-- **The local record is the system of record.** Every attestation writes one row to the `attestation` table in
-  SurrealDB (`store::attestations`) — one row per notation by convention, since the Surreal schema carries no unique
-  index on `notation_id`. The row carries the document SHA-256 plus identifiers (wallets, PDA, transaction signature)
-  and a `status` of `pending` / `recorded` / `failed` — **never client** content, the same trust boundary telemetry
-  observes. SurrealDB is snapshotted by the scheduled `surreal-archive` CronJob (see
-  [`surreal-archives.md`](surreal-archives.md)), so the attestation inherits the firm's ten-year retention for free.
+- **The local record is the system of record.** Every attestation writes one row to the PostgreSQL `attestation`
+  table through `store::attestations`. The row carries the document SHA-256 plus identifiers (wallets, PDA, transaction
+  signature) and a `status` of `pending` / `recorded` / `failed` — **never client** content, the same trust boundary
+  telemetry observes. PostgreSQL physical backups cover these records.
 - **The chain is isolated behind a trait.** `workflows::attest::Attestor` has one method, `record`, returning a
   `RecordedTx` or `None`. `NullAttestor` is the default (records nothing); `attestor_from_env` reads
   `NAVIGATOR_ONCHAIN_BACKEND` (`null` default, `solana` reserved and currently erroring by design). Selecting a chain —

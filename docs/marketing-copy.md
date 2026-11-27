@@ -254,8 +254,7 @@ sentence publishes the shared one rather than a sibling brand's wording.
 Copy that differs between pages today is deliberately **not** in the shared catalog. This catalog removes duplication;
 it does not decide wording. Wording lives with the page-copy reviews.
 
-Coverage: [`server/tests/firm_routes.rs`](../server/tests/firm_routes.rs) proves each served page renders the sentence
-the catalog authors, and that no page leaks an unresolved placeholder.
+The brand renderer applies the catalog to served pages.
 
 A home catalog may carry an optional `provenance` block with a request flow, ledger illustration, tiles, and notes. The
 generic home renderer supports it; the current practice catalogs omit it.

@@ -120,40 +120,11 @@ values inline, the password from `navigator-postgres-app`, a read-only mount of 
 client label. With the variables present, `web` imports the legacy journal before serving and logs `legacy journal
 import completed` ([`firm-journal.md`](firm-journal.md)).
 
-### DBOS opt-in
+### DBOS connection
 
-Set `NAVIGATOR_DBOS_ENABLED = "true"` in a deployment's `config.toml` to host the DBOS executor in `web`. `ops ship`
-then adds `examples/deploy/k8s/gke/postgres/web/web-dbos.yaml` after `web-env.yaml`. It sets `NAVIGATOR_DBOS_ENABLED`
-and the `NAVIGATOR_DBOS_HOST`, `PORT`, `DATABASE`, `SSLMODE` (`verify-full`), `ROOT_CERT`, and `USER` (`navigator_dbos`)
-values inline. It takes the password from `navigator-postgres-dbos` and mounts only that Secret's `ca.crt`. Both rows
-ship `"true"`; `ops ship` refuses a row whose `navigator-postgres-dbos` Secret is missing. [DBOS
-durability](dbos-durability.md) has the operator steps.
-
-### Archives opt-in
-
-Set `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` to run the Archives schedule on the DBOS executor in `web`. It needs the
-DBOS opt-in above. `ops ship` adds `examples/deploy/k8s/gke/postgres/web/web-archives.yaml` and the reviewed
-`navigator-archive-coverage` ConfigMap, then deletes the Restate `archives-trigger` CronJob. Each 05:55 and 17:55 UTC
-run exports the whole `navigator` and `forgejo` databases to Iceberg as `navigator_archive`. See [Iceberg
-archive](iceberg-archive.md#where-it-runs).
-
-Provision the login before the first ship with the switch on. On a row rolled from its published record:
-
-```bash
-openssl rand -hex 32 | hudson ops secrets set <row> --project-id <project> \
-  NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD --service postgres
-hudson ops secrets apply --deployment <row> --project-id <project> --service postgres --dry-run
-hudson ops secrets apply --deployment <row> --project-id <project> --service postgres
-hudson ops deployments set <row> --project-id <project> NAVIGATOR_DBOS_ARCHIVES_ENABLED=true
-```
-
-`ops secrets set` writes the password to Secret Manager and its name to the record's PostgreSQL inventory; it projects
-nothing. `ops secrets apply --service postgres` reads every PostgreSQL key the record lists from Secret Manager
-`versions/latest` and server-side applies every Secret in the table those keys supply, `navigator-postgres-archive`
-among them. It reads every value before it writes, so a key with no value fails naming `ops secrets set` and changes
-nothing. The next `ops ship` runs the roles Job, which creates `navigator_archive` from the new Secret before `web`
-rolls. A row with a private tree adds the key to its encrypted PostgreSQL service file and applies it with `hudson ops
-secrets apply --deployment <row> --service postgres` instead.
+The web application hosts DBOS. The deployment mounts the `navigator-postgres-dbos` Secret for the dedicated login and
+CA. The DBOS connection uses `verify-full` TLS. See [DBOS durability](dbos-durability.md) for executor ownership and
+recovery.
 
 ### Migration Job
 
@@ -161,50 +132,15 @@ secrets apply --deployment <row> --service postgres` instead.
 `navigator_owner`. It reads the same `NAVIGATOR_POSTGRES_*` variables `web` reads. The image is the placeholder
 `navigator-migrate`, pinned to the release at apply time. A failure is not retried. The command lives only in that file.
 
-### Mirror parity and reconcile
+### Application admission
 
-Run `hudson ops postgres backfill` as `navigator_owner`. In a one-off Job, use the PostgreSQL connection settings from
-`k8s/postgres/migrate/migrate-job.yaml`, including the password and CA from `navigator-postgres-migrator`. The graph arm
-calls `graph_clear_navigator()`, which requires the migration login. Parity and routine reconcile use `navigator_app`.
-See the [graph backfill runbook](age-graph-runbook.md#3-backfill-and-parity).
-
-Ordinary reads and writes use PostgreSQL. `ops ship` runs the release-pinned PostgreSQL application readiness Job after
-Forgejo and before application rollout. Readiness requires completed global history and every registered scoped receipt.
-Failure or timeout blocks rollout and preserves recovery. Successful admission retires only the obsolete automatic
-mirror-recovery CronJob and monitoring Rule.
-
-Captured Source transfer remains an explicit operator phase. Establish writer quiescence, obtain the strict capture and
-receipt pair, and complete global and scoped enrollment before starting the guarded application. Persisted ownership
-prevents later Source import or reconciliation from overwriting or resurrecting native rows. The [mirror tooling
-guide](postgres-tooling.md#scoped-family-enrollment) describes dependency, parity, and activation checks.
+`ops ship` runs the release-pinned PostgreSQL readiness Job after Forgejo and before the application rollout. Readiness
+verifies the database's native origin or completed application history and required ownership receipts. A failed or
+timed-out Job blocks the rollout.
 
 ```bash
-hudson ops postgres mirror parity [--json]              # explicit read-only diagnostics
-hudson ops postgres mirror reconcile --dry-run [--json] # inspect eligible compatibility work
-hudson ops postgres ready --json                       # PostgreSQL-only application admission
+hudson ops postgres ready --json
 ```
-
-The explicit compatibility commands require Source configuration when they inspect captured history; ordinary startup
-and readiness do not. Reports contain ids, counts, and sanitized differences. Completed-scope replay verifies persisted
-receipts through PostgreSQL alone. Neither deployment settings nor a successful row count substitute for the exact
-registered authority history.
-
-`k8s/postgres/mirror/mirror-reconcile-job.yaml` runs `reconcile --json` once, as `navigator_app`. It reads SurrealDB
-through the deployment Secret's `NAVIGATOR_SURREAL_*` keys. The image is the placeholder `navigator-ops`. That is the
-release image that carries the `hudson` operator CLI. Pin it to the release being inspected, then create the Job:
-
-```bash
-kubectl kustomize examples/deploy/k8s/gke/postgres/mirror/<env> | place \
-  | kubectl set image --local -f - reconcile=<registry>/navigator-ops@<release-digest> -o yaml \
-  | kubectl --context <context> -n "$NS" create -f -
-kubectl --context <context> -n "$NS" wait --for=condition=complete \
-  job/navigator-postgres-mirror-reconcile --timeout=30m
-kubectl --context <context> -n "$NS" logs job/navigator-postgres-mirror-reconcile
-kubectl --context <context> -n "$NS" delete job navigator-postgres-mirror-reconcile
-```
-
-The log is the JSON report. A failed Job is not retried. Read the report, fix the cause (for example a Person or Entity
-that PostgreSQL does not hold yet), delete the Job, and create it again.
 
 ### Rotation
 
@@ -334,7 +270,7 @@ rehydration before calling PostgreSQL or Forgejo Iceberg exports recoverable.
 Scheduled Iceberg exports default to PostgreSQL and require completed application storage handoff before publication.
 `NAVIGATOR_ARCHIVE_SOURCE=all` includes SurrealDB for migration or recovery; it does not certify that handoff. Physical
 base backups, WAL archiving, the restore drill, and raw PostgreSQL export helpers do not require application admission
-or a reachable SurrealDB server. See [archive source selection](iceberg-archive.md#postgresql-coverage-generations).
+or a reachable SurrealDB server. See [archive source selection](iceberg-archive.md#exporting-a-generation).
 
 ## Rollout runbook
 
@@ -408,20 +344,16 @@ grant either application's role access to the other database. Both databases sha
 maintenance window, instance failure domain, and physical backups: a restore recovers both to the same point. Forgejo's
 Git, LFS, and attachment files remain on its own retained volume and must be backed up with its database.
 
-The twice-daily Iceberg export must treat each database as an independent source: record its database identity, schema
-version, source cutoff, table inventory, and generation manifest; publish separate Navigator and Forgejo namespaces; and
-test rehydrating each into a fresh database without crossing service ownership. A single PostgreSQL transaction cannot
-provide a common snapshot cutoff across separate databases. The paired Iceberg generation covers both databases when
-Archives runs on DBOS in `web` ([Archives opt-in](#archives-opt-in)). The read-only `navigator_archive` login is the one
-role granted `CONNECT` on both databases, and it can write neither.
+A paired [Iceberg archive](iceberg-archive.md) records each database's identity, inventory, and cutoff. Each database
+has its own snapshot and namespace. Verify rehydration in isolated targets.
 
 ## Evidence
 
 Focused CI checks a new pod UID, unchanged PVC UID, and retained SQL and AGE data after replacement. It also scales to
 zero, deletes/recreates the StatefulSet, verifies retention, accepts TLS, and rejects unencrypted access. KIND proves
 claim lifecycle; GKE CSI provisioning and cross-zone recovery require separate environment drills. Manifest tests in
-`cli/tests/staging_manifests.rs` hold the roles, migration, mirror, backup, and drill contracts, and the
-staging/production equivalence; `deploy/src/devx/ship.rs` tests hold mandatory PostgreSQL readiness before rollout.
+`cli/tests/staging_manifests.rs` hold the roles, migration, backup, and drill contracts, and the staging/production
+equivalence; `deploy/src/devx/ship.rs` tests hold mandatory PostgreSQL readiness before rollout.
 
 See [GKE disks](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/regional-pd),
 [StatefulSet retention contract](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/), and

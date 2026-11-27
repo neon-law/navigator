@@ -7,13 +7,8 @@ use std::str::FromStr;
 use sqlx::{postgres::PgRow, Row};
 use uuid::Uuid;
 
-use super::{
-    AssistantTurn, AssistantTurnError, AssistantTurnRow, NewTurn, TurnKind, HISTORY_LIMIT, SELECT,
-    TABLE,
-};
+use super::{AssistantTurn, AssistantTurnError, NewTurn, TurnKind, HISTORY_LIMIT, SELECT, TABLE};
 use crate::postgres::PostgresDb;
-use crate::postgres_backfill::Copied;
-use crate::surreal::SurrealDb;
 
 /// `None` for a kind outside the glossary's four; the table's check refuses
 /// one, so only a hand-edited row reaches here.
@@ -84,43 +79,4 @@ pub(super) async fn purge(pg: &PostgresDb, person_id: Uuid) -> Result<u64, Assis
     .execute(&pg.0)
     .await?
     .rows_affected())
-}
-
-/// Copy every SurrealDB turn PostgreSQL does not hold, keeping its id and
-/// timestamps.
-pub(crate) async fn copy_from_surreal(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-) -> Result<Copied, surrealdb::Error> {
-    let rows: Vec<AssistantTurnRow> = surreal
-        .query(format!("SELECT {SELECT} FROM {TABLE}"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?
-        .take(0)?;
-    let mut copied = Copied::default();
-    for row in rows {
-        let Some(turn) = row.into_turn() else {
-            copied.unrepresentable(TABLE);
-            continue;
-        };
-        let result = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO {TABLE} (id, person_id, kind, content, tool_name, input_tokens, \
-             output_tokens, inserted_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING"
-        )))
-        .bind(turn.id)
-        .bind(turn.person_id)
-        .bind(turn.kind.to_string())
-        .bind(&turn.content)
-        .bind(&turn.tool_name)
-        .bind(turn.input_tokens)
-        .bind(turn.output_tokens)
-        .bind(turn.inserted_at)
-        .bind(turn.updated_at)
-        .execute(&pg.0)
-        .await
-        .map(|done| done.rows_affected());
-        copied.record(TABLE, Some(turn.id), result);
-    }
-    Ok(copied)
 }

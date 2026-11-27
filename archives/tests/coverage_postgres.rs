@@ -2,8 +2,8 @@
 use archives::coverage::{export_pair, inventory, CoverageManifest, DatabaseSource, Rule};
 use cloud::{FsStorage, ObjectListing, StorageError, StorageService, StoredObject};
 use sqlx::{postgres::PgConnectOptions, PgPool};
+use store::postgres::history::{require_scope, Family, FamilyError, SourceReceipt};
 use store::postgres::PostgresDb;
-use store::postgres_backfill::family::{require_scope, Family, FamilyError, SourceReceipt};
 
 #[path = "coverage_postgres/native_origin.rs"]
 mod native_origin;

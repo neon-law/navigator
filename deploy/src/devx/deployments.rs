@@ -2343,22 +2343,8 @@ mod tests {
 
     #[test]
     fn secrets_apply_plans_the_native_ingress_token() {
-        use store::workflow_engine::{COHOST_ENV, DBOS_ENABLED_ENV, ENGINE_ENV, WORKFLOWS};
-
         let mut deployment = Deployment::load(&fixture_tree(), "example-deployment")
             .expect("the synthetic deployment loads");
-        for (key, value) in [
-            (COHOST_ENV, "true"),
-            (DBOS_ENABLED_ENV, "true"),
-            (ENGINE_ENV, "dbos"),
-        ] {
-            deployment.coordinates.insert(key.into(), value.into());
-        }
-        for workflow in WORKFLOWS {
-            deployment
-                .coordinates
-                .insert(workflow.flag.into(), "true".into());
-        }
         let token = workflows::trigger::DBOS_INGRESS_TOKEN_ENV;
         deployment.encrypted_keys.remove(token);
         let error = plan(&deployment).expect_err("native web needs its ingress token");

@@ -228,7 +228,7 @@ pub(crate) async fn handoff(
     }
     // The role and admission come from the Person row now, never from the
     // payload: a role change between the two hosts takes effect here.
-    let person = match store::persons::find_by_id(&s.surreal, payload.person_id).await {
+    let person = match store::persons::find_by_id(&s.application_store, payload.person_id).await {
         Ok(Some(person)) => person,
         Ok(None) => return refuse(),
         Err(error) => {
@@ -240,7 +240,7 @@ pub(crate) async fn handoff(
                 .into_response();
         }
     };
-    if !store::persons::is_admitted(&s.surreal, person.id)
+    if !store::persons::is_admitted(&s.application_store, person.id)
         .await
         .unwrap_or(false)
     {

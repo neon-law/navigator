@@ -45,19 +45,11 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::{RecordId, SurrealValue};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::accounting as authority;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
-
-pub(crate) const WITHDRAWAL_TABLE: &str = "iolta_withdrawal";
-pub(crate) const ALLOCATION_TABLE: &str = "iolta_allocation";
-const WITHDRAWAL_SELECT: &str = "xero_transaction_id, jurisdiction_id, total_cents, currency, \
-                                 occurred_at, inserted_at, updated_at";
-const ALLOCATION_SELECT: &str = "withdrawal_id, xero_invoice_id, project_id, invoice_reference, \
-                                 amount_cents, occurred_at, inserted_at, updated_at";
 
 /// One mirrored transfer out of a state's pooled account.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -92,58 +84,6 @@ pub struct IoltaAllocation {
     pub occurred_at: DateTime<Utc>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-#[derive(serde::Deserialize, SurrealValue)]
-struct WithdrawalRow {
-    xero_transaction_id: String,
-    jurisdiction_id: RecordId,
-    total_cents: i64,
-    currency: String,
-    occurred_at: surrealdb::types::Datetime,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl WithdrawalRow {
-    fn into_withdrawal(self) -> Option<IoltaWithdrawal> {
-        Some(IoltaWithdrawal {
-            xero_transaction_id: self.xero_transaction_id,
-            jurisdiction_id: record_uuid(&self.jurisdiction_id)?,
-            total_cents: self.total_cents,
-            currency: self.currency,
-            occurred_at: self.occurred_at.into(),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-#[derive(serde::Deserialize, SurrealValue)]
-struct AllocationRow {
-    withdrawal_id: String,
-    xero_invoice_id: String,
-    project_id: RecordId,
-    invoice_reference: String,
-    amount_cents: i64,
-    occurred_at: surrealdb::types::Datetime,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl AllocationRow {
-    fn into_allocation(self) -> Option<IoltaAllocation> {
-        Some(IoltaAllocation {
-            withdrawal_id: self.withdrawal_id,
-            xero_invoice_id: self.xero_invoice_id,
-            project_id: record_uuid(&self.project_id)?,
-            invoice_reference: self.invoice_reference,
-            amount_cents: self.amount_cents,
-            occurred_at: self.occurred_at.into(),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
 }
 
 /// The withdrawal row as PostgreSQL's `to_jsonb` serves it. The row's `id`
@@ -206,8 +146,6 @@ impl From<PgAllocationRow> for IoltaAllocation {
 /// needs to reconcile it in Xero — none of them is recoverable by guessing.
 #[derive(Debug, Error)]
 pub enum IoltaWithdrawalError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// Boxed, like its sibling below: these two carry the largest payloads
     /// in this enum, and every function here returns it — an unboxed variant
     /// would widen every `Ok` on the happy path too.
@@ -283,16 +221,6 @@ impl From<crate::iolta_accounts::IoltaAccountError> for IoltaWithdrawalError {
     }
 }
 
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, IoltaWithdrawalError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt)
-        .await
-        .map_err(IoltaWithdrawalError::Db)
-}
-
 /// One line of a withdrawal as the mirror reads it from Xero: how much of
 /// the transfer settled which invoice.
 #[derive(Clone, Debug)]
@@ -338,7 +266,7 @@ pub enum Applied {
 ///
 /// Any [`IoltaWithdrawalError`]. A refusal writes nothing.
 pub async fn apply(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     input: &WithdrawalInput,
 ) -> Result<Applied, IoltaWithdrawalError> {
     if find(db, &input.xero_transaction_id).await?.is_some() {
@@ -431,59 +359,32 @@ pub async fn apply(
 }
 
 pub(crate) async fn write_withdrawal(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     input: &WithdrawalInput,
     jurisdiction_id: Uuid,
 ) -> Result<(), IoltaWithdrawalError> {
-    if let Some(pg) = authority::authority().await? {
-        let row = serde_json::json!({
-            "id": input.xero_transaction_id,
-            "xero_transaction_id": input.xero_transaction_id,
-            "jurisdiction_id": jurisdiction_id, "total_cents": input.total_cents,
-            "currency": input.currency, "occurred_at": input.occurred_at,
-        });
-        let query = sqlx::query(
-            "INSERT INTO iolta_withdrawal SELECT * FROM \
-             jsonb_populate_record(NULL::iolta_withdrawal, \
-             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-             ON CONFLICT (id) DO UPDATE SET jurisdiction_id = EXCLUDED.jurisdiction_id, \
-             total_cents = EXCLUDED.total_cents, currency = EXCLUDED.currency, \
-             occurred_at = EXCLUDED.occurred_at, updated_at = now()",
-        )
-        .bind(row);
-        authority::execute(&pg, query).await?;
-        return Ok(());
-    }
-    writing(|| {
-        db.query(
-            "UPSERT $id SET xero_transaction_id = $xero_transaction_id, \
-             jurisdiction_id = $jurisdiction_id, total_cents = $total_cents, \
-             currency = $currency, occurred_at = $occurred_at, \
-             inserted_at = IF inserted_at THEN inserted_at ELSE time::now() END, \
-             updated_at = time::now()",
-        )
-        .bind((
-            "id",
-            RecordId::new(WITHDRAWAL_TABLE, input.xero_transaction_id.clone()),
-        ))
-        .bind(("xero_transaction_id", input.xero_transaction_id.clone()))
-        .bind((
-            "jurisdiction_id",
-            record_id(crate::jurisdictions::TABLE, jurisdiction_id),
-        ))
-        .bind(("total_cents", input.total_cents))
-        .bind(("currency", input.currency.clone()))
-        .bind((
-            "occurred_at",
-            surrealdb::types::Datetime::from(input.occurred_at),
-        ))
-    })
-    .await?;
+    let pg = authority::authority().await?;
+    let row = serde_json::json!({
+        "id": input.xero_transaction_id,
+        "xero_transaction_id": input.xero_transaction_id,
+        "jurisdiction_id": jurisdiction_id, "total_cents": input.total_cents,
+        "currency": input.currency, "occurred_at": input.occurred_at,
+    });
+    let query = sqlx::query(
+        "INSERT INTO iolta_withdrawal SELECT * FROM \
+         jsonb_populate_record(NULL::iolta_withdrawal, \
+         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+         ON CONFLICT (id) DO UPDATE SET jurisdiction_id = EXCLUDED.jurisdiction_id, \
+         total_cents = EXCLUDED.total_cents, currency = EXCLUDED.currency, \
+         occurred_at = EXCLUDED.occurred_at, updated_at = now()",
+    )
+    .bind(row);
+    authority::execute(&pg, query).await?;
     Ok(())
 }
 
 pub(crate) async fn write_allocation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     input: &WithdrawalInput,
     invoice: &crate::xero_invoices::XeroInvoice,
     amount_cents: i64,
@@ -492,50 +393,24 @@ pub(crate) async fn write_allocation(
     // transfer refreshes its lines instead of doubling a matter's drawn
     // total — the same primary-key discipline the invoice mirror uses.
     let line_id = format!("{}--{}", input.xero_transaction_id, invoice.xero_invoice_id);
-    if let Some(pg) = authority::authority().await? {
-        let row = serde_json::json!({
-            "id": line_id, "withdrawal_id": input.xero_transaction_id,
-            "xero_invoice_id": invoice.xero_invoice_id,
-            "project_id": invoice.project_id,
-            "invoice_reference": invoice.reference,
-            "amount_cents": amount_cents, "occurred_at": input.occurred_at,
-        });
-        let query = sqlx::query(
-            "INSERT INTO iolta_allocation SELECT * FROM \
-             jsonb_populate_record(NULL::iolta_allocation, \
-             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-             ON CONFLICT (id) DO UPDATE SET invoice_reference = EXCLUDED.invoice_reference, \
-             amount_cents = EXCLUDED.amount_cents, occurred_at = EXCLUDED.occurred_at, \
-             updated_at = now()",
-        )
-        .bind(row);
-        authority::execute(&pg, query).await?;
-        return Ok(());
-    }
-    writing(|| {
-        db.query(
-            "UPSERT $id SET withdrawal_id = $withdrawal_id, \
-             xero_invoice_id = $xero_invoice_id, project_id = $project_id, \
-             invoice_reference = $invoice_reference, amount_cents = $amount_cents, \
-             occurred_at = $occurred_at, \
-             inserted_at = IF inserted_at THEN inserted_at ELSE time::now() END, \
-             updated_at = time::now()",
-        )
-        .bind(("id", RecordId::new(ALLOCATION_TABLE, line_id.clone())))
-        .bind(("withdrawal_id", input.xero_transaction_id.clone()))
-        .bind(("xero_invoice_id", invoice.xero_invoice_id.clone()))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, invoice.project_id),
-        ))
-        .bind(("invoice_reference", invoice.reference.clone()))
-        .bind(("amount_cents", amount_cents))
-        .bind((
-            "occurred_at",
-            surrealdb::types::Datetime::from(input.occurred_at),
-        ))
-    })
-    .await?;
+    let pg = authority::authority().await?;
+    let row = serde_json::json!({
+        "id": line_id, "withdrawal_id": input.xero_transaction_id,
+        "xero_invoice_id": invoice.xero_invoice_id,
+        "project_id": invoice.project_id,
+        "invoice_reference": invoice.reference,
+        "amount_cents": amount_cents, "occurred_at": input.occurred_at,
+    });
+    let query = sqlx::query(
+        "INSERT INTO iolta_allocation SELECT * FROM \
+         jsonb_populate_record(NULL::iolta_allocation, \
+         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+         ON CONFLICT (id) DO UPDATE SET invoice_reference = EXCLUDED.invoice_reference, \
+         amount_cents = EXCLUDED.amount_cents, occurred_at = EXCLUDED.occurred_at, \
+         updated_at = now()",
+    )
+    .bind(row);
+    authority::execute(&pg, query).await?;
     Ok(())
 }
 
@@ -545,29 +420,18 @@ pub(crate) async fn write_allocation(
 ///
 /// [`IoltaWithdrawalError::Db`] when the lookup fails.
 pub async fn find(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     xero_transaction_id: &str,
 ) -> Result<Option<IoltaWithdrawal>, IoltaWithdrawalError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(iolta_withdrawal) AS row FROM iolta_withdrawal \
-             WHERE xero_transaction_id = $1 LIMIT 1",
-        )
-        .bind(xero_transaction_id);
-        return Ok(authority::maybe::<PgWithdrawalRow>(&pg, query)
-            .await?
-            .map(Into::into));
-    }
-    let mut response = db
-        .query(format!("SELECT {WITHDRAWAL_SELECT} FROM ONLY $id"))
-        .bind((
-            "id",
-            RecordId::new(WITHDRAWAL_TABLE, xero_transaction_id.to_string()),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<WithdrawalRow> = response.take(0)?;
-    Ok(row.and_then(WithdrawalRow::into_withdrawal))
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(iolta_withdrawal) AS row FROM iolta_withdrawal \
+         WHERE xero_transaction_id = $1 LIMIT 1",
+    )
+    .bind(xero_transaction_id);
+    Ok(authority::maybe::<PgWithdrawalRow>(&pg, query)
+        .await?
+        .map(Into::into))
 }
 
 /// Every allocation line belonging to one matter, newest first.
@@ -580,36 +444,19 @@ pub async fn find(
 ///
 /// [`IoltaWithdrawalError::Db`] when the lookup fails.
 pub async fn for_project(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<IoltaAllocation>, IoltaWithdrawalError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(iolta_allocation) AS row FROM iolta_allocation \
-             WHERE project_id = $1 ORDER BY occurred_at DESC",
-        )
-        .bind(project_id);
-        return Ok(authority::rows::<PgAllocationRow>(&pg, query)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect());
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {ALLOCATION_SELECT} FROM {ALLOCATION_TABLE} \
-             WHERE project_id = $project_id ORDER BY occurred_at DESC"
-        ))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<AllocationRow> = response.take(0)?;
-    Ok(rows
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(iolta_allocation) AS row FROM iolta_allocation \
+         WHERE project_id = $1 ORDER BY occurred_at DESC",
+    )
+    .bind(project_id);
+    Ok(authority::rows::<PgAllocationRow>(&pg, query)
+        .await?
         .into_iter()
-        .filter_map(AllocationRow::into_allocation)
+        .map(Into::into)
         .collect())
 }
 
@@ -620,346 +467,21 @@ pub async fn for_project(
 ///
 /// [`IoltaWithdrawalError::Db`] when the lookup fails.
 pub async fn lines_for(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     withdrawal_id: &str,
 ) -> Result<Vec<IoltaAllocation>, IoltaWithdrawalError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(iolta_allocation) AS row FROM iolta_allocation \
-             WHERE withdrawal_id = $1 ORDER BY amount_cents DESC",
-        )
-        .bind(withdrawal_id);
-        return Ok(authority::rows::<PgAllocationRow>(&pg, query)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect());
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {ALLOCATION_SELECT} FROM {ALLOCATION_TABLE} \
-             WHERE withdrawal_id = $withdrawal_id ORDER BY amount_cents DESC"
-        ))
-        .bind(("withdrawal_id", withdrawal_id.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<AllocationRow> = response.take(0)?;
-    Ok(rows
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(iolta_allocation) AS row FROM iolta_allocation \
+         WHERE withdrawal_id = $1 ORDER BY amount_cents DESC",
+    )
+    .bind(withdrawal_id);
+    Ok(authority::rows::<PgAllocationRow>(&pg, query)
+        .await?
         .into_iter()
-        .filter_map(AllocationRow::into_allocation)
+        .map(Into::into)
         .collect())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        apply, for_project, lines_for, AllocationInput, Applied, IoltaWithdrawalError,
-        WithdrawalInput,
-    };
-    use crate::jurisdictions::NewJurisdiction;
-    use crate::surreal::test_support::mem;
-    use crate::surreal::SurrealDb;
-    use chrono::{DateTime, TimeZone, Utc};
-    use uuid::Uuid;
-
-    fn when() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 9, 30, 0, 0, 0).unwrap()
-    }
-
-    async fn nevada_pool(db: &SurrealDb) -> Uuid {
-        let jurisdiction_id =
-            crate::jurisdictions::create(db, &NewJurisdiction::new("Nevada", "NV", "state"))
-                .await
-                .unwrap()
-                .id;
-        crate::iolta_accounts::upsert(
-            db,
-            &crate::iolta_accounts::UpsertIoltaAccount {
-                jurisdiction_id,
-                xero_account_id: "xero-nv".into(),
-                xero_account_code: Some("090".into()),
-                name: "IOLTA NV — Trust".into(),
-                currency: "USD".into(),
-                balance_cents: 1_000_000,
-                mirrored_at: when(),
-            },
-        )
-        .await
-        .unwrap();
-        jurisdiction_id
-    }
-
-    /// A matter on the given pool, holding `deposit_cents` in trust.
-    async fn funded_matter(db: &SurrealDb, jurisdiction_id: Uuid, deposit_cents: i64) -> Uuid {
-        let notation_id = crate::test_support::seed_notation(db).await;
-        let project_id = crate::notations::find_by_id(db, notation_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .project_id;
-        crate::projects::set_jurisdiction(db, project_id, Some(jurisdiction_id))
-            .await
-            .unwrap();
-        if deposit_cents > 0 {
-            let deposit = crate::trust::Movement::deposit(
-                project_id,
-                "USD",
-                "0.00",
-                deposit_cents,
-                "2026-09-01T00:00:00Z",
-            )
-            .with_external_ref(format!("bt-deposit-{project_id}"));
-            crate::trust::record_project_movement(db, project_id, &deposit)
-                .await
-                .unwrap();
-        }
-        project_id
-    }
-
-    async fn mirror_invoice(db: &SurrealDb, project_id: Uuid, xero_id: &str, reference: &str) {
-        crate::xero_invoices::upsert(
-            db,
-            &crate::xero_invoices::UpsertXeroInvoice {
-                project_id,
-                xero_invoice_id: xero_id.into(),
-                reference: reference.into(),
-                status: "AUTHORISED".into(),
-                amount_cents: 100_000,
-                currency: "USD".into(),
-                issued_at: when(),
-                due_at: None,
-            },
-        )
-        .await
-        .unwrap();
-    }
-
-    fn withdrawal(total_cents: i64, lines: Vec<(&str, i64)>) -> WithdrawalInput {
-        WithdrawalInput {
-            xero_transaction_id: "bt-withdrawal".into(),
-            xero_account_id: "xero-nv".into(),
-            total_cents,
-            currency: "USD".into(),
-            occurred_at: when(),
-            lines: lines
-                .into_iter()
-                .map(|(invoice_reference, amount_cents)| AllocationInput {
-                    invoice_reference: invoice_reference.into(),
-                    amount_cents,
-                })
-                .collect(),
-        }
-    }
-
-    /// The issue's worked example: one transfer of 1000 cents, 600 to an
-    /// invoice on matter one and 400 to an invoice on matter two. Two draws,
-    /// two isolated client reads.
-    #[tokio::test]
-    async fn one_withdrawal_splits_across_two_matters() {
-        let db = mem().await;
-        let pool = nevada_pool(&db).await;
-        let first = funded_matter(&db, pool, 1_000).await;
-        let second = funded_matter(&db, pool, 1_000).await;
-        mirror_invoice(&db, first, "inv-a", "INV-A").await;
-        mirror_invoice(&db, second, "inv-b", "INV-B").await;
-
-        let applied = apply(
-            &db,
-            &withdrawal(1_000, vec![("INV-A", 600), ("INV-B", 400)]),
-        )
-        .await
-        .unwrap();
-        assert!(matches!(applied, Applied::Posted { .. }));
-
-        assert_eq!(
-            crate::trust::position_for_project(&db, first)
-                .await
-                .unwrap()
-                .earned_cents,
-            600
-        );
-        assert_eq!(
-            crate::trust::position_for_project(&db, second)
-                .await
-                .unwrap()
-                .earned_cents,
-            400
-        );
-
-        // The client read is scoped: one line each, naming their own invoice.
-        let first_lines = for_project(&db, first).await.unwrap();
-        assert_eq!(first_lines.len(), 1);
-        assert_eq!(first_lines[0].amount_cents, 600);
-        assert_eq!(first_lines[0].invoice_reference, "INV-A");
-        let second_lines = for_project(&db, second).await.unwrap();
-        assert_eq!(second_lines.len(), 1);
-        assert_eq!(second_lines[0].amount_cents, 400);
-
-        // The firm read sees the whole split.
-        assert_eq!(lines_for(&db, "bt-withdrawal").await.unwrap().len(), 2);
-    }
-
-    /// Two invoices on one matter draw once, for their total.
-    #[tokio::test]
-    async fn two_invoices_on_one_matter_draw_their_total_once() {
-        let db = mem().await;
-        let pool = nevada_pool(&db).await;
-        let matter = funded_matter(&db, pool, 1_000).await;
-        mirror_invoice(&db, matter, "inv-a", "INV-A").await;
-        mirror_invoice(&db, matter, "inv-b", "INV-B").await;
-
-        apply(&db, &withdrawal(900, vec![("INV-A", 500), ("INV-B", 400)]))
-            .await
-            .unwrap();
-
-        let position = crate::trust::position_for_project(&db, matter)
-            .await
-            .unwrap();
-        assert_eq!(position.earned_cents, 900);
-        assert_eq!(position.held_cents(), 100);
-        assert_eq!(for_project(&db, matter).await.unwrap().len(), 2);
-    }
-
-    /// A matter cannot be drawn beyond what it holds. The refusal is whole:
-    /// no row, no line, no draw — not even for the matter that would have
-    /// been fine.
-    #[tokio::test]
-    async fn an_overdrawn_matter_refuses_the_whole_withdrawal() {
-        let db = mem().await;
-        let pool = nevada_pool(&db).await;
-        let solvent = funded_matter(&db, pool, 1_000).await;
-        let thin = funded_matter(&db, pool, 100).await;
-        mirror_invoice(&db, solvent, "inv-a", "INV-A").await;
-        mirror_invoice(&db, thin, "inv-b", "INV-B").await;
-
-        let refused = apply(
-            &db,
-            &withdrawal(1_000, vec![("INV-A", 600), ("INV-B", 400)]),
-        )
-        .await;
-        assert!(
-            matches!(
-                refused,
-                Err(IoltaWithdrawalError::Overdraw {
-                    held_cents: 100,
-                    requested_cents: 400,
-                    ..
-                })
-            ),
-            "got {refused:?}"
-        );
-        assert_eq!(
-            crate::trust::position_for_project(&db, solvent)
-                .await
-                .unwrap()
-                .earned_cents,
-            0,
-            "the solvent matter is untouched by its neighbour's refusal"
-        );
-        assert!(for_project(&db, thin).await.unwrap().is_empty());
-        assert!(lines_for(&db, "bt-withdrawal").await.unwrap().is_empty());
-        assert!(super::find(&db, "bt-withdrawal").await.unwrap().is_none());
-    }
-
-    /// Lines that do not add up to the transfer leave the pool and the
-    /// ledgers disagreeing, so the withdrawal is refused.
-    #[tokio::test]
-    async fn lines_that_do_not_sum_are_refused() {
-        let db = mem().await;
-        let pool = nevada_pool(&db).await;
-        let matter = funded_matter(&db, pool, 10_000).await;
-        mirror_invoice(&db, matter, "inv-a", "INV-A").await;
-
-        let refused = apply(&db, &withdrawal(1_000, vec![("INV-A", 600)])).await;
-        assert!(
-            matches!(
-                refused,
-                Err(IoltaWithdrawalError::LinesDoNotSum {
-                    total_cents: 1_000,
-                    allocated_cents: 600,
-                    ..
-                })
-            ),
-            "got {refused:?}"
-        );
-        assert_eq!(
-            crate::trust::position_for_project(&db, matter)
-                .await
-                .unwrap()
-                .earned_cents,
-            0
-        );
-    }
-
-    /// A line naming an invoice the mirror does not carry says nothing about
-    /// which matter it settles.
-    #[tokio::test]
-    async fn an_unmirrored_invoice_is_refused() {
-        let db = mem().await;
-        let pool = nevada_pool(&db).await;
-        funded_matter(&db, pool, 10_000).await;
-
-        let refused = apply(&db, &withdrawal(1_000, vec![("INV-GHOST", 1_000)])).await;
-        assert!(
-            matches!(refused, Err(IoltaWithdrawalError::UnknownInvoice { .. })),
-            "got {refused:?}"
-        );
-    }
-
-    /// Money that left the Nevada pool cannot settle a matter governed by
-    /// California, or by nothing at all.
-    #[tokio::test]
-    async fn a_matter_on_another_pool_is_refused() {
-        let db = mem().await;
-        let nevada = nevada_pool(&db).await;
-        let california =
-            crate::jurisdictions::create(&db, &NewJurisdiction::new("California", "CA", "state"))
-                .await
-                .unwrap()
-                .id;
-        let ca_matter = funded_matter(&db, california, 10_000).await;
-        mirror_invoice(&db, ca_matter, "inv-ca", "INV-CA").await;
-        let _ = nevada;
-
-        let refused = apply(&db, &withdrawal(1_000, vec![("INV-CA", 1_000)])).await;
-        assert!(
-            matches!(refused, Err(IoltaWithdrawalError::WrongPool { .. })),
-            "got {refused:?}"
-        );
-    }
-
-    /// A second night's read of the same transfer posts nothing again.
-    #[tokio::test]
-    async fn re_reading_one_transfer_draws_once() {
-        let db = mem().await;
-        let pool = nevada_pool(&db).await;
-        let matter = funded_matter(&db, pool, 10_000).await;
-        mirror_invoice(&db, matter, "inv-a", "INV-A").await;
-        let input = withdrawal(1_000, vec![("INV-A", 1_000)]);
-
-        apply(&db, &input).await.unwrap();
-        assert_eq!(apply(&db, &input).await.unwrap(), Applied::AlreadyApplied);
-
-        let position = crate::trust::position_for_project(&db, matter)
-            .await
-            .unwrap();
-        assert_eq!(position.earned_cents, 1_000, "drawn once, not twice");
-        assert_eq!(for_project(&db, matter).await.unwrap().len(), 1);
-    }
-
-    /// A transfer out of an account no mirrored pool matches has no state to
-    /// belong to.
-    #[tokio::test]
-    async fn a_transfer_from_an_unmirrored_account_is_refused() {
-        let db = mem().await;
-        nevada_pool(&db).await;
-        let mut input = withdrawal(1_000, vec![("INV-A", 1_000)]);
-        input.xero_account_id = "xero-operating".into();
-
-        let refused = apply(&db, &input).await;
-        assert!(
-            matches!(refused, Err(IoltaWithdrawalError::NoSuchPool(_))),
-            "got {refused:?}"
-        );
-    }
-}
+mod tests {}

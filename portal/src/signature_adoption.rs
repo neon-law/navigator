@@ -32,7 +32,7 @@ pub(crate) async fn evidence(
 
 /// File both documents before the Signature can make an engagement official.
 pub(crate) async fn reconcile(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     provider: &dyn SignatureProvider,
     notation_id: Uuid,

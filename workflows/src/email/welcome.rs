@@ -138,14 +138,14 @@ pub async fn trigger_welcome(
 /// confirmation. The recipient is always read from the `persons` row, so
 /// no caller — human or model — chooses where the mail lands.
 pub async fn send_welcome(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     email: &dyn super::EmailService,
     base_url: &str,
     id: Uuid,
 ) -> Result<store::persons::Person, store::people_commands::PeopleCommandError> {
     use store::people_commands::PeopleCommandError;
 
-    let person = store::persons::find_by_id(surreal, id)
+    let person = store::persons::find_by_id(application_store, id)
         .await
         .map_err(PeopleCommandError::Db)?
         .ok_or(PeopleCommandError::NotFound)?;

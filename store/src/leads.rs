@@ -8,20 +8,13 @@
 //! because it is a lookup aid, not an identity constraint.
 
 use chrono::{DateTime, Utc};
-use surrealdb::types::{RecordId, SurrealValue};
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::persons::{self, ContactUpdate, NewPerson, PersonError};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const TABLE: &str = "lead";
 const CONSENT_TABLE: &str = "lead_consent";
-const PERSON_TABLE: &str = "person";
-const SELECT: &str = "id, email, email_lower, phone, brand_key, source_path, consent_version, \
-                     consented_at, status, unsubscribed_at, person_id, submissions, inserted_at, updated_at";
-const CONSENT_SELECT: &str = "id, lead_id, consented_at, phone, source_path, \
-                              sms_consent_version, sms_policy_version, sms_opt_in, \
-                              call_consent_version, call_opt_in";
 
 /// Closed status set stored on `lead.status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,83 +114,11 @@ pub struct ConsentEvent {
     pub call_opt_in: bool,
 }
 
-#[derive(SurrealValue)]
-struct LeadRow {
-    id: RecordId,
-    email: String,
-    email_lower: String,
-    phone: Option<String>,
-    brand_key: String,
-    source_path: String,
-    consent_version: String,
-    consented_at: surrealdb::types::Datetime,
-    status: String,
-    unsubscribed_at: Option<surrealdb::types::Datetime>,
-    person_id: Option<RecordId>,
-    submissions: i64,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl LeadRow {
-    fn into_lead(self) -> Option<Lead> {
-        Some(Lead {
-            id: record_uuid(&self.id)?,
-            email: self.email,
-            email_lower: self.email_lower,
-            phone: self.phone,
-            brand_key: self.brand_key,
-            source_path: self.source_path,
-            consent_version: self.consent_version,
-            consented_at: self.consented_at.into(),
-            status: self.status,
-            unsubscribed_at: self.unsubscribed_at.map(Into::into),
-            person_id: self.person_id.as_ref().and_then(record_uuid),
-            submissions: self.submissions,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-#[derive(SurrealValue)]
-struct ConsentEventRow {
-    id: RecordId,
-    lead_id: RecordId,
-    consented_at: surrealdb::types::Datetime,
-    phone: Option<String>,
-    source_path: String,
-    sms_consent_version: String,
-    sms_policy_version: String,
-    sms_opt_in: bool,
-    call_consent_version: Option<String>,
-    call_opt_in: Option<bool>,
-}
-
-impl ConsentEventRow {
-    fn into_event(self) -> Option<ConsentEvent> {
-        Some(ConsentEvent {
-            id: record_uuid(&self.id)?,
-            lead_id: record_uuid(&self.lead_id)?,
-            consented_at: self.consented_at.into(),
-            phone: self.phone,
-            source_path: self.source_path,
-            sms_consent_version: self.sms_consent_version,
-            sms_policy_version: self.sms_policy_version,
-            sms_opt_in: self.sms_opt_in,
-            call_consent_version: self.call_consent_version,
-            call_opt_in: self.call_opt_in.unwrap_or_default(),
-        })
-    }
-}
-
 /// Errors reading or writing public lead records.
 #[derive(Debug, thiserror::Error)]
 pub enum LeadError {
     #[error(transparent)]
     Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error("writing a lead returned no usable row")]
     WriteReturnedNothing,
     #[error("unknown lead")]
@@ -233,55 +154,9 @@ pub fn mask_phone(phone: Option<&str>) -> String {
 /// unique constraint: the schema permits several rows for the same mailbox so
 /// the later admin queue can retain a brand-scoped request without making a
 /// mailbox an identity key.
-pub async fn record(db: &SurrealDb, new: &NewLead) -> Result<Lead, LeadError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return crate::postgres::leads::record(&pg, new, None, None).await;
-    }
-
-    let email = new.email.trim().to_string();
-    let email_lower = email.to_lowercase();
-    let now = Utc::now();
-    let existing = find_by_key(db, &email_lower, &new.brand_key).await?;
-
-    let mut response = if let Some(existing) = existing {
-        db.query(format!(
-            "UPDATE $id SET email = $email, phone = $phone, source_path = $source_path, \
-             submissions += 1, updated_at = $now RETURN {SELECT}"
-        ))
-        .bind(("id", existing.id))
-        .bind(("email", email.clone()))
-        .bind(("phone", new.phone.clone()))
-        .bind(("source_path", new.source_path.clone()))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .await?
-        .check()?
-    } else {
-        db.query(format!(
-            "CREATE $id SET email = $email, email_lower = $email_lower, phone = $phone, \
-             brand_key = $brand_key, source_path = $source_path, consent_version = $consent_version, \
-             consented_at = $consented_at, status = 'new', \
-             unsubscribed_at = NONE, person_id = NONE, submissions = 1, inserted_at = $now, \
-             updated_at = $now RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, Uuid::new_v4())))
-        .bind(("email", email))
-        .bind(("email_lower", email_lower))
-        .bind(("phone", new.phone.clone()))
-        .bind(("brand_key", new.brand_key.clone()))
-        .bind(("source_path", new.source_path.clone()))
-        .bind(("consent_version", new.consent_version.clone()))
-        .bind(("consented_at", surrealdb::types::Datetime::from(new.consented_at)))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .await?
-        .check()?
-    };
-
-    let lead = response
-        .take::<Option<LeadRow>>(0)?
-        .and_then(LeadRow::into_lead)
-        .ok_or(LeadError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Lead(lead.id)).await;
-    Ok(lead)
+pub async fn record(_db: &ApplicationStore, new: &NewLead) -> Result<Lead, LeadError> {
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    crate::postgres::leads::record(&pg, new, None, None).await
 }
 
 /// Answers submitted with a public contact request.
@@ -309,9 +184,7 @@ pub async fn record_intake(
     event: &NewConsentEvent,
     answers: &LeadIntake<'_>,
 ) -> Result<Lead, LeadError> {
-    let pg = crate::postgres::matter::authority_for(TABLE)
-        .await?
-        .ok_or(crate::postgres::matter::MatterAuthorityError::Unavailable)?;
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
     crate::postgres::leads::record(&pg, new, Some(event), Some(answers)).await
 }
 
@@ -324,9 +197,7 @@ pub async fn intake_history(
     if !matches!(role, persons::Role::Owner | persons::Role::Admin) {
         return Ok(Vec::new());
     }
-    let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? else {
-        return Ok(Vec::new());
-    };
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
     sqlx::query_scalar("SELECT concat_ws(E'\\n', submitted_at::date::text,
         CASE WHEN contact_name IS NULL THEN concat_ws(E'\\n',
             'School or district: ' || school_district, 'Relationship: ' || relationship,
@@ -348,183 +219,70 @@ pub async fn intake_history(
 /// state that belong to the same submission; the lead row keeps only current
 /// contact data.
 pub async fn record_consent_event(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     new: &NewLead,
     event: &NewConsentEvent,
 ) -> Result<Lead, LeadError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return crate::postgres::leads::record(&pg, new, Some(event), None).await;
-    }
-
-    let email = new.email.trim().to_string();
-    let email_lower = email.to_lowercase();
-    let now = Utc::now();
-    let existing = find_by_key(db, &email_lower, &new.brand_key).await?;
-    let lead_id = existing
-        .as_ref()
-        .map_or_else(|| record_id(TABLE, Uuid::new_v4()), |lead| lead.id.clone());
-    let event_uuid = Uuid::new_v4();
-    let event_id = record_id(CONSENT_TABLE, event_uuid);
-    let lead_statement = if existing.is_some() {
-        "UPDATE $lead_id SET email = $email, phone = $phone, source_path = $source_path, \
-         submissions += 1, updated_at = $now"
-    } else {
-        "CREATE $lead_id SET email = $email, email_lower = $email_lower, phone = $phone, \
-         brand_key = $brand_key, source_path = $source_path, consent_version = $consent_version, \
-         consented_at = $consented_at, status = 'new', unsubscribed_at = NONE, person_id = NONE, \
-         submissions = 1, inserted_at = $now, updated_at = $now"
-    };
-    let mut response = db
-        .query(format!(
-            "BEGIN; \
-             CREATE $event_id SET lead_id = $lead_id, consented_at = $event_consented_at, \
-                 phone = $event_phone, source_path = $event_source_path, \
-                 sms_consent_version = $sms_consent_version, sms_policy_version = $sms_policy_version, \
-                 sms_opt_in = $sms_opt_in, call_consent_version = $call_consent_version, \
-                 call_opt_in = $call_opt_in; \
-             {lead_statement}; \
-             SELECT {SELECT} FROM ONLY $lead_id; \
-             COMMIT;"
-        ))
-        .bind(("event_id", event_id))
-        .bind(("lead_id", lead_id))
-        .bind((
-            "event_consented_at",
-            surrealdb::types::Datetime::from(event.consented_at),
-        ))
-        .bind(("event_phone", event.phone.clone()))
-        .bind(("event_source_path", event.source_path.clone()))
-        .bind((
-            "sms_consent_version",
-            event.sms_consent_version.clone(),
-        ))
-        .bind(("sms_policy_version", event.sms_policy_version.clone()))
-        .bind(("sms_opt_in", event.sms_opt_in))
-        .bind(("call_consent_version", event.call_consent_version.clone()))
-        .bind(("call_opt_in", event.call_opt_in))
-        .bind(("email", email))
-        .bind(("email_lower", email_lower))
-        .bind(("phone", new.phone.clone()))
-        .bind(("source_path", new.source_path.clone()))
-        .bind(("brand_key", new.brand_key.clone()))
-        .bind(("consent_version", new.consent_version.clone()))
-        .bind(("consented_at", surrealdb::types::Datetime::from(new.consented_at)))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .await?
-        .check()?;
-    let lead = response
-        .take::<Option<LeadRow>>(3)?
-        .and_then(LeadRow::into_lead)
-        .ok_or(LeadError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_writes(
-        db,
-        [
-            crate::postgres_mirror::MirrorKey::Lead(lead.id),
-            crate::postgres_mirror::MirrorKey::LeadConsent(event_uuid),
-        ],
-    )
-    .await;
-    Ok(lead)
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    crate::postgres::leads::record(&pg, new, Some(event), None).await
 }
 
 /// Read every consent event ordered by PostgreSQL's microsecond precision and UUID ties.
 pub async fn consent_history(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     lead_id: Uuid,
 ) -> Result<Vec<ConsentEvent>, LeadError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return Ok(crate::postgres::matter::select(
-            &pg,
-            CONSENT_TABLE,
-            serde_json::json!({"lead_id": lead_id}),
-            &["consented_at", "id"],
-        )
-        .await?);
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT {CONSENT_SELECT}, time::floor(consented_at, 1us) AS chronology_at FROM {CONSENT_TABLE} \
-             WHERE lead_id = $lead_id ORDER BY chronology_at ASC, id ASC"
-        ))
-        .bind(("lead_id", record_id(TABLE, lead_id)))
-        .await?
-        .check()?;
-    let rows: Vec<ConsentEventRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(ConsentEventRow::into_event)
-        .collect())
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    Ok(crate::postgres::matter::select(
+        &pg,
+        CONSENT_TABLE,
+        serde_json::json!({"lead_id": lead_id}),
+        &["consented_at", "id"],
+    )
+    .await?)
 }
 
 /// Read the newest consent event for the admin lead surface.
 pub async fn latest_consent_event(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     lead_id: Uuid,
 ) -> Result<Option<ConsentEvent>, LeadError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        let rows: Vec<ConsentEvent> = crate::postgres::matter::select(
-            &pg,
-            CONSENT_TABLE,
-            serde_json::json!({"lead_id": lead_id}),
-            &["consented_at DESC", "id DESC"],
-        )
-        .await?;
-        return Ok(rows.into_iter().next());
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT {CONSENT_SELECT}, time::floor(consented_at, 1us) AS chronology_at FROM {CONSENT_TABLE} \
-             WHERE lead_id = $lead_id ORDER BY chronology_at DESC, id DESC LIMIT 1"
-        ))
-        .bind(("lead_id", record_id(TABLE, lead_id)))
-        .await?
-        .check()?;
-    let row: Option<ConsentEventRow> = response.take(0)?;
-    Ok(row.and_then(ConsentEventRow::into_event))
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    let rows: Vec<ConsentEvent> = crate::postgres::matter::select(
+        &pg,
+        CONSENT_TABLE,
+        serde_json::json!({"lead_id": lead_id}),
+        &["consented_at DESC", "id DESC"],
+    )
+    .await?;
+    Ok(rows.into_iter().next())
 }
 
 /// List leads newest first for the later admin queue.
-pub async fn list(db: &SurrealDb) -> Result<Vec<Lead>, LeadError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return Ok(crate::postgres::matter::select(
-            &pg,
-            TABLE,
-            serde_json::json!({}),
-            &["updated_at DESC", "id DESC"],
-        )
-        .await?);
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} ORDER BY updated_at DESC, id DESC"
-        ))
-        .await?
-        .check()?;
-    let rows: Vec<LeadRow> = response.take(0)?;
-    Ok(rows.into_iter().filter_map(LeadRow::into_lead).collect())
+pub async fn list(_db: &ApplicationStore) -> Result<Vec<Lead>, LeadError> {
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    Ok(crate::postgres::matter::select(
+        &pg,
+        TABLE,
+        serde_json::json!({}),
+        &["updated_at DESC", "id DESC"],
+    )
+    .await?)
 }
 
 /// One lead by id.
-pub async fn find(db: &SurrealDb, id: Uuid) -> Result<Option<Lead>, LeadError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return Ok(crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id})).await?);
-    }
-
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(TABLE, id)))
-        .await?
-        .check()?;
-    let row: Option<LeadRow> = response.take(0)?;
-    Ok(row.and_then(LeadRow::into_lead))
+pub async fn find(_db: &ApplicationStore, id: Uuid) -> Result<Option<Lead>, LeadError> {
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    Ok(crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id})).await?)
 }
 
 /// Persist a status word. `unsubscribed_at` is written the first time the
 /// row becomes unsubscribed and left alone afterward.
-pub async fn set_status(db: &SurrealDb, id: Uuid, status: LeadStatus) -> Result<Lead, LeadError> {
+pub async fn set_status(
+    db: &ApplicationStore,
+    id: Uuid,
+    status: LeadStatus,
+) -> Result<Lead, LeadError> {
     let existing = find(db, id).await?.ok_or(LeadError::NotFound)?;
     if status == LeadStatus::Converted && existing.person_id.is_none() {
         return Err(LeadError::ConvertedWithoutPerson);
@@ -537,7 +295,7 @@ pub async fn set_status(db: &SurrealDb, id: Uuid, status: LeadStatus) -> Result<
 /// If an earlier attempt created the Person but did not link the lead, retrying
 /// completes that link. This makes the two writes recoverable without risking
 /// an unlinked Person that can sign in.
-pub async fn convert(db: &SurrealDb, id: Uuid) -> Result<Lead, LeadError> {
+pub async fn convert(db: &ApplicationStore, id: Uuid) -> Result<Lead, LeadError> {
     let existing = find(db, id).await?.ok_or(LeadError::NotFound)?;
     if let Some(person) = persons::find_by_email_ci(db, &existing.email).await? {
         return link_converted(db, existing.id, person.id).await;
@@ -554,7 +312,7 @@ pub async fn convert(db: &SurrealDb, id: Uuid) -> Result<Lead, LeadError> {
 /// When that Person has no phone and the lead recorded one, the phone is
 /// copied onto the Person row so later contact reads the directory, not the
 /// queue.
-pub async fn link_person(db: &SurrealDb, id: Uuid) -> Result<Lead, LeadError> {
+pub async fn link_person(db: &ApplicationStore, id: Uuid) -> Result<Lead, LeadError> {
     let existing = find(db, id).await?.ok_or(LeadError::NotFound)?;
     let Some(person) = persons::find_by_email_ci(db, &existing.email).await? else {
         return Err(LeadError::NoMatchingPerson);
@@ -577,86 +335,26 @@ pub async fn link_person(db: &SurrealDb, id: Uuid) -> Result<Lead, LeadError> {
 }
 
 async fn apply_status(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     existing: Lead,
     status: LeadStatus,
 ) -> Result<Lead, LeadError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        let row: serde_json::Value = sqlx::query_scalar("UPDATE lead AS r SET status=$2, unsubscribed_at=CASE WHEN $2='unsubscribed' THEN COALESCE(unsubscribed_at,now()) ELSE unsubscribed_at END, updated_at=now() WHERE id=$1 RETURNING to_jsonb(r)")
-            .bind(existing.id).bind(status.as_str()).fetch_optional(pg.pool()).await
-            .map_err(crate::postgres::matter::MatterAuthorityError::from)?.ok_or(LeadError::WriteReturnedNothing)?;
-        return serde_json::from_value(row)
-            .map_err(crate::postgres::matter::MatterAuthorityError::from)
-            .map_err(LeadError::from);
-    }
-
-    let now = Utc::now();
-    let unsubscribed_at = if status == LeadStatus::Unsubscribed {
-        Some(existing.unsubscribed_at.unwrap_or(now))
-    } else {
-        existing.unsubscribed_at
-    };
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET status = $status, unsubscribed_at = $unsubscribed_at, \
-             updated_at = $now RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, existing.id)))
-        .bind(("status", status.as_str().to_string()))
-        .bind((
-            "unsubscribed_at",
-            unsubscribed_at.map(surrealdb::types::Datetime::from),
-        ))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .await?
-        .check()?;
-    let row: Option<LeadRow> = response.take(0)?;
-    let lead = row
-        .and_then(LeadRow::into_lead)
-        .ok_or(LeadError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Lead(lead.id)).await;
-    Ok(lead)
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    let row: serde_json::Value = sqlx::query_scalar("UPDATE lead AS r SET status=$2, unsubscribed_at=CASE WHEN $2='unsubscribed' THEN COALESCE(unsubscribed_at,now()) ELSE unsubscribed_at END, updated_at=now() WHERE id=$1 RETURNING to_jsonb(r)")
+        .bind(existing.id).bind(status.as_str()).fetch_optional(pg.pool()).await
+        .map_err(crate::postgres::matter::MatterAuthorityError::from)?.ok_or(LeadError::WriteReturnedNothing)?;
+    serde_json::from_value(row)
+        .map_err(crate::postgres::matter::MatterAuthorityError::from)
+        .map_err(LeadError::from)
 }
 
-async fn link_converted(db: &SurrealDb, lead_id: Uuid, person_id: Uuid) -> Result<Lead, LeadError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return crate::postgres::matter::update(&pg, TABLE, serde_json::json!({"id": lead_id}), serde_json::json!({"status": "converted", "person_id": person_id, "updated_at": Utc::now()})).await?.into_iter().next().ok_or(LeadError::WriteReturnedNothing);
-    }
-
-    let now = Utc::now();
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET status = 'converted', person_id = $person_id, \
-             updated_at = $now RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, lead_id)))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .await?
-        .check()?;
-    let row: Option<LeadRow> = response.take(0)?;
-    let lead = row
-        .and_then(LeadRow::into_lead)
-        .ok_or(LeadError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Lead(lead.id)).await;
-    Ok(lead)
-}
-
-async fn find_by_key(
-    db: &SurrealDb,
-    email_lower: &str,
-    brand_key: &str,
-) -> Result<Option<LeadRow>, LeadError> {
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE email_lower = $email_lower \
-             AND brand_key = $brand_key ORDER BY updated_at DESC LIMIT 1"
-        ))
-        .bind(("email_lower", email_lower.to_string()))
-        .bind(("brand_key", brand_key.to_string()))
-        .await?
-        .check()?;
-    response.take(0).map_err(LeadError::from)
+async fn link_converted(
+    _db: &ApplicationStore,
+    lead_id: Uuid,
+    person_id: Uuid,
+) -> Result<Lead, LeadError> {
+    let pg = crate::postgres::matter::authority_for(TABLE).await?;
+    crate::postgres::matter::update(&pg, TABLE, serde_json::json!({"id": lead_id}), serde_json::json!({"status": "converted", "person_id": person_id, "updated_at": Utc::now()})).await?.into_iter().next().ok_or(LeadError::WriteReturnedNothing)
 }
 
 #[cfg(test)]
@@ -683,7 +381,7 @@ mod tests {
 
     #[tokio::test]
     async fn iep_intake_retries_and_siblings_keep_firm_scoped_answers() {
-        let (options, database) = crate::postgres_mirror::tests::test_postgres();
+        let (options, database) = crate::postgres::fixtures::test_postgres();
         let fixture = crate::test_support::PostgresFixture::create(options.database(&database))
             .await
             .unwrap();
@@ -767,7 +465,7 @@ mod tests {
     #[tokio::test]
     async fn record_uses_random_ids_and_preserves_identity_on_repeat() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
 
             let input = lead("first@example.test", "synthetic-brand");
             let first = record(&db, &input).await.unwrap();
@@ -789,7 +487,7 @@ mod tests {
     #[tokio::test]
     async fn consent_creation_uses_random_ids_and_preserves_the_lead() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
 
             let input = lead("consent@example.test", "synthetic-brand");
             let event = NewConsentEvent {
@@ -820,7 +518,7 @@ mod tests {
     #[tokio::test]
     async fn consent_order_uses_microsecond_instants_with_uuid_ties() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
 
         let parent = record(&db, &lead("history@example.test", "synthetic-brand"))
             .await
@@ -865,7 +563,7 @@ mod tests {
     #[tokio::test]
     async fn records_a_lead_without_creating_a_person() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
 
             let written = record(&db, &lead("Visitor@example.com", "neon"))
                 .await
@@ -885,7 +583,7 @@ mod tests {
     #[tokio::test]
     async fn consent_events_preserve_each_submission_tuple_and_opt_out() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let pg = crate::postgres::PostgresDb::application().await.unwrap();
 
             let mut first = lead("visitor@example.com", "neon");
@@ -991,7 +689,7 @@ mod tests {
     #[tokio::test]
     async fn reads_a_historical_lead_without_sms_consent_fields() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
         let historical_id = Uuid::now_v7();
         let pg = crate::postgres::PostgresDb::application().await.unwrap();
         sqlx::query("INSERT INTO lead (id,email,email_lower,brand_key,source_path,consent_version,consented_at,status,submissions,inserted_at,updated_at) VALUES ($1,'historical@example.com','historical@example.com','neon','/contact','email disclosure',now(),'new',1,now(),now())")
@@ -1010,7 +708,7 @@ mod tests {
     #[tokio::test]
     async fn the_same_mailbox_on_two_brands_is_two_leads() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
 
             record(&db, &lead("visitor@example.com", "neon"))
                 .await
@@ -1027,7 +725,7 @@ mod tests {
     #[tokio::test]
     async fn status_transitions_persist_and_unsubscribe_stamps_once() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
 
             let lead = record(&db, &lead("visitor@example.com", "neon"))
                 .await
@@ -1071,7 +769,7 @@ mod tests {
     #[tokio::test]
     async fn conversion_writes_person_id_and_retries_an_unlinked_person() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
 
             let mut incoming = lead("visitor@example.com", "neon");
             incoming.phone = Some("+1 (555) 010-9876".to_string());
@@ -1098,7 +796,7 @@ mod tests {
     #[tokio::test]
     async fn link_copies_a_missing_phone_onto_the_person_and_leaves_an_existing_number() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
 
             let without_phone =
                 persons::create(&db, &NewPerson::new("Existing", "link@example.com"))
@@ -1131,7 +829,7 @@ mod tests {
     #[tokio::test]
     async fn convert_links_an_already_seeded_mailbox() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
 
             persons::create(&db, &NewPerson::new("Existing", "already@example.com"))
                 .await

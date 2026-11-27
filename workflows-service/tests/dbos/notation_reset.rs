@@ -20,11 +20,11 @@ fn slot() -> chrono::DateTime<Utc> {
 }
 
 fn context(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     slack: Arc<dyn SlackBot>,
 ) -> notation_reset::Context {
     notation_reset::Context {
-        surreal: surreal.clone(),
+        application_store: application_store.clone(),
         slack,
         channel_id: "C-STAGING".to_owned(),
         environment: "staging",
@@ -98,17 +98,24 @@ async fn two_executors_run_one_reset_per_slot_and_post_once() {
     let Some(db) = database().await else {
         return;
     };
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let drafts = [seed_notation(&surreal).await, seed_notation(&surreal).await];
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    let drafts = [
+        seed_notation(&application_store).await,
+        seed_notation(&application_store).await,
+    ];
     let (first_bot, second_bot) = (CapturingSlackBot::new(), CapturingSlackBot::new());
     let first = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
     let second = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
-    let first_workflow =
-        notation_reset::register(&first, context(&surreal, Arc::new(first_bot.clone())))
-            .expect("register on first executor");
-    let second_workflow =
-        notation_reset::register(&second, context(&surreal, Arc::new(second_bot.clone())))
-            .expect("register on second executor");
+    let first_workflow = notation_reset::register(
+        &first,
+        context(&application_store, Arc::new(first_bot.clone())),
+    )
+    .expect("register on first executor");
+    let second_workflow = notation_reset::register(
+        &second,
+        context(&application_store, Arc::new(second_bot.clone())),
+    )
+    .expect("register on second executor");
     first.launch().await.expect("launch first executor");
     second.launch().await.expect("launch second executor");
 
@@ -132,7 +139,7 @@ async fn two_executors_run_one_reset_per_slot_and_post_once() {
     assert_eq!(report.notations_deleted, 2);
     assert!(report.failures.is_empty());
     for draft in drafts {
-        assert!(store::notations::find_by_id(&surreal, draft)
+        assert!(store::notations::find_by_id(&application_store, draft)
             .await
             .unwrap()
             .is_none());
@@ -155,14 +162,15 @@ async fn recovery_keeps_checkpointed_deletes_and_posts_once() {
     let Some(db) = database().await else {
         return;
     };
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let draft = seed_notation(&surreal).await;
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    let draft = seed_notation(&application_store).await;
     let held = HeldBot::default();
     let id = notation_reset::workflow_id(slot());
 
     let first = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
-    let workflow = notation_reset::register(&first, context(&surreal, Arc::new(held.clone())))
-        .expect("register NotationReset");
+    let workflow =
+        notation_reset::register(&first, context(&application_store, Arc::new(held.clone())))
+            .expect("register NotationReset");
     first.launch().await.expect("launch first executor");
     notation_reset::fire(&workflow, slot())
         .await
@@ -191,7 +199,7 @@ async fn recovery_keeps_checkpointed_deletes_and_posts_once() {
         "every delete checkpointed before the post"
     );
     assert_eq!(
-        store::notation_reset::delete_draft(&surreal, draft)
+        store::notation_reset::delete_draft(&application_store, draft)
             .await
             .unwrap(),
         ResetOutcome::AlreadyGone,
@@ -200,8 +208,11 @@ async fn recovery_keeps_checkpointed_deletes_and_posts_once() {
 
     let bot = CapturingSlackBot::new();
     let recovered = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
-    let _workflow = notation_reset::register(&recovered, context(&surreal, Arc::new(bot.clone())))
-        .expect("register recovery");
+    let _workflow = notation_reset::register(
+        &recovered,
+        context(&application_store, Arc::new(bot.clone())),
+    )
+    .expect("register recovery");
     recovered.launch().await.expect("relaunch same version");
     let report = report_of(&recovered, &id).await;
     recovered.shutdown().await;

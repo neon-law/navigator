@@ -126,7 +126,7 @@ fn bring_up(
 ) -> Result<()> {
     // A live port-forward is the cheap first signal that the tier is
     // actually reachable, not merely present.
-    let port_answers = std::net::TcpStream::connect(("127.0.0.1", cfg.surreal_port)).is_ok();
+    let port_answers = std::net::TcpStream::connect(("127.0.0.1", cfg.postgres_port)).is_ok();
     if fixture_is_reusable(cluster, context, namespace, port_answers)? {
         eprintln!("==> reusing the reachable KIND staging fixture");
         return Ok(());

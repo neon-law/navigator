@@ -79,7 +79,7 @@ fn font_label(brand: &store::brands::Brand) -> String {
 #[server]
 pub async fn brands_home_view() -> Result<BrandsHomeView, ServerFnError> {
     let role = crate::admin_listing::require_admin().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let actor_person_id = crate::admin_listing::injected_person_id().await;
     let store_role = match role {
         ViewerRole::Owner => store::persons::Role::Owner,
@@ -89,7 +89,7 @@ pub async fn brands_home_view() -> Result<BrandsHomeView, ServerFnError> {
         ViewerRole::Client => store::persons::Role::Client,
     };
 
-    let brands = store::brands::visible_for_actor(&surreal, store_role, actor_person_id)
+    let brands = store::brands::visible_for_actor(&application_store, store_role, actor_person_id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
 
@@ -97,7 +97,7 @@ pub async fn brands_home_view() -> Result<BrandsHomeView, ServerFnError> {
     for brand in brands {
         let owner_label = match brand.firm_id {
             None => "System-wide".to_string(),
-            Some(firm_id) => store::firms::find_by_id(&surreal, firm_id)
+            Some(firm_id) => store::firms::find_by_id(&application_store, firm_id)
                 .await
                 .map_err(|error| ServerFnError::new(error.to_string()))?
                 .map_or_else(|| "Unknown firm".to_string(), |firm| firm.name),

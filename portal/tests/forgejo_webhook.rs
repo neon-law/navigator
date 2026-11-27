@@ -115,8 +115,10 @@ async fn fixture(failures: usize) -> Option<Fixture> {
     let pg = database().await?;
     let consumer = ScriptedConsumer::with_failures(failures);
     let hmac_key = hmac_key();
-    let mut state =
-        portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+    let mut state = portal::test_support::app_state(
+        store::application_store::ApplicationStore::uninitialized(),
+    )
+    .await;
     state.forgejo_webhook_secret = Some(PATH_SECRET.into());
     state.forgejo_webhook_hmac_key = Some(hmac_key.clone());
     state.forgejo_push_store = Some(std::sync::Arc::new(pg.clone()));
@@ -378,8 +380,10 @@ async fn a_failing_consumption_answers_5xx_and_recovers_at_replay() {
 /// sweep reads. The fixture's consumer Arc is shared, so failure-script
 /// changes carry over.
 async fn fixture_state(fixture: &Fixture) -> portal::AppState {
-    let mut state =
-        portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+    let mut state = portal::test_support::app_state(
+        store::application_store::ApplicationStore::uninitialized(),
+    )
+    .await;
     state.forgejo_push_store = Some(std::sync::Arc::new(fixture.pg.clone()));
     state.forgejo_push_consumer = fixture.consumer.clone();
     state
@@ -525,8 +529,10 @@ async fn post_signed_with_failures(fixture: &Fixture, body: &[u8]) {
 /// never consumed without its receipt, so Forgejo redelivers.
 #[tokio::test]
 async fn a_verified_push_without_a_journal_store_is_refused() {
-    let mut state =
-        portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+    let mut state = portal::test_support::app_state(
+        store::application_store::ApplicationStore::uninitialized(),
+    )
+    .await;
     state.forgejo_webhook_secret = Some(PATH_SECRET.into());
     let hmac_key = hmac_key();
     state.forgejo_webhook_hmac_key = Some(hmac_key.clone());

@@ -139,7 +139,7 @@ pub struct GeneratedPdfRef {
 /// dispatch without leaving an orphaned object behind.
 pub async fn dispatch_generate_pdf(
     storage: &Arc<dyn cloud::StorageService>,
-    surreal: Option<&store::surreal::SurrealDb>,
+    application_store: Option<&store::application_store::ApplicationStore>,
     notation_id: uuid::Uuid,
     payload: &DocumentPayload,
 ) -> Result<Option<String>, DocumentError> {
@@ -184,8 +184,10 @@ pub async fn dispatch_generate_pdf(
     // classification and just persists the bytes below. The notation and
     // the template it pinned are both SurrealDB-resident, so only the
     // Surreal handle is needed here.
-    let classified = match surreal {
-        Some(surreal) => Some(notation_project_and_template_kind(surreal, notation_id).await?),
+    let classified = match application_store {
+        Some(application_store) => {
+            Some(notation_project_and_template_kind(application_store, notation_id).await?)
+        }
         None => None,
     };
 
@@ -194,7 +196,8 @@ pub async fn dispatch_generate_pdf(
     // Without the store handles (the render-only unit path) there is
     // nothing to file the asset into; the object-storage PDF above is all
     // the signature step needs to read back.
-    let (Some(surreal), Some((project_id, kind))) = (surreal, classified) else {
+    let (Some(application_store), Some((project_id, kind))) = (application_store, classified)
+    else {
         return Ok(None);
     };
 
@@ -208,7 +211,7 @@ pub async fn dispatch_generate_pdf(
     // on the asset row — in the same insert — so every asset row for these
     // bytes carries it and a governed expunge deletes every copy (#470).
     let ingested = store::documents::ingest_bytes(
-        surreal,
+        application_store,
         storage,
         &store::documents::IngestArgs {
             project_id,
@@ -244,13 +247,13 @@ pub async fn dispatch_generate_pdf(
 /// dispatch only carries the notation id, so this fetches the notation
 /// once and follows `template_id` to read the template's classification.
 async fn notation_project_and_template_kind(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: uuid::Uuid,
 ) -> Result<(uuid::Uuid, String), DocumentError> {
-    let notation = store::notations::find_by_id(surreal, notation_id)
+    let notation = store::notations::find_by_id(application_store, notation_id)
         .await?
         .ok_or(DocumentError::NotationNotFound(notation_id))?;
-    let template = store::templates::find_by_id(surreal, notation.template_id)
+    let template = store::templates::find_by_id(application_store, notation.template_id)
         .await?
         .ok_or(DocumentError::TemplateNotFound(notation.template_id))?;
     let kind = template

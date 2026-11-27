@@ -49,8 +49,10 @@ impl PracticePreview {
         let pg = PostgresDb::application()
             .await
             .expect("admitted preview fixture");
-        let mut state =
-            portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+        let mut state = portal::test_support::app_state(
+            store::application_store::ApplicationStore::uninitialized(),
+        )
+        .await;
         // The public signup form mounts with the OAuth routes. Rendering it uses no provider.
         state.oauth = Some(portal::OAuthConfig::new(
             "preview",
@@ -67,10 +69,10 @@ impl PracticePreview {
         );
         state.storage = blobs.clone();
         state.assets_storage = blobs;
-        store::seed::seed_canonical(&state.surreal, &state.assets_storage)
+        store::seed::seed_canonical(&state.application_store, &state.assets_storage)
             .await
             .expect("seed canonical Firms and Brands before their public Posts");
-        store::seed::seed_brand_blog(&state.surreal, store::seed::BrandSeed::Neon)
+        store::seed::seed_brand_blog(&state.application_store, store::seed::BrandSeed::Neon)
             .await
             .expect("seed public Brand Posts for previews");
         let mut listeners = Vec::new();

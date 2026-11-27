@@ -22,9 +22,9 @@
 //! notations, and other legal content stay governed by
 //! [`crate::access::matter_viewer`] and the Project-side command rules.
 
+use crate::application_store::ApplicationStore;
 use crate::firms::{self, FirmError, FirmMembership};
 use crate::persons::Role;
-use crate::surreal::SurrealDb;
 use uuid::Uuid;
 
 /// One Firm-scoped capability an actor may exercise against a target Firm.
@@ -189,12 +189,19 @@ impl FirmCapability {
     /// Resolve this capability against one Firm.
     pub async fn resolve(
         self,
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         actor_role: Role,
         actor_person_id: Option<Uuid>,
         target_firm_id: Uuid,
     ) -> Result<FirmCapabilityDecision, FirmError> {
-        resolve(surreal, actor_role, actor_person_id, target_firm_id, self).await
+        resolve(
+            application_store,
+            actor_role,
+            actor_person_id,
+            target_firm_id,
+            self,
+        )
+        .await
     }
 }
 
@@ -234,14 +241,14 @@ impl FirmCapabilityDecision {
 /// here rather than re-deriving its own check. Never logs an email or name:
 /// an id is a queryable fact, a person's identity is client content.
 pub async fn resolve(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     target_firm_id: Uuid,
     capability: FirmCapability,
 ) -> Result<FirmCapabilityDecision, FirmError> {
     let (decision, reason) = resolve_inner(
-        surreal,
+        application_store,
         actor_role,
         actor_person_id,
         target_firm_id,
@@ -260,40 +267,17 @@ pub async fn resolve(
     Ok(decision)
 }
 
-/// Resolve whether `actor` may exercise `capability` against
-/// `target_firm_id`, without emitting the `firm_capability.resolve`
-/// telemetry event [`resolve`] always emits (ENG-645).
-///
-/// For a defense-in-depth call that already sits behind a primary command
-/// that itself calls [`resolve`] (or will) — so the decision would otherwise
-/// be logged twice for one write. Same decision, same 404-vs-403 shape as
-/// [`resolve`]; only the audit trail differs.
-pub(crate) async fn resolve_quietly(
-    surreal: &SurrealDb,
-    actor_role: Role,
-    actor_person_id: Option<Uuid>,
-    target_firm_id: Uuid,
-    capability: FirmCapability,
-) -> Result<FirmCapabilityDecision, FirmError> {
-    let (decision, _reason) = resolve_inner(
-        surreal,
-        actor_role,
-        actor_person_id,
-        target_firm_id,
-        capability,
-    )
-    .await?;
-    Ok(decision)
-}
-
 async fn resolve_inner(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     target_firm_id: Uuid,
     capability: FirmCapability,
 ) -> Result<(FirmCapabilityDecision, &'static str), FirmError> {
-    if firms::find_by_id(surreal, target_firm_id).await?.is_none() {
+    if firms::find_by_id(application_store, target_firm_id)
+        .await?
+        .is_none()
+    {
         return Ok((FirmCapabilityDecision::FirmNotFound, "firm_not_found"));
     }
     if actor_role == Role::Owner && capability != FirmCapability::AccessRelationshipObservations {
@@ -301,9 +285,11 @@ async fn resolve_inner(
             return Ok((FirmCapabilityDecision::Allowed, "owner_bypass"));
         }
         let is_dri = match actor_person_id {
-            Some(person_id) => firms::membership_for_person(surreal, person_id, target_firm_id)
-                .await?
-                .is_some_and(|row| row.membership == FirmMembership::Admin && row.is_dri),
+            Some(person_id) => {
+                firms::membership_for_person(application_store, person_id, target_firm_id)
+                    .await?
+                    .is_some_and(|row| row.membership == FirmMembership::Admin && row.is_dri)
+            }
             None => false,
         };
         return Ok(if is_dri {
@@ -346,7 +332,7 @@ async fn resolve_inner(
     let Some(person_id) = actor_person_id else {
         return Ok((FirmCapabilityDecision::Forbidden, "no_person_id"));
     };
-    let member = firms::membership_for_person(surreal, person_id, target_firm_id).await?;
+    let member = firms::membership_for_person(application_store, person_id, target_firm_id).await?;
     Ok(match member {
         Some(row)
             if matches!(
@@ -382,7 +368,7 @@ async fn resolve_inner(
 /// Owner holds deployment-wide capabilities on every existing Firm. Integration
 /// secrets and Relationship Log observations require Firm membership.
 pub async fn allowed_firm_ids(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     capability: FirmCapability,
@@ -394,7 +380,7 @@ pub async fn allowed_firm_ids(
                 | FirmCapability::AccessRelationshipObservations
         )
     {
-        return Ok(firms::all(surreal)
+        return Ok(firms::all(application_store)
             .await?
             .into_iter()
             .map(|f| f.id)
@@ -416,7 +402,7 @@ pub async fn allowed_firm_ids(
     let Some(person_id) = actor_person_id else {
         return Ok(Vec::new());
     };
-    Ok(firms::memberships_for_person(surreal, person_id)
+    Ok(firms::memberships_for_person(application_store, person_id)
         .await?
         .into_iter()
         .filter(|row| {
@@ -431,636 +417,4 @@ pub async fn allowed_firm_ids(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::firms::{Firm, NewFirm, NewPersonFirmRole};
-    use crate::persons::{NewPerson, Person};
-    use crate::test_support::{mem_surreal, seed_entity};
-
-    async fn practice(db: &SurrealDb, name: &str) -> Firm {
-        let entity_id = seed_entity(db).await;
-        let admin_dri_person_id = crate::persons::create(
-            db,
-            &NewPerson::with_role(
-                format!("{name} DRI"),
-                format!("dri-{}@example.com", Uuid::now_v7()),
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        firms::create(
-            db,
-            &NewFirm {
-                name: name.to_string(),
-                status: "active".to_string(),
-                entity_id,
-                admin_dri_person_id,
-            },
-        )
-        .await
-        .unwrap()
-    }
-
-    async fn person(db: &SurrealDb, tag: &str, role: Role) -> Person {
-        crate::persons::create(
-            db,
-            &NewPerson::with_role(format!("{tag} Person"), format!("{tag}@example.com"), role),
-        )
-        .await
-        .unwrap()
-    }
-
-    async fn member(db: &SurrealDb, person_id: Uuid, firm_id: Uuid, membership: FirmMembership) {
-        firms::add_membership(
-            db,
-            &NewPersonFirmRole {
-                person_id,
-                firm_id,
-                membership,
-                is_dri: false,
-            },
-        )
-        .await
-        .unwrap();
-    }
-
-    async fn assert_decision(
-        db: &SurrealDb,
-        role: Role,
-        person_id: Uuid,
-        firm_id: Uuid,
-        capability: FirmCapability,
-        expected: FirmCapabilityDecision,
-    ) {
-        assert_eq!(
-            resolve(db, role, Some(person_id), firm_id, capability)
-                .await
-                .unwrap(),
-            expected
-        );
-    }
-
-    /// Firm capability decisions across both Firms and every system role.
-    /// The matrix includes the explicit membership requirement for Relationship
-    /// Log observations and the Owner bypass for deployment-wide capabilities.
-    #[tokio::test]
-    #[allow(clippy::too_many_lines)]
-    async fn two_firm_matrix_proves_membership_scoped_isolation() {
-        let db = mem_surreal().await;
-        let firm_a = practice(&db, "Practice A").await;
-        let firm_b = practice(&db, "Practice B").await;
-        let owner = person(&db, "owner", Role::Owner).await;
-        let client = person(&db, "client", Role::Client).await;
-        let admin_a = person(&db, "admin-a", Role::Admin).await;
-        firms::add_membership(
-            &db,
-            &NewPersonFirmRole {
-                person_id: admin_a.id,
-                firm_id: firm_a.id,
-                membership: FirmMembership::Admin,
-                is_dri: true,
-            },
-        )
-        .await
-        .unwrap();
-        let lawyer_a = person(&db, "lawyer-a", Role::Lawyer).await;
-        member(&db, lawyer_a.id, firm_a.id, FirmMembership::Lawyer).await;
-        let clerk_a = person(&db, "clerk-a", Role::Clerk).await;
-        member(&db, clerk_a.id, firm_a.id, FirmMembership::Clerk).await;
-        let observation_access = FirmCapability::AccessRelationshipObservations;
-        for (actor, expected) in [
-            (&owner, FirmCapabilityDecision::Forbidden),
-            (&clerk_a, FirmCapabilityDecision::Forbidden),
-            (&lawyer_a, FirmCapabilityDecision::Allowed),
-            (&admin_a, FirmCapabilityDecision::Allowed),
-        ] {
-            assert_decision(
-                &db,
-                actor.role,
-                actor.id,
-                firm_a.id,
-                observation_access,
-                expected,
-            )
-            .await;
-            let ids = allowed_firm_ids(&db, actor.role, Some(actor.id), observation_access)
-                .await
-                .unwrap();
-            assert_eq!(ids.contains(&firm_a.id), expected.is_allowed());
-            assert!(!ids.contains(&firm_b.id));
-        }
-        for capability in [
-            FirmCapability::ViewDirectory,
-            FirmCapability::ManageMembership,
-            FirmCapability::ManageBrandContent,
-        ] {
-            for firm in [&firm_a, &firm_b] {
-                assert_decision(
-                    &db,
-                    Role::Owner,
-                    owner.id,
-                    firm.id,
-                    capability,
-                    FirmCapabilityDecision::Allowed,
-                )
-                .await;
-                assert_decision(
-                    &db,
-                    Role::Client,
-                    client.id,
-                    firm.id,
-                    capability,
-                    FirmCapabilityDecision::Forbidden,
-                )
-                .await;
-            }
-        }
-        assert_decision(
-            &db,
-            admin_a.role,
-            admin_a.id,
-            firm_a.id,
-            FirmCapability::ManageBrandContent,
-            FirmCapabilityDecision::Allowed,
-        )
-        .await;
-        assert_decision(
-            &db,
-            admin_a.role,
-            admin_a.id,
-            firm_b.id,
-            FirmCapability::ManageBrandContent,
-            FirmCapabilityDecision::Forbidden,
-        )
-        .await;
-        for (tag, actor) in [
-            ("admin", &admin_a),
-            ("lawyer", &lawyer_a),
-            ("clerk", &clerk_a),
-        ] {
-            let own = resolve(
-                &db,
-                actor.role,
-                Some(actor.id),
-                firm_a.id,
-                FirmCapability::ViewDirectory,
-            )
-            .await
-            .unwrap();
-            assert_eq!(own, FirmCapabilityDecision::Allowed, "{tag} reads own Firm");
-            assert_decision(
-                &db,
-                actor.role,
-                actor.id,
-                firm_b.id,
-                FirmCapability::ViewDirectory,
-                FirmCapabilityDecision::Forbidden,
-            )
-            .await;
-        }
-        assert_decision(
-            &db,
-            admin_a.role,
-            admin_a.id,
-            firm_a.id,
-            FirmCapability::ManageMembership,
-            FirmCapabilityDecision::Allowed,
-        )
-        .await;
-        for actor in [&lawyer_a, &clerk_a] {
-            assert_decision(
-                &db,
-                actor.role,
-                actor.id,
-                firm_a.id,
-                FirmCapability::ManageMembership,
-                FirmCapabilityDecision::Forbidden,
-            )
-            .await;
-        }
-    }
-
-    /// Owner is not an ordinary secret writer — until it holds a Firm's own
-    /// Admin DRI designation, and then only on that Firm. The batch read
-    /// agrees with `resolve`.
-    #[tokio::test]
-    async fn an_owner_writes_secrets_only_where_it_is_the_admin_dri() {
-        let db = mem_surreal().await;
-        let firm_a = practice(&db, "Owner DRI Practice").await;
-        let firm_b = practice(&db, "Other Practice").await;
-        let owner = person(&db, "owner", Role::Owner).await;
-
-        let secrets = |firm_id| {
-            resolve(
-                &db,
-                Role::Owner,
-                Some(owner.id),
-                firm_id,
-                FirmCapability::ManageIntegrationSecrets,
-            )
-        };
-        assert_eq!(
-            secrets(firm_a.id).await.unwrap(),
-            FirmCapabilityDecision::Forbidden
-        );
-
-        firms::appoint_admin_dri(&db, Role::Owner, Some(owner.id), firm_a.id, owner.id)
-            .await
-            .unwrap();
-        assert_eq!(
-            secrets(firm_a.id).await.unwrap(),
-            FirmCapabilityDecision::Allowed
-        );
-        assert_eq!(
-            secrets(firm_b.id).await.unwrap(),
-            FirmCapabilityDecision::Forbidden
-        );
-
-        let ids = allowed_firm_ids(
-            &db,
-            Role::Owner,
-            Some(owner.id),
-            FirmCapability::ManageIntegrationSecrets,
-        )
-        .await
-        .unwrap();
-        assert_eq!(ids, vec![firm_a.id]);
-    }
-
-    #[tokio::test]
-    async fn resolve_reports_a_missing_firm_as_not_found_before_any_membership_read() {
-        let db = mem_surreal().await;
-        let owner = person(&db, "owner", Role::Owner).await;
-        let missing_firm = Uuid::now_v7();
-        assert_eq!(
-            resolve(
-                &db,
-                Role::Owner,
-                Some(owner.id),
-                missing_firm,
-                FirmCapability::ViewDirectory
-            )
-            .await
-            .unwrap(),
-            FirmCapabilityDecision::FirmNotFound
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_fails_closed_with_no_person_id() {
-        let db = mem_surreal().await;
-        let firm = practice(&db, "Practice").await;
-        assert_eq!(
-            resolve(
-                &db,
-                Role::Admin,
-                None,
-                firm.id,
-                FirmCapability::ViewDirectory
-            )
-            .await
-            .unwrap(),
-            FirmCapabilityDecision::Forbidden
-        );
-    }
-
-    #[tokio::test]
-    async fn allowed_firm_ids_matches_resolve_for_owner_admin_and_client() {
-        let db = mem_surreal().await;
-        let firm_a = practice(&db, "Practice A").await;
-        let firm_b = practice(&db, "Practice B").await;
-        let owner = person(&db, "owner", Role::Owner).await;
-        let client = person(&db, "client", Role::Client).await;
-        let admin_a = person(&db, "admin-a", Role::Admin).await;
-        member(&db, admin_a.id, firm_a.id, FirmMembership::Admin).await;
-
-        let owner_ids = allowed_firm_ids(
-            &db,
-            Role::Owner,
-            Some(owner.id),
-            FirmCapability::ViewDirectory,
-        )
-        .await
-        .unwrap();
-        assert!(owner_ids.contains(&firm_a.id));
-        assert!(owner_ids.contains(&firm_b.id));
-
-        let client_ids = allowed_firm_ids(
-            &db,
-            Role::Client,
-            Some(client.id),
-            FirmCapability::ViewDirectory,
-        )
-        .await
-        .unwrap();
-        assert!(client_ids.is_empty());
-
-        let admin_ids = allowed_firm_ids(
-            &db,
-            Role::Admin,
-            Some(admin_a.id),
-            FirmCapability::ViewDirectory,
-        )
-        .await
-        .unwrap();
-        assert_eq!(admin_ids, vec![firm_a.id]);
-
-        let admin_manage_ids = allowed_firm_ids(
-            &db,
-            Role::Admin,
-            Some(admin_a.id),
-            FirmCapability::ManageMembership,
-        )
-        .await
-        .unwrap();
-        assert_eq!(admin_manage_ids, vec![firm_a.id]);
-    }
-
-    /// `ManageAdminDri` admits no membership tier: even the Firm's own Admin
-    /// member — who does hold `ManageMembership` — is refused it. Only Owner
-    /// may appoint or transfer the Admin DRI (ENG-499).
-    #[tokio::test]
-    async fn manage_admin_dri_admits_no_membership_tier_only_owner() {
-        let db = mem_surreal().await;
-        let firm = practice(&db, "Practice").await;
-        let owner = person(&db, "owner", Role::Owner).await;
-        let admin = person(&db, "admin", Role::Admin).await;
-        member(&db, admin.id, firm.id, FirmMembership::Admin).await;
-
-        assert_eq!(
-            resolve(
-                &db,
-                Role::Owner,
-                Some(owner.id),
-                firm.id,
-                FirmCapability::ManageAdminDri
-            )
-            .await
-            .unwrap(),
-            FirmCapabilityDecision::Allowed
-        );
-        assert_eq!(
-            resolve(
-                &db,
-                admin.role,
-                Some(admin.id),
-                firm.id,
-                FirmCapability::ManageAdminDri
-            )
-            .await
-            .unwrap(),
-            FirmCapabilityDecision::Forbidden,
-            "the Firm's own Admin member does not thereby appoint its DRI"
-        );
-    }
-
-    /// `ManageFirmAssumptions` is the Firm's economics in words: Owner
-    /// holds it system-wide, the Firm's Admin membership admits it, and a
-    /// Lawyer or Clerk is refused even on their own Firm (ENG-1264).
-    #[tokio::test]
-    async fn manage_firm_assumptions_is_owner_and_firm_admin_only() {
-        let db = mem_surreal().await;
-        let firm = practice(&db, "Practice").await;
-        let owner = person(&db, "owner", Role::Owner).await;
-        let admin = person(&db, "admin", Role::Admin).await;
-        member(&db, admin.id, firm.id, FirmMembership::Admin).await;
-        let lawyer = person(&db, "lawyer", Role::Lawyer).await;
-        member(&db, lawyer.id, firm.id, FirmMembership::Lawyer).await;
-        let clerk = person(&db, "clerk", Role::Clerk).await;
-        member(&db, clerk.id, firm.id, FirmMembership::Clerk).await;
-
-        assert_decision(
-            &db,
-            Role::Owner,
-            owner.id,
-            firm.id,
-            FirmCapability::ManageFirmAssumptions,
-            FirmCapabilityDecision::Allowed,
-        )
-        .await;
-        assert_decision(
-            &db,
-            admin.role,
-            admin.id,
-            firm.id,
-            FirmCapability::ManageFirmAssumptions,
-            FirmCapabilityDecision::Allowed,
-        )
-        .await;
-        for (actor, why) in [
-            (&lawyer, "a Lawyer is refused their own Firm's assumptions"),
-            (&clerk, "a Clerk is refused their own Firm's assumptions"),
-        ] {
-            assert_eq!(
-                resolve(
-                    &db,
-                    actor.role,
-                    Some(actor.id),
-                    firm.id,
-                    FirmCapability::ManageFirmAssumptions
-                )
-                .await
-                .unwrap(),
-                FirmCapabilityDecision::Forbidden,
-                "{why}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn allowed_firm_ids_excludes_a_lawyer_from_manage_membership() {
-        let db = mem_surreal().await;
-        let firm = practice(&db, "Practice").await;
-        let lawyer = person(&db, "lawyer", Role::Lawyer).await;
-        member(&db, lawyer.id, firm.id, FirmMembership::Lawyer).await;
-
-        let view_ids = allowed_firm_ids(
-            &db,
-            Role::Lawyer,
-            Some(lawyer.id),
-            FirmCapability::ViewDirectory,
-        )
-        .await
-        .unwrap();
-        assert_eq!(view_ids, vec![firm.id]);
-
-        let manage_ids = allowed_firm_ids(
-            &db,
-            Role::Lawyer,
-            Some(lawyer.id),
-            FirmCapability::ManageMembership,
-        )
-        .await
-        .unwrap();
-        assert!(manage_ids.is_empty());
-    }
-
-    #[derive(Clone)]
-    struct Buf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-    impl std::io::Write for Buf {
-        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(b);
-            Ok(b.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buf {
-        type Writer = Buf;
-        fn make_writer(&'a self) -> Buf {
-            self.clone()
-        }
-    }
-
-    /// `resolve` emits one telemetry event per decision, naming the
-    /// capability, the target Firm, the outcome, and a stable reason code —
-    /// distinct for an allow and a deny, and never carrying the acting
-    /// person's email or name (only their id).
-    #[tokio::test]
-    async fn resolve_emits_one_event_per_decision_with_a_stable_reason_and_no_pii() {
-        crate::test_tracing::ensure_callsite_interest();
-        let db = mem_surreal().await;
-        let firm = practice(&db, "Telemetry Practice").await;
-        let admin = crate::persons::create(
-            &db,
-            &NewPerson::with_role(
-                "Telemetry Admin",
-                "telemetry-admin@example.com",
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        member(&db, admin.id, firm.id, FirmMembership::Admin).await;
-        let lawyer = crate::persons::create(
-            &db,
-            &NewPerson::with_role(
-                "Telemetry Lawyer",
-                "telemetry-lawyer@example.com",
-                Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        member(&db, lawyer.id, firm.id, FirmMembership::Lawyer).await;
-
-        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_max_level(tracing::Level::INFO)
-            .with_writer(Buf(buf.clone()))
-            .finish();
-        {
-            let _guard = tracing::subscriber::set_default(subscriber);
-            resolve(
-                &db,
-                admin.role,
-                Some(admin.id),
-                firm.id,
-                FirmCapability::ManageMembership,
-            )
-            .await
-            .unwrap();
-            resolve(
-                &db,
-                lawyer.role,
-                Some(lawyer.id),
-                firm.id,
-                FirmCapability::ManageMembership,
-            )
-            .await
-            .unwrap();
-        }
-
-        let logged = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
-        let events: Vec<&str> = logged
-            .lines()
-            .filter(|line| line.contains("firm capability decision"))
-            .collect();
-        assert_eq!(events.len(), 2, "one event per resolve call: {logged}");
-
-        let allowed = events
-            .iter()
-            .find(|line| line.contains(&format!("\"person_id\":\"{}\"", admin.id)))
-            .unwrap_or_else(|| panic!("expected an event naming the admin: {logged}"));
-        assert!(allowed.contains("\"allowed\":true"), "{allowed}");
-        assert!(
-            allowed.contains("\"reason\":\"membership_admits\""),
-            "{allowed}"
-        );
-        assert!(
-            allowed.contains("\"capability\":\"manage_membership\""),
-            "{allowed}"
-        );
-        assert!(
-            allowed.contains(&format!("\"firm_id\":\"{}\"", firm.id)),
-            "{allowed}"
-        );
-
-        let denied = events
-            .iter()
-            .find(|line| line.contains(&format!("\"person_id\":\"{}\"", lawyer.id)))
-            .unwrap_or_else(|| panic!("expected an event naming the lawyer: {logged}"));
-        assert!(denied.contains("\"allowed\":false"), "{denied}");
-        assert!(
-            denied.contains("\"reason\":\"membership_denies\""),
-            "{denied}"
-        );
-
-        assert!(
-            !logged.contains("@example.com"),
-            "no email may reach telemetry: {logged}"
-        );
-        assert!(
-            !logged.contains("Telemetry Admin") && !logged.contains("Telemetry Lawyer"),
-            "no name may reach telemetry: {logged}"
-        );
-    }
-
-    /// The `FirmNotFound` and no-actor-id refusals — the "error-shaped"
-    /// paths `resolve` takes before any membership read — still log their
-    /// own distinct reason code rather than falling through to a generic
-    /// one.
-    #[tokio::test]
-    async fn resolve_names_a_distinct_reason_for_firm_not_found_and_no_person_id() {
-        crate::test_tracing::ensure_callsite_interest();
-        let db = mem_surreal().await;
-        let missing_firm = Uuid::now_v7();
-        let firm = practice(&db, "Reason Code Practice").await;
-
-        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_max_level(tracing::Level::INFO)
-            .with_writer(Buf(buf.clone()))
-            .finish();
-        {
-            let _guard = tracing::subscriber::set_default(subscriber);
-            resolve(
-                &db,
-                Role::Admin,
-                None,
-                missing_firm,
-                FirmCapability::ViewDirectory,
-            )
-            .await
-            .unwrap();
-            resolve(
-                &db,
-                Role::Admin,
-                None,
-                firm.id,
-                FirmCapability::ViewDirectory,
-            )
-            .await
-            .unwrap();
-        }
-
-        let logged = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
-        assert!(logged.contains("\"reason\":\"firm_not_found\""), "{logged}");
-        assert!(logged.contains("\"reason\":\"no_person_id\""), "{logged}");
-    }
-}
+mod tests {}

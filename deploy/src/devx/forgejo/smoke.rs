@@ -1463,15 +1463,17 @@ struct SeededProject {
 /// Seed the synthetic Firm and its Project into `surreal` — the one
 /// Firm/Project fixture every repository-path consumer uses. The push
 /// pipeline resolves the Project from this same graph by its code.
-async fn seed_firm_project(surreal: &store::surreal::SurrealDb) -> Result<SeededProject> {
+async fn seed_firm_project(
+    application_store: &store::application_store::ApplicationStore,
+) -> Result<SeededProject> {
     let jurisdiction = store::jurisdictions::create(
-        surreal,
+        application_store,
         &store::jurisdictions::NewJurisdiction::new("Synthetic State", "SS", "state"),
     )
     .await?;
-    let kind = store::entity_types::create(surreal, "Synthetic Company").await?;
+    let kind = store::entity_types::create(application_store, "Synthetic Company").await?;
     let entity_id = store::entities::create(
-        surreal,
+        application_store,
         &store::entities::NewEntity {
             name: "Synthetic Forgejo Entity".into(),
             entity_type_id: kind.id,
@@ -1485,7 +1487,7 @@ async fn seed_firm_project(surreal: &store::surreal::SurrealDb) -> Result<Seeded
     .await?
     .id;
     let admin = store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role(
             "Synthetic Admin",
             "forge-smoke-admin@example.test",
@@ -1495,7 +1497,7 @@ async fn seed_firm_project(surreal: &store::surreal::SurrealDb) -> Result<Seeded
     .await
     .context("seed the synthetic Admin DRI")?;
     let firm = store::firms::create(
-        surreal,
+        application_store,
         &store::firms::NewFirm {
             name: SMOKE_FIRM.to_owned(),
             status: "active".to_owned(),
@@ -1506,7 +1508,7 @@ async fn seed_firm_project(surreal: &store::surreal::SurrealDb) -> Result<Seeded
     .await
     .context("seed the synthetic Firm")?;
     let brand = store::brands::create(
-        surreal,
+        application_store,
         store::persons::Role::Admin,
         Some(admin.id),
         &store::brands::NewBrand {
@@ -1518,7 +1520,7 @@ async fn seed_firm_project(surreal: &store::surreal::SurrealDb) -> Result<Seeded
     )
     .await?;
     let project = store::projects::create(
-        surreal,
+        application_store,
         &store::projects::NewProject {
             code: SMOKE_PROJECT.to_owned(),
             name: "Sample Litigation".to_owned(),
@@ -1541,7 +1543,7 @@ async fn seeded_repository_path(
     options: &PgConnectOptions,
 ) -> Result<store::firms::forgejo::RepositoryPath> {
     let fixture = create_smoke_postgres(options).await?;
-    let source = store::surreal::SurrealDb::uninitialized();
+    let source = store::application_store::ApplicationStore::from(fixture.postgres().clone());
     let seeded = store::postgres::PostgresDb::with_test_db(
         fixture.postgres().clone(),
         seed_firm_project(&source),
@@ -2203,12 +2205,16 @@ fn serve_receiver_mode(config_path: &std::path::Path) -> Result<()> {
         .context("build the receiver's runtime")?;
     runtime.block_on(async move {
         let journal = receiver_journal().await?;
-        let surreal = store::surreal::SurrealDb::uninitialized();
-        let seeded = seed_firm_project(&surreal).await?;
-        store::projects::set_internal_slack_channel_id(&surreal, seeded.project_id, SLACK_CHANNEL)
-            .await
-            .map_err(|error| anyhow::anyhow!("record the Project's Slack channel: {error}"))?;
-        let state = portal::test_support::app_state(surreal.clone()).await;
+        let application_store = store::application_store::ApplicationStore::connect().await?;
+        let seeded = seed_firm_project(&application_store).await?;
+        store::projects::set_internal_slack_channel_id(
+            &application_store,
+            seeded.project_id,
+            SLACK_CHANNEL,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("record the Project's Slack channel: {error}"))?;
+        let state = portal::test_support::app_state(application_store.clone()).await;
         // The stub binds inside the pod's own namespace; only this
         // process's pipeline dials it.
         let stub_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
@@ -2223,7 +2229,7 @@ fn serve_receiver_mode(config_path: &std::path::Path) -> Result<()> {
             forgejo_push_consumer: Arc::new(
                 portal::forgejo_push_pipeline::JjPushPipeline::with_credentials(
                     journal,
-                    surreal,
+                    application_store,
                     Arc::new(portal::forgejo_push_pipeline::FixedPushCredentials {
                         forgejo_token: config.forge_token.clone(),
                         slack_bot_token: Some("smoke-stub-token".to_owned()),

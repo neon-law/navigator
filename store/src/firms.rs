@@ -26,23 +26,10 @@ pub mod forgejo_organization;
 pub mod slug;
 
 use serde::Serialize;
-use std::collections::HashMap;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::persons::Role;
-use crate::postgres_mirror::MirrorKey;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
-
-pub(crate) const TABLE: &str = "firm";
-const MEMBERSHIP_TABLE: &str = "person_firm_role";
-const PERSON_TABLE: &str = "person";
-const BRAND_TABLE: &str = "firm_brand";
-const ENTITY_TABLE: &str = "entity";
-const FIRM_SELECT: &str =
-    "id, name, slug, status, entity_id, portal_theme_brand_key, inserted_at, updated_at";
-const MEMBERSHIP_SELECT: &str =
-    "id, person_id, firm_id, membership, is_dri, inserted_at, updated_at";
 
 /// The compiled house-brand keys `store::seed` migrates into `brand` rows
 /// on first boot (ENG-496). Matches the `ASSERT` on `firm_brand.brand_key`
@@ -74,23 +61,10 @@ pub const CLOSED_BRAND_KEYS: &[&str] = &[
 /// `pub(crate)` so `store::projects::create` can run the identical check
 /// (ENG-587) rather than a second, divergent closed list.
 pub(crate) async fn brand_key_exists(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     brand_key: &str,
 ) -> Result<bool, FirmError> {
-    #[derive(SurrealValue)]
-    struct BrandKeyRow {
-        brand_key: String,
-    }
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::brand_key_exists(brand_key)).await?);
-    }
-    let mut response = surreal
-        .query("SELECT brand_key FROM brand WHERE brand_key = $brand_key LIMIT 1")
-        .bind(("brand_key", brand_key.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<BrandKeyRow> = response.take(0)?;
-    Ok(!rows.is_empty())
+    Ok(Box::pin(crate::postgres::tenancy::brand_key_exists(brand_key)).await?)
 }
 
 /// A practice that owns Projects and firm-side people.
@@ -112,52 +86,6 @@ pub struct Firm {
     pub portal_theme_brand_key: Option<String>,
     pub inserted_at: String,
     pub updated_at: String,
-}
-
-#[derive(SurrealValue)]
-struct FirmRow {
-    id: surrealdb::types::RecordId,
-    name: String,
-    slug: String,
-    status: String,
-    entity_id: Option<surrealdb::types::RecordId>,
-    portal_theme_brand_key: Option<String>,
-    inserted_at: String,
-    updated_at: String,
-}
-
-impl FirmRow {
-    fn into_firm(self) -> Option<Firm> {
-        Some(Firm {
-            id: record_uuid(&self.id)?,
-            name: self.name,
-            slug: self.slug,
-            status: self.status,
-            entity_id: match self.entity_id.as_ref() {
-                Some(id) => Some(record_uuid(id)?),
-                None => None,
-            },
-            portal_theme_brand_key: self.portal_theme_brand_key,
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
-#[derive(SurrealValue)]
-struct ProjectIdRow {
-    id: surrealdb::types::RecordId,
-}
-
-#[derive(SurrealValue)]
-struct PersonIdRow {
-    person_id: surrealdb::types::RecordId,
-}
-
-#[derive(SurrealValue)]
-struct TouchedProject {
-    id: surrealdb::types::RecordId,
-    brand: String,
 }
 
 /// Inputs for creating a [`Firm`].
@@ -236,31 +164,6 @@ pub struct PersonFirmRole {
     pub updated_at: String,
 }
 
-#[derive(SurrealValue)]
-struct PersonFirmRoleRow {
-    id: surrealdb::types::RecordId,
-    person_id: surrealdb::types::RecordId,
-    firm_id: surrealdb::types::RecordId,
-    membership: String,
-    is_dri: bool,
-    inserted_at: String,
-    updated_at: String,
-}
-
-impl PersonFirmRoleRow {
-    fn into_role(self) -> Option<PersonFirmRole> {
-        Some(PersonFirmRole {
-            id: record_uuid(&self.id)?,
-            person_id: record_uuid(&self.person_id)?,
-            firm_id: record_uuid(&self.firm_id)?,
-            membership: FirmMembership::parse(&self.membership)?,
-            is_dri: self.is_dri,
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
 /// Inputs for creating a [`PersonFirmRole`].
 #[derive(Debug, Clone)]
 pub struct NewPersonFirmRole {
@@ -273,8 +176,6 @@ pub struct NewPersonFirmRole {
 /// Errors from the firm command seam.
 #[derive(Debug, thiserror::Error)]
 pub enum FirmError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Postgres(#[from] crate::postgres::tenancy::TenancyError),
     #[error("PostgreSQL firm operation failed")]
@@ -422,8 +323,7 @@ impl FirmError {
             | Self::InvalidCalendarOwner
             | Self::GmailCalendarOwner
             | Self::InvalidEsignProvider => self.to_string(),
-            Self::Db(_)
-            | Self::Postgres(_)
+            Self::Postgres(_)
             | Self::PostgresSql(_)
             | Self::Person(_)
             | Self::Entity(_)
@@ -431,23 +331,6 @@ impl FirmError {
             | Self::WriteReturnedNothing => "Could not save firm.".to_string(),
         }
     }
-}
-
-fn classify_write(error: surrealdb::Error) -> FirmError {
-    match crate::surreal::retry::unique_violation(&error) {
-        Some("person_firm_role_pair") => FirmError::DuplicateMembership,
-        Some("firm_entity") => FirmError::DuplicateEntity,
-        Some("firm_brand_key" | "firm_brand_pair") => FirmError::DuplicateBrand,
-        _ => FirmError::Db(error),
-    }
-}
-
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, FirmError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(classify_write)
 }
 
 /// Create a firm under a fresh UUID record key, atomically with its first
@@ -465,125 +348,32 @@ where
 /// derives an invalid or reserved slug is refused as
 /// [`FirmError::InvalidSlug`], and one whose slug another Firm already holds
 /// as [`FirmError::DuplicateSlug`]; no suffix is added to make it fit.
-pub async fn create(surreal: &SurrealDb, input: &NewFirm) -> Result<Firm, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Box::pin(crate::postgres::tenancy::create_firm(input)).await;
-    }
-    if crate::entities::find_by_id(surreal, input.entity_id)
-        .await?
-        .is_none()
-    {
-        return Err(FirmError::NoSuchEntity(input.entity_id));
-    }
-    let admin = crate::persons::find_by_id(surreal, input.admin_dri_person_id)
-        .await?
-        .ok_or(FirmError::NoSuchPerson(input.admin_dri_person_id))?;
-    if !admin.role.is_admin_tier() {
-        return Err(FirmError::IneligibleAdminDriTier(input.admin_dri_person_id));
-    }
-    let slug = slug::derive(&input.name);
-    if !slug::is_valid(&slug) {
-        return Err(FirmError::InvalidSlug(slug));
-    }
-    let firm_id = Uuid::now_v7();
-    let membership_id = Uuid::now_v7();
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut response = retry::writing(|| {
-        surreal
-            .query(format!(
-                "BEGIN; \
-                 CREATE $firm_id SET name = $name, slug = $slug, status = $status, \
-                 entity_id = $entity_id, inserted_at = $now, updated_at = $now \
-                 RETURN {FIRM_SELECT}; \
-                 CREATE $membership_id SET person_id = $person_id, firm_id = $firm_id, \
-                 membership = 'admin', is_dri = true, inserted_at = $now, updated_at = $now; \
-                 COMMIT;"
-            ))
-            .bind(("firm_id", record_id(TABLE, firm_id)))
-            .bind(("membership_id", record_id(MEMBERSHIP_TABLE, membership_id)))
-            .bind((
-                "person_id",
-                record_id(PERSON_TABLE, input.admin_dri_person_id),
-            ))
-            .bind(("name", input.name.clone()))
-            .bind(("slug", slug.clone()))
-            .bind(("status", input.status.clone()))
-            .bind(("entity_id", record_id(ENTITY_TABLE, input.entity_id)))
-            .bind(("now", now.clone()))
-    })
-    .await
-    .map_err(|error| {
-        if retry::unique_violation(&error) == Some("firm_slug") {
-            FirmError::DuplicateSlug(slug.clone())
-        } else {
-            classify_write(error)
-        }
-    })?;
-    let row: Option<FirmRow> = response.take(1)?;
-    let firm = row
-        .and_then(FirmRow::into_firm)
-        .ok_or(FirmError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_writes(
-        surreal,
-        [
-            MirrorKey::Firm(firm.id),
-            MirrorKey::FirmMembership {
-                person_id: input.admin_dri_person_id,
-                firm_id: firm.id,
-            },
-        ],
-    )
-    .await;
-    Ok(firm)
+pub async fn create(
+    _application_store: &ApplicationStore,
+    input: &NewFirm,
+) -> Result<Firm, FirmError> {
+    Box::pin(crate::postgres::tenancy::create_firm(input)).await
 }
 
 /// Find the firm identified by `id`.
-pub async fn find_by_id(surreal: &SurrealDb, id: Uuid) -> Result<Option<Firm>, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::find_firm(id)).await?);
-    }
-    let mut response = surreal
-        .query(format!("SELECT {FIRM_SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<FirmRow> = response.take(0)?;
-    let firm = row.and_then(FirmRow::into_firm);
-    Ok(firm)
+pub async fn find_by_id(
+    _application_store: &ApplicationStore,
+    id: Uuid,
+) -> Result<Option<Firm>, FirmError> {
+    Ok(Box::pin(crate::postgres::tenancy::find_firm(id)).await?)
 }
 
 /// Find the firm whose [`Firm::entity_id`] is `entity_id`.
 pub async fn find_by_entity_id(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     entity_id: Uuid,
 ) -> Result<Option<Firm>, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::firm_by_entity(entity_id)).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {FIRM_SELECT} FROM {TABLE} WHERE entity_id = $entity_id LIMIT 1"
-        ))
-        .bind(("entity_id", record_id(ENTITY_TABLE, entity_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<FirmRow> = response.take(0)?;
-    Ok(rows.into_iter().find_map(FirmRow::into_firm))
+    Ok(Box::pin(crate::postgres::tenancy::firm_by_entity(entity_id)).await?)
 }
 
 /// Every firm, name then id.
-pub async fn all(surreal: &SurrealDb) -> Result<Vec<Firm>, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::all_firms()).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {FIRM_SELECT} FROM {TABLE} ORDER BY name, id"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<FirmRow> = response.take(0)?;
-    Ok(rows.into_iter().filter_map(FirmRow::into_firm).collect())
+pub async fn all(_application_store: &ApplicationStore) -> Result<Vec<Firm>, FirmError> {
+    Ok(Box::pin(crate::postgres::tenancy::all_firms()).await?)
 }
 
 /// A partial edit to a [`Firm`]'s own fields (ENG-494). Absent fields are
@@ -606,14 +396,14 @@ pub struct FirmEdit {
 /// are one administrative surface (ENG-494). Owner passes on every Firm;
 /// only the Admin membership tier passes on its own.
 async fn authorize_manage_firm(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
 ) -> Result<(), FirmError> {
     use crate::firm_capability::{resolve, FirmCapability, FirmCapabilityDecision};
     match resolve(
-        surreal,
+        application_store,
         actor_role,
         actor_person_id,
         firm_id,
@@ -640,7 +430,7 @@ pub fn is_consumer_gmail(address: &str) -> bool {
 /// Save the Owner's Google Workspace mailbox choice. A blank choice disables Calendar
 /// for the Firm and suppresses the deployment bootstrap.
 pub async fn set_calendar_owner(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
@@ -649,7 +439,7 @@ pub async fn set_calendar_owner(
     if actor_role != Role::Owner {
         return Err(FirmError::NotAuthorized);
     }
-    authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
+    authorize_manage_firm(application_store, actor_role, actor_person_id, firm_id).await?;
     let value = value.trim();
     let owner = if value.is_empty() {
         None
@@ -687,108 +477,25 @@ pub async fn set_calendar_owner(
     Ok(())
 }
 
-/// Gate an Owner-only brand-seat write through the capability resolver —
-/// the audit point every Firm-scoped allow/deny decision routes through.
-/// `MoveBrand` admits no membership tier: moving a Brand to another Firm
-/// re-points whose legal entity the public site's copyright names, an
-/// ownership decision only Owner makes, where `authorize_manage_firm`
-/// stays the gate for a Firm's own brand administration.
-async fn authorize_brand_ownership(
-    surreal: &SurrealDb,
-    actor_role: Role,
-    actor_person_id: Option<Uuid>,
-    firm_id: Uuid,
-    capability: crate::firm_capability::FirmCapability,
-) -> Result<(), FirmError> {
-    use crate::firm_capability::{resolve, FirmCapabilityDecision};
-    match resolve(surreal, actor_role, actor_person_id, firm_id, capability).await? {
-        FirmCapabilityDecision::Allowed => Ok(()),
-        FirmCapabilityDecision::FirmNotFound => Err(FirmError::NoSuchFirm(firm_id)),
-        FirmCapabilityDecision::Forbidden => Err(FirmError::NotAuthorized),
-    }
-}
-
 /// Edit a Firm's own fields. Owner, or that Firm's own Admin membership,
 /// only (`authorize_manage_firm`). Refuses an `entity_id` that does not
 /// resolve, the same guarantee [`create`] gives; leaves the Admin DRI and
 /// every membership row untouched — those move only through
 /// [`appoint_admin_dri`], [`update_membership`], and [`remove_membership`].
 pub async fn update(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
     input: &FirmEdit,
 ) -> Result<Firm, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Box::pin(crate::postgres::tenancy::update_firm(
-            actor_role,
-            actor_person_id,
-            firm_id,
-            input,
-        ))
-        .await;
-    }
-    authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
-    if let Some(entity_id) = input.entity_id {
-        if crate::entities::find_by_id(surreal, entity_id)
-            .await?
-            .is_none()
-        {
-            return Err(FirmError::NoSuchEntity(entity_id));
-        }
-    }
-    if let Some(Some(key)) = &input.portal_theme_brand_key {
-        let owner = crate::brands::find_by_key(surreal, key)
-            .await
-            .map_err(|error| FirmError::Brand(Box::new(error)))?
-            .and_then(|brand| brand.firm_id);
-        if owner != Some(firm_id) {
-            return Err(FirmError::ThemeBrandNotOwned(firm_id, key.clone()));
-        }
-    }
-
-    let mut assignments: Vec<&str> = vec!["updated_at = $updated_at"];
-    if input.name.is_some() {
-        assignments.push("name = $name");
-    }
-    if input.status.is_some() {
-        assignments.push("status = $status");
-    }
-    if input.entity_id.is_some() {
-        assignments.push("entity_id = $entity_id");
-    }
-    if input.portal_theme_brand_key.is_some() {
-        assignments.push("portal_theme_brand_key = $portal_theme_brand_key");
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut response = writing(|| {
-        surreal
-            .query(format!(
-                "UPDATE $id SET {} RETURN {FIRM_SELECT}",
-                assignments.join(", ")
-            ))
-            .bind(("id", record_id(TABLE, firm_id)))
-            .bind(("updated_at", now.clone()))
-            .bind(("name", input.name.clone()))
-            .bind(("status", input.status.clone()))
-            .bind((
-                "entity_id",
-                input.entity_id.map(|id| record_id(ENTITY_TABLE, id)),
-            ))
-            .bind((
-                "portal_theme_brand_key",
-                input.portal_theme_brand_key.clone().flatten(),
-            ))
-    })
-    .await?;
-    let row: Option<FirmRow> = response.take(0)?;
-    let firm = row
-        .and_then(FirmRow::into_firm)
-        .ok_or(FirmError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(surreal, MirrorKey::Firm(firm.id)).await;
-    Ok(firm)
+    Box::pin(crate::postgres::tenancy::update_firm(
+        actor_role,
+        actor_person_id,
+        firm_id,
+        input,
+    ))
+    .await
 }
 
 /// Delete a Firm. Owner, or that Firm's own Admin membership, only
@@ -798,66 +505,17 @@ pub async fn update(
 /// `person_firm_role` and `firm_brand` rows are removed in the same
 /// transaction — nothing is left pointing at a Firm that no longer exists.
 pub async fn delete(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Box::pin(crate::postgres::tenancy::delete_firm(
-            actor_role,
-            actor_person_id,
-            firm_id,
-        ))
-        .await;
-    }
-    authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
-    let mut projects = surreal
-        .query("SELECT id FROM project WHERE firm_id = $firm_id LIMIT 1")
-        .bind(("firm_id", record_id(TABLE, firm_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let owned: Vec<ProjectIdRow> = projects.take(0)?;
-    if !owned.is_empty() {
-        return Err(FirmError::FirmOwnsProjects(firm_id));
-    }
-    if !crate::brands::for_firm(surreal, firm_id)
-        .await
-        .map_err(|error| FirmError::Brand(Box::new(error)))?
-        .is_empty()
-    {
-        return Err(FirmError::FirmOwnsBrands(firm_id));
-    }
-    let mut removed: Vec<MirrorKey> = memberships_for_firm(surreal, firm_id)
-        .await?
-        .into_iter()
-        .map(|role| MirrorKey::FirmMembership {
-            person_id: role.person_id,
-            firm_id,
-        })
-        .collect();
-    removed.extend(
-        brand_keys_for_firm(surreal, firm_id)
-            .await?
-            .into_iter()
-            .map(|brand_key| MirrorKey::FirmBrand { brand_key }),
-    );
-    removed.push(MirrorKey::Firm(firm_id));
-
-    writing(|| {
-        surreal
-            .query(
-                "BEGIN; \
-                 DELETE person_firm_role WHERE firm_id = $firm_id; \
-                 DELETE firm_brand WHERE firm_id = $firm_id; \
-                 DELETE $firm_id; \
-                 COMMIT;",
-            )
-            .bind(("firm_id", record_id(TABLE, firm_id)))
-    })
-    .await?;
-    crate::postgres_mirror::after_writes(surreal, removed).await;
-    Ok(())
+    Box::pin(crate::postgres::tenancy::delete_firm(
+        actor_role,
+        actor_person_id,
+        firm_id,
+    ))
+    .await
 }
 
 /// Record one person's membership at a firm.
@@ -868,120 +526,37 @@ pub async fn delete(
 /// membership, so this refuses to write a row for one regardless of the
 /// requested `membership` value.
 pub async fn add_membership(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     input: &NewPersonFirmRole,
 ) -> Result<PersonFirmRole, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Box::pin(crate::postgres::tenancy::add_membership(input)).await;
-    }
-    let person = crate::persons::find_by_id(surreal, input.person_id)
-        .await?
-        .ok_or(FirmError::NoSuchPerson(input.person_id))?;
-    if person.role == Role::Client {
-        return Err(FirmError::ClientCannotJoinFirm(input.person_id));
-    }
-    if find_by_id(surreal, input.firm_id).await?.is_none() {
-        return Err(FirmError::NoSuchFirm(input.firm_id));
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut response = writing(|| {
-        surreal
-            .query(format!(
-                "CREATE $id SET person_id = $person_id, firm_id = $firm_id, \
-                 membership = $membership, is_dri = $is_dri, \
-                 inserted_at = $now, updated_at = $now RETURN {MEMBERSHIP_SELECT}"
-            ))
-            .bind(("id", record_id(MEMBERSHIP_TABLE, Uuid::now_v7())))
-            .bind(("person_id", record_id(PERSON_TABLE, input.person_id)))
-            .bind(("firm_id", record_id(TABLE, input.firm_id)))
-            .bind(("membership", input.membership.as_str().to_string()))
-            .bind(("is_dri", input.is_dri))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    let row: Option<PersonFirmRoleRow> = response.take(0)?;
-    let role = row
-        .and_then(PersonFirmRoleRow::into_role)
-        .ok_or(FirmError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(
-        surreal,
-        MirrorKey::FirmMembership {
-            person_id: role.person_id,
-            firm_id: role.firm_id,
-        },
-    )
-    .await;
-    Ok(role)
+    Box::pin(crate::postgres::tenancy::add_membership(input)).await
 }
 
 /// The membership row for this `(person, firm)` pair, if any.
 pub async fn membership_for_person(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     person_id: Uuid,
     firm_id: Uuid,
 ) -> Result<Option<PersonFirmRole>, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::membership(person_id, firm_id)).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {MEMBERSHIP_SELECT} FROM ONLY {MEMBERSHIP_TABLE} \
-             WHERE person_id = $person_id AND firm_id = $firm_id LIMIT 1"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .bind(("firm_id", record_id(TABLE, firm_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<PersonFirmRoleRow> = response.take(0)?;
-    Ok(row.and_then(PersonFirmRoleRow::into_role))
+    Ok(Box::pin(crate::postgres::tenancy::membership(person_id, firm_id)).await?)
 }
 
 /// Every membership row for this person.
 pub async fn memberships_for_person(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Vec<PersonFirmRole>, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::memberships_for_person(person_id)).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {MEMBERSHIP_SELECT} FROM {MEMBERSHIP_TABLE} \
-             WHERE person_id = $person_id ORDER BY inserted_at, id"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<PersonFirmRoleRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(PersonFirmRoleRow::into_role)
-        .collect())
+    Ok(Box::pin(crate::postgres::tenancy::memberships_for_person(person_id)).await?)
 }
 
 /// Every membership row on this Firm — the inverse of
 /// [`memberships_for_person`], for a Firm detail view listing who belongs to
 /// it rather than which Firms one person belongs to.
 pub async fn memberships_for_firm(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     firm_id: Uuid,
 ) -> Result<Vec<PersonFirmRole>, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::memberships_for_firm(firm_id)).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {MEMBERSHIP_SELECT} FROM {MEMBERSHIP_TABLE} \
-             WHERE firm_id = $firm_id ORDER BY inserted_at, id"
-        ))
-        .bind(("firm_id", record_id(TABLE, firm_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<PersonFirmRoleRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(PersonFirmRoleRow::into_role)
-        .collect())
+    Ok(Box::pin(crate::postgres::tenancy::memberships_for_firm(firm_id)).await?)
 }
 
 /// Change a person's `membership` at a Firm. Owner, or that Firm's own Admin
@@ -991,51 +566,21 @@ pub async fn memberships_for_firm(
 /// person is the Firm's current sole Admin DRI and `membership` is not
 /// `admin` (ENG-499's guard, [`refuse_admin_dri_orphaning`]).
 pub async fn update_membership(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     person_id: Uuid,
     firm_id: Uuid,
     membership: FirmMembership,
 ) -> Result<PersonFirmRole, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Box::pin(crate::postgres::tenancy::update_membership(
-            actor_role,
-            actor_person_id,
-            person_id,
-            firm_id,
-            membership,
-        ))
-        .await;
-    }
-    authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
-    if membership_for_person(surreal, person_id, firm_id)
-        .await?
-        .is_none()
-    {
-        return Err(FirmError::NotAMember(person_id, firm_id));
-    }
-    refuse_admin_dri_orphaning(surreal, firm_id, person_id, Some(membership)).await?;
-
-    let now = chrono::Utc::now().to_rfc3339();
-    writing(|| {
-        surreal
-            .query(
-                "UPDATE person_firm_role SET membership = $membership, updated_at = $now \
-                 WHERE person_id = $person_id AND firm_id = $firm_id",
-            )
-            .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-            .bind(("firm_id", record_id(TABLE, firm_id)))
-            .bind(("membership", membership.as_str().to_string()))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    crate::postgres_mirror::after_write(surreal, MirrorKey::FirmMembership { person_id, firm_id })
-        .await;
-
-    membership_for_person(surreal, person_id, firm_id)
-        .await?
-        .ok_or(FirmError::WriteReturnedNothing)
+    Box::pin(crate::postgres::tenancy::update_membership(
+        actor_role,
+        actor_person_id,
+        person_id,
+        firm_id,
+        membership,
+    ))
+    .await
 }
 
 /// Remove a person's membership at a Firm entirely. Owner, or that Firm's
@@ -1045,57 +590,44 @@ pub async fn update_membership(
 /// [`refuse_admin_dri_orphaning`]) — transfer the designation first with
 /// [`appoint_admin_dri`].
 pub async fn remove_membership(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     person_id: Uuid,
     firm_id: Uuid,
 ) -> Result<(), FirmError> {
-    remove_membership_row(surreal, actor_role, actor_person_id, person_id, firm_id).await?;
+    remove_membership_row(
+        application_store,
+        actor_role,
+        actor_person_id,
+        person_id,
+        firm_id,
+    )
+    .await?;
     // A Person who no longer belongs to a Firm wants no SSH keys on the
     // forge (ENG-1219). Best-effort: the operator sweep retries a failure.
     Box::pin(crate::ssh_public_keys::after_membership_removed(
-        surreal, person_id,
+        application_store,
+        person_id,
     ))
     .await;
     Ok(())
 }
 
 async fn remove_membership_row(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     person_id: Uuid,
     firm_id: Uuid,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Box::pin(crate::postgres::tenancy::remove_membership(
-            actor_role,
-            actor_person_id,
-            person_id,
-            firm_id,
-        ))
-        .await;
-    }
-    authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
-    if membership_for_person(surreal, person_id, firm_id)
-        .await?
-        .is_none()
-    {
-        return Err(FirmError::NotAMember(person_id, firm_id));
-    }
-    refuse_admin_dri_orphaning(surreal, firm_id, person_id, None).await?;
-
-    writing(|| {
-        surreal
-            .query("DELETE person_firm_role WHERE person_id = $person_id AND firm_id = $firm_id")
-            .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-            .bind(("firm_id", record_id(TABLE, firm_id)))
-    })
-    .await?;
-    crate::postgres_mirror::after_write(surreal, MirrorKey::FirmMembership { person_id, firm_id })
-        .await;
-    Ok(())
+    Box::pin(crate::postgres::tenancy::remove_membership(
+        actor_role,
+        actor_person_id,
+        person_id,
+        firm_id,
+    ))
+    .await
 }
 
 /// Person ids an Admin of these firms may see: members of those firms, plus
@@ -1106,11 +638,11 @@ async fn remove_membership_row(
 /// than deriving its own membership set, so this stays in step with every
 /// other Firm-scoped directory read.
 pub async fn visible_person_ids(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     admin_person_id: Uuid,
 ) -> Result<Vec<Uuid>, FirmError> {
     let firm_ids = crate::firm_capability::allowed_firm_ids(
-        surreal,
+        application_store,
         Role::Admin,
         Some(admin_person_id),
         crate::firm_capability::FirmCapability::ViewDirectory,
@@ -1119,50 +651,7 @@ pub async fn visible_person_ids(
     if firm_ids.is_empty() {
         return Ok(Vec::new());
     }
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::visible_person_ids(&firm_ids)).await?);
-    }
-    let firm_records: Vec<_> = firm_ids
-        .iter()
-        .copied()
-        .map(|id| record_id(TABLE, id))
-        .collect();
-    let mut members = surreal
-        .query(format!(
-            "SELECT {MEMBERSHIP_SELECT} FROM {MEMBERSHIP_TABLE} \
-             WHERE firm_id IN $firm_ids"
-        ))
-        .bind(("firm_ids", firm_records.clone()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let member_rows: Vec<PersonFirmRoleRow> = members.take(0)?;
-    let mut ids: std::collections::BTreeSet<Uuid> = member_rows
-        .into_iter()
-        .filter_map(PersonFirmRoleRow::into_role)
-        .map(|row| row.person_id)
-        .collect();
-
-    let mut projects = surreal
-        .query("SELECT id FROM project WHERE firm_id IN $firm_ids")
-        .bind(("firm_ids", firm_records))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let project_rows: Vec<ProjectIdRow> = projects.take(0)?;
-    let project_ids: Vec<_> = project_rows.into_iter().map(|row| row.id).collect();
-    if !project_ids.is_empty() {
-        let mut participants = surreal
-            .query("SELECT person_id FROM person_project_role WHERE project_id IN $project_ids")
-            .bind(("project_ids", project_ids))
-            .await
-            .and_then(surrealdb::IndexedResults::check)?;
-        let participant_rows: Vec<PersonIdRow> = participants.take(0)?;
-        for row in participant_rows {
-            if let Some(id) = record_uuid(&row.person_id) {
-                ids.insert(id);
-            }
-        }
-    }
-    Ok(ids.into_iter().collect())
+    Ok(Box::pin(crate::postgres::tenancy::visible_person_ids(&firm_ids)).await?)
 }
 
 /// Whose rows the people directory lists.
@@ -1204,60 +693,30 @@ pub const PEOPLE_DIRECTORY: crate::listing::ListSpec = crate::listing::ListSpec 
 ///
 /// [`FirmError`] when any of the reads fails.
 pub async fn people_directory(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     params: &crate::listing::ListParams,
     scope: DirectoryScope,
 ) -> Result<crate::listing::Page<DirectoryEntry>, FirmError> {
-    if let Some(pg) = crate::persons::postgres_authority().await? {
-        let firm_ids = match scope {
-            DirectoryScope::Everyone => None,
-            DirectoryScope::VisibleToAdmin(admin) => Some(
-                crate::firm_capability::allowed_firm_ids(
-                    surreal,
-                    Role::Admin,
-                    Some(admin),
-                    crate::firm_capability::FirmCapability::ViewDirectory,
-                )
-                .await?,
-            ),
-        };
-        let page = Box::pin(crate::postgres::people::directory_page(
-            &pg,
-            params,
-            firm_ids.as_deref(),
-        ))
-        .await?;
-        return Ok(page.map(|(person, firm_names)| DirectoryEntry { person, firm_names }));
-    }
-
-    let visible = match scope {
+    let pg = crate::persons::postgres_authority().await?;
+    let firm_ids = match scope {
         DirectoryScope::Everyone => None,
-        DirectoryScope::VisibleToAdmin(admin) => Some(visible_person_ids(surreal, admin).await?),
+        DirectoryScope::VisibleToAdmin(admin) => Some(
+            crate::firm_capability::allowed_firm_ids(
+                application_store,
+                Role::Admin,
+                Some(admin),
+                crate::firm_capability::FirmCapability::ViewDirectory,
+            )
+            .await?,
+        ),
     };
-    let page = crate::persons::surreal_directory_page(surreal, params, visible.as_deref()).await?;
-    let on_page: std::collections::HashSet<Uuid> =
-        page.items.iter().map(|person| person.id).collect();
-    let firm_names: HashMap<Uuid, String> = all(surreal)
-        .await?
-        .into_iter()
-        .map(|firm| (firm.id, firm.name))
-        .collect();
-    let mut memberships = all_memberships(surreal).await?;
-    memberships.retain(|membership| on_page.contains(&membership.person_id));
-    memberships.sort_by(|a, b| (&a.inserted_at, a.id).cmp(&(&b.inserted_at, b.id)));
-    let mut names_by_person: HashMap<Uuid, Vec<String>> = HashMap::new();
-    for membership in memberships {
-        if let Some(name) = firm_names.get(&membership.firm_id) {
-            names_by_person
-                .entry(membership.person_id)
-                .or_default()
-                .push(name.clone());
-        }
-    }
-    Ok(page.map(|person| DirectoryEntry {
-        firm_names: names_by_person.remove(&person.id).unwrap_or_default(),
-        person,
-    }))
+    let page = Box::pin(crate::postgres::people::directory_page(
+        &pg,
+        params,
+        firm_ids.as_deref(),
+    ))
+    .await?;
+    Ok(page.map(|(person, firm_names)| DirectoryEntry { person, firm_names }))
 }
 
 /// Attach one of the deployment's closed house-brand keys to a Firm.
@@ -1268,27 +727,16 @@ pub async fn people_directory(
 /// flows that already hold the brand seat — the seed bootstrap and
 /// [`ensure_brand`] — write through [`attach_brand_row`].
 pub async fn attach_brand(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     actor_role: Role,
-    actor_person_id: Option<Uuid>,
+    _actor_person_id: Option<Uuid>,
     firm_id: Uuid,
     brand_key: &str,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        if actor_role != Role::Owner {
-            return Err(FirmError::NotAuthorized);
-        }
-        return Box::pin(crate::postgres::tenancy::attach_brand(firm_id, brand_key)).await;
+    if actor_role != Role::Owner {
+        return Err(FirmError::NotAuthorized);
     }
-    authorize_brand_ownership(
-        surreal,
-        actor_role,
-        actor_person_id,
-        firm_id,
-        crate::firm_capability::FirmCapability::AttachBrand,
-    )
-    .await?;
-    attach_brand_row(surreal, firm_id, brand_key).await
+    Box::pin(crate::postgres::tenancy::attach_brand(firm_id, brand_key)).await
 }
 
 /// The raw brand-seat write `attach_brand` gates: validates the brand key
@@ -1296,58 +744,29 @@ pub async fn attach_brand(
 /// seed bootstrap and flows like [`ensure_brand`] that already hold the
 /// brand seat attach through this without re-walking Owner authority.
 pub(crate) async fn attach_brand_row(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     firm_id: Uuid,
     brand_key: &str,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Box::pin(crate::postgres::tenancy::attach_brand(firm_id, brand_key)).await;
-    }
-    if !brand_key_exists(surreal, brand_key).await? {
-        return Err(FirmError::UnknownBrand(brand_key.to_string()));
-    }
-    if find_by_id(surreal, firm_id).await?.is_none() {
-        return Err(FirmError::NoSuchFirm(firm_id));
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    writing(|| {
-        surreal
-            .query(
-                "CREATE $id SET firm_id = $firm_id, brand_key = $brand_key, \
-                 inserted_at = $now, updated_at = $now",
-            )
-            .bind(("id", record_id(BRAND_TABLE, Uuid::now_v7())))
-            .bind(("firm_id", record_id(TABLE, firm_id)))
-            .bind(("brand_key", brand_key.to_string()))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    crate::postgres_mirror::after_write(
-        surreal,
-        MirrorKey::FirmBrand {
-            brand_key: brand_key.to_string(),
-        },
-    )
-    .await;
-    Ok(())
+    Box::pin(crate::postgres::tenancy::attach_brand(firm_id, brand_key)).await
 }
 
 /// Attach `brand_key` if it is not already on this firm. A key already
 /// worn by this firm is a no-op; a key worn by another firm is still an
 /// error.
 pub async fn ensure_brand(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
     brand_key: &str,
 ) -> Result<(), FirmError> {
-    let existing = brand_keys_for_firm(surreal, firm_id).await?;
+    let existing = brand_keys_for_firm(application_store, firm_id).await?;
     if existing.iter().any(|key| key == brand_key) {
         return Ok(());
     }
-    match attach_brand_row(surreal, firm_id, brand_key).await {
+    match attach_brand_row(application_store, firm_id, brand_key).await {
         Ok(()) => Ok(()),
         Err(FirmError::DuplicateBrand) => {
-            let keys = brand_keys_for_firm(surreal, firm_id).await?;
+            let keys = brand_keys_for_firm(application_store, firm_id).await?;
             if keys.iter().any(|key| key == brand_key) {
                 Ok(())
             } else {
@@ -1360,52 +779,20 @@ pub async fn ensure_brand(
 
 /// House-brand keys this firm wears, in registry order.
 pub async fn brand_keys_for_firm(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     firm_id: Uuid,
 ) -> Result<Vec<String>, FirmError> {
-    #[derive(SurrealValue)]
-    struct BrandRow {
-        brand_key: String,
-    }
-    if crate::postgres::tenancy::enabled() {
-        let keys = Box::pin(crate::postgres::tenancy::firm_brand_keys(firm_id)).await?;
-        return Ok(in_registry_order(keys));
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT brand_key FROM {BRAND_TABLE} WHERE firm_id = $firm_id ORDER BY brand_key"
-        ))
-        .bind(("firm_id", record_id(TABLE, firm_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<BrandRow> = response.take(0)?;
-    Ok(in_registry_order(
-        rows.into_iter().map(|row| row.brand_key).collect(),
-    ))
+    let keys = Box::pin(crate::postgres::tenancy::firm_brand_keys(firm_id)).await?;
+    Ok(in_registry_order(keys))
 }
 
 /// The Firm that wears `brand_key`, if any. A key is unique across the
 /// deployment (`firm_brand_key`), so this is at most one row.
 pub async fn firm_id_for_brand_key(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     brand_key: &str,
 ) -> Result<Option<Uuid>, FirmError> {
-    #[derive(SurrealValue)]
-    struct FirmIdRow {
-        firm_id: surrealdb::types::RecordId,
-    }
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::firm_for_brand_key(brand_key)).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT firm_id FROM {BRAND_TABLE} WHERE brand_key = $brand_key LIMIT 1"
-        ))
-        .bind(("brand_key", brand_key.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<FirmIdRow> = response.take(0)?;
-    Ok(rows.into_iter().find_map(|row| record_uuid(&row.firm_id)))
+    Ok(Box::pin(crate::postgres::tenancy::firm_for_brand_key(brand_key)).await?)
 }
 
 /// One `firm_brand` row: a Brand key a Firm wears.
@@ -1418,83 +805,27 @@ pub struct FirmBrand {
     pub updated_at: String,
 }
 
-#[derive(SurrealValue)]
-struct FirmBrandRow {
-    id: surrealdb::types::RecordId,
-    firm_id: surrealdb::types::RecordId,
-    brand_key: String,
-    inserted_at: String,
-    updated_at: String,
-}
-
-impl FirmBrandRow {
-    fn into_firm_brand(self) -> Option<FirmBrand> {
-        Some(FirmBrand {
-            id: record_uuid(&self.id)?,
-            firm_id: record_uuid(&self.firm_id)?,
-            brand_key: self.brand_key,
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
-const FIRM_BRAND_SELECT: &str = "id, firm_id, brand_key, inserted_at, updated_at";
-
 /// The `firm_brand` row for `brand_key`, if a Firm wears it. A key is unique
 /// across the deployment, so this is at most one row.
 pub async fn firm_brand_for_key(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     brand_key: &str,
 ) -> Result<Option<FirmBrand>, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::firm_brand_row_for_key(brand_key)).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {FIRM_BRAND_SELECT} FROM {BRAND_TABLE} WHERE brand_key = $brand_key LIMIT 1"
-        ))
-        .bind(("brand_key", brand_key.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<FirmBrandRow> = response.take(0)?;
-    Ok(rows.into_iter().find_map(FirmBrandRow::into_firm_brand))
+    Ok(Box::pin(crate::postgres::tenancy::firm_brand_row_for_key(brand_key)).await?)
 }
 
 /// Every `firm_brand` row, by Brand key.
-pub async fn all_firm_brands(surreal: &SurrealDb) -> Result<Vec<FirmBrand>, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::all_firm_brand_rows()).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {FIRM_BRAND_SELECT} FROM {BRAND_TABLE} ORDER BY brand_key"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<FirmBrandRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(FirmBrandRow::into_firm_brand)
-        .collect())
+pub async fn all_firm_brands(
+    _application_store: &ApplicationStore,
+) -> Result<Vec<FirmBrand>, FirmError> {
+    Ok(Box::pin(crate::postgres::tenancy::all_firm_brand_rows()).await?)
 }
 
 /// Every membership row on every Firm.
-pub async fn all_memberships(surreal: &SurrealDb) -> Result<Vec<PersonFirmRole>, FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        return Ok(Box::pin(crate::postgres::tenancy::all_memberships()).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {MEMBERSHIP_SELECT} FROM {MEMBERSHIP_TABLE} ORDER BY firm_id, person_id"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<PersonFirmRoleRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(PersonFirmRoleRow::into_role)
-        .collect())
+pub async fn all_memberships(
+    _application_store: &ApplicationStore,
+) -> Result<Vec<PersonFirmRole>, FirmError> {
+    Ok(Box::pin(crate::postgres::tenancy::all_memberships()).await?)
 }
 
 /// House-brand keys this firm wears, ordered as [`CLOSED_BRAND_KEYS`] then
@@ -1520,19 +851,19 @@ fn in_registry_order(keys: Vec<String>) -> Vec<String> {
 /// another Firm's Brand. A key the Firm already wears is a no-op
 /// ([`ensure_brand`]); returns the Firm the Brand is now attached to.
 pub async fn attach_own_brand(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     brand_key: &str,
 ) -> Result<Uuid, FirmError> {
-    let brand = crate::brands::find_by_key(surreal, brand_key)
+    let brand = crate::brands::find_by_key(application_store, brand_key)
         .await
         .map_err(|error| FirmError::Brand(Box::new(error)))?
         .ok_or_else(|| FirmError::UnknownBrand(brand_key.to_string()))?;
     let firm_id = brand
         .firm_id
         .ok_or_else(|| FirmError::BrandHasNoFirm(brand_key.to_string()))?;
-    if crate::postgres::tenancy::enabled() {
+    {
         let pg = crate::postgres::PostgresDb::application()
             .await
             .map_err(crate::postgres::tenancy::TenancyError::from)?;
@@ -1543,10 +874,8 @@ pub async fn attach_own_brand(
             firm_id,
         ))
         .await?;
-    } else {
-        authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
     }
-    ensure_brand(surreal, firm_id, brand_key).await?;
+    ensure_brand(application_store, firm_id, brand_key).await?;
     Ok(firm_id)
 }
 
@@ -1554,43 +883,23 @@ pub async fn attach_own_brand(
 /// membership, only (`authorize_manage_firm`). A key the firm does not wear
 /// is a no-op — there is nothing to remove and nothing to refuse.
 pub async fn detach_brand(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
     brand_key: &str,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        let pg = crate::postgres::PostgresDb::application()
-            .await
-            .map_err(crate::postgres::tenancy::TenancyError::from)?;
-        Box::pin(crate::postgres::tenancy::authorize_firm_management(
-            pg.pool(),
-            actor_role,
-            actor_person_id,
-            firm_id,
-        ))
-        .await?;
-        return Box::pin(crate::postgres::tenancy::detach_brand(firm_id, brand_key)).await;
-    }
-    authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
-    writing(|| {
-        surreal
-            .query(format!(
-                "DELETE {BRAND_TABLE} WHERE firm_id = $firm_id AND brand_key = $brand_key"
-            ))
-            .bind(("firm_id", record_id(TABLE, firm_id)))
-            .bind(("brand_key", brand_key.to_string()))
-    })
+    let pg = crate::postgres::PostgresDb::application()
+        .await
+        .map_err(crate::postgres::tenancy::TenancyError::from)?;
+    Box::pin(crate::postgres::tenancy::authorize_firm_management(
+        pg.pool(),
+        actor_role,
+        actor_person_id,
+        firm_id,
+    ))
     .await?;
-    crate::postgres_mirror::after_write(
-        surreal,
-        MirrorKey::FirmBrand {
-            brand_key: brand_key.to_string(),
-        },
-    )
-    .await;
-    Ok(())
+    Box::pin(crate::postgres::tenancy::detach_brand(firm_id, brand_key)).await
 }
 
 /// Move one Brand's seat to another Firm. Owner only, through the
@@ -1607,138 +916,47 @@ pub async fn detach_brand(
 /// already wears the brand, with the `brand` row already naming it, is a
 /// no-op success.
 pub async fn move_brand(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     actor_role: Role,
-    actor_person_id: Option<Uuid>,
+    _actor_person_id: Option<Uuid>,
     brand_key: &str,
     target_firm_id: Uuid,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled() {
-        if actor_role != Role::Owner {
-            return Err(FirmError::NotAuthorized);
-        }
-        return Box::pin(crate::postgres::tenancy::move_brand(
-            brand_key,
-            target_firm_id,
-        ))
-        .await;
+    if actor_role != Role::Owner {
+        return Err(FirmError::NotAuthorized);
     }
-    let brand = crate::brands::find_by_key(surreal, brand_key)
-        .await
-        .map_err(|error| FirmError::Brand(Box::new(error)))?
-        .ok_or_else(|| FirmError::UnknownBrand(brand_key.to_string()))?;
-    if find_by_id(surreal, target_firm_id).await?.is_none() {
-        return Err(FirmError::NoSuchFirm(target_firm_id));
-    }
-    authorize_brand_ownership(
-        surreal,
-        actor_role,
-        actor_person_id,
+    Box::pin(crate::postgres::tenancy::move_brand(
+        brand_key,
         target_firm_id,
-        crate::firm_capability::FirmCapability::MoveBrand,
-    )
-    .await?;
-    let worn_by = firm_id_for_brand_key(surreal, brand_key).await?;
-    if worn_by != Some(target_firm_id) || brand.firm_id != Some(target_firm_id) {
-        let now = chrono::Utc::now().to_rfc3339();
-        retry::writing(|| {
-            surreal
-                .query(format!(
-                    "BEGIN; \
-                     DELETE {BRAND_TABLE} WHERE brand_key = $brand_key; \
-                     UPDATE $brand SET firm_id = $firm_id, updated_at = $now; \
-                     CREATE $seat SET firm_id = $firm_id, brand_key = $brand_key, \
-                     inserted_at = $now, updated_at = $now; \
-                     COMMIT;"
-                ))
-                .bind(("brand_key", brand_key.to_string()))
-                .bind(("brand", record_id(crate::brands::TABLE, brand.id)))
-                .bind(("firm_id", record_id(TABLE, target_firm_id)))
-                .bind(("now", now.clone()))
-                .bind(("seat", record_id(BRAND_TABLE, Uuid::now_v7())))
-        })
-        .await?;
-    }
-    // The target may predate optional mirroring. An identical move also retries
-    // projections after a prior mirror failure without rewriting source timestamps.
-    // Keep parent-before-child order and the best-effort mirror contract.
-    crate::postgres_mirror::after_writes(
-        surreal,
-        [
-            MirrorKey::Firm(target_firm_id),
-            MirrorKey::Brand(brand.id),
-            MirrorKey::FirmBrand {
-                brand_key: brand_key.to_string(),
-            },
-        ],
-    )
-    .await;
-    Ok(())
+    ))
+    .await
 }
 
 /// Assign each unowned Project to the Firm wearing its brand, or to the
 /// deployment's anchor Firm when no Firm wears that brand. Idempotent.
 pub async fn backfill_unowned_projects(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     fallback_firm_id: Option<Uuid>,
 ) -> Result<u64, FirmError> {
     if let Some(firm_id) = fallback_firm_id {
-        if find_by_id(surreal, firm_id).await?.is_none() {
+        if find_by_id(application_store, firm_id).await?.is_none() {
             return Err(FirmError::NoSuchFirm(firm_id));
         }
     }
-    if crate::postgres::tenancy::enabled() {
-        return Ok(
-            Box::pin(crate::postgres::tenancy::backfill_unowned_projects(
-                fallback_firm_id,
-            ))
-            .await?,
-        );
-    }
-    let mut response = surreal
-        .query("SELECT id, brand FROM project WHERE firm_id IS NONE")
-        .await?;
-    let rows: Vec<TouchedProject> = response.take(0)?;
-    let mut firms_by_brand = HashMap::new();
-    let mut assigned = 0;
-    for row in rows {
-        let brand_firm = if let Some(firm_id) = firms_by_brand.get(&row.brand) {
-            *firm_id
-        } else {
-            let firm_id = firm_id_for_brand_key(surreal, &row.brand).await?;
-            firms_by_brand.insert(row.brand.clone(), firm_id);
-            firm_id
-        };
-        let Some(firm_id) = brand_firm.or(fallback_firm_id) else {
-            continue;
-        };
-        let mut response = writing(|| {
-            surreal
-                .query("UPDATE $id SET firm_id = $firm_id WHERE firm_id IS NONE RETURN AFTER")
-                .bind(("id", row.id.clone()))
-                .bind(("firm_id", record_id(TABLE, firm_id)))
-        })
-        .await?;
-        let touched: Vec<ProjectIdRow> = response.take(0).unwrap_or_default();
-        assigned += touched.len() as u64;
-        crate::postgres_mirror::after_writes(
-            surreal,
-            touched
-                .iter()
-                .filter_map(|project| record_uuid(&project.id))
-                .map(MirrorKey::Project),
-        )
-        .await;
-    }
-    Ok(assigned)
+    Ok(
+        Box::pin(crate::postgres::tenancy::backfill_unowned_projects(
+            fallback_firm_id,
+        ))
+        .await?,
+    )
 }
 
 /// Grant membership when missing. A duplicate pair is a no-op.
 pub async fn ensure_membership(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     input: &NewPersonFirmRole,
 ) -> Result<(), FirmError> {
-    match add_membership(surreal, input).await {
+    match add_membership(application_store, input).await {
         Ok(_) | Err(FirmError::DuplicateMembership) => Ok(()),
         Err(error) => Err(error),
     }
@@ -1762,19 +980,17 @@ pub async fn ensure_membership(
 /// Firm and setting the new one — so a concurrent reader never observes zero
 /// or two Admin DRIs on the same Firm.
 pub async fn appoint_admin_dri(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
     person_id: Uuid,
 ) -> Result<PersonFirmRole, FirmError> {
-    let result = if crate::postgres::tenancy::enabled() {
+    let result = {
         Box::pin(crate::postgres::tenancy::appoint_admin_dri(
             actor_role, firm_id, person_id,
         ))
         .await
-    } else {
-        appoint_admin_dri_inner(surreal, actor_role, actor_person_id, firm_id, person_id).await
     };
     // ENG-464: the appointment/transfer outcome, distinct from
     // `firm_capability.resolve`'s own event above it — this names *who was
@@ -1801,89 +1017,6 @@ pub async fn appoint_admin_dri(
     result
 }
 
-async fn appoint_admin_dri_inner(
-    surreal: &SurrealDb,
-    actor_role: Role,
-    actor_person_id: Option<Uuid>,
-    firm_id: Uuid,
-    person_id: Uuid,
-) -> Result<PersonFirmRole, FirmError> {
-    match crate::firm_capability::resolve(
-        surreal,
-        actor_role,
-        actor_person_id,
-        firm_id,
-        crate::firm_capability::FirmCapability::ManageAdminDri,
-    )
-    .await?
-    {
-        crate::firm_capability::FirmCapabilityDecision::Allowed => {}
-        crate::firm_capability::FirmCapabilityDecision::FirmNotFound => {
-            return Err(FirmError::NoSuchFirm(firm_id));
-        }
-        crate::firm_capability::FirmCapabilityDecision::Forbidden => {
-            return Err(FirmError::NotAuthorized);
-        }
-    }
-
-    let person = crate::persons::find_by_id(surreal, person_id)
-        .await?
-        .ok_or(FirmError::NoSuchPerson(person_id))?;
-    if !person.role.is_admin_tier() {
-        return Err(FirmError::IneligibleAdminDriTier(person_id));
-    }
-    let grant_owner_membership = match membership_for_person(surreal, person_id, firm_id).await? {
-        None if person.role.is_owner() => true,
-        None => return Err(FirmError::AdminDriCrossFirm(person_id, firm_id)),
-        Some(row) if row.membership != FirmMembership::Admin => {
-            return Err(FirmError::WrongAdminDriMembership(person_id, firm_id));
-        }
-        Some(_) => false,
-    };
-    let set_dri = if grant_owner_membership {
-        "CREATE $membership_id SET person_id = $person_id, firm_id = $firm_id, \
-         membership = 'admin', is_dri = true, inserted_at = $now, updated_at = $now;"
-    } else {
-        "UPDATE person_firm_role SET is_dri = true, updated_at = $now \
-         WHERE person_id = $person_id AND firm_id = $firm_id;"
-    };
-
-    let membership_id = Uuid::now_v7();
-    let now = chrono::Utc::now().to_rfc3339();
-    writing(|| {
-        surreal
-            .query(format!(
-                "BEGIN; \
-                 UPDATE person_firm_role SET is_dri = false, updated_at = $now \
-                 WHERE firm_id = $firm_id AND is_dri = true; \
-                 {set_dri} \
-                 COMMIT;"
-            ))
-            .bind(("firm_id", record_id(TABLE, firm_id)))
-            .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-            .bind(("membership_id", record_id(MEMBERSHIP_TABLE, membership_id)))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    if crate::postgres_mirror::enabled() {
-        let memberships = memberships_for_firm(surreal, firm_id).await?;
-        crate::postgres_mirror::after_writes(
-            surreal,
-            memberships
-                .into_iter()
-                .map(|role| MirrorKey::FirmMembership {
-                    person_id: role.person_id,
-                    firm_id,
-                }),
-        )
-        .await;
-    }
-
-    membership_for_person(surreal, person_id, firm_id)
-        .await?
-        .ok_or(FirmError::WriteReturnedNothing)
-}
-
 /// Refuse a `person_firm_role` edit that would leave an active Firm with no
 /// Admin DRI (ENG-499 scope item 3).
 ///
@@ -1895,7 +1028,7 @@ async fn appoint_admin_dri_inner(
 /// [`appoint_admin_dri`] is the only way past this guard for the current
 /// sole DRI.
 pub async fn refuse_admin_dri_orphaning(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
     person_id: Uuid,
     new_membership: Option<FirmMembership>,
@@ -1903,13 +1036,13 @@ pub async fn refuse_admin_dri_orphaning(
     if new_membership == Some(FirmMembership::Admin) {
         return Ok(());
     }
-    let Some(row) = membership_for_person(surreal, person_id, firm_id).await? else {
+    let Some(row) = membership_for_person(application_store, person_id, firm_id).await? else {
         return Ok(());
     };
     if !row.is_dri {
         return Ok(());
     }
-    let Some(firm) = find_by_id(surreal, firm_id).await? else {
+    let Some(firm) = find_by_id(application_store, firm_id).await? else {
         return Ok(());
     };
     if firm.status != "active" {
@@ -1948,14 +1081,14 @@ pub enum AdminDriProblem {
 /// eligible Admin DRI. Read-only: it never appoints, clears, or otherwise
 /// repairs a row — [`appoint_admin_dri`] is the only writer.
 pub async fn admin_dri_invariant_report(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
 ) -> Result<Vec<AdminDriStatus>, FirmError> {
     let mut out = Vec::new();
-    for firm in all(surreal).await? {
+    for firm in all(application_store).await? {
         if firm.status != "active" {
             continue;
         }
-        let dris: Vec<PersonFirmRole> = memberships_for_firm(surreal, firm.id)
+        let dris: Vec<PersonFirmRole> = memberships_for_firm(application_store, firm.id)
             .await?
             .into_iter()
             .filter(|role| role.is_dri)
@@ -1969,7 +1102,7 @@ pub async fn admin_dri_invariant_report(
         } else {
             let dri = &dris[0];
             if dri.membership == FirmMembership::Admin {
-                match crate::persons::find_by_id(surreal, dri.person_id).await? {
+                match crate::persons::find_by_id(application_store, dri.person_id).await? {
                     Some(person) if person.role.is_admin_tier() => None,
                     _ => Some(AdminDriProblem::Ineligible(dri.person_id)),
                 }
@@ -2000,7 +1133,7 @@ pub async fn admin_dri_invariant_report(
 /// [`crate::seed::BOOTSTRAP_COMPANY_ENV`] `portal::admin::bootstrap_company_from_env`
 /// resolves for the Entity surface, so the two agree on which Entity is the
 /// anchor without either importing the other.
-pub async fn anchor_firm(surreal: &SurrealDb) -> Result<Option<Firm>, FirmError> {
+pub async fn anchor_firm(application_store: &ApplicationStore) -> Result<Option<Firm>, FirmError> {
     let configured = std::env::var(crate::seed::BOOTSTRAP_COMPANY_ENV)
         .ok()
         .map(|value| value.trim().to_string())
@@ -2012,18 +1145,15 @@ pub async fn anchor_firm(surreal: &SurrealDb) -> Result<Option<Firm>, FirmError>
     // claim the key by matching `configured` case-insensitively in the first
     // place, so the lowercased forms are identical.
     let key = configured.to_lowercase();
-    let Some(entity_id) = crate::entities::firm_anchor_holder(surreal, &key).await? else {
+    let Some(entity_id) = crate::entities::firm_anchor_holder(application_store, &key).await?
+    else {
         return Ok(None);
     };
-    find_by_entity_id(surreal, entity_id).await
+    find_by_entity_id(application_store, entity_id).await
 }
 
 #[cfg(test)]
 mod calendar_tests;
-
-#[cfg(test)]
-#[path = "firms/compatibility_tests.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "firms/native_tests.rs"]

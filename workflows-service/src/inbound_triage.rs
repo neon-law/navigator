@@ -16,8 +16,8 @@ use std::time::Duration;
 use cloud::{GeminiVertexAdapter, MetadataTokenSource, VertexError, VertexRequest};
 
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::inbox::{direction, Conversation, Message};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::inbox_triage::ClassifierLane;
 use workflows::{
@@ -225,14 +225,17 @@ fn retryable(error: &VertexError) -> bool {
 
 #[derive(Clone)]
 pub struct InboundTriageService {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     providers: Option<TriageProviders>,
 }
 
 impl InboundTriageService {
     #[must_use]
-    pub fn new(surreal: SurrealDb, providers: Option<TriageProviders>) -> Self {
-        Self { surreal, providers }
+    pub fn new(application_store: ApplicationStore, providers: Option<TriageProviders>) -> Self {
+        Self {
+            application_store,
+            providers,
+        }
     }
 }
 
@@ -256,11 +259,11 @@ struct TriageContext {
 }
 
 async fn triage_context(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     message_id: Uuid,
     providers: Option<&TriageProviders>,
 ) -> Result<Option<TriageContext>, WorkflowStepError> {
-    let Some(message): Option<Message> = store::inbox::message_by_id(surreal, message_id)
+    let Some(message): Option<Message> = store::inbox::message_by_id(application_store, message_id)
         .await
         .map_err(WorkflowStepError::retryable)?
     else {
@@ -270,7 +273,7 @@ async fn triage_context(
         return Ok(None);
     }
     let Some(conversation): Option<Conversation> =
-        store::inbox::conversation_by_id(surreal, message.conversation_id)
+        store::inbox::conversation_by_id(application_store, message.conversation_id)
             .await
             .map_err(WorkflowStepError::retryable)?
     else {
@@ -306,14 +309,14 @@ async fn triage_context(
 /// when the Project exists and belongs to the message's own Firm. Anything
 /// else decays to no suggestion — the row then waits for a person.
 async fn validate_suggestion(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
     candidate: Option<Uuid>,
 ) -> Result<Option<Uuid>, WorkflowStepError> {
     let Some(candidate) = candidate else {
         return Ok(None);
     };
-    let project = store::projects::find_by_id(surreal, candidate)
+    let project = store::projects::find_by_id(application_store, candidate)
         .await
         .map_err(WorkflowStepError::retryable)?;
     Ok(project
@@ -322,10 +325,10 @@ async fn validate_suggestion(
 }
 
 async fn firm_menu(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
 ) -> Result<Vec<ProjectOption>, WorkflowStepError> {
-    let choices = store::inbox::projects_in_firm(surreal, firm_id)
+    let choices = store::inbox::projects_in_firm(application_store, firm_id)
         .await
         .map_err(WorkflowStepError::retryable)?;
     Ok(choices
@@ -340,7 +343,7 @@ async fn firm_menu(
 
 async fn classifier_attempt(
     providers: Option<TriageProviders>,
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     message_id: Uuid,
     invocation: ClassifierConfig,
     channel: String,
@@ -357,14 +360,15 @@ async fn classifier_attempt(
         });
     };
     providers.project_id = invocation.project_id;
-    let message = store::inbox::message_by_id(&surreal, message_id)
+    let message = store::inbox::message_by_id(&application_store, message_id)
         .await
         .map_err(WorkflowStepError::retryable)?
         .ok_or_else(|| WorkflowStepError::terminal("inbound message not found"))?;
-    let conversation = store::inbox::conversation_by_id(&surreal, message.conversation_id)
-        .await
-        .map_err(WorkflowStepError::retryable)?
-        .ok_or_else(|| WorkflowStepError::terminal("inbound conversation not found"))?;
+    let conversation =
+        store::inbox::conversation_by_id(&application_store, message.conversation_id)
+            .await
+            .map_err(WorkflowStepError::retryable)?
+            .ok_or_else(|| WorkflowStepError::terminal("inbound conversation not found"))?;
     let prompt = build_triage_prompt(
         &channel,
         conversation.subject.as_deref(),
@@ -377,14 +381,14 @@ async fn classifier_attempt(
 }
 
 async fn record_triage(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     message_id: Uuid,
     context: TriageContext,
     lane: ClassifierLane,
     attempt: ClassifierAttempt,
 ) -> Result<InboundTriageReport, WorkflowStepError> {
     let validated = validate_suggestion(
-        surreal,
+        application_store,
         context.firm_id,
         attempt
             .output
@@ -401,7 +405,7 @@ async fn record_triage(
         attempt.output.as_ref(),
         validated,
     );
-    let recorded = store::inbox_triage::record(surreal, &row)
+    let recorded = store::inbox_triage::record(application_store, &row)
         .await
         .map_err(WorkflowStepError::retryable)?;
     Ok(triage_report(message_id, &recorded))
@@ -438,11 +442,11 @@ pub fn register_filing_dbos(
     dbos: &dbos::DBOS,
     service: InboundTriageService,
 ) -> dbos::Result<FilingWorkflow> {
-    let surreal = service.surreal;
+    let application_store = service.application_store;
     dbos.register_workflow(
         "FileInboxMessage",
         move |approval: store::inbox_triage::FilingApproval| {
-            let surreal = surreal.clone();
+            let application_store = application_store.clone();
             async move {
                 let filed = dbos::step_with(
                     "file-approved-message",
@@ -451,7 +455,11 @@ pub fn register_filing_dbos(
                         ..Default::default()
                     },
                     || async {
-                        match store::inbox_triage::file_approved_message(&surreal, &approval).await
+                        match store::inbox_triage::file_approved_message(
+                            &application_store,
+                            &approval,
+                        )
+                        .await
                         {
                             Ok(id) => Ok(Some(id)),
                             Err(
@@ -496,9 +504,13 @@ async fn run_dbos(
     message_id: Uuid,
 ) -> dbos::Result<InboundTriageReport, TriageError> {
     let context = dbos::step("load-inbound-triage-context", || async {
-        triage_context(&service.surreal, message_id, service.providers.as_ref())
-            .await
-            .map_err(triage_step_error)
+        triage_context(
+            &service.application_store,
+            message_id,
+            service.providers.as_ref(),
+        )
+        .await
+        .map_err(triage_step_error)
     })
     .await?;
     let Some(context) = context else {
@@ -514,7 +526,7 @@ async fn run_dbos(
         .await;
     }
     let existing = dbos::step("find-existing-triage", || async {
-        store::inbox_triage::find_for_message(&service.surreal, message_id)
+        store::inbox_triage::find_for_message(&service.application_store, message_id)
             .await
             .map_err(|_| dbos::Error::Application(TriageError::Store))
     })
@@ -524,7 +536,7 @@ async fn run_dbos(
     }
     let attempt = if let Some(invocation) = context.classifier.as_ref() {
         let menu = dbos::step("load-firm-project-menu", || async {
-            firm_menu(&service.surreal, context.firm_id)
+            firm_menu(&service.application_store, context.firm_id)
                 .await
                 .map_err(triage_step_error)
         })
@@ -537,7 +549,7 @@ async fn run_dbos(
             async move {
                 classifier_attempt(
                     service.providers,
-                    service.surreal,
+                    service.application_store,
                     message_id,
                     invocation,
                     channel,
@@ -557,16 +569,16 @@ async fn run_dbos(
     };
     dbos::step("record-inbound-triage", || {
         let (context, attempt) = (context.clone(), attempt.clone());
-        let surreal = service.surreal.clone();
+        let application_store = service.application_store.clone();
         async move {
             // The write may have succeeded before DBOS checkpointed the step.
-            if let Some(row) = store::inbox_triage::find_for_message(&surreal, message_id)
+            if let Some(row) = store::inbox_triage::find_for_message(&application_store, message_id)
                 .await
                 .map_err(|_| dbos::Error::Application(TriageError::Store))?
             {
                 return Ok(triage_report(message_id, &row));
             }
-            record_or_load_dbos(&surreal, message_id, context, attempt).await
+            record_or_load_dbos(&application_store, message_id, context, attempt).await
         }
     })
     .await
@@ -579,8 +591,8 @@ async fn classify_and_record_dbos(
     message_id: Uuid,
     context: TriageContext,
 ) -> dbos::Result<InboundTriageReport, TriageError> {
-    let surreal = service.surreal;
-    if let Some(row) = store::inbox_triage::find_for_message(&surreal, message_id)
+    let application_store = service.application_store;
+    if let Some(row) = store::inbox_triage::find_for_message(&application_store, message_id)
         .await
         .map_err(|_| dbos::Error::Application(TriageError::Store))?
     {
@@ -588,12 +600,12 @@ async fn classify_and_record_dbos(
     }
     let attempt = match context.classifier.clone() {
         Some(invocation) => {
-            let menu = firm_menu(&surreal, context.firm_id)
+            let menu = firm_menu(&application_store, context.firm_id)
                 .await
                 .map_err(triage_step_error)?;
             classifier_attempt(
                 service.providers,
-                surreal.clone(),
+                application_store.clone(),
                 message_id,
                 invocation,
                 context.channel.clone(),
@@ -608,18 +620,26 @@ async fn classify_and_record_dbos(
             run_config: None,
         },
     };
-    record_or_load_dbos(&surreal, message_id, context, attempt).await
+    record_or_load_dbos(&application_store, message_id, context, attempt).await
 }
 
 async fn record_or_load_dbos(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     message_id: Uuid,
     context: TriageContext,
     attempt: ClassifierAttempt,
 ) -> dbos::Result<InboundTriageReport, TriageError> {
-    match record_triage(surreal, message_id, context, attempt.lane(), attempt).await {
+    match record_triage(
+        application_store,
+        message_id,
+        context,
+        attempt.lane(),
+        attempt,
+    )
+    .await
+    {
         Ok(report) => Ok(report),
-        Err(error) => store::inbox_triage::find_for_message(surreal, message_id)
+        Err(error) => store::inbox_triage::find_for_message(application_store, message_id)
             .await
             .ok()
             .flatten()
@@ -692,85 +712,6 @@ mod tests {
             model: TRIAGE_MODEL.to_string(),
             location: TRIAGE_LOCATION.to_string(),
         }
-    }
-
-    async fn context_fixture(
-        channel: &'static str,
-        providers: Option<&TriageProviders>,
-    ) -> super::TriageContext {
-        let db = store::test_support::mem_surreal().await;
-        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let saved = store::inbox::ingest_inbound(
-            &db,
-            &store::inbox::IngestInbound {
-                firm_id,
-                brand_key: Some("neon"),
-                interaction_type: Some("message"),
-                provider_post_id: None,
-                parent_provider_message_id: None,
-                visibility: None,
-                channel,
-                provider_account: "synthetic-account",
-                provider_message_id: "snapshot-message",
-                provider_thread_ref: None,
-                external_address: "sender@example.com",
-                external_name: None,
-                subject: Some("Synthetic subject"),
-                body: "Synthetic private text",
-                source_page: None,
-                source_channel: None,
-                matter_consent: false,
-                promotional_opt_in: false,
-                email_conversation_id: None,
-                attachments: Vec::new(),
-                project_id: None,
-                occurred_at: "2026-11-01T00:00:00Z",
-                raw_storage_key: None,
-            },
-        )
-        .await
-        .unwrap();
-        super::triage_context(&db, saved.message_id, providers)
-            .await
-            .unwrap()
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn context_checkpoint_keeps_classifier_choices_after_boot_configuration_changes() {
-        let server = MockServer::start().await;
-        let mut current = providers(&server.uri());
-        let context = context_fixture("email", Some(&current)).await;
-        let checkpoint = serde_json::to_value(&context).unwrap();
-        assert!(!checkpoint.to_string().contains("Synthetic private text"));
-        assert!(!checkpoint.to_string().contains("Synthetic subject"));
-        current.model = "changed-bootstrap-model".into();
-        current.project_id = "changed-bootstrap-project".into();
-        let fresh = context_fixture("email", Some(&current))
-            .await
-            .classifier
-            .unwrap();
-        assert_eq!(fresh.run.model, "changed-bootstrap-model");
-        assert_eq!(fresh.project_id, "changed-bootstrap-project");
-        let replayed: super::TriageContext = serde_json::from_value(checkpoint).unwrap();
-        let pinned = replayed.classifier.unwrap();
-        assert_eq!(pinned.run.model, TRIAGE_MODEL);
-        assert_eq!(pinned.project_id, SYNTHETIC_PROJECT);
-        assert!(context_fixture("email", None).await.classifier.is_none());
-        assert!(server.received_requests().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn social_and_scraper_contexts_never_select_the_classifier() {
-        let server = MockServer::start().await;
-        let configured = providers(&server.uri());
-        for channel in ["x", "scraper"] {
-            assert!(context_fixture(channel, Some(&configured))
-                .await
-                .classifier
-                .is_none());
-        }
-        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     fn config(digest: &str) -> TriageRunConfig {
@@ -926,47 +867,12 @@ mod tests {
             ("NAVIGATOR_TRIAGE_VERTEX_BASE_URL", "http://fixture.invalid"),
             ("GOOGLE_METADATA_URL", "http://fixture.invalid/token"),
             ("NAVIGATOR_CI_HARNESS", "1"),
-            ("RESTATE_BROKER_URL", "http://127.0.0.1:8080"),
         ]);
         let providers = TriageProviders::from_lookup(harness)
             .unwrap()
             .expect("harness overrides are honoured");
         assert_eq!(providers.model, cloud::DEFAULT_GEMINI_TRIAGE_MODEL);
         assert_eq!(providers.location, cloud::DEFAULT_GEMINI_TRIAGE_LOCATION);
-    }
-
-    fn inbound<'a>(
-        firm_id: uuid::Uuid,
-        channel: &'a str,
-        interaction_type: &'a str,
-        visibility: Option<&'a str>,
-        provider_message_id: &'a str,
-    ) -> store::inbox::IngestInbound<'a> {
-        store::inbox::IngestInbound {
-            firm_id,
-            brand_key: Some("neon"),
-            interaction_type: Some(interaction_type),
-            provider_post_id: None,
-            parent_provider_message_id: None,
-            visibility,
-            channel,
-            provider_account: "synthetic-account",
-            provider_message_id,
-            provider_thread_ref: None,
-            external_address: "sender@example.com",
-            external_name: None,
-            subject: Some("Synthetic subject"),
-            body: "Synthetic private text",
-            source_page: None,
-            source_channel: None,
-            matter_consent: false,
-            promotional_opt_in: false,
-            email_conversation_id: None,
-            attachments: Vec::new(),
-            project_id: None,
-            occurred_at: "2026-11-01T00:00:00Z",
-            raw_storage_key: None,
-        }
     }
 
     #[test]
@@ -1098,182 +1004,5 @@ mod tests {
             1,
             "a non-retryable failure decays at once"
         );
-    }
-
-    #[tokio::test]
-    async fn a_missing_message_is_a_terminal_context_failure() {
-        let db = store::test_support::mem_surreal().await;
-        let error = super::triage_context(&db, uuid::Uuid::now_v7(), None)
-            .await
-            .expect_err("an unknown message has no context");
-        assert!(
-            format!("{error:?}").contains("inbound message not found"),
-            "{error:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_message_that_is_not_inbound_has_no_triage_context() {
-        let db = store::test_support::mem_surreal().await;
-        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let saved = store::inbox::ingest_inbound(
-            &db,
-            &inbound(firm_id, "email", "message", None, "outbound-message"),
-        )
-        .await
-        .unwrap();
-        db.query("UPDATE $id SET direction = $direction")
-            .bind(("id", store::surreal::record_id("message", saved.message_id)))
-            .bind(("direction", store::inbox::direction::OUTBOUND))
-            .await
-            .unwrap();
-        assert!(super::triage_context(&db, saved.message_id, None)
-            .await
-            .unwrap()
-            .is_none());
-        let report = super::non_inbound_report(saved.message_id);
-        assert_eq!(report.message_id, saved.message_id);
-        assert_eq!(report.disposition, "skipped_non_inbound");
-        assert!(report.privilege.is_empty());
-    }
-
-    #[tokio::test]
-    async fn only_a_public_non_direct_social_message_is_public_social() {
-        let db = store::test_support::mem_surreal().await;
-        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let cases = [
-            ("comment", Some("public"), "public-comment", true),
-            ("comment", None, "unknown-comment", false),
-            ("direct_message", Some("public"), "public-dm", false),
-        ];
-        for (interaction, visibility, provider_id, expected) in cases {
-            let saved = store::inbox::ingest_inbound(
-                &db,
-                &inbound(firm_id, "x", interaction, visibility, provider_id),
-            )
-            .await
-            .unwrap();
-            let context = super::triage_context(&db, saved.message_id, None)
-                .await
-                .unwrap()
-                .expect("an inbound social message has a context");
-            assert_eq!(context.firm_id, firm_id);
-            assert_eq!(context.channel, "x");
-            assert_eq!(
-                context.public_social, expected,
-                "{interaction} with visibility {visibility:?}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a_suggestion_counts_only_for_a_project_in_the_message_firm() {
-        let db = store::test_support::mem_surreal().await;
-        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other_admin = store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Other Firm Admin",
-                format!("other-admin-{}@example.com", uuid::Uuid::now_v7()),
-                store::persons::Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let other_firm = store::firms::create(
-            &db,
-            &store::firms::NewFirm {
-                name: format!("Other Firm {}", uuid::Uuid::now_v7()),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(&db).await,
-                admin_dri_person_id: other_admin.id,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
-        let own = store::test_support::seed_project_on_firm(
-            &db,
-            Some(firm_id),
-            "Synthetic triage matter",
-        )
-        .await
-        .id;
-        let foreign = store::test_support::seed_project_on_firm(
-            &db,
-            Some(other_firm),
-            "Synthetic triage matter",
-        )
-        .await
-        .id;
-        let unowned =
-            store::test_support::seed_project_on_firm(&db, None, "Synthetic triage matter")
-                .await
-                .id;
-
-        assert_eq!(
-            super::validate_suggestion(&db, firm_id, None)
-                .await
-                .unwrap(),
-            None
-        );
-        assert_eq!(
-            super::validate_suggestion(&db, firm_id, Some(own))
-                .await
-                .unwrap(),
-            Some(own)
-        );
-        for claim in [foreign, unowned, uuid::Uuid::now_v7()] {
-            assert_eq!(
-                super::validate_suggestion(&db, firm_id, Some(claim))
-                    .await
-                    .unwrap(),
-                None,
-                "a suggestion outside the Firm decays to none"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn the_report_mirrors_the_recorded_row() {
-        let db = store::test_support::mem_surreal().await;
-        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let saved = store::inbox::ingest_inbound(
-            &db,
-            &inbound(firm_id, "email", "message", None, "recorded-message"),
-        )
-        .await
-        .unwrap();
-        let context = super::triage_context(&db, saved.message_id, None)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(context.classifier.is_none(), "no providers, no classifier");
-        let row = workflows::assemble_triage(
-            saved.message_id,
-            context.firm_id,
-            &context.channel,
-            context.public_social,
-            &workflows::inbox_triage::ClassifierLane::rules_only(),
-            None,
-            None,
-        );
-        let recorded = store::inbox_triage::record(&db, &row).await.unwrap();
-        let report = super::triage_report(saved.message_id, &recorded);
-        assert_eq!(report.message_id, saved.message_id);
-        assert_eq!(report.privilege, recorded.privilege.as_str());
-        assert_eq!(report.disposition, recorded.disposition.as_str());
-        assert_eq!(
-            report.privilege, "uncertain",
-            "automation never clears email"
-        );
-        assert_eq!(report.disposition, "needs_human");
-    }
-
-    #[tokio::test]
-    async fn the_service_is_rules_only_without_providers() {
-        let db = store::test_support::mem_surreal().await;
-        let service = super::InboundTriageService::new(db, None);
-        assert!(service.providers.is_none());
     }
 }

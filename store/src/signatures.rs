@@ -26,13 +26,9 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
-
-/// The table these rows live in.
-pub(crate) const TABLE: &str = "signature";
+use crate::application_store::ApplicationStore;
 
 /// The e-signature (and, for [`crate::notarizations`], notarization)
 /// provider that executed a request. A closed set keeps call sites and the
@@ -167,54 +163,11 @@ impl Signature {
     }
 }
 
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct SignatureRow {
-    id: surrealdb::types::RecordId,
-    notation_id: surrealdb::types::RecordId,
-    signer_person_id: Option<surrealdb::types::RecordId>,
-    field: Option<String>,
-    provider: String,
-    provider_id: String,
-    state: String,
-    signed_at: Option<String>,
-    completed_signer_roles: Option<Vec<String>>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl SignatureRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_signature(self) -> Option<Signature> {
-        Some(Signature {
-            id: record_uuid(&self.id)?,
-            notation_id: record_uuid(&self.notation_id)?,
-            signer_person_id: self.signer_person_id.as_ref().and_then(record_uuid),
-            field: self.field,
-            provider: self.provider,
-            provider_id: self.provider_id,
-            state: SignatureState::from_stored(&self.state)?,
-            signed_at: self.signed_at,
-            completed_signer_roles: self.completed_signer_roles.unwrap_or_default(),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`SignatureRow`] from only one query.
-const SELECT: &str = "id, notation_id, signer_person_id, field, provider, provider_id, \
-     state, signed_at, completed_signer_roles, inserted_at, updated_at";
-
 use crate::postgres::signatures as authority;
 
 /// Errors reading or writing a signature.
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// PostgreSQL, under the signature authority, failed.
     #[error(transparent)]
     Postgres(#[from] authority::SignatureFamilyError),
@@ -227,30 +180,6 @@ pub enum SignatureError {
     /// module could not read back.
     #[error("writing a signature returned no usable row")]
     WriteReturnedNothing,
-}
-
-fn is_provider_request_conflict(error: &surrealdb::Error) -> bool {
-    crate::surreal::retry::unique_violation(error) == Some("signature_provider_request")
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, surrealdb::Error>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await
-}
-
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Signature>, surrealdb::Error> {
-    let row: Option<SignatureRow> = response.take(0)?;
-    Ok(row.and_then(SignatureRow::into_signature))
 }
 
 /// The row as PostgreSQL's `to_jsonb` serves it, under the
@@ -312,65 +241,34 @@ fn instant(raw: &str) -> Result<DateTime<Utc>, SignatureError> {
 ///
 /// [`SignatureError::Db`] if the write fails.
 pub async fn record_request(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     notation_id: Uuid,
     provider: SignatureProvider,
     provider_id: &str,
 ) -> Result<Signature, SignatureError> {
-    if let Some(pg) = authority::authority().await? {
-        let row = serde_json::json!({
-            "id": Uuid::now_v7(), "notation_id": notation_id,
-            "provider": provider.as_str(), "provider_id": provider_id,
-            "state": SignatureState::Requested.as_str(),
-        });
-        let query = sqlx::query(
-            "INSERT INTO signature SELECT * FROM \
-             jsonb_populate_record(NULL::signature, \
-             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-             RETURNING to_jsonb(signature) AS row",
-        )
-        .bind(row);
-        return match authority::maybe::<PgSignatureRow>(&pg, query).await {
-            Ok(Some(row)) => Ok(Signature::from(row)),
-            Ok(None) => Err(SignatureError::WriteReturnedNothing),
-            Err(error) if error.violates("signature_provider_request") => {
-                by_provider(db, provider, provider_id)
-                    .await?
-                    .filter(|signature| signature.notation_id == notation_id)
-                    .ok_or(SignatureError::WriteReturnedNothing)
-            }
-            Err(error) => Err(error.into()),
-        };
-    }
-    let id = Uuid::now_v7();
-    match db
-        .query(format!(
-            "CREATE $id SET \
-             notation_id = $notation_id, provider = $provider, provider_id = $provider_id \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "notation_id",
-            record_id(crate::notations::TABLE, notation_id),
-        ))
-        .bind(("provider", provider.as_str().to_string()))
-        .bind(("provider_id", provider_id.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-    {
-        Ok(mut response) => {
-            let row: Option<SignatureRow> = response.take(0)?;
-            row.and_then(SignatureRow::into_signature)
-                .ok_or(SignatureError::WriteReturnedNothing)
-        }
-        Err(error) if is_provider_request_conflict(&error) => {
+    let pg = authority::authority().await?;
+    let row = serde_json::json!({
+        "id": Uuid::now_v7(), "notation_id": notation_id,
+        "provider": provider.as_str(), "provider_id": provider_id,
+        "state": SignatureState::Requested.as_str(),
+    });
+    let query = sqlx::query(
+        "INSERT INTO signature SELECT * FROM \
+         jsonb_populate_record(NULL::signature, \
+         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+         RETURNING to_jsonb(signature) AS row",
+    )
+    .bind(row);
+    match authority::maybe::<PgSignatureRow>(&pg, query).await {
+        Ok(Some(row)) => Ok(Signature::from(row)),
+        Ok(None) => Err(SignatureError::WriteReturnedNothing),
+        Err(error) if error.violates("signature_provider_request") => {
             by_provider(db, provider, provider_id)
                 .await?
-                .filter(|request| request.notation_id == notation_id)
+                .filter(|signature| signature.notation_id == notation_id)
                 .ok_or(SignatureError::WriteReturnedNothing)
         }
-        Err(error) => Err(SignatureError::Db(error)),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -381,31 +279,20 @@ pub async fn record_request(
 ///
 /// [`SignatureError::Db`] if the lookup fails.
 pub async fn by_provider(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
 ) -> Result<Option<Signature>, SignatureError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(signature) AS row FROM signature \
-             WHERE provider = $1 AND provider_id = $2 LIMIT 1",
-        )
-        .bind(provider.as_str())
-        .bind(provider_id);
-        return Ok(authority::maybe::<PgSignatureRow>(&pg, query)
-            .await?
-            .map(Signature::from));
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE provider = $provider AND provider_id = $provider_id \
-             LIMIT 1"
-        ))
-        .bind(("provider", provider.as_str().to_string()))
-        .bind(("provider_id", provider_id.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(signature) AS row FROM signature \
+         WHERE provider = $1 AND provider_id = $2 LIMIT 1",
+    )
+    .bind(provider.as_str())
+    .bind(provider_id);
+    Ok(authority::maybe::<PgSignatureRow>(&pg, query)
+        .await?
+        .map(Signature::from))
 }
 
 /// The provider request id sent for a Notation, if one has been sent. The
@@ -416,26 +303,16 @@ pub async fn by_provider(
 ///
 /// [`SignatureError::Db`] if the lookup fails.
 pub async fn request_id_for_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Option<String>, SignatureError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT provider_id FROM signature WHERE notation_id = $1 \
-             ORDER BY inserted_at DESC LIMIT 1",
-        )
-        .bind(notation_id);
-        return Ok(authority::maybe_scalar::<String>(&pg, query).await?);
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation \
-             ORDER BY inserted_at DESC LIMIT 1"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?.map(|s| s.provider_id))
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT provider_id FROM signature WHERE notation_id = $1 \
+         ORDER BY inserted_at DESC LIMIT 1",
+    )
+    .bind(notation_id);
+    Ok(authority::maybe_scalar::<String>(&pg, query).await?)
 }
 
 /// The completed signature for a Notation, if the provider has ever
@@ -451,29 +328,19 @@ pub async fn request_id_for_notation(
 ///
 /// [`SignatureError::Db`] if the lookup fails.
 pub async fn completed_for_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Option<Signature>, SignatureError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(signature) AS row FROM signature \
-             WHERE notation_id = $1 AND signed_at IS NOT NULL \
-             ORDER BY inserted_at DESC LIMIT 1",
-        )
-        .bind(notation_id);
-        return Ok(authority::maybe::<PgSignatureRow>(&pg, query)
-            .await?
-            .map(Signature::from));
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation AND signed_at != NONE \
-             ORDER BY inserted_at DESC LIMIT 1"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(signature) AS row FROM signature \
+         WHERE notation_id = $1 AND signed_at IS NOT NULL \
+         ORDER BY inserted_at DESC LIMIT 1",
+    )
+    .bind(notation_id);
+    Ok(authority::maybe::<PgSignatureRow>(&pg, query)
+        .await?
+        .map(Signature::from))
 }
 
 /// The most recently recorded signature row for a Notation, in any state —
@@ -488,28 +355,18 @@ pub async fn completed_for_notation(
 ///
 /// [`SignatureError::Db`] if the lookup fails.
 pub async fn latest_for_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Option<Signature>, SignatureError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(signature) AS row FROM signature \
-             WHERE notation_id = $1 ORDER BY inserted_at DESC LIMIT 1",
-        )
-        .bind(notation_id);
-        return Ok(authority::maybe::<PgSignatureRow>(&pg, query)
-            .await?
-            .map(Signature::from));
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation \
-             ORDER BY inserted_at DESC LIMIT 1"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(signature) AS row FROM signature \
+         WHERE notation_id = $1 ORDER BY inserted_at DESC LIMIT 1",
+    )
+    .bind(notation_id);
+    Ok(authority::maybe::<PgSignatureRow>(&pg, query)
+        .await?
+        .map(Signature::from))
 }
 
 /// Every signature request on a Notation, oldest first — one row per
@@ -519,32 +376,19 @@ pub async fn latest_for_notation(
 ///
 /// [`SignatureError::Db`] if the lookup fails.
 pub async fn for_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Vec<Signature>, SignatureError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(signature) AS row FROM signature \
-             WHERE notation_id = $1 ORDER BY inserted_at, id",
-        )
-        .bind(notation_id);
-        return Ok(authority::rows::<PgSignatureRow>(&pg, query)
-            .await?
-            .into_iter()
-            .map(Signature::from)
-            .collect());
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation ORDER BY inserted_at, id"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<SignatureRow> = response.take(0)?;
-    Ok(rows
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(signature) AS row FROM signature \
+         WHERE notation_id = $1 ORDER BY inserted_at, id",
+    )
+    .bind(notation_id);
+    Ok(authority::rows::<PgSignatureRow>(&pg, query)
+        .await?
         .into_iter()
-        .filter_map(SignatureRow::into_signature)
+        .map(Signature::from)
         .collect())
 }
 
@@ -562,39 +406,22 @@ pub async fn for_notation(
 ///
 /// [`SignatureError::Db`] if the lookup fails.
 pub async fn completed_for_notations(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_ids: &[Uuid],
 ) -> Result<Vec<Signature>, SignatureError> {
     if notation_ids.is_empty() {
         return Ok(Vec::new());
     }
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(signature) AS row FROM signature \
-             WHERE notation_id = ANY($1) AND signed_at IS NOT NULL",
-        )
-        .bind(notation_ids);
-        return Ok(authority::rows::<PgSignatureRow>(&pg, query)
-            .await?
-            .into_iter()
-            .map(Signature::from)
-            .collect());
-    }
-    let notations: Vec<surrealdb::types::RecordId> = notation_ids
-        .iter()
-        .map(|id| record_id(crate::notations::TABLE, *id))
-        .collect();
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id IN $notations AND signed_at != NONE"
-        ))
-        .bind(("notations", notations))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<SignatureRow> = response.take(0)?;
-    Ok(rows
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(signature) AS row FROM signature \
+         WHERE notation_id = ANY($1) AND signed_at IS NOT NULL",
+    )
+    .bind(notation_ids);
+    Ok(authority::rows::<PgSignatureRow>(&pg, query)
+        .await?
         .into_iter()
-        .filter_map(SignatureRow::into_signature)
+        .map(Signature::from)
         .collect())
 }
 
@@ -607,64 +434,32 @@ pub async fn completed_for_notations(
 ///
 /// [`SignatureError::Db`] if the lookup or write fails.
 pub async fn stamp_signed(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
     signed_at: &str,
 ) -> Result<bool, SignatureError> {
-    if let Some(pg) = authority::authority().await? {
-        let signed_at = instant(signed_at)?;
-        let query = sqlx::query(
-            "UPDATE signature SET state = 'completed', \
-             signed_at = COALESCE(signed_at, $1), updated_at = now() \
-             WHERE provider = $2 AND provider_id = $3 AND state = 'requested'",
-        )
-        .bind(signed_at)
-        .bind(provider.as_str())
-        .bind(provider_id);
-        if authority::affected(&pg, query).await? > 0 {
-            return Ok(true);
-        }
-        // The update found nothing to stamp: either the envelope is
-        // unknown (`false`, like the SurrealDB path) or it already left
-        // `requested` — where `completed` stays `true` and every other
-        // terminal state stays `false`, the same distinction the SurrealDB
-        // path draws from the row it re-reads.
-        return Ok(by_provider(db, provider, provider_id)
-            .await?
-            .is_some_and(|row| row.state == SignatureState::Completed));
-    }
-    let Some(row) = by_provider(db, provider, provider_id).await? else {
-        return Ok(false);
-    };
-    if row.state == SignatureState::Completed {
+    let pg = authority::authority().await?;
+    let signed_at = instant(signed_at)?;
+    let query = sqlx::query(
+        "UPDATE signature SET state = 'completed', \
+         signed_at = COALESCE(signed_at, $1), updated_at = now() \
+         WHERE provider = $2 AND provider_id = $3 AND state = 'requested'",
+    )
+    .bind(signed_at)
+    .bind(provider.as_str())
+    .bind(provider_id);
+    if authority::affected(&pg, query).await? > 0 {
         return Ok(true);
     }
-    if row.state != SignatureState::Requested {
-        return Ok(false);
-    }
-
-    if row.signed_at.is_some() {
-        writing(|| {
-            db.query(
-                "UPDATE $id SET state = 'completed', updated_at = time::now() \
-                 WHERE state = 'requested'",
-            )
-            .bind(("id", record_id(TABLE, row.id)))
-        })
-        .await?;
-    } else {
-        writing(|| {
-            db.query(
-                "UPDATE $id SET state = 'completed', signed_at = $signed_at, updated_at = time::now() \
-                 WHERE state = 'requested' AND signed_at = NONE",
-            )
-            .bind(("id", record_id(TABLE, row.id)))
-            .bind(("signed_at", signed_at.to_string()))
-        })
-        .await?;
-    }
-    Ok(true)
+    // The update found nothing to stamp: either the envelope is
+    // unknown (`false`, like the SurrealDB path) or it already left
+    // `requested` — where `completed` stays `true` and every other
+    // terminal state stays `false`, the same distinction the SurrealDB
+    // path draws from the row it re-reads.
+    Ok(by_provider(db, provider, provider_id)
+        .await?
+        .is_some_and(|row| row.state == SignatureState::Completed))
 }
 
 /// Record that the recipient holding signer `role` completed their own step
@@ -676,89 +471,52 @@ pub async fn stamp_signed(
 ///
 /// [`SignatureError::Db`] if the lookup or write fails.
 pub async fn record_signer_completion(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
     role: &str,
 ) -> Result<bool, SignatureError> {
-    if let Some(pg) = authority::authority().await? {
-        // Containment keeps the append idempotent — SurrealDB's
-        // `array::union` records a role once — and the state guard means a
-        // late recipient event can never rewrite a finished envelope.
-        let query = sqlx::query(
-            "UPDATE signature SET completed_signer_roles = \
-             CASE WHEN completed_signer_roles @> to_jsonb(ARRAY[$1]) \
-                  THEN completed_signer_roles \
-                  ELSE COALESCE(completed_signer_roles, '[]'::jsonb) \
-                       || to_jsonb(ARRAY[$1]) END, \
-             updated_at = now() \
-             WHERE provider = $2 AND provider_id = $3 AND state = 'requested'",
-        )
-        .bind(role)
-        .bind(provider.as_str())
-        .bind(provider_id);
-        return Ok(authority::affected(&pg, query).await? > 0);
-    }
-    let Some(row) = by_provider(db, provider, provider_id).await? else {
-        return Ok(false);
-    };
-    if row.state != SignatureState::Requested {
-        return Ok(false);
-    }
-    writing(|| {
-        db.query(
-            "UPDATE $id SET \
-             completed_signer_roles = array::union(completed_signer_roles ?? [], [$role]), \
-             updated_at = time::now() \
-             WHERE state = 'requested'",
-        )
-        .bind(("id", record_id(TABLE, row.id)))
-        .bind(("role", role.to_string()))
-    })
-    .await?;
-    Ok(true)
+    let pg = authority::authority().await?;
+    // Containment keeps the append idempotent — SurrealDB's
+    // `array::union` records a role once — and the state guard means a
+    // late recipient event can never rewrite a finished envelope.
+    let query = sqlx::query(
+        "UPDATE signature SET completed_signer_roles = \
+         CASE WHEN completed_signer_roles @> to_jsonb(ARRAY[$1]) \
+              THEN completed_signer_roles \
+              ELSE COALESCE(completed_signer_roles, '[]'::jsonb) \
+                   || to_jsonb(ARRAY[$1]) END, \
+         updated_at = now() \
+         WHERE provider = $2 AND provider_id = $3 AND state = 'requested'",
+    )
+    .bind(role)
+    .bind(provider.as_str())
+    .bind(provider_id);
+    Ok(authority::affected(&pg, query).await? > 0)
 }
 
 async fn stamp_terminal(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
     state: SignatureState,
 ) -> Result<bool, SignatureError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "UPDATE signature SET state = $1, updated_at = now() \
-             WHERE provider = $2 AND provider_id = $3 AND state = 'requested'",
-        )
-        .bind(state.as_str())
-        .bind(provider.as_str())
-        .bind(provider_id);
-        return Ok(authority::affected(&pg, query).await? > 0);
-    }
-    let Some(row) = by_provider(db, provider, provider_id).await? else {
-        return Ok(false);
-    };
-    if row.state != SignatureState::Requested {
-        return Ok(false);
-    }
-
-    writing(|| {
-        db.query(
-            "UPDATE $id SET state = $state, updated_at = time::now() \
-             WHERE state = 'requested'",
-        )
-        .bind(("id", record_id(TABLE, row.id)))
-        .bind(("state", state.as_str().to_string()))
-    })
-    .await?;
-    Ok(true)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "UPDATE signature SET state = $1, updated_at = now() \
+         WHERE provider = $2 AND provider_id = $3 AND state = 'requested'",
+    )
+    .bind(state.as_str())
+    .bind(provider.as_str())
+    .bind(provider_id);
+    Ok(authority::affected(&pg, query).await? > 0)
 }
 
 /// Stamp a declined terminal state for a known provider envelope.
 ///
 /// A missing envelope or an already-terminal row is a no-op.
 pub async fn stamp_declined(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
 ) -> Result<bool, SignatureError> {
@@ -769,7 +527,7 @@ pub async fn stamp_declined(
 ///
 /// A missing envelope or an already-terminal row is a no-op.
 pub async fn stamp_voided(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
 ) -> Result<bool, SignatureError> {
@@ -780,7 +538,7 @@ pub async fn stamp_voided(
 ///
 /// A missing envelope or an already-terminal row is a no-op.
 pub async fn stamp_expired(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
 ) -> Result<bool, SignatureError> {
@@ -788,318 +546,4 @@ pub async fn stamp_expired(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::surreal::test_support::mem;
-    use crate::test_support::seed_notation;
-
-    #[tokio::test]
-    async fn record_request_is_idempotent_on_provider_and_provider_id() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-        let first = record_request(&surreal, notation_id, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap();
-        let again = record_request(&surreal, notation_id, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap();
-        assert_eq!(first.id, again.id);
-    }
-
-    #[tokio::test]
-    async fn signer_completion_records_each_role_once_while_the_envelope_is_live() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-        assert!(
-            !record_signer_completion(&surreal, SignatureProvider::DocuSign, "env-1", "client")
-                .await
-                .unwrap(),
-            "an unknown envelope records nothing"
-        );
-        let fresh = record_request(&surreal, notation_id, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap();
-        assert!(fresh.completed_signer_roles.is_empty());
-
-        for _ in 0..2 {
-            assert!(record_signer_completion(
-                &surreal,
-                SignatureProvider::DocuSign,
-                "env-1",
-                "client"
-            )
-            .await
-            .unwrap());
-        }
-        let live = latest_for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .expect("the envelope exists");
-        assert_eq!(live.state, SignatureState::Requested);
-        assert_eq!(live.completed_signer_roles, vec!["client".to_string()]);
-        assert!(live.signer_completed("client"));
-        assert!(!live.signer_completed("firm"));
-
-        stamp_voided(&surreal, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap();
-        assert!(
-            !record_signer_completion(&surreal, SignatureProvider::DocuSign, "env-1", "firm")
-                .await
-                .unwrap(),
-            "a terminal envelope takes no further signer completions"
-        );
-        let voided = latest_for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .expect("the envelope exists");
-        assert_eq!(voided.completed_signer_roles, vec!["client".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn request_id_for_notation_reads_the_latest_envelope() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-        assert!(request_id_for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .is_none());
-        record_request(&surreal, notation_id, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap();
-        assert_eq!(
-            request_id_for_notation(&surreal, notation_id)
-                .await
-                .unwrap(),
-            Some("env-1".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn completed_for_notation_is_none_until_stamp_signed_runs() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-        record_request(&surreal, notation_id, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap();
-        assert!(completed_for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .is_none());
-        stamp_signed(
-            &surreal,
-            SignatureProvider::DocuSign,
-            "env-1",
-            "2026-06-30T00:00:00Z",
-        )
-        .await
-        .unwrap();
-        let completed = completed_for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .expect("stamped signature is now completed");
-        assert_eq!(completed.provider_id, "env-1");
-        assert_eq!(completed.signed_at.as_deref(), Some("2026-06-30T00:00:00Z"));
-    }
-
-    #[tokio::test]
-    async fn latest_for_notation_reads_the_live_state_through_every_transition() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-        assert!(latest_for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .is_none());
-
-        record_request(&surreal, notation_id, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap();
-        assert_eq!(
-            latest_for_notation(&surreal, notation_id)
-                .await
-                .unwrap()
-                .map(|s| s.state),
-            Some(SignatureState::Requested)
-        );
-
-        stamp_declined(&surreal, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap();
-        assert_eq!(
-            latest_for_notation(&surreal, notation_id)
-                .await
-                .unwrap()
-                .map(|s| s.state),
-            Some(SignatureState::Declined)
-        );
-    }
-
-    #[tokio::test]
-    async fn stamp_signed_marks_completion_and_is_a_no_op_for_unknown_envelopes() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-        record_request(&surreal, notation_id, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap();
-        assert!(!stamp_signed(
-            &surreal,
-            SignatureProvider::DocuSign,
-            "unknown",
-            "2026-06-30T00:00:00Z"
-        )
-        .await
-        .unwrap());
-        assert!(stamp_signed(
-            &surreal,
-            SignatureProvider::DocuSign,
-            "env-1",
-            "2026-06-30T00:00:00Z"
-        )
-        .await
-        .unwrap());
-        assert!(stamp_signed(
-            &surreal,
-            SignatureProvider::DocuSign,
-            "env-1",
-            "2026-06-30T00:00:01Z"
-        )
-        .await
-        .unwrap());
-        let after = by_provider(&surreal, SignatureProvider::DocuSign, "env-1")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(after.signed_at.as_deref(), Some("2026-06-30T00:00:00Z"));
-        assert_eq!(after.state, SignatureState::Completed);
-    }
-
-    #[tokio::test]
-    async fn terminal_stamps_are_readable_but_not_completed() {
-        let surreal = mem().await;
-
-        let declined_notation = seed_notation(&surreal).await;
-        record_request(
-            &surreal,
-            declined_notation,
-            SignatureProvider::DocuSign,
-            "declined",
-        )
-        .await
-        .unwrap();
-        assert!(
-            stamp_declined(&surreal, SignatureProvider::DocuSign, "declined")
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            by_provider(&surreal, SignatureProvider::DocuSign, "declined")
-                .await
-                .unwrap()
-                .unwrap()
-                .state,
-            SignatureState::Declined
-        );
-        assert!(completed_for_notation(&surreal, declined_notation)
-            .await
-            .unwrap()
-            .is_none());
-
-        let voided_notation = seed_notation(&surreal).await;
-        record_request(
-            &surreal,
-            voided_notation,
-            SignatureProvider::DocuSign,
-            "voided",
-        )
-        .await
-        .unwrap();
-        assert!(
-            stamp_voided(&surreal, SignatureProvider::DocuSign, "voided")
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            by_provider(&surreal, SignatureProvider::DocuSign, "voided")
-                .await
-                .unwrap()
-                .unwrap()
-                .state,
-            SignatureState::Voided
-        );
-        assert!(completed_for_notation(&surreal, voided_notation)
-            .await
-            .unwrap()
-            .is_none());
-
-        let expired_notation = seed_notation(&surreal).await;
-        record_request(
-            &surreal,
-            expired_notation,
-            SignatureProvider::DocuSign,
-            "expired",
-        )
-        .await
-        .unwrap();
-        assert!(
-            stamp_expired(&surreal, SignatureProvider::DocuSign, "expired")
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            by_provider(&surreal, SignatureProvider::DocuSign, "expired")
-                .await
-                .unwrap()
-                .unwrap()
-                .state,
-            SignatureState::Expired
-        );
-        assert!(completed_for_notation(&surreal, expired_notation)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn terminal_state_is_monotonic_after_completion() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-        record_request(
-            &surreal,
-            notation_id,
-            SignatureProvider::DocuSign,
-            "completed",
-        )
-        .await
-        .unwrap();
-        assert!(stamp_signed(
-            &surreal,
-            SignatureProvider::DocuSign,
-            "completed",
-            "2026-06-30T00:00:00Z"
-        )
-        .await
-        .unwrap());
-        assert!(
-            !stamp_declined(&surreal, SignatureProvider::DocuSign, "completed")
-                .await
-                .unwrap()
-        );
-        assert!(
-            !stamp_voided(&surreal, SignatureProvider::DocuSign, "completed")
-                .await
-                .unwrap()
-        );
-        assert!(
-            !stamp_expired(&surreal, SignatureProvider::DocuSign, "completed")
-                .await
-                .unwrap()
-        );
-
-        let after = by_provider(&surreal, SignatureProvider::DocuSign, "completed")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(after.state, SignatureState::Completed);
-        assert_eq!(after.signed_at.as_deref(), Some("2026-06-30T00:00:00Z"));
-    }
-}
+mod tests {}

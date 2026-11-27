@@ -154,13 +154,13 @@ async fn load() -> Result<DocumentDetailView, ServerFnError> {
         ViewerRole::Client => store::persons::Role::Client,
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     // The matter arrives as its code; everything below keys on the row id. A
     // code naming no matter is the same "not found" a caller off the matter
     // gets, so neither can tell the other's case from the response — but a
     // store *failure* is not a miss and must stay a 500, or an outage would
     // read to every caller as "your matter is gone".
-    let project_id = match store::projects::find_by_code(&surreal, &project_code).await {
+    let project_id = match store::projects::find_by_code(&application_store, &project_code).await {
         Ok(Some(project)) => project.id,
         Ok(None) => return Ok(missing),
         Err(_) => return Ok(failed()),
@@ -169,8 +169,13 @@ async fn load() -> Result<DocumentDetailView, ServerFnError> {
     // reports a store outage as a missing document. Resolve the matter lens
     // from the participation ledger so a mixed-role caller cannot widen their
     // document visibility through their system tier.
-    let store_lens = match store::access::matter_lens(&surreal, person_id, store_role, project_id)
-        .await
+    let store_lens = match store::access::matter_lens(
+        &application_store,
+        person_id,
+        store_role,
+        project_id,
+    )
+    .await
     {
         Ok(Some(lens)) => lens,
         Ok(None) => {
@@ -183,7 +188,7 @@ async fn load() -> Result<DocumentDetailView, ServerFnError> {
         }
     };
 
-    let doc = match store::assets::find_by_id(&surreal, doc_id).await {
+    let doc = match store::assets::find_by_id(&application_store, doc_id).await {
         Ok(row) => row,
         Err(e) => {
             tracing::error!(error = %e, %project_id, %doc_id, "db error loading project document");

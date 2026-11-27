@@ -1,12 +1,12 @@
 use super::calendar::calendar_owners_with_bootstrap;
 use super::{calendar_owner, set_calendar_owner, with_google_calendar};
-use crate::{persons::Role, surreal::SurrealDb};
+use crate::{application_store::ApplicationStore, persons::Role};
 use uuid::Uuid;
 
 #[tokio::test]
 async fn calendar_owner_bootstrap_is_scoped_and_saved_opt_out_wins() {
     crate::test_support::with_postgres(async {
-        let source = SurrealDb::uninitialized();
+        let source = ApplicationStore::uninitialized();
         let db = crate::postgres::PostgresDb::application().await.unwrap();
         let (_, anchor_firm) = crate::test_support::seed_calendar_project().await;
         let other = sqlx::query_scalar::<_, Uuid>(

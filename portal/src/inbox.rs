@@ -73,7 +73,7 @@ pub(crate) async fn archive_inbound_inbox_mail(
 ///
 /// Propagates storage or database failures as the ingest door's error string.
 pub(crate) async fn ingest_attachments(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
     firm_id: Uuid,
@@ -121,7 +121,7 @@ pub async fn start_inbound_message_triage(message_id: Uuid) -> Result<(), String
 ///
 /// Propagates database failures or a missing Firm for a public support mailbox.
 pub async fn ingest_support_email(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
 ) -> Result<Option<store::inbox::IngestedInbound>, String> {
@@ -151,7 +151,7 @@ fn resolve_inbound_firm(
 /// The Firm the plan-assignment lane scopes its staged record to — resolved
 /// exactly as [`ingest_support_email`] resolved it when it saved the message.
 pub(crate) async fn inbound_firm_id(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     email: &InboundEmail,
 ) -> Result<Uuid, String> {
     let (_, brand) = receiving_email_identity(email)?;
@@ -167,7 +167,7 @@ pub(crate) async fn inbound_firm_id(
 }
 
 async fn ingest_support_email_for_firm(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
     configured_firm: Option<Uuid>,
@@ -332,7 +332,7 @@ fn sms_provider_account() -> String {
 }
 
 async fn linked_email_conversation(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     email: &InboundEmail,
     from: &str,
 ) -> Result<Option<Uuid>, String> {
@@ -421,7 +421,7 @@ pub struct ReplyForm {
 /// with an `?assigned=` confirmation — so batch triage never re-navigates.
 /// The reading pane (`next=inbox`) still returns to the firm inbox.
 pub async fn assign_post(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(conversation_id): Path<Uuid>,
     axum::Form(form): axum::Form<AssignForm>,
@@ -457,7 +457,7 @@ pub async fn assign_post(
 /// Moves the conversation to the Inbox trash, or restores it, and returns to
 /// the inbox.
 pub async fn trash_post(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(conversation_id): Path<Uuid>,
     axum::Form(form): axum::Form<TrashForm>,
@@ -472,7 +472,7 @@ pub async fn trash_post(
 }
 
 async fn triage_path_matches(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     conversation_id: Uuid,
     triage_id: Uuid,
 ) -> bool {
@@ -490,7 +490,7 @@ async fn triage_path_matches(
 /// A person confirms the classifier's suggested Project. Email proposals stay
 /// in the review queue until the lawyer explicitly approves a Message filing.
 pub async fn triage_confirm_post(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((conversation_id, triage_id, project_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Response {
@@ -517,7 +517,7 @@ pub struct TriageFilingForm {
 
 /// Approve filing one reviewed Message as an internal Project Communication.
 pub async fn triage_file_post(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((conversation_id, triage_id, project_id)): Path<(Uuid, Uuid, Uuid)>,
     axum::Form(form): axum::Form<TriageFilingForm>,
@@ -558,7 +558,7 @@ pub struct TriageAttachmentFilingForm {
 
 /// Approve one Inbox Message Asset for internal filing in the reviewed Project.
 pub async fn triage_file_attachment_post(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((conversation_id, triage_id, project_id, asset_id)): Path<(Uuid, Uuid, Uuid, Uuid)>,
     axum::Form(form): axum::Form<TriageAttachmentFilingForm>,
@@ -611,7 +611,7 @@ pub struct TriageOverrideForm {
 /// A person corrects the suggestion with a different Project and a
 /// rationale; the correction is recorded as a labeled example.
 pub async fn triage_override_post(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((conversation_id, triage_id)): Path<(Uuid, Uuid)>,
     axum::Form(form): axum::Form<TriageOverrideForm>,
@@ -650,7 +650,7 @@ pub struct TriageResolveForm {
 /// authoritative server-side for public posts. Private messages accept a
 /// human privilege decision.
 pub async fn triage_resolve_post(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((conversation_id, triage_id)): Path<(Uuid, Uuid)>,
     axum::Form(form): axum::Form<TriageResolveForm>,
@@ -684,7 +684,7 @@ pub async fn triage_resolve_post(
 /// from the message's channel and the disposition follows. A decided row
 /// returns to the queue.
 pub async fn triage_rerun_post(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((conversation_id, triage_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
@@ -702,7 +702,7 @@ pub async fn triage_rerun_post(
 
 /// `POST /app/projects/{project_code}/inbox/{conversation_id}/notes`
 pub async fn note_post(
-    State(db): State<store::surreal::SurrealDb>,
+    State(db): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((project_code, conversation_id)): Path<(String, Uuid)>,
     axum::Form(form): axum::Form<NoteForm>,
@@ -730,7 +730,8 @@ pub async fn attachment_get(
     let Some(actor_id) = actor_id(session) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Ok(detail) = store::inbox::intake_detail(&state.surreal, actor_id, conversation_id).await
+    let Ok(detail) =
+        store::inbox::intake_detail(&state.application_store, actor_id, conversation_id).await
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -741,16 +742,20 @@ pub async fn attachment_get(
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let linked =
-        store::inbox::message_assets(&state.surreal, detail.conversation.firm_id, message_id)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .find(|link| link.asset_id == asset_id);
+    let linked = store::inbox::message_assets(
+        &state.application_store,
+        detail.conversation.firm_id,
+        message_id,
+    )
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .find(|link| link.asset_id == asset_id);
     if linked.is_none() && message.attachment_asset_id != Some(asset_id) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Ok(Some(asset)) = store::assets::find_by_id(&state.surreal, asset_id).await else {
+    let Ok(Some(asset)) = store::assets::find_by_id(&state.application_store, asset_id).await
+    else {
         return StatusCode::NOT_FOUND.into_response();
     };
     if asset
@@ -791,8 +796,13 @@ pub async fn link_contact_post(
     let Some(actor_id) = actor_id(session) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    match store::inbox::link_contact_phone(&state.surreal, actor_id, conversation_id, &form.email)
-        .await
+    match store::inbox::link_contact_phone(
+        &state.application_store,
+        actor_id,
+        conversation_id,
+        &form.email,
+    )
+    .await
     {
         Ok(_) => Redirect::to(&back).into_response(),
         Err(error) => redirect_error(&back, &error.to_string()),
@@ -829,15 +839,18 @@ pub async fn new_text_post(
         Ok(None) => return redirect_error(back, "Texting is not configured on this deployment"),
         Err(error) => return redirect_error(back, &error.to_string()),
     };
-    let firm_id = match store::firms::firm_id_for_brand_key(&state.surreal, &registered.brand_key)
-        .await
-    {
-        Ok(Some(firm_id)) => firm_id,
-        Ok(None) => return redirect_error(back, "The texting number's Brand has no owning Firm"),
-        Err(error) => return redirect_error(back, &error.to_string()),
-    };
+    let firm_id =
+        match store::firms::firm_id_for_brand_key(&state.application_store, &registered.brand_key)
+            .await
+        {
+            Ok(Some(firm_id)) => firm_id,
+            Ok(None) => {
+                return redirect_error(back, "The texting number's Brand has no owning Firm")
+            }
+            Err(error) => return redirect_error(back, &error.to_string()),
+        };
     let queued = store::inbox::open_sms_conversation(
-        &state.surreal,
+        &state.application_store,
         actor_id,
         firm_id,
         Some(&registered.brand_key),
@@ -861,7 +874,7 @@ pub async fn new_text_post(
     if let Err(error) = dispatch_now(&state, Some(message_id)).await {
         return redirect_error(&thread, &error.to_string());
     }
-    match store::inbox::message_by_id(&state.surreal, message_id).await {
+    match store::inbox::message_by_id(&state.application_store, message_id).await {
         Ok(Some(message)) => match message.delivery_state.as_str() {
             store::inbox::delivery::FAILED | store::inbox::delivery::SUPPRESSED => {
                 redirect_error(&thread, "The text could not be sent.")
@@ -891,13 +904,15 @@ async fn dispatch_now(
     )
     .with_social(std::sync::Arc::new(
         crate::inbox_transport::SocialReplyTransport::new(
-            state.surreal.clone(),
+            state.application_store.clone(),
             state.runtime_kms.clone(),
         ),
     ));
     match message_id {
-        Some(id) => store::inbox::dispatch_queued_message(&state.surreal, &transport, id).await,
-        None => store::inbox::dispatch_queued(&state.surreal, &transport).await,
+        Some(id) => {
+            store::inbox::dispatch_queued_message(&state.application_store, &transport, id).await
+        }
+        None => store::inbox::dispatch_queued(&state.application_store, &transport).await,
     }
     .map(|_| ())
 }
@@ -918,7 +933,7 @@ pub async fn reply_post(
     };
     let queued = if let Some(visibility) = form.visibility.as_deref() {
         store::inbox::queue_social_reply(
-            &state.surreal,
+            &state.application_store,
             actor_id,
             conversation_id,
             &form.body,
@@ -927,7 +942,7 @@ pub async fn reply_post(
         .await
     } else {
         store::inbox::queue_reply(
-            &state.surreal,
+            &state.application_store,
             actor_id,
             conversation_id,
             &form.body,
@@ -959,13 +974,17 @@ pub async fn intake_reply_post(
         return StatusCode::NOT_FOUND.into_response();
     };
     let is_sms = matches!(
-        store::inbox::conversation_by_id(&state.surreal, conversation_id).await,
+        store::inbox::conversation_by_id(&state.application_store, conversation_id).await,
         Ok(Some(conversation)) if conversation.channel == store::inbox::channel::SMS
     );
     if is_sms {
-        if let Err(error) =
-            store::inbox::queue_sms_reply(&state.surreal, actor_id, conversation_id, &form.body)
-                .await
+        if let Err(error) = store::inbox::queue_sms_reply(
+            &state.application_store,
+            actor_id,
+            conversation_id,
+            &form.body,
+        )
+        .await
         {
             return redirect_error(&back, &error.to_string());
         }
@@ -978,7 +997,7 @@ pub async fn intake_reply_post(
         return redirect_error(&back, "A social reply audience is required");
     };
     if let Err(error) = store::inbox::queue_social_reply(
-        &state.surreal,
+        &state.application_store,
         actor_id,
         conversation_id,
         &form.body,
@@ -1043,7 +1062,7 @@ pub async fn sms_inbound(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(sms_provider_account);
     match store::inbox::ingest_inbound(
-        &state.surreal,
+        &state.application_store,
         &store::inbox::IngestInbound {
             project_id: None,
             firm_id,
@@ -1111,7 +1130,7 @@ pub async fn sms_status(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(sms_provider_account);
     match store::inbox::apply_delivery(
-        &state.surreal,
+        &state.application_store,
         firm_id,
         store::inbox::channel::SMS,
         &account,
@@ -1158,7 +1177,7 @@ mod tests {
                     .await
                     .expect("required PostgreSQL application fixture");
                 store::postgres::PostgresDb::with_application_db(pg, async move {
-                    let $db = store::surreal::SurrealDb::uninitialized();
+                    let $db = store::application_store::ApplicationStore::uninitialized();
                     $body
                 })
                 .await
@@ -1401,7 +1420,7 @@ mod tests {
         with_native_inbox_test!(db, {
         let app = crate::test_support::app_state(db).await;
         let state = crate::admin::AdminState {
-            surreal: app.surreal,
+            application_store: app.application_store,
             workflow_runtime: app.workflow_runtime,
             signature_provider: app.signature_provider,
             retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
@@ -1451,7 +1470,7 @@ mod tests {
         with_native_inbox_test!(db, {
         let app = crate::test_support::app_state(db).await;
         let state = crate::admin::AdminState {
-            surreal: app.surreal,
+            application_store: app.application_store,
             workflow_runtime: app.workflow_runtime,
             signature_provider: app.signature_provider,
             retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
@@ -1502,7 +1521,7 @@ mod tests {
         with_native_inbox_test!(db, {
         let app = crate::test_support::app_state(db).await;
         let state = crate::admin::AdminState {
-            surreal: app.surreal,
+            application_store: app.application_store,
             workflow_runtime: app.workflow_runtime,
             signature_provider: app.signature_provider,
             retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
@@ -1645,7 +1664,7 @@ mod tests {
     }
 
     async fn inbox_matter(
-        db: &store::surreal::SurrealDb,
+        db: &store::application_store::ApplicationStore,
     ) -> (
         store::persons::Person,
         store::persons::Person,
@@ -1818,7 +1837,7 @@ mod tests {
             .await
             .unwrap();
         let state = crate::admin::AdminState {
-            surreal: app.surreal,
+            application_store: app.application_store,
             workflow_runtime: app.workflow_runtime,
             signature_provider: app.signature_provider,
             retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
@@ -1935,7 +1954,7 @@ mod tests {
 
     /// Post the full thread's assign form as `person`.
     async fn assign_as(
-        db: &store::surreal::SurrealDb,
+        db: &store::application_store::ApplicationStore,
         person: &store::persons::Person,
         conversation_id: Uuid,
         project_id: Uuid,
@@ -2010,7 +2029,7 @@ mod tests {
         )
         .await
         .unwrap();
-        store::projects::designate_dri_in_surreal(
+        store::projects::designate_dri(
             &db,
             project.id,
             lawyer.id,
@@ -2063,7 +2082,7 @@ mod tests {
         .unwrap();
         let app = crate::test_support::app_state(db).await;
         let state = crate::admin::AdminState {
-            surreal: app.surreal,
+            application_store: app.application_store,
             workflow_runtime: app.workflow_runtime,
             signature_provider: app.signature_provider,
             retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
@@ -2143,7 +2162,7 @@ mod tests {
         )
         .await
         .unwrap();
-        store::projects::designate_dri_in_surreal(
+        store::projects::designate_dri(
             &db,
             project.id,
             lawyer.id,
@@ -2153,7 +2172,7 @@ mod tests {
         .unwrap();
         let app = crate::test_support::app_state(db).await;
         let state = crate::admin::AdminState {
-            surreal: app.surreal,
+            application_store: app.application_store,
             workflow_runtime: app.workflow_runtime,
             signature_provider: app.signature_provider,
             retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
@@ -2199,7 +2218,7 @@ mod tests {
     /// A NeedsHuman email triage row with a suggested Project, over a
     /// fresh conversation, in `firm`'s inbox.
     async fn triaged_email(
-        db: &store::surreal::SurrealDb,
+        db: &store::application_store::ApplicationStore,
         firm: Uuid,
         tag: &str,
         project: Option<Uuid>,
@@ -2325,7 +2344,7 @@ mod tests {
         let state = crate::test_support::app_state(db).await;
 
         let confirmed = triage_confirm_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             None,
             Path((Uuid::now_v7(), triage_id, project.id)),
         )
@@ -2333,7 +2352,7 @@ mod tests {
         assert_eq!(confirmed.status(), StatusCode::NOT_FOUND);
 
         let resolved = triage_resolve_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             None,
             Path((Uuid::now_v7(), triage_id)),
             axum::Form(TriageResolveForm {
@@ -2346,7 +2365,7 @@ mod tests {
         assert_eq!(resolved.status(), StatusCode::NOT_FOUND);
 
         assert_eq!(
-            store::inbox_triage::find_by_id(&state.surreal, triage_id)
+            store::inbox_triage::find_by_id(&state.application_store, triage_id)
                 .await
                 .unwrap()
                 .unwrap()
@@ -2380,7 +2399,7 @@ mod tests {
         let state = crate::test_support::app_state(db).await;
 
         let response = triage_confirm_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             Some(axum::Extension(session(
                 &owner.email,
                 store::persons::Role::Owner,
@@ -2393,31 +2412,31 @@ mod tests {
         assert_eq!(location(&response).as_deref(), Some(TRIAGE_QUEUE));
 
         let conversation =
-            store::inbox::conversation_by_id(&state.surreal, message.conversation_id)
+            store::inbox::conversation_by_id(&state.application_store, message.conversation_id)
                 .await
                 .unwrap()
                 .unwrap();
         assert_eq!(conversation.project_id, None);
-        let row = store::inbox_triage::find_by_id(&state.surreal, triage_id)
+        let row = store::inbox_triage::find_by_id(&state.application_store, triage_id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(row.disposition, TriageDisposition::NeedsHuman);
         assert!(!row.labeled_example);
         assert!(
-            store::communications::for_project(&state.surreal, project.id)
+            store::communications::for_project(&state.application_store, project.id)
                 .await
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            store::inbox::assignments(&state.surreal, message.conversation_id)
+            store::inbox::assignments(&state.application_store, message.conversation_id)
                 .await
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
-            store::inbox_triage::list_for_review(&state.surreal, owner.id)
+            store::inbox_triage::list_for_review(&state.application_store, owner.id)
                 .await
                 .unwrap()
                 .len(),
@@ -2458,7 +2477,7 @@ mod tests {
 
         // Firm membership alone is not the participation check.
         let denied = triage_confirm_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             Some(axum::Extension(session(
                 &lawyer.email,
                 store::persons::Role::Lawyer,
@@ -2472,7 +2491,7 @@ mod tests {
             .unwrap_or_default()
             .starts_with(&format!("{TRIAGE_QUEUE}?error=")));
         let conversation =
-            store::inbox::conversation_by_id(&state.surreal, message.conversation_id)
+            store::inbox::conversation_by_id(&state.application_store, message.conversation_id)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2480,7 +2499,7 @@ mod tests {
 
         // Active participation admits the proposal confirmation.
         store::projects::add_participation(
-            &state.surreal,
+            &state.application_store,
             project.id,
             lawyer.id,
             store::projects::participation_for_role(store::persons::Role::Lawyer),
@@ -2488,7 +2507,7 @@ mod tests {
         .await
         .unwrap();
         let confirmed = triage_confirm_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             Some(axum::Extension(session(
                 &lawyer.email,
                 store::persons::Role::Lawyer,
@@ -2499,14 +2518,14 @@ mod tests {
         .await;
         assert_eq!(confirmed.status(), StatusCode::SEE_OTHER);
         let conversation =
-            store::inbox::conversation_by_id(&state.surreal, message.conversation_id)
+            store::inbox::conversation_by_id(&state.application_store, message.conversation_id)
                 .await
                 .unwrap()
                 .unwrap();
         assert_eq!(conversation.project_id, None);
         assert_eq!(location(&confirmed).as_deref(), Some(TRIAGE_QUEUE));
         assert_eq!(
-            store::inbox_triage::list_for_review(&state.surreal, owner.id)
+            store::inbox_triage::list_for_review(&state.application_store, owner.id)
                 .await
                 .unwrap()
                 .len(),
@@ -2524,7 +2543,7 @@ mod tests {
         let state = crate::test_support::app_state(db).await;
 
         let response = triage_override_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             Some(axum::Extension(session(
                 &owner.email,
                 store::persons::Role::Owner,
@@ -2540,7 +2559,7 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
 
-        let row = store::inbox_triage::find_by_id(&state.surreal, triage_id)
+        let row = store::inbox_triage::find_by_id(&state.application_store, triage_id)
             .await
             .unwrap()
             .unwrap();
@@ -2548,13 +2567,13 @@ mod tests {
         assert!(row.labeled_example);
         assert_eq!(row.suggested_project_id, Some(project.id));
         assert!(
-            store::communications::for_project(&state.surreal, project.id)
+            store::communications::for_project(&state.application_store, project.id)
                 .await
                 .unwrap()
                 .is_empty()
         );
         let conversation =
-            store::inbox::conversation_by_id(&state.surreal, message.conversation_id)
+            store::inbox::conversation_by_id(&state.application_store, message.conversation_id)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2607,7 +2626,7 @@ mod tests {
         let state = crate::test_support::app_state(db).await;
 
         let settled = triage_resolve_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             Some(axum::Extension(session(
                 &owner.email,
                 store::persons::Role::Owner,
@@ -2622,7 +2641,7 @@ mod tests {
         )
         .await;
         assert_eq!(settled.status(), StatusCode::SEE_OTHER);
-        let row = store::inbox_triage::find_by_id(&state.surreal, email_row)
+        let row = store::inbox_triage::find_by_id(&state.application_store, email_row)
             .await
             .unwrap()
             .unwrap();
@@ -2630,7 +2649,7 @@ mod tests {
 
         // The social row's forced label: the form asked for privileged.
         let forced = triage_resolve_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             Some(axum::Extension(session(
                 &owner.email,
                 store::persons::Role::Owner,
@@ -2645,7 +2664,7 @@ mod tests {
         )
         .await;
         assert_eq!(forced.status(), StatusCode::SEE_OTHER);
-        let row = store::inbox_triage::find_by_id(&state.surreal, social_row)
+        let row = store::inbox_triage::find_by_id(&state.application_store, social_row)
             .await
             .unwrap()
             .unwrap();
@@ -2680,27 +2699,27 @@ mod tests {
         )));
 
         triage_confirm_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             owner_session.clone(),
             Path((message.conversation_id, triage_id, project.id)),
         )
         .await
         .status();
         let response = triage_rerun_post(
-            State(state.surreal.clone()),
+            State(state.application_store.clone()),
             owner_session,
             Path((message.conversation_id, triage_id)),
         )
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let row = store::inbox_triage::find_by_id(&state.surreal, triage_id)
+        let row = store::inbox_triage::find_by_id(&state.application_store, triage_id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(row.privilege, PrivilegeLabel::Uncertain);
         assert_eq!(row.disposition, TriageDisposition::NeedsHuman);
         assert_eq!(
-            store::inbox_triage::list_for_review(&state.surreal, owner.id)
+            store::inbox_triage::list_for_review(&state.application_store, owner.id)
                 .await
                 .unwrap()
                 .len(),

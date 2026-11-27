@@ -7,16 +7,13 @@
 
 use serde::Serialize;
 use serde_json::json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::matter_record_links::{
-    optional_text, party_from_record, party_record, require_party, require_project, required_text,
-};
+use crate::application_store::ApplicationStore;
+use crate::matter_record_links::{optional_text, required_text};
 use crate::postgres::matter::{self, MatterAuthorityError};
 use crate::project_references::Party;
 use crate::relationships::Endpoint;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 const TABLE: &str = "cap_table_holding";
 const LINE_INDEX: &str = "cap_table_holding_line";
@@ -41,33 +38,6 @@ pub struct CapTableHoldingFields {
     pub share_class: String,
     pub shares: i64,
     pub vesting_note: Option<String>,
-}
-
-#[derive(SurrealValue)]
-struct CapTableHoldingRow {
-    id: surrealdb::types::RecordId,
-    project_id: surrealdb::types::RecordId,
-    holder_id: surrealdb::types::RecordId,
-    share_class: String,
-    shares: i64,
-    vesting_note: Option<String>,
-    inserted_at: String,
-    updated_at: String,
-}
-
-impl CapTableHoldingRow {
-    fn into_holding(self) -> Option<CapTableHolding> {
-        Some(CapTableHolding {
-            id: record_uuid(&self.id)?,
-            project_id: record_uuid(&self.project_id)?,
-            holder: party_from_record(&self.holder_id)?,
-            share_class: self.share_class,
-            shares: self.shares,
-            vesting_note: self.vesting_note,
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
 }
 
 /// The row as PostgreSQL stores it: the holder is a tagged `JSONB` link.
@@ -102,13 +72,8 @@ impl PgRow {
     }
 }
 
-const SELECT: &str = "id, project_id, holder_id, share_class, shares, vesting_note, inserted_at, \
-     updated_at";
-
 #[derive(Debug, thiserror::Error)]
 pub enum CapTableHoldingError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Postgres(MatterAuthorityError),
     #[error("{0}")]
@@ -138,7 +103,7 @@ fn holdings(rows: Vec<PgRow>) -> Vec<CapTableHolding> {
 
 /// The fields as stored: trimmed and checked, the holder resolved.
 async fn validate(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     fields: &CapTableHoldingFields,
 ) -> Result<CapTableHoldingFields, CapTableHoldingError> {
@@ -149,15 +114,9 @@ async fn validate(
             "shares must be zero or more".into(),
         ));
     }
-    if let Some(pg) = matter::authority().await? {
+    {
+        let pg = matter::authority().await?;
         crate::matter_record_links::require_project_on(&pg, project_id)
-            .await
-            .map_err(CapTableHoldingError::Invalid)?;
-    } else {
-        require_project(surreal, project_id)
-            .await
-            .map_err(CapTableHoldingError::Invalid)?;
-        require_party(surreal, "holder", fields.holder)
             .await
             .map_err(CapTableHoldingError::Invalid)?;
     }
@@ -170,78 +129,50 @@ async fn validate(
 }
 
 async fn persist(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     id: Uuid,
     project_id: Uuid,
     fields: CapTableHoldingFields,
     inserted_at: &str,
 ) -> Result<CapTableHolding, CapTableHoldingError> {
     let now = chrono::Utc::now().to_rfc3339();
-    if let Some(pg) = matter::authority().await? {
-        let row = PgRow {
-            id,
-            project_id,
-            holder_id: matter::tagged(fields.holder.kind.table(), fields.holder.id),
-            share_class: fields.share_class,
-            shares: fields.shares,
-            vesting_note: fields.vesting_note,
-            inserted_at: inserted_at.to_owned(),
-            updated_at: now,
-        };
-        let mut transaction = pg
-            .pool()
-            .begin()
-            .await
-            .map_err(MatterAuthorityError::from)?;
-        if !crate::matter_record_links::lock_party_on(&mut transaction, fields.holder).await? {
-            let noun = match fields.holder.kind {
-                Endpoint::Person => "Person",
-                Endpoint::Entity => "Entity",
-            };
-            return Err(CapTableHoldingError::Invalid(format!(
-                "the holder names no such {noun}"
-            )));
-        }
-        let stored: PgRow = matter::upsert_on(
-            &mut *transaction,
-            TABLE,
-            serde_json::to_value(row).map_err(MatterAuthorityError::from)?,
-        )
-        .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(MatterAuthorityError::from)?;
-        return stored
-            .into_holding()
-            .ok_or(CapTableHoldingError::WriteReturnedNothing);
-    }
-    let response = surreal
-        .query(format!(
-            "UPSERT $id SET project_id = $project_id, holder_id = $holder_id, \
-             share_class = $share_class, shares = $shares, \
-             vesting_note = $vesting_note, inserted_at = $inserted_at, updated_at = $now \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("project_id", record_id("project", project_id)))
-        .bind(("holder_id", party_record(fields.holder)))
-        .bind(("share_class", fields.share_class))
-        .bind(("shares", fields.shares))
-        .bind(("vesting_note", fields.vesting_note))
-        .bind(("inserted_at", inserted_at.to_string()))
-        .bind(("now", now))
-        .await
-        .and_then(surrealdb::IndexedResults::check);
-    let mut response = match response {
-        Ok(response) => response,
-        Err(error) if retry::unique_violation(&error) == Some(LINE_INDEX) => {
-            return Err(CapTableHoldingError::Invalid(DUPLICATE_LINE.into()));
-        }
-        Err(error) => return Err(error.into()),
+    let pg = matter::authority().await?;
+    let row = PgRow {
+        id,
+        project_id,
+        holder_id: matter::tagged(fields.holder.kind.table(), fields.holder.id),
+        share_class: fields.share_class,
+        shares: fields.shares,
+        vesting_note: fields.vesting_note,
+        inserted_at: inserted_at.to_owned(),
+        updated_at: now,
     };
-    let row: Option<CapTableHoldingRow> = response.take(0)?;
-    row.and_then(CapTableHoldingRow::into_holding)
+    let mut transaction = pg
+        .pool()
+        .begin()
+        .await
+        .map_err(MatterAuthorityError::from)?;
+    if !crate::matter_record_links::lock_party_on(&mut transaction, fields.holder).await? {
+        let noun = match fields.holder.kind {
+            Endpoint::Person => "Person",
+            Endpoint::Entity => "Entity",
+        };
+        return Err(CapTableHoldingError::Invalid(format!(
+            "the holder names no such {noun}"
+        )));
+    }
+    let stored: PgRow = matter::upsert_on(
+        &mut *transaction,
+        TABLE,
+        serde_json::to_value(row).map_err(MatterAuthorityError::from)?,
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(MatterAuthorityError::from)?;
+    stored
+        .into_holding()
         .ok_or(CapTableHoldingError::WriteReturnedNothing)
 }
 
@@ -251,27 +182,13 @@ async fn persist(
 ///
 /// [`CapTableHoldingError::Db`] if the read fails.
 pub async fn list(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<CapTableHolding>, CapTableHoldingError> {
-    if let Some(pg) = matter::authority().await? {
-        let filter = json!({"project_id": project_id});
-        let order = ["share_class", "shares DESC", "id"];
-        return Ok(holdings(matter::select(&pg, TABLE, filter, &order).await?));
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project_id \
-             ORDER BY share_class, shares DESC, id"
-        ))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<CapTableHoldingRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(CapTableHoldingRow::into_holding)
-        .collect())
+    let pg = matter::authority().await?;
+    let filter = json!({"project_id": project_id});
+    let order = ["share_class", "shares DESC", "id"];
+    Ok(holdings(matter::select(&pg, TABLE, filter, &order).await?))
 }
 
 /// One Cap Table Holding on a Project, or `None`.
@@ -280,25 +197,13 @@ pub async fn list(
 ///
 /// [`CapTableHoldingError::Db`] if the read fails.
 pub async fn find(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     id: Uuid,
 ) -> Result<Option<CapTableHolding>, CapTableHoldingError> {
-    if let Some(pg) = matter::authority().await? {
-        let filter = json!({"id": id, "project_id": project_id});
-        return Ok(holdings(matter::select(&pg, TABLE, filter, &[]).await?).pop());
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE id = $id AND project_id = $project_id LIMIT 1"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<CapTableHoldingRow> = response.take(0)?;
-    Ok(row.and_then(CapTableHoldingRow::into_holding))
+    let pg = matter::authority().await?;
+    let filter = json!({"id": id, "project_id": project_id});
+    Ok(holdings(matter::select(&pg, TABLE, filter, &[]).await?).pop())
 }
 
 /// The row holding one (holder, share class) line, or `None`.
@@ -307,31 +212,18 @@ pub async fn find(
 ///
 /// [`CapTableHoldingError::Db`] if the read fails.
 pub async fn find_by_line(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     holder: Party,
     share_class: &str,
 ) -> Result<Option<CapTableHolding>, CapTableHoldingError> {
-    if let Some(pg) = matter::authority().await? {
-        let filter = json!({
-            "project_id": project_id,
-            "holder_id": matter::tagged(holder.kind.table(), holder.id),
-            "share_class": share_class.trim(),
-        });
-        return Ok(holdings(matter::select(&pg, TABLE, filter, &[]).await?).pop());
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE project_id = $project_id \
-             AND holder_id = $holder_id AND share_class = $share_class LIMIT 1"
-        ))
-        .bind(("project_id", record_id("project", project_id)))
-        .bind(("holder_id", party_record(holder)))
-        .bind(("share_class", share_class.trim().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<CapTableHoldingRow> = response.take(0)?;
-    Ok(row.and_then(CapTableHoldingRow::into_holding))
+    let pg = matter::authority().await?;
+    let filter = json!({
+        "project_id": project_id,
+        "holder_id": matter::tagged(holder.kind.table(), holder.id),
+        "share_class": share_class.trim(),
+    });
+    Ok(holdings(matter::select(&pg, TABLE, filter, &[]).await?).pop())
 }
 
 /// Store a new Cap Table Holding and return it.
@@ -342,13 +234,20 @@ pub async fn find_by_line(
 /// shares, a missing Project, a holder with no row behind it, or a line already held; [`CapTableHoldingError::Db`] if
 /// the write fails.
 pub async fn insert(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     fields: &CapTableHoldingFields,
 ) -> Result<CapTableHolding, CapTableHoldingError> {
-    let fields = validate(surreal, project_id, fields).await?;
+    let fields = validate(application_store, project_id, fields).await?;
     let inserted_at = chrono::Utc::now().to_rfc3339();
-    persist(surreal, Uuid::now_v7(), project_id, fields, &inserted_at).await
+    persist(
+        application_store,
+        Uuid::now_v7(),
+        project_id,
+        fields,
+        &inserted_at,
+    )
+    .await
 }
 
 /// Replace a Cap Table Holding's fields and return the stored row.
@@ -358,17 +257,17 @@ pub async fn insert(
 /// [`CapTableHoldingError::NotFound`] when the row is not on this Project;
 /// otherwise as [`insert`].
 pub async fn update(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     id: Uuid,
     fields: &CapTableHoldingFields,
 ) -> Result<CapTableHolding, CapTableHoldingError> {
-    let existing = find(surreal, project_id, id)
+    let existing = find(application_store, project_id, id)
         .await?
         .ok_or(CapTableHoldingError::NotFound)?;
-    let fields = validate(surreal, project_id, fields).await?;
+    let fields = validate(application_store, project_id, fields).await?;
     persist(
-        surreal,
+        application_store,
         existing.id,
         project_id,
         fields,
@@ -384,22 +283,15 @@ pub async fn update(
 /// [`CapTableHoldingError::NotFound`] when the row is not on this Project;
 /// [`CapTableHoldingError::Db`] if the delete fails.
 pub async fn delete(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     id: Uuid,
 ) -> Result<(), CapTableHoldingError> {
-    find(surreal, project_id, id)
+    find(application_store, project_id, id)
         .await?
         .ok_or(CapTableHoldingError::NotFound)?;
-    if let Some(pg) = matter::authority().await? {
-        matter::delete(&pg, TABLE, json!({"id": id})).await?;
-        return Ok(());
-    }
-    surreal
-        .query("DELETE $id")
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
+    let pg = matter::authority().await?;
+    matter::delete(&pg, TABLE, json!({"id": id})).await?;
     Ok(())
 }
 
@@ -410,18 +302,11 @@ pub async fn delete(
 ///
 /// [`CapTableHoldingError::Db`] if the delete fails.
 pub async fn delete_for_project(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<(), CapTableHoldingError> {
-    if let Some(pg) = matter::authority().await? {
-        matter::delete(&pg, TABLE, json!({"project_id": project_id})).await?;
-        return Ok(());
-    }
-    surreal
-        .query(format!("DELETE {TABLE} WHERE project_id = $project_id"))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
+    let pg = matter::authority().await?;
+    matter::delete(&pg, TABLE, json!({"project_id": project_id})).await?;
     Ok(())
 }
 
@@ -430,11 +315,11 @@ mod tests {
     use super::*;
 
     macro_rules! with_postgres {
-        ($pg:ident, $surreal:ident, $body:block) => {{
+        ($pg:ident, $application_store:ident, $body:block) => {{
             let Some($pg) = crate::postgres::matter::tests::database().await else {
                 return;
             };
-            let $surreal = SurrealDb::uninitialized();
+            let $application_store = ApplicationStore::uninitialized();
             crate::postgres::matter::with_test_db($pg.clone(), async $body).await;
             $pg.0.close().await;
         }};
@@ -451,7 +336,7 @@ mod tests {
 
     #[tokio::test]
     async fn insert_list_update_and_delete_round_trip() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-table").await;
             let founder =
@@ -459,7 +344,7 @@ mod tests {
             let fund = crate::postgres::matter::tests::postgres_entity(&pg).await;
 
             let common = insert(
-                &surreal,
+                &application_store,
                 project_id,
                 &holding(founder, " Common ", 6_000_000),
             )
@@ -467,7 +352,7 @@ mod tests {
             .unwrap();
             assert_eq!(common.share_class, "Common");
             let preferred = insert(
-                &surreal,
+                &application_store,
                 project_id,
                 &CapTableHoldingFields {
                     holder: Party::entity(fund),
@@ -479,7 +364,7 @@ mod tests {
             let employee =
                 crate::postgres::matter::tests::postgres_person(&pg, "employee@example.com").await;
             let options = insert(
-                &surreal,
+                &application_store,
                 project_id,
                 &CapTableHoldingFields {
                     vesting_note: Some("Four years, one-year cliff".into()),
@@ -489,7 +374,7 @@ mod tests {
             .await
             .unwrap();
 
-            let table: Vec<Uuid> = list(&surreal, project_id)
+            let table: Vec<Uuid> = list(&application_store, project_id)
                 .await
                 .unwrap()
                 .into_iter()
@@ -498,7 +383,7 @@ mod tests {
             assert_eq!(table, vec![common.id, options.id, preferred.id]);
 
             let updated = update(
-                &surreal,
+                &application_store,
                 project_id,
                 common.id,
                 &holding(founder, "Common", 5_750_000),
@@ -508,10 +393,12 @@ mod tests {
             assert_eq!(updated.shares, 5_750_000);
             assert_eq!(updated.inserted_at, common.inserted_at);
 
-            delete(&surreal, project_id, options.id).await.unwrap();
-            assert_eq!(list(&surreal, project_id).await.unwrap().len(), 2);
+            delete(&application_store, project_id, options.id)
+                .await
+                .unwrap();
+            assert_eq!(list(&application_store, project_id).await.unwrap().len(), 2);
             assert!(matches!(
-                delete(&surreal, project_id, options.id).await,
+                delete(&application_store, project_id, options.id).await,
                 Err(CapTableHoldingError::NotFound)
             ));
         });
@@ -519,12 +406,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_holder_with_no_row_behind_it_is_refused() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-holder").await;
             for holder in [Party::person(Uuid::now_v7()), Party::entity(Uuid::now_v7())] {
                 let error = insert(
-                    &surreal,
+                    &application_store,
                     project_id,
                     &CapTableHoldingFields {
                         holder,
@@ -535,13 +422,16 @@ mod tests {
                 .unwrap_err();
                 assert!(matches!(error, CapTableHoldingError::Invalid(_)), "{error}");
             }
-            assert!(list(&surreal, project_id).await.unwrap().is_empty());
+            assert!(list(&application_store, project_id)
+                .await
+                .unwrap()
+                .is_empty());
         });
     }
 
     #[tokio::test]
     async fn negative_shares_or_a_blank_class_is_refused() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-refusals").await;
             let person_id =
@@ -551,7 +441,9 @@ mod tests {
                 holding(person_id, "  ", 10),
             ] {
                 assert!(matches!(
-                    insert(&surreal, project_id, &bad).await.unwrap_err(),
+                    insert(&application_store, project_id, &bad)
+                        .await
+                        .unwrap_err(),
                     CapTableHoldingError::Invalid(_)
                 ));
             }
@@ -560,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_row_holds_each_holder_and_class() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let project_id =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-line").await;
             let person_id =
@@ -568,27 +460,44 @@ mod tests {
             let other =
                 crate::postgres::matter::tests::postgres_person(&pg, "line-other@example.com")
                     .await;
-            insert(&surreal, project_id, &holding(person_id, "Common", 100))
-                .await
-                .unwrap();
-            insert(&surreal, project_id, &holding(other, "Common", 100))
-                .await
-                .unwrap();
-            let error = insert(&surreal, project_id, &holding(person_id, "Common", 5))
-                .await
-                .unwrap_err();
+            insert(
+                &application_store,
+                project_id,
+                &holding(person_id, "Common", 100),
+            )
+            .await
+            .unwrap();
+            insert(
+                &application_store,
+                project_id,
+                &holding(other, "Common", 100),
+            )
+            .await
+            .unwrap();
+            let error = insert(
+                &application_store,
+                project_id,
+                &holding(person_id, "Common", 5),
+            )
+            .await
+            .unwrap_err();
             assert!(matches!(error, CapTableHoldingError::Invalid(_)), "{error}");
-            let found = find_by_line(&surreal, project_id, Party::person(person_id), " Common")
-                .await
-                .unwrap()
-                .expect("the line");
+            let found = find_by_line(
+                &application_store,
+                project_id,
+                Party::person(person_id),
+                " Common",
+            )
+            .await
+            .unwrap()
+            .expect("the line");
             assert_eq!(found.shares, 100);
         });
     }
 
     #[tokio::test]
     async fn rows_are_scoped_to_their_project() {
-        with_postgres!(pg, surreal, {
+        with_postgres!(pg, application_store, {
             let mine =
                 crate::postgres::matter::tests::postgres_project(&pg, "sample-cap-mine").await;
             let other =
@@ -596,13 +505,16 @@ mod tests {
             let person_id =
                 crate::postgres::matter::tests::postgres_person(&pg, "cap-scoped@example.com")
                     .await;
-            let stored = insert(&surreal, mine, &holding(person_id, "Common", 10))
+            let stored = insert(&application_store, mine, &holding(person_id, "Common", 10))
                 .await
                 .unwrap();
-            assert!(list(&surreal, other).await.unwrap().is_empty());
-            assert!(find(&surreal, other, stored.id).await.unwrap().is_none());
-            delete_for_project(&surreal, mine).await.unwrap();
-            assert!(list(&surreal, mine).await.unwrap().is_empty());
+            assert!(list(&application_store, other).await.unwrap().is_empty());
+            assert!(find(&application_store, other, stored.id)
+                .await
+                .unwrap()
+                .is_none());
+            delete_for_project(&application_store, mine).await.unwrap();
+            assert!(list(&application_store, mine).await.unwrap().is_empty());
         });
     }
 }

@@ -79,7 +79,7 @@ async fn database() -> Option<TestDatabase> {
 }
 
 async fn neon_router() -> axum::Router {
-    let state = portal::test_support::app_state(store::test_support::mem_surreal().await).await;
+    let state = portal::test_support::app_state(store::test_support::uninitialized_store()).await;
     portal::bootstrap(
         state.clone(),
         std::path::Path::new(portal::DEFAULT_PUBLIC_DIR),

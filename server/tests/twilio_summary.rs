@@ -5,7 +5,7 @@ use axum::routing::post;
 use http_body_util::BodyExt as _;
 use sqlx::ConnectOptions as _;
 use std::{sync::Arc, time::Duration};
-use store::{postgres::PostgresDb, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, postgres::PostgresDb};
 use tower::ServiceExt as _;
 use uuid::Uuid;
 use workflows_service::email_summary::EmailSummaryReport;
@@ -44,7 +44,6 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
                 options.get_database().unwrap(),
             )
             .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
-            .env(workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV, "true")
             .env(workflows::trigger::DBOS_INGRESS_TOKEN_ENV, TOKEN)
             .env_remove("RESTATE_BROKER_URL")
             .kill_on_drop(true);
@@ -61,7 +60,7 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
 
 async fn exercise() {
     let pg = PostgresDb::application().await.unwrap();
-    let db = SurrealDb::uninitialized();
+    let db = ApplicationStore::uninitialized();
     let mut state = portal::test_support::app_state(db.clone()).await;
     let directory = tempfile::tempdir().unwrap();
     state.storage = Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
@@ -158,9 +157,12 @@ async fn configure(
     origin: String,
     token: &str,
 ) {
-    let project =
-        store::test_support::seed_project_on_firm(&state.surreal, Some(firm), "Synthetic SMS")
-            .await;
+    let project = store::test_support::seed_project_on_firm(
+        &state.application_store,
+        Some(firm),
+        "Synthetic SMS",
+    )
+    .await;
     state.summary_intake = Some(portal::inbound_email::SummaryIntakeConfig {
         envelope_recipients: vec![],
         inbound_public_key: String::new(),
@@ -176,8 +178,15 @@ async fn configure(
         max_input_chars: workflows::DEFAULT_MAX_INPUT_CHARS,
         max_output_tokens: workflows::DEFAULT_MAX_OUTPUT_TOKENS,
     });
-    store::test_support::twilio::register_number(&state.surreal, pg, firm, "neon", NUMBER, token)
-        .await;
+    store::test_support::twilio::register_number(
+        &state.application_store,
+        pg,
+        firm,
+        "neon",
+        NUMBER,
+        token,
+    )
+    .await;
     state.runtime_kms = Arc::new(cloud::FakeKms::new("spine-test"));
     state.canonical_host = portal::CanonicalHost::new(Some("sms.example.test".into()));
     state.twilio_registry = Some(Arc::new(pg.clone()));
@@ -220,7 +229,7 @@ async fn post_sms(app: &axum::Router, token: &str) {
         .contains("<Response></Response>"));
 }
 
-async fn seed_sms_summary_mailroom(db: &SurrealDb) {
+async fn seed_sms_summary_mailroom(db: &ApplicationStore) {
     let addr = store::addresses::create(
         db,
         &store::addresses::NewAddress {

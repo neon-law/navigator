@@ -205,9 +205,9 @@ fn a_staging_only_key_in_production_is_refused() {
 }
 
 #[test]
-fn an_operator_only_key_in_either_row_is_refused() {
-    let dir = tree(&["RESTATE_ADMIN_TOKEN"], &[]);
-    assert_refused(&validate(dir.path()), "RESTATE_ADMIN_TOKEN");
+fn a_retired_key_is_refused() {
+    let dir = tree(&["RESTATE_BROKER_URL"], &[]);
+    assert_refused(&validate(dir.path()), "RESTATE_BROKER_URL");
 }
 
 #[test]

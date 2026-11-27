@@ -33,17 +33,24 @@ pub(crate) async fn put_matter(
     Path(id): Path<Uuid>,
     Json(input): Json<PutMatterRequest>,
 ) -> Result<Response, ApiError> {
-    let allowed =
-        store::access::can_see_project(&state.surreal, session.person_id, session.role, id)
-            .await
-            .map_err(ApiError::Db)?;
+    let allowed = store::access::can_see_project(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     if !allowed {
         return Err(ApiError::NotFound);
     }
-    let stored =
-        store::matter_captions::replace_for_project(&state.surreal, id, input.matter.as_ref())
-            .await
-            .map_err(|error| ApiError::Db(error.to_string()))?;
+    let stored = store::matter_captions::replace_for_project(
+        &state.application_store,
+        id,
+        input.matter.as_ref(),
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?;
     Ok(Json(MatterView {
         synced_at: stored.as_ref().map(|caption| caption.synced_at.clone()),
         matter: stored.map(|caption| caption.matter),

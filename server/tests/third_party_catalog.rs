@@ -107,7 +107,6 @@ fn catalog_lists_exactly_the_services_we_ship() {
             "DocuSign",
             "Google Cloud",
             "Notion",
-            "Restate Cloud",
             "SendGrid",
             "Slack",
             "Vertex AI",

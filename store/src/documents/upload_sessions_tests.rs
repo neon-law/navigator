@@ -1,6 +1,6 @@
 use super::upload_sessions;
 use super::*;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 
 async fn database() -> Option<PostgresDb> {
     let (options, database) = fresh_schema().await?;
@@ -154,35 +154,5 @@ async fn a_session_resumes_advances_once_per_offset_and_is_removed() {
             .unwrap(),
         None
     );
-    pg.0.close().await;
-}
-
-#[tokio::test]
-async fn surreal_sessions_copy_once_with_their_resume_point() {
-    let Some(pg) = database().await else { return };
-    let surreal = crate::test_support::mem_surreal().await;
-    let project_id = project(&pg).await;
-    let opened = create_upload_session(&surreal, &args(project_id))
-        .await
-        .unwrap();
-
-    let copied = upload_sessions::copy_from_surreal(&surreal, &pg)
-        .await
-        .unwrap();
-    assert_eq!((copied.applied, copied.failures.len()), (1, 0));
-    assert_eq!(
-        upload_sessions::copy_from_surreal(&surreal, &pg)
-            .await
-            .unwrap()
-            .applied,
-        0
-    );
-    let carried = upload_sessions::find(&pg, project_id, opened.id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(carried.folder.as_deref(), Some("Discovery"));
-    assert_eq!(carried.declared_sha256, opened.declared_sha256);
-    assert_eq!(carried.received_bytes, 0);
     pg.0.close().await;
 }

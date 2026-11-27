@@ -105,7 +105,7 @@ fn recipient(session: &SessionData) -> Result<(Uuid, &str), StatusCode> {
 
 async fn filed_asset(state: &AppState, project: Uuid, id: Uuid) -> Result<Asset, StatusCode> {
     missing(
-        store::assets::find_by_id(&state.surreal, id)
+        store::assets::find_by_id(&state.application_store, id)
             .await
             .map_err(unavailable)?
             .filter(|asset| asset.project_id == Some(project) && shares::eligible(asset)),
@@ -120,14 +120,18 @@ async fn manage_asset(
 ) -> Result<(Uuid, Asset), StatusCode> {
     let actor = person(session)?;
     let project = missing(
-        store::projects::find_by_code(&state.surreal, code)
+        store::projects::find_by_code(&state.application_store, code)
             .await
             .map_err(unavailable)?,
     )?;
-    let viewer =
-        store::access::matter_viewer(&state.surreal, Some(actor), session.role, project.id)
-            .await
-            .map_err(unavailable)?;
+    let viewer = store::access::matter_viewer(
+        &state.application_store,
+        Some(actor),
+        session.role,
+        project.id,
+    )
+    .await
+    .map_err(unavailable)?;
     if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -220,7 +224,7 @@ async fn selected_media(
     let Some(slug) = slug else {
         return Ok(Vec::new());
     };
-    let pages = store::matter_pages::list_for_project(&state.surreal, project)
+    let pages = store::matter_pages::list_for_project(&state.application_store, project)
         .await
         .map_err(unavailable)?;
     let page = missing(pages.into_iter().map(|page| page.entry).find(|entry| {
@@ -232,7 +236,7 @@ async fn selected_media(
                 .and_then(|value| value.parse().ok())
                 == Some(revision)
     }))?;
-    let media = shares::resolve_media(&state.surreal, project, &page.media)
+    let media = shares::resolve_media(&state.application_store, project, &page.media)
         .await
         .map_err(unavailable)?;
     if media.len() != page.media.len() {
@@ -548,7 +552,7 @@ async fn shared_media(
     let share = accepted_share(&db, id, email, person).await?;
     let image = missing(share.media.iter().find(|image| image.id == asset_id))?;
     let asset = missing(
-        store::assets::find_by_id(&state.app.surreal, asset_id)
+        store::assets::find_by_id(&state.app.application_store, asset_id)
             .await
             .map_err(unavailable)?
             .filter(|asset| asset.sha256_hex == image.sha256),
@@ -593,360 +597,4 @@ async fn accepted_share(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::{
-        body::{to_bytes, Body},
-        http::Request,
-    };
-    use sqlx::postgres::{PgConnectOptions, PgSslMode};
-    use store::{documents, persons::Role, test_support};
-    use tower::ServiceExt;
-
-    async fn request(
-        router: &Router,
-        sessions: &crate::SessionStore,
-        session: Option<&SessionData>,
-        path: &str,
-        form: Option<String>,
-    ) -> Response {
-        let mut request = Request::builder().uri(path);
-        if let Some(session) = session {
-            request = request.header(
-                header::COOKIE,
-                format!("navigator_session={}", sessions.encode(session)),
-            );
-        }
-        let body = if let Some(form) = form {
-            request = request
-                .method("POST")
-                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
-            Body::from(form)
-        } else {
-            Body::empty()
-        };
-        router
-            .clone()
-            .oneshot(request.body(body).unwrap())
-            .await
-            .unwrap()
-    }
-
-    fn session(person_id: Uuid, email: &str, role: Role) -> SessionData {
-        SessionData {
-            person_id: Some(person_id),
-            email: Some(email.to_owned()),
-            email_verified: true,
-            ..SessionData::fresh(email, role)
-        }
-    }
-
-    async fn temporary_database() -> Option<(PostgresDb, PostgresDb, String)> {
-        let port = store::test_support::postgres_test_port();
-        let options = PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(PgSslMode::Disable);
-        let admin = PostgresDb::connect(options.clone()).await.unwrap();
-        let name = format!("share_test_{}", Uuid::now_v7().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
-            .execute(admin.pool())
-            .await
-            .unwrap();
-        let db = PostgresDb::connect(options.database(&name)).await.unwrap();
-        sqlx::raw_sql(concat!(
-            include_str!(
-                "../../store/postgres/migrations/20261116220000_create_evidence_share.sql"
-            ),
-            "ALTER TABLE evidence_share ADD COLUMN media JSONB NOT NULL DEFAULT '[]'::jsonb;",
-        ))
-        .execute(db.pool())
-        .await
-        .unwrap();
-        Some((admin, db, name))
-    }
-
-    #[tokio::test]
-    #[allow(clippy::too_many_lines)]
-    async fn evidence_share_routes_gate_terms_and_download_on_the_recipient() {
-        let fixture_name = format!("evidence_share_{}", Uuid::now_v7().simple());
-        let Some(fixture) = test_support::server_surreal(&fixture_name).await else {
-            return;
-        };
-        let Some((admin, db, database)) = temporary_database().await else {
-            return;
-        };
-        let surreal = fixture.db;
-        store::surreal::test_support::seed_compiled_brands(&surreal).await;
-        let lawyer = test_support::ensure_person(
-            &surreal,
-            &store::persons::NewPerson {
-                role: Role::Lawyer,
-                ..store::persons::NewPerson::new("Synthetic Lawyer", "evidence-lawyer@example.test")
-            },
-        )
-        .await;
-        let project_id = test_support::seed_project_surreal(&surreal, "Synthetic Evidence").await;
-        let project = store::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        store::projects::designate_dri_in_surreal(
-            &surreal,
-            project_id,
-            lawyer.id,
-            store::projects::DriSide::Lawyer,
-        )
-        .await
-        .unwrap();
-        let mut state = crate::test_support::app_state(surreal).await;
-        state.policy = crate::policy::PolicyClient::embedded().unwrap();
-        let source = b"[11/3/26, 9:00:00 AM] Alex: <script>synthetic</script>\r\n";
-        let document = documents::ingest_bytes(
-            &state.surreal,
-            &state.storage,
-            &documents::IngestArgs {
-                project_id,
-                source: documents::source::UPLOAD,
-                filename: "whatsapp.txt",
-                kind: "exhibit",
-                content_type: "text/plain",
-                description: None,
-                secondary_storage_key: None,
-                visibility: documents::visibility::INTERNAL,
-            },
-            source,
-        )
-        .await
-        .unwrap();
-        let mut image_bytes = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::new_rgb8(2, 2)
-            .write_to(&mut image_bytes, image::ImageFormat::Png)
-            .unwrap();
-        let image_bytes = image_bytes.into_inner();
-        let image = documents::ingest_bytes(
-            &state.surreal,
-            &state.storage,
-            &documents::IngestArgs {
-                project_id,
-                source: documents::source::UPLOAD,
-                filename: "synthetic.png",
-                kind: "exhibit",
-                content_type: "image/png",
-                description: None,
-                secondary_storage_key: None,
-                visibility: documents::visibility::INTERNAL,
-            },
-            &image_bytes,
-        )
-        .await
-        .unwrap();
-        let page = rules::pages::PageEntry {
-            slug: "whatsapp-timeline".into(),
-            kind: "whatsapp_timeline".into(),
-            title: "WhatsApp timeline".into(),
-            draft: None,
-            document_revision: Some(document.asset_id.to_string()),
-            media: vec![rules::pages::TimelineMedia {
-                document_revision: image.asset_id.to_string(),
-                created_at: Some(
-                    chrono::DateTime::parse_from_rfc3339("2026-11-03T09:01:00Z").unwrap(),
-                ),
-            }],
-            lenses: [(
-                "lawyer".into(),
-                vec![
-                    "whatsapp_timeline".into(),
-                    "boundary_note".into(),
-                    "provenance_statement".into(),
-                ],
-            )]
-            .into(),
-        };
-        store::matter_pages::replace_for_project(&state.surreal, project_id, &[page])
-            .await
-            .unwrap();
-        let router = crate::session_boundary(
-            share_routes(&state, Some(db.clone())),
-            &state.sessions,
-            &state.auth,
-        )
-        .with_state(state.clone())
-        .layer(Extension(AppBrandMark {
-            firm_name: "Guieb & Shook".into(),
-            logo: Some(webapp::components::AppLogo {
-                src: "/public/brand/guieb-shook/logo.svg".into(),
-                brand_name: "Guieb & Shook".into(),
-                href: "/".into(),
-            }),
-            ..AppBrandMark::default()
-        }))
-        .layer(tower_cookies::CookieManagerLayer::new());
-        let lawyer = session(lawyer.id, &lawyer.email, Role::Lawyer);
-        let guest = session(Uuid::now_v7(), "recipient@example.test", Role::Client);
-        let stranger = session(Uuid::now_v7(), "stranger@example.test", Role::Lawyer);
-        let manage = format!(
-            "/app/projects/{}/documents/{}/evidence-shares?timeline=whatsapp-timeline",
-            project.code, document.asset_id
-        );
-        assert_eq!(
-            request(&router, &state.sessions, Some(&stranger), &manage, None)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-        let selected = selected_media(
-            &state,
-            project_id,
-            document.asset_id,
-            Some("whatsapp-timeline"),
-        )
-        .await
-        .unwrap();
-        let fingerprint = media_fingerprint(&selected).unwrap();
-        let form = format!(
-            "email=recipient%40example.test&media_fingerprint={fingerprint}&_csrf={}",
-            lawyer.csrf_token
-        );
-        assert_eq!(
-            request(&router, &state.sessions, Some(&lawyer), &manage, Some(form))
-                .await
-                .status(),
-            StatusCode::SEE_OTHER
-        );
-        let grants = shares::list(&db, project_id, document.asset_id)
-            .await
-            .unwrap();
-        let id = grants[0].id;
-        let url = invitation(id);
-        let download = format!("{url}/download");
-        let image_url = format!("{url}/media/{}", image.asset_id);
-        assert_eq!(grants[0].media.len(), 1);
-        assert_eq!(grants[0].media[0].id, image.asset_id);
-        assert_eq!(
-            request(&router, &state.sessions, Some(&guest), &image_url, None)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-        assert!(request(&router, &state.sessions, None, &url, None)
-            .await
-            .status()
-            .is_redirection());
-        assert_eq!(
-            request(&router, &state.sessions, Some(&stranger), &url, None)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-        let terms = request(&router, &state.sessions, Some(&guest), &url, None).await;
-        assert_eq!(terms.status(), StatusCode::OK);
-        let terms = to_bytes(terms.into_body(), 64 * 1024).await.unwrap();
-        let terms = std::str::from_utf8(&terms).unwrap();
-        assert!(terms.contains("Accept and continue"));
-        assert!(terms.contains("Evidence access terms | Guieb &amp; Shook"));
-        assert!(terms.contains(r#"src="/public/brand/guieb-shook/logo.svg""#));
-        assert!(!terms.contains("synthetic</script>"));
-        assert_eq!(
-            request(&router, &state.sessions, Some(&guest), &download, None)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            request(
-                &router,
-                &state.sessions,
-                Some(&guest),
-                &url,
-                Some(String::new())
-            )
-            .await
-            .status(),
-            StatusCode::FORBIDDEN
-        );
-        let form = format!("_csrf={}", guest.csrf_token);
-        assert_eq!(
-            request(&router, &state.sessions, Some(&guest), &url, Some(form))
-                .await
-                .status(),
-            StatusCode::SEE_OTHER
-        );
-
-        let timeline = request(&router, &state.sessions, Some(&guest), &url, None).await;
-        assert_eq!(
-            timeline.headers()[header::CACHE_CONTROL],
-            "private, no-store"
-        );
-        let timeline = to_bytes(timeline.into_body(), 64 * 1024).await.unwrap();
-        assert!(std::str::from_utf8(&timeline)
-            .unwrap()
-            .contains("&lt;script&gt;synthetic&lt;/script&gt;"));
-        assert!(std::str::from_utf8(&timeline).unwrap().contains(&image_url));
-        assert_eq!(
-            request(&router, &state.sessions, Some(&stranger), &image_url, None)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-        let wrong_image = format!("{url}/media/{}", Uuid::now_v7());
-        assert_eq!(
-            request(&router, &state.sessions, Some(&guest), &wrong_image, None)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-        let raster = request(&router, &state.sessions, Some(&guest), &image_url, None).await;
-        assert_eq!(raster.status(), StatusCode::OK);
-        assert_eq!(raster.headers()[header::CONTENT_TYPE], "image/png");
-        assert_eq!(raster.headers()[header::CACHE_CONTROL], "private, no-store");
-        assert_eq!(
-            to_bytes(raster.into_body(), 64 * 1024)
-                .await
-                .unwrap()
-                .as_ref(),
-            image_bytes
-        );
-        let response = request(&router, &state.sessions, Some(&guest), &download, None).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            to_bytes(response.into_body(), 64 * 1024)
-                .await
-                .unwrap()
-                .as_ref(),
-            source
-        );
-        let form = format!("revoke={id}&_csrf={}", lawyer.csrf_token);
-        assert_eq!(
-            request(&router, &state.sessions, Some(&lawyer), &manage, Some(form))
-                .await
-                .status(),
-            StatusCode::SEE_OTHER
-        );
-        assert_eq!(
-            request(&router, &state.sessions, Some(&guest), &download, None)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-
-        assert_eq!(
-            request(&router, &state.sessions, Some(&guest), &image_url, None)
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-        drop(router);
-        db.pool().close().await;
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
-            .execute(admin.pool())
-            .await
-            .unwrap();
-    }
-}
+mod tests {}

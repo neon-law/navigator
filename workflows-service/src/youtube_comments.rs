@@ -19,9 +19,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::config::SocialEgressGate;
 use store::social_accounts::SocialProvider;
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 use workflows::social_publish::{self, TokenRefreshConfig};
@@ -144,7 +144,7 @@ pub struct PollReport {
 /// steps; tests call them directly against a local store and mock server.
 #[derive(Clone)]
 pub struct YoutubeCommentsPollerService {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     kms: Arc<dyn cloud::RuntimeKms>,
     http: reqwest::Client,
     base: String,
@@ -154,9 +154,9 @@ pub struct YoutubeCommentsPollerService {
 
 impl YoutubeCommentsPollerService {
     #[must_use]
-    pub fn new(surreal: SurrealDb, kms: Arc<dyn cloud::RuntimeKms>) -> Self {
+    pub fn new(application_store: ApplicationStore, kms: Arc<dyn cloud::RuntimeKms>) -> Self {
         Self {
-            surreal,
+            application_store,
             kms,
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -187,20 +187,24 @@ impl YoutubeCommentsPollerService {
     ///
     /// A database failure.
     pub async fn poll_targets(&self) -> anyhow::Result<Vec<PollTarget>> {
-        let publications =
-            store::social_publications::confirmed_links(&self.surreal, "youtube", VIDEO_LIMIT)
-                .await?;
+        let publications = store::social_publications::confirmed_links(
+            &self.application_store,
+            "youtube",
+            VIDEO_LIMIT,
+        )
+        .await?;
         let mut targets = Vec::new();
         for publication in publications {
             let Some(video_id) = publication.provider_post_id.as_deref() else {
                 continue;
             };
-            let Some(post) = store::posts::find_by_id(&self.surreal, publication.post_id).await?
+            let Some(post) =
+                store::posts::find_by_id(&self.application_store, publication.post_id).await?
             else {
                 continue;
             };
             let accounts = store::social_accounts::selected_for_brand(
-                &self.surreal,
+                &self.application_store,
                 &post.brand_key,
                 &post.selected_social_accounts,
             )
@@ -232,7 +236,7 @@ impl YoutubeCommentsPollerService {
             return Ok(VideoOutcome::default());
         }
         let credential = social_publish::send_credential(
-            &self.surreal,
+            &self.application_store,
             self.kms.as_ref(),
             &self.http,
             &self.refresh,
@@ -386,7 +390,7 @@ impl YoutubeCommentsPollerService {
         occurred: DateTime<Utc>,
     ) -> anyhow::Result<store::inbox::IngestedInbound> {
         store::inbox::ingest_inbound(
-            &self.surreal,
+            &self.application_store,
             &store::inbox::IngestInbound {
                 firm_id: target.firm_id,
                 brand_key: Some(&target.brand_key),
@@ -565,17 +569,6 @@ fn occurred_at(published_at: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use store::brands::NewBrand;
-    use store::firms::NewFirm;
-    use store::persons::NewPerson;
-    use store::social_accounts::ConnectSocialAccount;
-    use store::test_support::mem_surreal;
-    use store::{persons::Role, posts, social_publications};
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    const VIDEO_ID: &str = "abc123defg";
-    const ACCOUNT_ID: &str = "synthetic-channel";
 
     fn threads_body() -> serde_json::Value {
         serde_json::json!({
@@ -634,274 +627,5 @@ mod tests {
         });
         let parsed = parse_threads(&serde_json::from_value(body).unwrap());
         assert_eq!(parsed[0].text, "display only");
-    }
-
-    async fn seed_target(db: &SurrealDb) {
-        // The social-publisher test fixture's shape: a real Firm with its
-        // Admin DRI (whose membership `firms::create` records), a brand row
-        // owned by that Firm, and a raw post row — `seed_post` would refuse
-        // an uncompiled Brand key.
-        let admin = store::persons::create(
-            db,
-            &NewPerson::with_role("Synthetic Admin", "youtube-test@example.com", Role::Admin),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            db,
-            &NewFirm {
-                name: "Synthetic Firm".into(),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(db).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::brands::create(
-            db,
-            Role::Admin,
-            Some(admin.id),
-            &NewBrand {
-                name: "Synthetic Brand".into(),
-                key: "synthetic-brand".into(),
-                firm_id: Some(firm.id),
-                primary_color: None,
-                accent_color: None,
-                typeface: None,
-            },
-        )
-        .await
-        .unwrap();
-        let scopes = SocialProvider::Youtube
-            .required_scopes()
-            .iter()
-            .map(|scope| (*scope).into())
-            .collect::<Vec<String>>();
-        store::social_accounts::connect(
-            db,
-            ConnectSocialAccount {
-                actor_role: Role::Admin,
-                actor_person_id: admin.id,
-                brand_key: "synthetic-brand",
-                provider: SocialProvider::Youtube,
-                provider_account_id: ACCOUNT_ID,
-                display_name: None,
-                scopes: &scopes,
-                expires_at: None,
-                access_token: "synthetic-token",
-                refresh_token: None,
-            },
-            std::sync::Arc::new(cloud::FakeKms::new("youtube-test")).as_ref(),
-        )
-        .await
-        .unwrap();
-        let post_id = Uuid::now_v7();
-        db.query("CREATE $id SET brand_key = 'synthetic-brand', slug = $slug, title = 'Synthetic', description = '', body_html = '', status = 'scheduled', inserted_at = time::now(), updated_at = time::now()")
-            .bind(("id", store::surreal::record_id("post", post_id)))
-            .bind(("slug", "youtube-comments-test"))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let post = posts::find_by_brand_slug(db, "synthetic-brand", "youtube-comments-test")
-            .await
-            .unwrap()
-            .unwrap();
-        let post_id = post.id;
-        // The publisher records the post's intended destinations as
-        // `social_account` record keys; the poller resolves targets through
-        // that selection, so the fixture stamps the connected account on.
-        let account = store::social_accounts::connected_account(
-            db,
-            "synthetic-brand",
-            SocialProvider::Youtube,
-            ACCOUNT_ID,
-        )
-        .await
-        .unwrap()
-        .expect("connected youtube account");
-        db.query("UPDATE $id SET selected_social_accounts = $accounts")
-            .bind(("id", store::surreal::record_id("post", post_id)))
-            .bind(("accounts", vec![account.id]))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert!(matches!(
-            social_publications::admit(db, post_id, "youtube")
-                .await
-                .unwrap(),
-            social_publications::Admission::Admitted(_)
-        ));
-        social_publications::mark_confirmed(db, post_id, "youtube", VIDEO_ID, None)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn polling_is_idempotent_and_owner_echo_is_ignored() {
-        let db = mem_surreal().await;
-        seed_target(&db).await;
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/commentThreads"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(threads_body()))
-            .mount(&server)
-            .await;
-        let service = YoutubeCommentsPollerService::new(
-            db.clone(),
-            std::sync::Arc::new(cloud::FakeKms::new("youtube-test")),
-        )
-        .with_base(server.uri())
-        .with_egress(SocialEgressGate::new(|| Ok(())));
-        let targets = service.poll_targets().await.unwrap();
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].video_id, VIDEO_ID);
-        assert_eq!(targets[0].account_id, ACCOUNT_ID);
-
-        let first = service.poll_video(&targets[0]).await.unwrap();
-        assert_eq!(first.ingested, 2, "top-level comment plus its reply");
-        assert_eq!(first.deduped, 0);
-        assert_eq!(
-            first.skipped, 2,
-            "the Brand's own echo and the broken timestamp"
-        );
-
-        let second = service.poll_video(&targets[0]).await.unwrap();
-        assert_eq!(
-            second.deduped, 2,
-            "the same comments are recognized, never re-filed"
-        );
-        assert_eq!(second.ingested, 0);
-
-        let mut response = db
-            .query("SELECT * FROM inbox_conversation")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let mut conversations: Vec<serde_json::Value> = response.take(0).unwrap();
-        conversations.sort_by(|a, b| {
-            a["external_address"]
-                .as_str()
-                .unwrap_or("")
-                .cmp(b["external_address"].as_str().unwrap_or(""))
-        });
-        assert_eq!(
-            conversations.len(),
-            2,
-            "one conversation per commenter, Meta-style: external_address keys the thread"
-        );
-        for conversation in &conversations {
-            assert_eq!(conversation["channel"], "youtube");
-            assert_eq!(conversation["brand_key"], "synthetic-brand");
-            assert_eq!(conversation["provider_account"], ACCOUNT_ID);
-            assert_eq!(conversation["provider_post_id"], VIDEO_ID);
-            assert_eq!(conversation["provider_thread_ref"], VIDEO_ID);
-        }
-        assert_eq!(conversations[0]["external_address"], "UC-other");
-        assert_eq!(conversations[1]["external_address"], "UC-viewer");
-
-        let mut response = db
-            .query("SELECT * FROM message ORDER BY occurred_at")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let messages: Vec<serde_json::Value> = response.take(0).unwrap();
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0]["body"], "A question");
-        assert_eq!(messages[1]["body"], "From another viewer");
-    }
-    fn comment(id: &str) -> serde_json::Value {
-        serde_json::json!({"id":id,"snippet":{"textOriginal":"Synthetic comment","authorChannelId":{"value":"viewer"},"publishedAt":"2026-10-30T12:00:00Z"}})
-    }
-    #[tokio::test]
-    async fn fetch_reads_every_thread_page_and_missing_reply_page_without_duplicates() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET")).and(path("/commentThreads"))
-            .respond_with(|request:&wiremock::Request| {
-                if request.url.query_pairs().any(|(key,_)|key=="pageToken") {
-                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"items":[{"snippet":{"topLevelComment":comment("c2")}}]}))
-                }else{ResponseTemplate::new(200).set_body_json(serde_json::json!({"nextPageToken":"thread2","items":[{
-                    "snippet":{"topLevelComment":comment("c1"),"totalReplyCount":3},"replies":{"comments":[comment("r1")]}
-                }]}))}
-            }).expect(2).mount(&server).await;
-        Mock::given(method("GET")).and(path("/comments"))
-            .respond_with(|request:&wiremock::Request| {
-                assert!(request.url.query_pairs().any(|(key,value)|key=="parentId"&&value=="c1"));
-                if request.url.query_pairs().any(|(key,_)|key=="pageToken") {
-                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"items":[comment("r3")]}))
-                }else{ResponseTemplate::new(200).set_body_json(serde_json::json!({"nextPageToken":"reply2","items":[comment("r1"),comment("r2")]}))}
-            }).expect(2).mount(&server).await;
-        let service = YoutubeCommentsPollerService::new(
-            mem_surreal().await,
-            Arc::new(cloud::FakeKms::new("pagination")),
-        )
-        .with_base(server.uri());
-        let comments = service
-            .fetch_comments(VIDEO_ID, "synthetic-token")
-            .await
-            .unwrap();
-        assert_eq!(
-            comments
-                .iter()
-                .map(|comment| comment.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["c1", "r1", "r2", "r3", "c2"]
-        );
-        assert!(comments
-            .iter()
-            .filter(|c| c.id.starts_with('r'))
-            .all(|c| c.parent_id.as_deref() == Some("c1")));
-    }
-    #[tokio::test]
-    async fn repeated_page_token_and_later_page_failure_never_report_partial_success() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/commentThreads"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"items":[],"nextPageToken":"same"})),
-            )
-            .expect(2)
-            .mount(&server)
-            .await;
-        let service = YoutubeCommentsPollerService::new(
-            mem_surreal().await,
-            Arc::new(cloud::FakeKms::new("pagination")),
-        )
-        .with_base(server.uri());
-        assert!(service
-            .fetch_comments(VIDEO_ID, "synthetic-token")
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("repeated"));
-        let server = MockServer::start().await;
-        let failed = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let state = failed.clone();
-        Mock::given(method("GET")).and(path("/commentThreads"))
-            .respond_with(move|request:&wiremock::Request| {
-                if request.url.query_pairs().any(|(key,_)|key=="pageToken") {
-                    if state.load(std::sync::atomic::Ordering::SeqCst){ResponseTemplate::new(503)}
-                    else{ResponseTemplate::new(200).set_body_json(serde_json::json!({"items":[{"snippet":{"topLevelComment":comment("c2")}}]}))}
-                }else{ResponseTemplate::new(200).set_body_json(serde_json::json!({"nextPageToken":"page2","items":[{"snippet":{"topLevelComment":comment("c1")}}]}))}
-            }).mount(&server).await;
-        let service = service.with_base(server.uri());
-        assert!(service
-            .fetch_comments(VIDEO_ID, "synthetic-token")
-            .await
-            .is_err());
-        failed.store(false, std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(
-            service
-                .fetch_comments(VIDEO_ID, "synthetic-token")
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
     }
 }

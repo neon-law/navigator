@@ -12,7 +12,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 
 use crate::dbos_email_summary::EmailSummaryWorkflow;
 use crate::dbos_finance_aggregate::{self, FinanceAggregateWorkflow, RunRequest};
@@ -65,7 +65,7 @@ struct ManualStart {
 }
 
 fn require_active_service(service: &str) -> Result<(), StatusCode> {
-    if store::workflow_engine::disabled_billing_service(service) {
+    if store::disabled_billing::disabled_billing_service(service) {
         Err(StatusCode::GONE)
     } else {
         Ok(())
@@ -300,7 +300,7 @@ trait FinanceStarter: Send + Sync {
 struct DbosFinanceStarter {
     workflow: FinanceAggregateWorkflow,
     dbos: dbos::DBOS,
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     postgres: store::postgres::PostgresDb,
 }
 
@@ -424,7 +424,7 @@ enum StartError {
 #[async_trait::async_trait]
 impl FinanceStarter for DbosFinanceStarter {
     async fn start(&self, workflow_id: &str, request: RunRequest) -> Result<(), StartError> {
-        let project = store::projects::find_by_id(&self.surreal, request.project_id)
+        let project = store::projects::find_by_id(&self.application_store, request.project_id)
             .await
             .map_err(|_| StartError::StartFailed)?
             .ok_or(StartError::ProjectNotFound)?;
@@ -557,7 +557,7 @@ impl FinanceIngress {
         token: String,
         workflow: FinanceAggregateWorkflow,
         dbos: dbos::DBOS,
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         postgres: store::postgres::PostgresDb,
     ) -> Self {
         Self {
@@ -565,7 +565,7 @@ impl FinanceIngress {
             starter: Arc::new(DbosFinanceStarter {
                 workflow,
                 dbos,
-                surreal,
+                application_store,
                 postgres,
             }),
         }
@@ -955,7 +955,7 @@ impl ProjectSlackIngress {
         token: String,
         workflow: ProjectSlackWorkflow,
         dbos: dbos::DBOS,
-        _surreal: SurrealDb,
+        _application_store: ApplicationStore,
         postgres: store::postgres::PostgresDb,
     ) -> Self {
         Self {

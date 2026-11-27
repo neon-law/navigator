@@ -15,7 +15,7 @@
 use rules::pages::PageEntry;
 use uuid::Uuid;
 
-use crate::surreal::SurrealDb;
+use crate::application_store::ApplicationStore;
 
 const TABLE: &str = "matter_page";
 
@@ -44,9 +44,7 @@ pub enum MatterPageError {
 }
 
 async fn authority() -> Result<crate::postgres::PostgresDb, MatterPageError> {
-    crate::postgres::matter::authority_for(TABLE)
-        .await?
-        .ok_or_else(|| crate::postgres::matter::MatterAuthorityError::Unavailable.into())
+    Ok(crate::postgres::matter::authority_for(TABLE).await?)
 }
 
 /// Every gate finding against `pages`, as one line each: the `Y021` shape
@@ -83,12 +81,12 @@ pub fn findings(pages: &[PageEntry]) -> Vec<String> {
 /// [`MatterPageError::Invalid`] when the set fails the gate's checks;
 /// [`MatterPageError::Storage`] when the write fails.
 pub async fn replace_for_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     pages: &[PageEntry],
 ) -> Result<Vec<MatterPage>, MatterPageError> {
     let pg = authority().await?;
-    let _ = surreal;
+    let _ = application_store;
     let problems = findings(pages);
     if !problems.is_empty() {
         return Err(MatterPageError::Invalid(problems));
@@ -102,20 +100,20 @@ pub async fn replace_for_project(
 ///
 /// [`MatterPageError::Storage`] when the read fails.
 pub async fn list_for_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<MatterPage>, MatterPageError> {
     let pg = authority().await?;
-    let _ = surreal;
+    let _ = application_store;
     crate::postgres::matter_pages::list(&pg, project_id).await
 }
 
 /// The Project Inbox reads the same authoritative manifest entries.
 pub async fn inbox_entries(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<PageEntry>, MatterPageError> {
-    Ok(list_for_project(surreal, project_id)
+    Ok(list_for_project(application_store, project_id)
         .await?
         .into_iter()
         .map(|page| page.entry)
@@ -128,11 +126,11 @@ pub async fn inbox_entries(
 ///
 /// [`MatterPageError::Storage`] when the delete fails.
 pub async fn delete_for_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<(), MatterPageError> {
     let pg = authority().await?;
-    let _ = surreal;
+    let _ = application_store;
     crate::postgres::matter_pages::delete(&pg, project_id).await
 }
 

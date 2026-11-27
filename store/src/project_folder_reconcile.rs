@@ -1,9 +1,9 @@
 //! Resumable provider-folder provisioning with verified publication boundaries.
 use crate::{
+    application_store::ApplicationStore,
     document_pointers::MatterFolder,
     postgres::PostgresDb,
     project_folders::{self, ProjectFolder, ProjectFolderSlot},
-    surreal::SurrealDb,
 };
 use cloud::drive::{
     DriveFolderAccess, DriveIsolationOutcome, DriveMember, DriveMemberKind, DriveRole, DriveService,
@@ -61,8 +61,6 @@ pub struct FolderReconcileReport {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum FolderReconcileError {
-    #[error("Project storage projection failed")]
-    Projection(#[from] crate::postgres_mirror::MirrorError),
     #[error("folder binding: {0}")]
     Binding(#[from] project_folders::ProjectFolderError),
     #[error("folder provider: {0}")]
@@ -86,7 +84,7 @@ fn email(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 async fn members(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     policy: &FolderProvisioningPolicy,
 ) -> Result<Members, FolderReconcileError> {
@@ -483,7 +481,7 @@ async fn ensure_slot<D: DriveService + ?Sized>(
 // Preserve the ordered provider audit and its fail-closed publication boundary.
 #[allow(clippy::too_many_lines)]
 pub async fn reconcile<D: DriveService + ?Sized>(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     pg: &PostgresDb,
     drive: &D,
     project_id: Uuid,
@@ -513,27 +511,6 @@ pub async fn reconcile<D: DriveService + ?Sized>(
         .await
         .map_err(|_| FolderReconcileError::Matter)?
         .ok_or(FolderReconcileError::Matter)?;
-    // Project Folder is PostgreSQL-authoritative while Projects are still
-    // Surreal-authoritative. Seed its FK through the canonical projection even
-    // when optional automatic mirroring is disabled or historical rows are absent.
-    if let Some(firm_id) = project.firm_id {
-        crate::postgres_mirror::mirror(db, pg, &crate::postgres_mirror::MirrorKey::Firm(firm_id))
-            .await?;
-    }
-    if let Some(jurisdiction_id) = project.jurisdiction_id {
-        crate::postgres_mirror::mirror(
-            db,
-            pg,
-            &crate::postgres_mirror::MirrorKey::Jurisdiction(jurisdiction_id),
-        )
-        .await?;
-    }
-    crate::postgres_mirror::mirror(
-        db,
-        pg,
-        &crate::postgres_mirror::MirrorKey::Project(project_id),
-    )
-    .await?;
     let members = members(db, project_id, policy).await?;
     if members.firm.is_empty() {
         return Ok(blocked(FolderBlock::MissingFirmParticipant));
@@ -666,7 +643,7 @@ pub async fn reconcile<D: DriveService + ?Sized>(
 // Preserve the ordered provider audit and its fail-closed publication boundary.
 #[allow(clippy::too_many_lines)]
 pub async fn verify_for_import<D: DriveService + ?Sized>(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     pg: &PostgresDb,
     drive: &D,
     project_id: Uuid,
@@ -779,7 +756,7 @@ pub async fn verify_for_import<D: DriveService + ?Sized>(
 /// # Errors
 /// A roster larger than 100 is refused; individual outcomes remain separate.
 pub async fn converge_projects<D: DriveService + ?Sized>(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     pg: &PostgresDb,
     drive: &D,
     ids: &[Uuid],
@@ -800,7 +777,7 @@ pub async fn converge_projects<D: DriveService + ?Sized>(
 /// # Errors
 /// Incomplete provider configuration, unavailable PostgreSQL, or reconciliation failure.
 pub async fn reconcile_from_env(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Option<FolderReconcileReport>, FolderReconcileError> {
     // The shared drive declares Drive; the delegation keys also serve Calendar.
@@ -826,7 +803,7 @@ pub async fn reconcile_from_env(
 
 // Shared post-provider tail: production owns provider configuration, this path owns the admitted database.
 pub(crate) async fn reconcile_configured(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     drive: &dyn DriveService,
     project_id: Uuid,
     policy: &FolderProvisioningPolicy,
@@ -872,7 +849,7 @@ where
 }
 
 /// Reconcile one Project without allowing its failure to starve the nightly roster.
-pub async fn nightly_from_env(db: &SurrealDb, project_id: Uuid) -> NightlyFolderOutcome {
+pub async fn nightly_from_env(db: &ApplicationStore, project_id: Uuid) -> NightlyFolderOutcome {
     let outcome = match Box::pin(reconcile_from_env(db, project_id)).await {
         Ok(None) => NightlyFolderOutcome::Skipped,
         Ok(Some(report)) if report.outcome == FolderOutcome::Complete => {
@@ -889,7 +866,7 @@ pub async fn nightly_from_env(db: &SurrealDb, project_id: Uuid) -> NightlyFolder
 ///
 /// # Errors
 /// Project discovery failure; individual provider failures do not prevent other projects.
-pub async fn backfill_from_env(db: &SurrealDb) -> Result<usize, FolderReconcileError> {
+pub async fn backfill_from_env(db: &ApplicationStore) -> Result<usize, FolderReconcileError> {
     if std::env::var_os("NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID").is_none() {
         return Ok(0);
     }
@@ -1118,297 +1095,5 @@ mod tests {
         assert_eq!(drive.item_permissions(&file.id).await.unwrap().len(), 1);
     }
 
-    async fn postgres() -> Option<PostgresDb> {
-        use sqlx::postgres::{PgConnectOptions, PgSslMode};
-        let port = crate::test_support::postgres_test_port();
-        let options = PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(PgSslMode::Disable);
-        let admin = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
-        let name = format!("folder_reconcile_{}", Uuid::now_v7().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let pg = PostgresDb::connect(options.database(&name)).await.unwrap();
-        pg.migrate_embedded(None).await.unwrap();
-        Some(pg)
-    }
-    async fn fixture(pg: &PostgresDb) -> (SurrealDb, Uuid, FakeDrive, FolderProvisioningPolicy) {
-        fixture_named(pg, "synthetic-folder").await
-    }
-    async fn fixture_named(
-        pg: &PostgresDb,
-        code: &str,
-    ) -> (SurrealDb, Uuid, FakeDrive, FolderProvisioningPolicy) {
-        use crate::persons::{NewPerson, Role};
-        let db = crate::test_support::mem_surreal().await;
-        // This fixture crosses into PostgreSQL, so seed the reference rows
-        // that the minimal Surreal-only Entity helper intentionally omits.
-        db.query("CREATE $jurisdiction SET name = 'Synthetic Source', code = 'ZZ', jurisdiction_type = 'country'; CREATE $kind SET name = 'Synthetic Source';")
-            .bind(("jurisdiction", crate::surreal::record_id("jurisdiction", crate::test_support::SEED_ENTITY_JURISDICTION_ID)))
-            .bind(("kind", crate::surreal::record_id("entity_type", crate::test_support::SEED_ENTITY_TYPE_ID)))
-            .await.unwrap().check().unwrap();
-        crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let entity = crate::test_support::seed_entity(&db).await;
-        let lawyer = crate::persons::create(
-            &db,
-            &NewPerson::with_role("Synthetic Lawyer", "lawyer@example.com", Role::Lawyer),
-        )
-        .await
-        .unwrap();
-        let client = crate::persons::create(
-            &db,
-            &NewPerson::with_role("Synthetic Client", "client@example.com", Role::Client),
-        )
-        .await
-        .unwrap();
-        let project = crate::projects::open_matter(
-            &db,
-            &crate::projects::OpenMatterCommand {
-                firm_id: None,
-                name: "Synthetic Project".into(),
-                code: code.into(),
-                client_id: client.id,
-                entity_id: entity,
-                jurisdiction_id: None,
-                description: None,
-                brand: "neon".into(),
-                attestation: true,
-                acting_person_id: lawyer.id,
-                closed_at: None,
-            },
-        )
-        .await
-        .unwrap();
-        let jurisdiction = Uuid::now_v7();
-        let kind = Uuid::now_v7();
-        let pgentity = Uuid::now_v7();
-        sqlx::query("INSERT INTO jurisdiction(id,name) VALUES ($1,$2)")
-            .bind(jurisdiction)
-            .bind(format!("Synthetic {jurisdiction}"))
-            .execute(pg.pool())
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO entity_type(id,name) VALUES ($1,$2)")
-            .bind(kind)
-            .bind(format!("Synthetic {kind}"))
-            .execute(pg.pool())
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,'Synthetic',$2,$3)")
-            .bind(pgentity).bind(kind).bind(jurisdiction).execute(pg.pool()).await.unwrap();
-        sqlx::query("INSERT INTO project(id,code,name,status,entity_id) VALUES ($1,$3,'Synthetic','open',$2)")
-            .bind(project.id).bind(pgentity).bind(code).execute(pg.pool()).await.unwrap();
-        let drive = FakeDrive::default();
-        let parent = drive.create_folder("shared-parent").await.unwrap();
-        let policy = FolderProvisioningPolicy {
-            projects_parent_id: parent.id,
-            trusted_organizers: BTreeSet::new(),
-        };
-        (db, project.id, drive, policy)
-    }
-    #[tokio::test]
-    async fn legacy_surreal_project_converges_without_preseeded_postgres_project() {
-        let Some(pg) = postgres().await else { return };
-        let (db, project_id, drive, policy) = fixture(&pg).await;
-        sqlx::query("DELETE FROM project WHERE id=$1")
-            .bind(project_id)
-            .execute(pg.pool())
-            .await
-            .unwrap();
-        let report = Box::pin(reconcile(&db, &pg, &drive, project_id, &policy))
-            .await
-            .unwrap();
-        assert_eq!(report.outcome, FolderOutcome::Complete);
-        let projected: Uuid = sqlx::query_scalar("SELECT entity_id FROM project WHERE id=$1")
-            .bind(project_id)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-        let source = crate::projects::find_by_id(&db, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(projected, source.entity_id);
-        assert!(
-            project_folders::get_verified(&pg, project_id, ProjectFolderSlot::Root)
-                .await
-                .unwrap()
-                .is_some()
-        );
-    }
-    #[tokio::test]
-    async fn reserved_uncreated_root_recovers_same_id_and_all_slots_converge() {
-        let Some(pg) = postgres().await else {
-            return;
-        };
-        let (db, id, drive, policy) = fixture(&pg).await;
-        let reserved = drive.allocate_folder_id().await.unwrap();
-        project_folders::bind(
-            &pg,
-            id,
-            ProjectFolderSlot::Root,
-            &reserved,
-            None,
-            Some(&policy.projects_parent_id),
-        )
-        .await
-        .unwrap();
-        assert!(
-            project_folders::get_verified(&pg, id, ProjectFolderSlot::Root)
-                .await
-                .unwrap()
-                .is_none()
-        );
-        let first = Box::pin(reconcile(&db, &pg, &drive, id, &policy))
-            .await
-            .unwrap();
-        assert_eq!(first.outcome, FolderOutcome::Complete);
-        let before = project_folders::list_verified(&pg, id).await.unwrap();
-        assert_eq!(before.len(), MatterFolder::TREE.len() + 2);
-        assert!(before.iter().any(|row| {
-            row.slot == ProjectFolderSlot::Matter(MatterFolder::Costs)
-                && row.parent_drive_folder_id.as_deref() == Some(reserved.as_str())
-        }));
-        assert_eq!(
-            project_folders::get_verified(&pg, id, ProjectFolderSlot::Root)
-                .await
-                .unwrap()
-                .unwrap()
-                .drive_folder_id,
-            reserved
-        );
-        let retry = Box::pin(reconcile(&db, &pg, &drive, id, &policy))
-            .await
-            .unwrap();
-        assert_eq!(retry.outcome, FolderOutcome::Complete);
-        let after = project_folders::list_verified(&pg, id).await.unwrap();
-        assert_eq!(
-            before
-                .iter()
-                .map(|r| (r.slot.key(), &r.drive_folder_id))
-                .collect::<Vec<_>>(),
-            after
-                .iter()
-                .map(|r| (r.slot.key(), &r.drive_folder_id))
-                .collect::<Vec<_>>()
-        );
-    }
-    #[tokio::test]
-    async fn provider_drift_clears_all_publication_and_recovery_reuses_slots() {
-        let Some(pg) = postgres().await else {
-            return;
-        };
-        let (db, id, drive, policy) = fixture(&pg).await;
-        assert_eq!(
-            Box::pin(reconcile(&db, &pg, &drive, id, &policy))
-                .await
-                .unwrap()
-                .outcome,
-            FolderOutcome::Complete
-        );
-        let root = project_folders::get(&pg, id, ProjectFolderSlot::Root)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(drive.set_folder_access_state(&root.drive_folder_id, false, false));
-        assert_eq!(
-            Box::pin(reconcile(&db, &pg, &drive, id, &policy))
-                .await
-                .unwrap()
-                .outcome,
-            FolderOutcome::Blocked(FolderBlock::ProviderCapability)
-        );
-        assert!(project_folders::list_verified(&pg, id)
-            .await
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            project_folders::list(&pg, id).await.unwrap().len(),
-            MatterFolder::TREE.len() + 2
-        );
-        assert!(drive.set_folder_access_state(&root.drive_folder_id, false, true));
-        assert_eq!(
-            Box::pin(reconcile(&db, &pg, &drive, id, &policy))
-                .await
-                .unwrap()
-                .outcome,
-            FolderOutcome::Complete
-        );
-        assert_eq!(
-            project_folders::list_verified(&pg, id).await.unwrap().len(),
-            MatterFolder::TREE.len() + 2
-        );
-    }
-    #[tokio::test]
-    async fn nightly_full_roster_continues_after_real_provider_block_and_database_failure() {
-        let Some(pg) = postgres().await else {
-            return;
-        };
-        let blocked = fixture_named(&pg, "blocked-folder").await;
-        let mut later = fixture_named(&pg, "later-folder").await;
-        // One provider allocates globally unique IDs across the roster. Two
-        // independent FakeDrives restart their counters and model ID reuse.
-        later.2 = blocked.2.clone();
-        let root = blocked
-            .2
-            .ensure_child_folder(&blocked.3.projects_parent_id, "blocked-folder")
-            .await
-            .unwrap();
-        assert!(blocked.2.set_folder_access_state(&root.id, false, false));
-        let missing = Uuid::now_v7();
-        let mut roster = vec![missing; 101];
-        roster.extend([blocked.1, later.1]);
-        let outcomes = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            visit_nightly_roster(roster, |id| {
-                let blocked = &blocked;
-                let later = &later;
-                let pg = &pg;
-                async move {
-                    let context = if id == later.1 { later } else { blocked };
-                    let outcome =
-                        match Box::pin(reconcile(&context.0, pg, &context.2, id, &context.3)).await
-                        {
-                            Ok(report) if report.outcome == FolderOutcome::Complete => {
-                                NightlyFolderOutcome::Verified
-                            }
-                            Ok(_) => NightlyFolderOutcome::Blocked,
-                            Err(_) => NightlyFolderOutcome::Failed,
-                        };
-                    Ok::<_, std::convert::Infallible>(outcome)
-                }
-            }),
-        )
-        .await
-        .expect("bounded roster pass")
-        .unwrap();
-        assert_eq!(outcomes.len(), 103, "nightly is not capped at boot's 100");
-        assert!(outcomes[..101]
-            .iter()
-            .all(|v| *v == NightlyFolderOutcome::Failed));
-        assert_eq!(outcomes[101], NightlyFolderOutcome::Blocked);
-        assert_eq!(outcomes[102], NightlyFolderOutcome::Verified);
-        assert!(project_folders::list_verified(&pg, blocked.1)
-            .await
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            project_folders::list_verified(&pg, later.1)
-                .await
-                .unwrap()
-                .len(),
-            MatterFolder::TREE.len() + 2
-        );
-    }
     include!("project_folder_reconcile_boundary_tests.rs");
 }

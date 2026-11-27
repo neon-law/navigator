@@ -48,11 +48,11 @@ async fn send(
     )
 }
 
-async fn api(surreal: store::surreal::SurrealDb) -> Router {
-    let state = portal::test_support::app_state(surreal).await;
+async fn api(application_store: store::application_store::ApplicationStore) -> Router {
+    let state = portal::test_support::app_state(application_store).await;
     portal::api::routes().with_state(portal::api::ApiState {
         jev: None,
-        surreal: state.surreal.clone(),
+        application_store: state.application_store.clone(),
         email: state.email.clone(),
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),
         bootstrap_company: "Synthetic Firm".into(),
@@ -82,7 +82,7 @@ fn session(person: &store::persons::Person, role: Role) -> portal::SessionData {
 )]
 async fn run() {
     let pg = store::postgres::PostgresDb::application().await.unwrap();
-    let surreal = store::surreal::SurrealDb::uninitialized();
+    let application_store = store::application_store::ApplicationStore::uninitialized();
     sqlx::query("INSERT INTO brand(name, brand_key) VALUES ('Synthetic Brand', 'neon')")
         .execute(pg.pool())
         .await
@@ -97,13 +97,13 @@ async fn run() {
     .await
     .unwrap();
     let owner = store::persons::create(
-        &surreal,
+        &application_store,
         &NewPerson::with_role("Synthetic Owner", "plans-owner@example.com", Role::Owner),
     )
     .await
     .unwrap();
     let outsider = store::persons::create(
-        &surreal,
+        &application_store,
         &NewPerson::with_role(
             "Synthetic Outsider",
             "plans-outsider@example.com",
@@ -113,7 +113,7 @@ async fn run() {
     .await
     .unwrap();
     let firm = store::firms::create(
-        &surreal,
+        &application_store,
         &store::firms::NewFirm {
             name: format!("Synthetic Plan Firm {}", Uuid::now_v7()),
             status: "active".into(),
@@ -124,7 +124,7 @@ async fn run() {
     .await
     .unwrap();
     let project = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: store::projects::code_from_name("Synthetic Plan Matter", Uuid::new_v4()),
             name: "Synthetic Plan Matter".into(),
@@ -137,7 +137,7 @@ async fn run() {
     .await
     .unwrap();
     let firmless = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: store::projects::code_from_name("Synthetic Firmless Matter", Uuid::new_v4()),
             name: "Synthetic Firmless Matter".into(),
@@ -148,7 +148,7 @@ async fn run() {
     )
     .await
     .unwrap();
-    let app = api(surreal).await;
+    let app = api(application_store).await;
     let owner = session(&owner, Role::Owner);
     let outsider = session(&outsider, Role::Lawyer);
     let plans = format!("/app/api/firms/{}/legal-plans", firm.id);

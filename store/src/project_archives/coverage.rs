@@ -22,9 +22,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{generation_from, store_error, ArchiveError, Generation, GENERATION_COLUMNS};
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
 use crate::projects::Project;
-use crate::surreal::SurrealDb;
 
 /// The twice-daily full-archive baseline an open Project's newest committed
 /// generation is measured against. A reporting threshold, not a
@@ -231,11 +231,11 @@ pub fn assess(
 /// # Errors
 /// A Project inventory or database read failure.
 pub async fn report(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     now: DateTime<Utc>,
 ) -> Result<CoverageReport, ArchiveError> {
-    let projects: Vec<ExpectedProject> = crate::projects::all(surreal)
+    let projects: Vec<ExpectedProject> = crate::projects::all(application_store)
         .await
         .map_err(store_error)?
         .iter()

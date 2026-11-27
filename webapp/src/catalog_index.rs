@@ -93,9 +93,9 @@ pub async fn catalog_index_view() -> Result<CatalogIndexView, ServerFnError> {
     .await
     .map(|axum::Extension(c)| c.0)
     .unwrap_or_default();
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let testimonials = if content.include_testimonials {
-        store::testimonials::published_for_brand(&surreal, &content.brand_key, Some(12))
+        store::testimonials::published_for_brand(&application_store, &content.brand_key, Some(12))
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
             .into_iter()

@@ -21,8 +21,8 @@ use std::time::Duration;
 use chrono::{DateTime, NaiveTime, Utc};
 use dbos::{CancellationToken, StepOptions, WorkflowHandle, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::notation_reset::ResetOutcome;
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 use super::daily::{self, LateStart};
@@ -68,7 +68,7 @@ pub fn enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, super::S
 
 #[derive(Clone)]
 pub struct Context {
-    pub surreal: SurrealDb,
+    pub application_store: ApplicationStore,
     pub slack: Arc<dyn SlackBot>,
     pub channel_id: String,
     pub environment: &'static str,
@@ -81,7 +81,7 @@ impl Context {
     ///
     /// Fails when that channel is unset or blank.
     pub fn from_lookup<F>(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         slack: Arc<dyn SlackBot>,
         environment: &'static str,
         simulated: bool,
@@ -92,7 +92,7 @@ impl Context {
     {
         let channel_id = super::messages_channel(lookup, simulated)?;
         Ok(Self {
-            surreal,
+            application_store,
             slack,
             channel_id,
             environment,
@@ -150,11 +150,11 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NotationResetWork
         let context = context.clone();
         async move {
             let started = now_step("started").await?;
-            let surreal = context.surreal.clone();
+            let application_store = context.application_store.clone();
             let roster = dbos::step_with("discover", options(ATTEMPTS), move || {
-                let surreal = surreal.clone();
+                let application_store = application_store.clone();
                 async move {
-                    discover_drafts(&surreal)
+                    discover_drafts(&application_store)
                         .await
                         .map_err(|_| dbos::Error::Application(NotationResetError::Discover))
                 }
@@ -173,14 +173,14 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NotationResetWork
 
             let mut report = NotationResetReport::default();
             for id in roster.notations {
-                match delete(&context.surreal, "notation", id).await {
+                match delete(&context.application_store, "notation", id).await {
                     Ok(Some(outcome)) => report.absorb(outcome),
                     Ok(None) => {}
                     Err(_) => report.failures.push(id),
                 }
             }
             for id in roster.previews {
-                match delete(&context.surreal, "preview", id).await {
+                match delete(&context.application_store, "preview", id).await {
                     Ok(_) => report.previews_deleted += 1,
                     Err(_) => report.failures.push(id),
                 }
@@ -205,23 +205,23 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NotationResetWork
 /// One checkpointed delete. A Notation reports its outcome; a preview
 /// reports `None`.
 async fn delete(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     kind: &'static str,
     id: Uuid,
 ) -> dbos::Result<Option<ResetOutcome>, NotationResetError> {
-    let surreal = surreal.clone();
+    let application_store = application_store.clone();
     dbos::step_with(
         &format!("delete-{kind}-{id}"),
         options(ATTEMPTS),
         move || {
-            let surreal = surreal.clone();
+            let application_store = application_store.clone();
             async move {
                 let deleted = if kind == "notation" {
-                    store::notation_reset::delete_draft(&surreal, id)
+                    store::notation_reset::delete_draft(&application_store, id)
                         .await
                         .map(Some)
                 } else {
-                    store::notation_reset::delete_preview_draft(&surreal, id)
+                    store::notation_reset::delete_preview_draft(&application_store, id)
                         .await
                         .map(|()| None)
                 };
@@ -308,7 +308,7 @@ mod tests {
     fn an_enabled_schedule_requires_its_channel_and_bot() {
         let configured = |simulated: bool, pairs: &'static [(&'static str, &'static str)]| {
             Context::from_lookup(
-                store::surreal::test_support::unreachable(),
+                store::test_support::uninitialized_store(),
                 std::sync::Arc::new(crate::CapturingSlackBot::new()),
                 "staging",
                 simulated,

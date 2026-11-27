@@ -381,7 +381,7 @@ pub struct AppState {
     pub brand_bundle: Option<views::brand_bundle::BrandBundle>,
     /// The SurrealDB handle — the store. A process that cannot reach this
     /// engine cannot serve anything.
-    pub surreal: store::surreal::SurrealDb,
+    pub application_store: store::application_store::ApplicationStore,
     pub workshops: WorkshopIndex,
     pub auth: AuthConfig,
     /// Google OAuth access-token validator for `/mcp`. Pass-through
@@ -587,9 +587,9 @@ pub struct AppState {
     pub hcaptcha: Option<Arc<hcaptcha::HCaptcha>>,
 }
 
-impl FromRef<AppState> for store::surreal::SurrealDb {
+impl FromRef<AppState> for store::application_store::ApplicationStore {
     fn from_ref(s: &AppState) -> Self {
-        s.surreal.clone()
+        s.application_store.clone()
     }
 }
 
@@ -1096,7 +1096,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let api = session_boundary(
         api::routes()
             .with_state(api::ApiState {
-                surreal: state.surreal.clone(),
+                application_store: state.application_store.clone(),
                 email: state.email.clone(),
                 bootstrap_owner_email: state.bootstrap_owner_email.clone(),
                 bootstrap_company: admin::bootstrap_company_from_env(),
@@ -1124,7 +1124,7 @@ pub fn bootstrap_with_forgejo_oidc(
                 },
             })
             .route_layer(axum::middleware::from_fn_with_state(
-                state.surreal.clone(),
+                state.application_store.clone(),
                 crate::api::scope_project_request,
             ))
             .layer(axum::Extension(state.runtime_kms.clone()))
@@ -1168,7 +1168,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // renders (a friendly 401 rather than a redirect an XHR can't follow).
     let api_docs = api::doc_routes();
     let admin_state = admin::AdminState {
-        surreal: state.surreal.clone(),
+        application_store: state.application_store.clone(),
         workflow_runtime: state.workflow_runtime.clone(),
         signature_provider: state.signature_provider.clone(),
         retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
@@ -1221,19 +1221,19 @@ pub fn bootstrap_with_forgejo_oidc(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_app_brands_edit = dioxus_app::app_brands_edit_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_app_brands_edit_post = dioxus_app::app_brands_edit_post_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     // ENG-586: a brand's logo and font uploads are native multipart POSTs,
     // never JSON — this is the only door that writes them.
@@ -1248,7 +1248,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_brand_new = dioxus_app::csrf_page_router(
         dioxus_app::APP_BRAND_NEW_PATH,
         webapp::brands_new::BrandNew,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1263,66 +1263,66 @@ pub fn bootstrap_with_forgejo_oidc(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_social_dashboard = dioxus_app::social_dashboard_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_social_calendar = dioxus_app::social_calendar_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_owner_inbox = dioxus_app::owner_inbox_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_triage_queue = dioxus_app::triage_queue_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_plan_intake = dioxus_app::plan_intake_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_owner_inbox_thread = dioxus_app::owner_inbox_thread_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_project_inbox = dioxus_app::project_inbox_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_project_inbox_thread = dioxus_app::project_inbox_thread_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_app_owner = dioxus_app::app_owner_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_deployment_keys = dioxus_app::csrf_page_router(
         webapp::deployment_keys::PATH,
         webapp::deployment_keys::DeploymentKeys,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1331,13 +1331,13 @@ pub fn bootstrap_with_forgejo_oidc(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     let dioxus_firm_show = dioxus_app::firm_show_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
     );
     // ENG-585: Owner opens a Firm from a native form on the shared `FormCard`
     // + CSRF page router, the same shape the entity create form uses. It
@@ -1345,7 +1345,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_firm_new = dioxus_app::csrf_page_router(
         dioxus_app::APP_OWNER_FIRM_NEW_PATH,
         webapp::firm_new::OwnerFirmNew,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1355,7 +1355,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_firm_edit = dioxus_app::csrf_page_router(
         dioxus_app::FIRM_EDIT_PATH,
         webapp::firm_edit::FirmEdit,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1366,7 +1366,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_firm_move = dioxus_app::csrf_page_router(
         dioxus_app::APP_OWNER_FIRM_MOVE_PATH,
         webapp::firm_move::MoveBrand,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1446,8 +1446,10 @@ pub fn bootstrap_with_forgejo_oidc(
     // why `/app/mcp` is not gated by `session_boundary` — see
     // `docs/access-model.md` for why that is not the same thing as being
     // anonymous.
-    let mut mcp_state =
-        mcp::McpState::new(state.surreal.clone(), state.questionnaire_runtime.clone());
+    let mut mcp_state = mcp::McpState::new(
+        state.application_store.clone(),
+        state.questionnaire_runtime.clone(),
+    );
     // Object storage is always available to the MCP tools — the
     // questionnaire walker reads template bodies from blob storage, so a
     // non-bundled template's spec can still be parsed.
@@ -1464,7 +1466,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // (`workflows::PostQuestionnaireDrive`).
     mcp_state.post_questionnaire = Some(std::sync::Arc::new(
         crate::retainer_walk::PostQuestionnaire {
-            surreal: state.surreal.clone(),
+            application_store: state.application_store.clone(),
             workflow_runtime: state.workflow_runtime.clone(),
             storage: state.storage.clone(),
             assets_storage: state.assets_storage.clone(),
@@ -1505,7 +1507,10 @@ pub fn bootstrap_with_forgejo_oidc(
                 crate::auth::require_auth,
             ))
             .route_layer(axum::middleware::from_fn_with_state(
-                state.google_oauth.clone().with_db(state.surreal.clone()),
+                state
+                    .google_oauth
+                    .clone()
+                    .with_db(state.application_store.clone()),
                 crate::google_oauth::require_google_oauth,
             ))
             // Above the auth chain, so every layer below sees a resolved
@@ -1600,7 +1605,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let cli_auth = cli_auth::routes(state.sessions.clone());
     let seed_token_auth = ci_auth::routes(ci_auth::CiAuthState {
         sessions: state.sessions.clone(),
-        surreal: state.surreal.clone(),
+        application_store: state.application_store.clone(),
         github_oidc: state.github_oidc.clone(),
         github_org: state.github_org.clone(),
         forgejo_oidc,
@@ -1631,7 +1636,7 @@ pub fn bootstrap_with_forgejo_oidc(
             oauth_microsoft: state.oauth_microsoft.clone(),
             oauth_apple: state.oauth_apple.clone(),
             sessions: state.sessions.clone(),
-            surreal: state.surreal.clone(),
+            application_store: state.application_store.clone(),
             email: state.email.clone(),
             workflow_runtime: state.workflow_runtime.clone(),
             bootstrap_owner_email: bootstrap_owner.clone(),
@@ -1725,7 +1730,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // #641 Phase 3 (admin cluster): the lawyer entity-types directory renders
     // through Dioxus, replacing the read view. Same auth + embedded Rego policy gate.
     let dioxus_entity_types = dioxus_app::entity_types_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1734,7 +1739,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // Dioxus — the first row-action page; its actions post to the existing
     // authorize/deny handlers via native forms carrying the session CSRF token.
     let dioxus_expunge_queue = dioxus_app::expunge_queue_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1743,7 +1748,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // Dioxus with a first-party Sigma.js island fed by the read-only
     // `GET /app/api/graph/*` doors.
     let dioxus_graph_views = dioxus_app::graph_views_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1755,7 +1760,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_expunge_document = dioxus_app::csrf_page_router(
         dioxus_app::LAWYER_DOCUMENT_EXPUNGE_PATH,
         webapp::expunge_document::AdminExpungeDocument,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1764,13 +1769,13 @@ pub fn bootstrap_with_forgejo_oidc(
     // at `/app/lawyer/contract-reviews/{id}`. Its per-finding, summary, approve, and
     // reject forms post to the unchanged handlers on deeper paths.
     let dioxus_contract_review = dioxus_app::contract_review_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
     );
     let dioxus_notation_document_review = dioxus_app::notation_document_review_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.storage.clone(),
         state.sessions.clone(),
         state.policy.clone(),
@@ -1782,7 +1787,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_entity_new = dioxus_app::csrf_page_router(
         dioxus_app::LAWYER_ENTITY_NEW_PATH,
         webapp::entity_new::LawyerEntityNew,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1794,7 +1799,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_retainer_start = dioxus_app::csrf_page_router_with_storage(
         dioxus_app::LAWYER_RETAINER_NEW_PATH,
         webapp::retainer_start::LawyerRetainerStart,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.storage.clone(),
         state.sessions.clone(),
         state.policy.clone(),
@@ -1806,7 +1811,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_entity_edit = dioxus_app::csrf_page_router(
         dioxus_app::LAWYER_ENTITY_EDIT_PATH,
         webapp::entity_edit::LawyerEntityEdit,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1815,7 +1820,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // sortable table with per-row edit/delete actions. `POST /app/admin/entities`
     // (create) stays on the admin router; axum merges the same-path methods.
     let dioxus_entity_list = dioxus_app::entity_list_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1831,7 +1836,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // administrative directory. Person-scoped like the lawyer projects list, so
     // the counts and the matter list are the caller's workload.
     let dioxus_lawyer_dashboard = dioxus_app::lawyer_dashboard_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1839,13 +1844,13 @@ pub fn bootstrap_with_forgejo_oidc(
     let daily_billing = dioxus_app::csrf_page_router(
         webapp::lawyer_dashboard::billing::PATH,
         webapp::lawyer_dashboard::billing::DailyBilling,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
     );
     let dioxus_notation_outline = dioxus_app::notation_outline_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.storage.clone(),
         state.sessions.clone(),
         state.policy.clone(),
@@ -1854,7 +1859,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_clauses = dioxus_app::clause_library_router(
         webapp::clause_library::CLAUSES_PATH,
         webapp::clause_library::ClauseLibrary,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.storage.clone(),
         state.sessions.clone(),
         state.policy.clone(),
@@ -1863,7 +1868,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_clause = dioxus_app::clause_library_router(
         webapp::clause_library::CLAUSE_PATH,
         webapp::clause_library::ClauseDetail,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.storage.clone(),
         state.sessions.clone(),
         state.policy.clone(),
@@ -1873,7 +1878,7 @@ pub fn bootstrap_with_forgejo_oidc(
         dioxus_app::LAWYER_PLAYBOOKS_PATH,
         webapp::playbooks::LawyerPlaybookList,
         dioxus_app::LAWYER_PLAYBOOKS_SORT,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1881,7 +1886,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_playbook_new = dioxus_app::csrf_page_router(
         dioxus_app::LAWYER_PLAYBOOK_NEW_PATH,
         webapp::playbooks::LawyerPlaybookNew,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1889,7 +1894,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_playbook_edit = dioxus_app::csrf_page_router(
         dioxus_app::LAWYER_PLAYBOOK_EDIT_PATH,
         webapp::playbooks::LawyerPlaybookEdit,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1901,7 +1906,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_schedules = dioxus_app::csrf_page_router(
         dioxus_app::LAWYER_SCHEDULES_PATH,
         webapp::schedules::LawyerSchedules,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1912,7 +1917,7 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_admin_people_new = dioxus_app::csrf_page_router(
         dioxus_app::ADMIN_PEOPLE_NEW_PATH,
         webapp::admin_people_new::AdminPeopleNew,
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1923,7 +1928,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // decided from the caller's role, not from the prefix they typed.
     // `POST /app/projects` (create) stays on the router.
     let dioxus_projects = dioxus_app::projects_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1931,7 +1936,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // #956 Phase 4 (app cluster): the blank government-forms index renders
     // through Dioxus at /app/forms. The download route stays on Axum.
     let dioxus_app_forms = dioxus_app::app_forms_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         &state.forms_registry,
         state.sessions.clone(),
         state.policy.clone(),
@@ -1954,7 +1959,7 @@ pub fn bootstrap_with_forgejo_oidc(
         state.auth.clone(),
     );
     let dioxus_project_detail = dioxus_app::project_detail_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.storage.clone(),
         state.sessions.clone(),
         state.policy.clone(),
@@ -1966,7 +1971,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // the admin-only participation add/edit forms. Every write stays on its
     // native `POST` handler; axum merges the same-path methods.
     let dioxus_lawyer_project_forms = dioxus_app::lawyer_project_forms_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1976,7 +1981,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // and the loader re-applies the cross-project and client-visibility guards;
     // the `…/download` routes stay on Axum.
     let dioxus_project_documents = dioxus_app::project_document_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1987,7 +1992,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // `POST …/conversation/messages` stays on its existing Axum handler (it
     // already redirects a native form — PRG).
     let dioxus_conversation = dioxus_app::conversation_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1995,7 +2000,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // One declared Matter Page at /app/projects/{project_code}/{page_slug},
     // rendered from the Project's synced `pages:` through the caller's lens.
     let dioxus_matter_page = dioxus_app::matter_page_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.storage.clone(),
         state.sessions.clone(),
         state.policy.clone(),
@@ -2006,7 +2011,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // (`…/comments` GET/POST, driven by the document-review custom element)
     // stays on the Axum data API.
     let dioxus_review = dioxus_app::review_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -2016,14 +2021,14 @@ pub fn bootstrap_with_forgejo_oidc(
     // Edit/Delete action column. `POST /app/admin/people` (create) stays
     // on the router; axum merges the same-path methods.
     let dioxus_admin_leads = dioxus_app::admin_leads_router(
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
     );
     let dioxus_admin_people = dioxus_app::admin_people_router(
         state.bootstrap_owner_email.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -2036,7 +2041,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // methods.
     let dioxus_admin_person_show = dioxus_app::admin_person_show_router(
         state.bootstrap_owner_email.clone(),
-        state.surreal.clone(),
+        state.application_store.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -2052,7 +2057,7 @@ pub fn bootstrap_with_forgejo_oidc(
             dioxus_app::admin_listing_router(
                 $path,
                 $component,
-                state.surreal.clone(),
+                state.application_store.clone(),
                 state.sessions.clone(),
                 state.policy.clone(),
                 state.auth.clone(),
@@ -2067,7 +2072,7 @@ pub fn bootstrap_with_forgejo_oidc(
             dioxus_app::LAWYER_TEMPLATES_PATH,
             webapp::admin_listings::LawyerTemplates,
             &["code", "title", "respondent_type"],
-            state.surreal.clone(),
+            state.application_store.clone(),
             state.sessions.clone(),
             state.policy.clone(),
             state.auth.clone(),
@@ -2078,7 +2083,7 @@ pub fn bootstrap_with_forgejo_oidc(
             dioxus_app::LAWYER_DRAFTS_PATH,
             webapp::admin_listings::LawyerTemplates,
             &["code", "title", "respondent_type"],
-            state.surreal.clone(),
+            state.application_store.clone(),
             state.sessions.clone(),
             state.policy.clone(),
             state.auth.clone(),
@@ -2087,7 +2092,7 @@ pub fn bootstrap_with_forgejo_oidc(
             dioxus_app::LAWYER_QUESTIONS_PATH,
             webapp::admin_listings::LawyerQuestions,
             &["code", "answer_type"],
-            state.surreal.clone(),
+            state.application_store.clone(),
             state.sessions.clone(),
             state.policy.clone(),
             state.auth.clone(),
@@ -2101,7 +2106,7 @@ pub fn bootstrap_with_forgejo_oidc(
             dioxus_app::ADMIN_MATTER_DIRECTORY_PATH,
             webapp::matter_directory::AdminMatterDirectory,
             dioxus_app::ADMIN_MATTER_DIRECTORY_SORT,
-            state.surreal.clone(),
+            state.application_store.clone(),
             state.sessions.clone(),
             state.policy.clone(),
             state.auth.clone(),
@@ -2183,7 +2188,7 @@ pub fn bootstrap_with_forgejo_oidc(
     // active-subscription layer; build it before `state` moves into the
     // chain below.
     let sandbox = legal_sandbox::routes(&state);
-    let firm_context_store = state.surreal.clone();
+    let firm_context_store = state.application_store.clone();
     let mut router = mount_brand_assets(router, brand_bundle.as_ref())
         .route("/site-brand.json", get(site_brand::site_brand))
         .nest_service("/public", static_files)
@@ -2913,7 +2918,7 @@ fn is_probe_path(path: &str) -> bool {
 /// every per-route layer that reads either extension — `inject_app_brand_mark`
 /// included — finds it already resolved.
 async fn inject_resolved_firm_context(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
@@ -2926,24 +2931,25 @@ async fn inject_resolved_firm_context(
         .get::<views::brand::BrandKey>()
         .copied()
         .unwrap_or_default();
-    let model = webapp::firm_footer::resolve_firm_footer_model(&surreal, current, {
+    let model = webapp::firm_footer::resolve_firm_footer_model(&application_store, current, {
         use chrono::Datelike;
         chrono::Utc::now().year()
     })
     .await;
-    let mark = match webapp::app_chrome::firm_portal_theme_brand(&surreal, current).await {
+    let mark = match webapp::app_chrome::firm_portal_theme_brand(&application_store, current).await
+    {
         Some(theme) => {
             webapp::app_chrome::resolve_theme_brand_mark(
-                &surreal,
+                &application_store,
                 current,
                 theme,
                 std::env::var("NAVIGATOR_PUBLIC_HOST").ok().as_deref(),
             )
             .await
         }
-        None => webapp::app_chrome::resolve_app_brand_mark(&surreal, current).await,
+        None => webapp::app_chrome::resolve_app_brand_mark(&application_store, current).await,
     };
-    request.extensions_mut().insert(surreal);
+    request.extensions_mut().insert(application_store);
     request.extensions_mut().insert(model);
     request.extensions_mut().insert(mark);
     next.run(request).await
@@ -3014,7 +3020,7 @@ mod probe_context_tests {
 
         // No engine answers this handle: a probe that reached the store
         // would fail instead of passing.
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let app = Router::new()
             .route("/health", get(probe))
             .route("/readyz", get(probe))
@@ -3537,8 +3543,12 @@ async fn sitemap_xml(
     // The posts a crawler walks from `/blog` are rows in the database, so the
     // sitemap reads them there rather than from a table compiled into the host.
     if paths.contains("/blog") {
-        match store::posts::published_for_brand(&state.surreal, key.as_str(), chrono::Utc::now())
-            .await
+        match store::posts::published_for_brand(
+            &state.application_store,
+            key.as_str(),
+            chrono::Utc::now(),
+        )
+        .await
         {
             Ok(posts) => paths.extend(posts.into_iter().map(|post| format!("/blog/{}", post.slug))),
             Err(error) => tracing::error!(%error, "list public Blog Posts for the sitemap failed"),
@@ -3961,20 +3971,12 @@ async fn health() -> impl IntoResponse {
     )
 }
 
-/// Readiness probe: the pod is ready to take traffic when its database is
-/// reachable with valid PostgreSQL activation history,
-/// and Project repository storage is configured (`NAVIGATOR_GIT_REPO_ROOT`).
-/// The authorization policy is compiled at boot, so it is not a runtime
-/// network dependency. The DBOS executor needs no probe here: with
-/// `NAVIGATOR_DBOS_ENABLED=true` a failed launch refuses the boot.
-async fn readyz(State(_state): State<AppState>) -> impl IntoResponse {
+/// Readiness checks the admitted PostgreSQL connection and Project repository storage.
+/// DBOS must start before the host serves requests.
+async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
     let mut failures: Vec<String> = Vec::new();
-    let postgres = postgres_readiness(async {
-        store::postgres::PostgresDb::application()
-            .await?
-            .ping()
-            .await
-    });
+    let postgres =
+        postgres_readiness(async { state.application_store.postgres().await?.ping().await });
     if let Some(failure) = postgres.await {
         failures.push(failure);
     }
@@ -4126,8 +4128,10 @@ mod readyz_tests {
     /// degraded; only the repository line is under test.
     #[tokio::test]
     async fn readyz_reports_unconfigured_repo_storage() {
-        let state =
-            crate::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+        let state = crate::test_support::app_state(
+            store::application_store::ApplicationStore::uninitialized(),
+        )
+        .await;
         let app = Router::new()
             .route("/app/readyz", get(readyz))
             .with_state(state);

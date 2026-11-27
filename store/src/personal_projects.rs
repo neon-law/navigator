@@ -37,9 +37,6 @@ pub async fn owner_access(
     person: Uuid,
     brand: &str,
 ) -> anyhow::Result<Option<bool>> {
-    if !crate::postgres::tenancy::enabled() {
-        return Ok(None);
-    }
     let pg = crate::postgres::tenancy::db().await?;
     Ok(sqlx::query_scalar(
         "SELECT p.client_dri_person_id=$2 AND p.brand=$3 AND EXISTS(
@@ -60,9 +57,6 @@ pub async fn moved_intake(
     owner: Uuid,
     brand: &str,
 ) -> anyhow::Result<Option<String>> {
-    if !crate::postgres::tenancy::enabled() {
-        return Ok(None);
-    }
     let pg = crate::postgres::tenancy::db().await?;
     let code: Option<String> = sqlx::query_scalar(
         "SELECT p.code FROM notation_project_transfer m JOIN notation n ON n.id=m.notation_id

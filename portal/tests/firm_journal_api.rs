@@ -15,7 +15,7 @@ use uuid::Uuid;
 )]
 async fn journal_routes_refuse_an_unrelated_administrator_and_forged_actor() {
     store::test_support::with_postgres(async {
-    let db = store::surreal::SurrealDb::uninitialized();
+    let db = store::application_store::ApplicationStore::uninitialized();
     let person = store::persons::create(
         &db,
         &NewPerson::with_role(
@@ -125,7 +125,7 @@ async fn journal_routes_refuse_an_unrelated_administrator_and_forged_actor() {
     assert!(store::firm_journal::entries(&pg, firm.id).await.unwrap().is_empty());
     assert_eq!(sqlx::query("UPDATE public._sqlx_migrations SET success=false WHERE version=(SELECT max(version) FROM public._sqlx_migrations)")
         .execute(pg.pool()).await.unwrap().rows_affected(), 1);
-    let app = portal::router(portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await);
+    let app = portal::router(portal::test_support::app_state(store::application_store::ApplicationStore::uninitialized()).await);
     let response = app.oneshot(Request::builder()
         .uri(format!("/app/api/firms/{}/journal/migration-triage", firm.id))
         .header(header::AUTHORIZATION, format!("Bearer {}", token(Role::Owner)))
@@ -142,7 +142,7 @@ async fn journal_routes_refuse_an_unrelated_administrator_and_forged_actor() {
 )]
 async fn journal_routes_preview_post_deduplicate_and_report_balances() {
     store::test_support::with_postgres(async {
-    let db = store::surreal::SurrealDb::uninitialized();
+    let db = store::application_store::ApplicationStore::uninitialized();
     let person = store::persons::create(
         &db,
         &NewPerson::with_role(
@@ -313,7 +313,7 @@ async fn journal_routes_preview_post_deduplicate_and_report_balances() {
     }).await;
 }
 
-async fn entity(db: &store::surreal::SurrealDb) -> Uuid {
+async fn entity(db: &store::application_store::ApplicationStore) -> Uuid {
     let suffix = Uuid::now_v7();
     let jurisdiction = store::jurisdictions::create(
         db,
@@ -345,7 +345,7 @@ async fn entity(db: &store::surreal::SurrealDb) -> Uuid {
     .id
 }
 
-async fn native_router(db: store::surreal::SurrealDb) -> axum::Router {
+async fn native_router(db: store::application_store::ApplicationStore) -> axum::Router {
     let pg = store::postgres::PostgresDb::application().await.unwrap();
     portal::router(portal::test_support::app_state(db).await).layer(axum::middleware::from_fn(
         move |request: Request<Body>, next: axum::middleware::Next| {

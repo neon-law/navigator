@@ -95,7 +95,7 @@ async fn application_scope_rechecks_history_and_never_falls_back_to_another_admi
                         PostgresDb::application().await,
                         Err(PostgresError::History)
                     ));
-                    let source = crate::surreal::SurrealDb::uninitialized();
+                    let source = crate::application_store::ApplicationStore::uninitialized();
                     assert!(
                         crate::projects::onboarding_status(&source, uuid::Uuid::new_v4(), "navigator")
                             .await
@@ -139,7 +139,7 @@ async fn application_scope_rechecks_history_and_never_falls_back_to_another_admi
 
 async fn assert_owned_calendar_and_brand(
     owned: &PostgresDb,
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     actor: uuid::Uuid,
     firm: uuid::Uuid,
     brand: &str,
@@ -230,7 +230,7 @@ async fn calendar_and_brand_management_use_the_owning_application_pool() {
         crate::test_support::with_postgres(async {
             let ambient = PostgresDb::application().await.unwrap();
             PostgresDb::with_application_db(owned.clone(), async {
-                let db = crate::surreal::SurrealDb::uninitialized();
+                let db = crate::application_store::ApplicationStore::uninitialized();
                 assert_owned_calendar_and_brand(&owned, &db, actor, firm, &brand).await;
                 for table in ["firm_calendar_settings", "firm_brand"] {
                     let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
@@ -277,7 +277,7 @@ async fn calendar_and_brand_management_use_the_owning_application_pool() {
 }
 
 async fn assert_voice_assignment(
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     owned: &PostgresDb,
     ambient: &PostgresDb,
     actor: uuid::Uuid,
@@ -387,7 +387,7 @@ async fn voice_assignments_and_triage_keep_billing_in_the_owning_application_poo
         crate::test_support::with_postgres(async {
             let ambient = PostgresDb::application().await.unwrap();
             PostgresDb::with_application_db(owned.clone(), async {
-                let db = crate::surreal::SurrealDb::uninitialized();
+                let db = crate::application_store::ApplicationStore::uninitialized();
                 for review in [false, true] {
                     assert_voice_assignment(&db, &owned, &ambient, actor, firm, project, review)
                         .await;

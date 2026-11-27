@@ -7,7 +7,7 @@ A Project's fee waterfall, computed by a durable workflow and read back over the
 ## Shape
 
 ```text
-finance/<code>/input.json ──> FinanceAggregate (Restate) ──> finance_aggregate row (SurrealDB)
+finance/<code>/input.json ──> FinanceAggregate (DBOS) ──> finance_aggregate row (PostgreSQL)
                                      │                    └─> finance/<code>/<run_id>.json (object storage)
                                      └─ spans: finance_aggregate.run > ingest, aggregate, store
 
@@ -15,9 +15,8 @@ GET /app/api/projects/{id}/finance  ──> latest row for the Project, in the r
 POST /app/api/projects/{id}/finance/run ──> starts one run (lawyer tier)
 ```
 
-- **Workflow.** `workflows-service/src/finance_aggregate.rs`, Restate service `FinanceAggregate`, keyed per run. Three
-  journaled steps: `ingest` (read and parse the input), `aggregate` (the arithmetic), `store` (object plus row). Each is
-  idempotent, so a retry rewrites rather than duplicates.
+- **Workflow.** The DBOS workflow `FinanceAggregate` runs `ingest`, `aggregate`, and `store` under one run id. Each step
+  uses that identity when retrying.
 - **Arithmetic.** `store/src/finance_aggregate.rs`. Overhead comes off collected fees; net splits between attorney and
   firm; the firm share splits between Lead and Rain Maker. Rounding is half up on overhead, attorney share and Lead
   share; net, firm share and Rain Maker share are the remainders, so the four pieces always add up to collected.
@@ -44,7 +43,7 @@ land in the totals and in no group. The percentages default to 28 overhead, 70 a
      gs://example-bucket/finance/sample-finance/input.json --project example-bucket
    ```
 
-2. **Roll the deployment** if the running worker predates the `FinanceAggregate` service. Review the offline local plan
+2. **Roll the deployment** if it needs the current release. Review the offline local plan
    first; it does not verify the live cluster or release availability:
 
    ```bash
@@ -52,24 +51,22 @@ land in the totals and in no group. The percentages default to 28 overhead, 70 a
    hudson ops ship --deployment $NAVIGATOR_STAGING_DEPLOYMENT --tag <release tag>
    ```
 
-   The schema applies on boot (version 63 adds the `finance_aggregate` table).
-3. **Register the worker with Restate** if `ship` warned that re-registration failed. See "The registration gotcha" in
-   [durable workflows](durable-workflows.md). A missing registration answers `404 service 'FinanceAggregate' not found`.
-4. **Start a run** as a lawyer-tier session. The run reads `finance/<code>/input.json` already in storage:
+   PostgreSQL migrations create the `finance_aggregate` table.
+
+3. **Start a run** as a lawyer-tier session. The run reads `finance/<code>/input.json` already in storage:
 
    ```bash
    navigator site login --host <host>
    navigator project finance run sample-finance --host <host>
    ```
 
-   It prints the `run_id` (`manual-...`). A `503` means the deployment has no Restate ingress configured.
-5. **Verify the read:** `navigator project finance show sample-finance --host <host> --json` returns `"source":
-   "workflow"` and the run id from step 4. "no run stored yet" before the run finishes is expected.
-6. **Verify the trace** in Dash0, dataset `$NAVIGATOR_STAGING_DEPLOYMENT`: search for the span `finance_aggregate.run`
+   It prints the `run_id` (`manual-...`). A `503` means the workflow could not be submitted.
+4. **Verify the read:** `navigator project finance show sample-finance --host <host> --json` returns `"source":
+   "workflow"` and the run id from step 3. "no run stored yet" before the run finishes is expected.
+5. **Verify the trace** in Dash0, dataset `$NAVIGATOR_STAGING_DEPLOYMENT`: search for the span `finance_aggregate.run`
    with the run id, and check its children `finance_aggregate.ingest`, `finance_aggregate.aggregate` and
    `finance_aggregate.store`. The run span carries `navigator.keep`, so the sampler keeps it whatever the sampled
-   percentage. Restate Cloud does not export into the Dash0 dataset: the trace shows the worker's handler span under the
-   web request, and the Restate invocation itself is only in the Restate Cloud console.
+   percentage. The `FinanceAggregate:<run_id>` execution also appears in DBOS records.
 
 ## Report shape
 

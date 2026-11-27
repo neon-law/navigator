@@ -14,8 +14,8 @@ authorization to inspect, use, or change that app or its data.
 ## Before running the app
 
 - Read `AGENTS.md` and the skill for the changed seam: web work, [kind-local-dev](../kind-local-dev/SKILL.md) and
-  [web-preview](../web-preview/SKILL.md); authorization, [authorization-model](../authorization-model/SKILL.md);
-  Restate, [restate](../restate/SKILL.md).
+  [web-preview](../web-preview/SKILL.md); authorization, [authorization-model](../authorization-model/SKILL.md); durable
+  workflows, [durable-execution](../durable-execution/SKILL.md).
 - Confirm the current directory is a non-primary worktree with `git worktree list --porcelain`. Follow
   `kind-local-dev` if a separate worktree is needed; do not hand-create a checkout.
 - Inspect `git status` before changing anything. Preserve unrelated user changes.

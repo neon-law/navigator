@@ -20,16 +20,10 @@ pub use model::cases::{escalated_filing_name, filing_name, FilingNameError};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashSet;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::cases as authority;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
-
-const CASE_TABLE: &str = "case";
-const DOCKET_ENTRY_TABLE: &str = "case_docket_entry";
-const DISCOVERY_REQUEST_TABLE: &str = "discovery_request";
-const DISCOVERY_ITEM_TABLE: &str = "discovery_item";
 
 /// What a docket entry is.
 ///
@@ -152,8 +146,6 @@ pub enum CaseError {
     UnknownEntryKind(String),
     #[error("`{0}` is not a recognized discovery device")]
     UnknownDevice(String),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back.
     #[error("writing a {0} returned no usable row")]
@@ -210,42 +202,6 @@ pub struct Case {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct CaseRow {
-    id: surrealdb::types::RecordId,
-    project_id: surrealdb::types::RecordId,
-    caption: String,
-    forum: Option<String>,
-    jurisdiction: Option<String>,
-    docket_number: Option<String>,
-    judge: Option<String>,
-    posture: String,
-    status: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl CaseRow {
-    fn into_case(self) -> Option<Case> {
-        Some(Case {
-            id: record_uuid(&self.id)?,
-            project_id: record_uuid(&self.project_id)?,
-            caption: self.caption,
-            forum: self.forum,
-            jurisdiction: self.jurisdiction,
-            docket_number: self.docket_number,
-            judge: self.judge,
-            posture: self.posture,
-            status: self.status,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const CASE_SELECT: &str = "id, project_id, caption, forum, jurisdiction, docket_number, judge, \
-                           posture, status, inserted_at, updated_at";
-
 /// One entry on a case's docket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DocketEntry {
@@ -299,62 +255,6 @@ pub struct DocketEntry {
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
-
-#[derive(SurrealValue)]
-struct DocketEntryRow {
-    id: surrealdb::types::RecordId,
-    case_id: surrealdb::types::RecordId,
-    entry_number: String,
-    kind: String,
-    title: String,
-    party: Option<String>,
-    filed_or_served_on: Option<String>,
-    scheduled_on: Option<surrealdb::types::Datetime>,
-    supersedes: Option<surrealdb::types::RecordId>,
-    document_asset_id: Option<surrealdb::types::RecordId>,
-    notation_id: Option<surrealdb::types::RecordId>,
-    stamp_case_number: Option<String>,
-    stamp_entry_number: Option<String>,
-    stamp_filed_on: Option<String>,
-    integrity_checked_at: Option<surrealdb::types::Datetime>,
-    integrity_source_sha256_hex: Option<String>,
-    integrity_matched: Option<bool>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl DocketEntryRow {
-    fn into_entry(self) -> Option<DocketEntry> {
-        Some(DocketEntry {
-            id: record_uuid(&self.id)?,
-            case_id: record_uuid(&self.case_id)?,
-            entry_number: self.entry_number,
-            kind: self.kind,
-            title: self.title,
-            party: self.party,
-            filed_or_served_on: self.filed_or_served_on,
-            scheduled_on: self.scheduled_on.map(Into::into),
-            supersedes: self.supersedes.as_ref().and_then(record_uuid),
-            document_asset_id: self.document_asset_id.as_ref().and_then(record_uuid),
-            notation_id: self.notation_id.as_ref().and_then(record_uuid),
-            stamp_case_number: self.stamp_case_number,
-            stamp_entry_number: self.stamp_entry_number,
-            stamp_filed_on: self.stamp_filed_on,
-            integrity_checked_at: self.integrity_checked_at.map(Into::into),
-            integrity_source_sha256_hex: self.integrity_source_sha256_hex,
-            integrity_matched: self.integrity_matched,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const DOCKET_ENTRY_SELECT: &str = "id, case_id, entry_number, kind, title, party, \
-                                   filed_or_served_on, scheduled_on, supersedes, \
-                                   document_asset_id, notation_id, stamp_case_number, \
-                                   stamp_entry_number, stamp_filed_on, integrity_checked_at, \
-                                   integrity_source_sha256_hex, integrity_matched, \
-                                   inserted_at, updated_at";
 
 /// A hearing or trial the calendar should show: the current appearance on
 /// a continuance chain, with a date still in the future.
@@ -420,45 +320,6 @@ pub struct DiscoveryRequest {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct DiscoveryRequestRow {
-    id: surrealdb::types::RecordId,
-    case_id: surrealdb::types::RecordId,
-    docket_entry_id: Option<surrealdb::types::RecordId>,
-    device: String,
-    set_number: i64,
-    propounding_party: String,
-    responding_party: String,
-    served_on: Option<String>,
-    responses_due_on: Option<String>,
-    status: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl DiscoveryRequestRow {
-    fn into_request(self) -> Option<DiscoveryRequest> {
-        Some(DiscoveryRequest {
-            id: record_uuid(&self.id)?,
-            case_id: record_uuid(&self.case_id)?,
-            docket_entry_id: self.docket_entry_id.as_ref().and_then(record_uuid),
-            device: self.device,
-            set_number: i32::try_from(self.set_number).ok()?,
-            propounding_party: self.propounding_party,
-            responding_party: self.responding_party,
-            served_on: self.served_on,
-            responses_due_on: self.responses_due_on,
-            status: self.status,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const DISCOVERY_REQUEST_SELECT: &str =
-    "id, case_id, docket_entry_id, device, set_number, propounding_party, responding_party, \
-     served_on, responses_due_on, status, inserted_at, updated_at";
-
 /// One numbered item within a served set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiscoveryItem {
@@ -475,36 +336,6 @@ pub struct DiscoveryItem {
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
-
-#[derive(SurrealValue)]
-struct DiscoveryItemRow {
-    id: surrealdb::types::RecordId,
-    discovery_request_id: surrealdb::types::RecordId,
-    item_number: i64,
-    request_text: String,
-    response_text: Option<String>,
-    objections: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl DiscoveryItemRow {
-    fn into_item(self) -> Option<DiscoveryItem> {
-        Some(DiscoveryItem {
-            id: record_uuid(&self.id)?,
-            discovery_request_id: record_uuid(&self.discovery_request_id)?,
-            item_number: i32::try_from(self.item_number).ok()?,
-            request_text: self.request_text,
-            response_text: self.response_text,
-            objections: self.objections,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const DISCOVERY_ITEM_SELECT: &str = "id, discovery_request_id, item_number, request_text, \
-                                     response_text, objections, inserted_at, updated_at";
 
 // The litigation rows as PostgreSQL's `to_jsonb` serves them, under the
 // `postgres::cases` authority. Record links are plain UUID foreign keys, so
@@ -672,35 +503,9 @@ pub struct NewCase<'a> {
 ///
 /// # Errors
 /// Propagates any database error.
-pub async fn open_case(db: &SurrealDb, new: &NewCase<'_>) -> Result<Case, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_open_case(&pg, new).await;
-    }
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             project_id = $project_id, caption = $caption, forum = $forum, \
-             jurisdiction = $jurisdiction, docket_number = $docket_number, judge = $judge, \
-             posture = $posture, status = 'open' \
-             RETURN {CASE_SELECT}"
-        ))
-        .bind(("id", record_id(CASE_TABLE, id)))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, new.project_id),
-        ))
-        .bind(("caption", new.caption.to_string()))
-        .bind(("forum", new.forum.map(str::to_string)))
-        .bind(("jurisdiction", new.jurisdiction.map(str::to_string)))
-        .bind(("docket_number", new.docket_number.map(str::to_string)))
-        .bind(("judge", new.judge.map(str::to_string)))
-        .bind(("posture", new.posture.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<CaseRow> = response.take(0)?;
-    row.and_then(CaseRow::into_case)
-        .ok_or(CaseError::WriteReturnedNothing("case"))
+pub async fn open_case(_db: &ApplicationStore, new: &NewCase<'_>) -> Result<Case, CaseError> {
+    let pg = authority::authority().await?;
+    pg_open_case(&pg, new).await
 }
 
 /// Resolve or open a numbered case without duplicating overlapping intake.
@@ -709,67 +514,18 @@ pub async fn open_case(db: &SurrealDb, new: &NewCase<'_>) -> Result<Case, CaseEr
 ///
 /// # Errors
 /// Propagates database failures or a write that returns no usable case.
-pub async fn ensure_case(db: &SurrealDb, new: &NewCase<'_>) -> Result<Case, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_ensure_case(&pg, new).await;
-    }
-    let Some(number) = new.docket_number else {
-        return open_case(db, new).await;
-    };
-    if let Some(existing) = find_case_by_docket_number(db, new.project_id, number).await? {
-        return Ok(existing);
-    }
-    let number = canonical_docket_number(number);
-    let id = Uuid::now_v7();
-    crate::surreal::retry::writing(|| {
-        db.query(format!(
-            "BEGIN; UPDATE $project SET updated_at = $now; \
-             LET $existing = (SELECT VALUE id FROM {CASE_TABLE} \
-                 WHERE project_id = $project AND docket_number = $number LIMIT 1)[0]; \
-             IF $existing = NONE {{ CREATE $id SET project_id = $project, \
-                 caption = $caption, forum = $forum, jurisdiction = $jurisdiction, \
-                 docket_number = $number, judge = $judge, posture = $posture, status = 'open'; }}; \
-             COMMIT;"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, new.project_id),
-        ))
-        .bind(("id", record_id(CASE_TABLE, id)))
-        .bind(("number", number.clone()))
-        .bind(("now", Utc::now().to_rfc3339()))
-        .bind(("caption", new.caption.to_owned()))
-        .bind(("forum", new.forum.map(str::to_owned)))
-        .bind(("jurisdiction", new.jurisdiction.map(str::to_owned)))
-        .bind(("judge", new.judge.map(str::to_owned)))
-        .bind(("posture", new.posture.to_owned()))
-    })
-    .await?;
-    find_case_by_docket_number(db, new.project_id, &number)
-        .await?
-        .ok_or(CaseError::WriteReturnedNothing("case"))
+pub async fn ensure_case(_db: &ApplicationStore, new: &NewCase<'_>) -> Result<Case, CaseError> {
+    let pg = authority::authority().await?;
+    pg_ensure_case(&pg, new).await
 }
 
 /// Every case on `project_id`, oldest first.
 ///
 /// # Errors
 /// Propagates any database error.
-pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Case>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_cases_for_project(&pg, project_id).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {CASE_SELECT} FROM {CASE_TABLE} WHERE project_id = $project ORDER BY id ASC"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<CaseRow> = response.take(0)?;
-    Ok(rows.into_iter().filter_map(CaseRow::into_case).collect())
+pub async fn for_project(_db: &ApplicationStore, project_id: Uuid) -> Result<Vec<Case>, CaseError> {
+    let pg = authority::authority().await?;
+    pg_cases_for_project(&pg, project_id).await
 }
 
 /// The case on `project_id` with the same docket number, ignoring case
@@ -778,7 +534,7 @@ pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Case>, 
 /// # Errors
 /// Propagates any database error.
 pub async fn find_case_by_docket_number(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     docket_number: &str,
 ) -> Result<Option<Case>, CaseError> {
@@ -810,7 +566,7 @@ fn canonical_docket_number(number: &str) -> String {
 /// # Errors
 /// Propagates any database error.
 pub async fn docket_for_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<DocketEntry>, CaseError> {
     let mut entries = Vec::new();
@@ -824,19 +580,12 @@ pub async fn docket_for_project(
 ///
 /// # Errors
 /// Propagates any database error.
-pub async fn find_entry(db: &SurrealDb, entry_id: Uuid) -> Result<Option<DocketEntry>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_find_entry(&pg, entry_id).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {DOCKET_ENTRY_SELECT} FROM ONLY $id LIMIT 1"
-        ))
-        .bind(("id", record_id(DOCKET_ENTRY_TABLE, entry_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DocketEntryRow> = response.take(0)?;
-    Ok(row.and_then(DocketEntryRow::into_entry))
+pub async fn find_entry(
+    _db: &ApplicationStore,
+    entry_id: Uuid,
+) -> Result<Option<DocketEntry>, CaseError> {
+    let pg = authority::authority().await?;
+    pg_find_entry(&pg, entry_id).await
 }
 
 /// Link the filed document to an entry, ending its *source pending* state.
@@ -848,29 +597,12 @@ pub async fn find_entry(db: &SurrealDb, entry_id: Uuid) -> Result<Option<DocketE
 /// [`CaseError::EntryNotFound`] when no entry carries `entry_id`, or any
 /// database error.
 pub async fn link_document(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     entry_id: Uuid,
     document_asset_id: Uuid,
 ) -> Result<DocketEntry, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_link_document(&pg, entry_id, document_asset_id).await;
-    }
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET document_asset_id = $document, updated_at = time::now() \
-             RETURN {DOCKET_ENTRY_SELECT}"
-        ))
-        .bind(("id", record_id(DOCKET_ENTRY_TABLE, entry_id)))
-        .bind((
-            "document",
-            record_id(crate::assets::TABLE, document_asset_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DocketEntryRow> = response.take(0)?;
-    rows.into_iter()
-        .find_map(DocketEntryRow::into_entry)
-        .ok_or(CaseError::EntryNotFound(entry_id))
+    let pg = authority::authority().await?;
+    pg_link_document(&pg, entry_id, document_asset_id).await
 }
 
 /// What a continuance needs: the new entry number the court gave it and
@@ -895,7 +627,7 @@ pub struct Continuance<'a> {
 /// [`CaseError::NotAnAppearance`] when it is not a hearing or trial, or any
 /// database error.
 pub async fn supersede(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     prior_id: Uuid,
     continuance: &Continuance<'_>,
 ) -> Result<DocketEntry, CaseError> {
@@ -933,64 +665,9 @@ pub async fn supersede(
 ///
 /// # Errors
 /// Propagates any database error.
-pub async fn delete_for_project(db: &SurrealDb, project_id: Uuid) -> Result<(), CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_delete_for_project(&pg, project_id).await;
-    }
-    let case_ids: Vec<Uuid> = for_project(db, project_id)
-        .await?
-        .into_iter()
-        .map(|c| c.id)
-        .collect();
-    if case_ids.is_empty() {
-        return Ok(());
-    }
-    let cases: Vec<surrealdb::types::RecordId> = case_ids
-        .iter()
-        .map(|id| record_id(CASE_TABLE, *id))
-        .collect();
-
-    let mut request_ids = Vec::new();
-    for case_id in &case_ids {
-        request_ids.extend(
-            discovery_requests(db, *case_id)
-                .await?
-                .into_iter()
-                .map(|r| r.id),
-        );
-    }
-    if !request_ids.is_empty() {
-        let requests: Vec<surrealdb::types::RecordId> = request_ids
-            .iter()
-            .map(|id| record_id(DISCOVERY_REQUEST_TABLE, *id))
-            .collect();
-        db.query(format!(
-            "DELETE {DISCOVERY_ITEM_TABLE} WHERE $requests CONTAINS discovery_request_id"
-        ))
-        .bind(("requests", requests))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    }
-
-    // Children before parents, in one explicit transaction — a
-    // multi-statement query is not atomic on its own.
-    //
-    // `$cases CONTAINS case_id`, not `case_id IN $cases`: inside a DELETE,
-    // the `IN` form silently matches nothing for a record-link field and
-    // the statement reports success having removed no rows. The same `IN`
-    // works in a SELECT, which is what makes it so easy to write. The
-    // cascade test below is what holds this shape in place.
-    db.query(format!(
-        "BEGIN; \
-         DELETE {DISCOVERY_REQUEST_TABLE} WHERE $cases CONTAINS case_id; \
-         DELETE {DOCKET_ENTRY_TABLE} WHERE $cases CONTAINS case_id; \
-         DELETE {CASE_TABLE} WHERE id IN $cases; \
-         COMMIT;"
-    ))
-    .bind(("cases", cases))
-    .await
-    .and_then(surrealdb::IndexedResults::check)?;
-    Ok(())
+pub async fn delete_for_project(_db: &ApplicationStore, project_id: Uuid) -> Result<(), CaseError> {
+    let pg = authority::authority().await?;
+    pg_delete_for_project(&pg, project_id).await
 }
 
 /// What a new docket entry needs.
@@ -1018,7 +695,7 @@ pub struct NewDocketEntry<'a> {
 /// # Errors
 /// Propagates any database error.
 pub async fn record_entry(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     new: &NewDocketEntry<'_>,
 ) -> Result<DocketEntry, CaseError> {
     persist_entry(db, new, false).await
@@ -1030,85 +707,19 @@ pub async fn record_entry(
 /// # Errors
 /// Propagates database failures or a write that returns no usable entry.
 pub async fn ensure_entry(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     new: &NewDocketEntry<'_>,
 ) -> Result<DocketEntry, CaseError> {
     persist_entry(db, new, true).await
 }
 
 async fn persist_entry(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     new: &NewDocketEntry<'_>,
     reuse: bool,
 ) -> Result<DocketEntry, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_persist_entry(&pg, new, reuse).await;
-    }
-    let id = Uuid::now_v7();
-    let create = format!(
-        "CREATE $id SET \
-             case_id = $case_id, entry_number = $entry_number, kind = $kind, title = $title, \
-             party = $party, filed_or_served_on = $filed_or_served_on, \
-             scheduled_on = $scheduled_on, supersedes = $supersedes, \
-             document_asset_id = $document_asset_id, notation_id = $notation_id \
-             RETURN {DOCKET_ENTRY_SELECT}"
-    );
-    let query = if reuse {
-        format!(
-            "BEGIN; UPDATE $case_id SET updated_at = time::now(); \
-            LET $existing = (SELECT VALUE id FROM {DOCKET_ENTRY_TABLE} \
-                WHERE case_id = $case_id AND entry_number = $entry_number LIMIT 1)[0]; \
-            IF $existing = NONE {{ {create}; }} ELSE {{ \
-                UPDATE $existing SET document_asset_id = $document_asset_id, updated_at = time::now() \
-                WHERE document_asset_id = NONE AND $document_asset_id != NONE; \
-            }}; COMMIT;"
-        )
-    } else {
-        create
-    };
-    let mut response = crate::surreal::retry::writing(|| {
-        db.query(query.clone())
-            .bind(("id", record_id(DOCKET_ENTRY_TABLE, id)))
-            .bind(("case_id", record_id(CASE_TABLE, new.case_id)))
-            .bind(("entry_number", new.entry_number.to_string()))
-            .bind(("kind", new.kind.as_str().to_string()))
-            .bind(("title", new.title.to_string()))
-            .bind(("party", new.party.map(str::to_string)))
-            .bind((
-                "filed_or_served_on",
-                new.filed_or_served_on.map(str::to_string),
-            ))
-            .bind((
-                "scheduled_on",
-                new.scheduled_on.map(surrealdb::types::Datetime::from),
-            ))
-            .bind((
-                "supersedes",
-                new.supersedes
-                    .map(|prior| record_id(DOCKET_ENTRY_TABLE, prior)),
-            ))
-            .bind((
-                "document_asset_id",
-                new.document_asset_id
-                    .map(|a| record_id(crate::assets::TABLE, a)),
-            ))
-            .bind((
-                "notation_id",
-                new.notation_id
-                    .map(|n| record_id(crate::notations::TABLE, n)),
-            ))
-    })
-    .await?;
-    if reuse {
-        return docket(db, new.case_id)
-            .await?
-            .into_iter()
-            .find(|entry| entry.entry_number == new.entry_number)
-            .ok_or(CaseError::WriteReturnedNothing("docket entry"));
-    }
-    let row: Option<DocketEntryRow> = response.take(0)?;
-    row.and_then(DocketEntryRow::into_entry)
-        .ok_or(CaseError::WriteReturnedNothing("docket entry"))
+    let pg = authority::authority().await?;
+    pg_persist_entry(&pg, new, reuse).await
 }
 
 /// Record the CM/ECF header stamp [`crate::cm_ecf_stamp::extract`] found in
@@ -1121,29 +732,12 @@ async fn persist_entry(
 /// Propagates any database error, and [`CaseError::WriteReturnedNothing`]
 /// if `entry_id` names no docket entry.
 pub async fn record_stamp(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     entry_id: Uuid,
     stamp: &crate::cm_ecf_stamp::CmEcfStamp,
 ) -> Result<DocketEntry, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_record_stamp(&pg, entry_id, stamp).await;
-    }
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET \
-             stamp_case_number = $case_number, stamp_entry_number = $entry_number, \
-             stamp_filed_on = $filed_on \
-             RETURN {DOCKET_ENTRY_SELECT}"
-        ))
-        .bind(("id", record_id(DOCKET_ENTRY_TABLE, entry_id)))
-        .bind(("case_number", stamp.case_number.clone()))
-        .bind(("entry_number", stamp.entry_number.clone()))
-        .bind(("filed_on", stamp.filed_on.clone()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DocketEntryRow> = response.take(0)?;
-    row.and_then(DocketEntryRow::into_entry)
-        .ok_or(CaseError::WriteReturnedNothing("docket entry"))
+    let pg = authority::authority().await?;
+    pg_record_stamp(&pg, entry_id, stamp).await
 }
 
 /// Record the result of hashing an independently fetched copy of this
@@ -1159,30 +753,13 @@ pub async fn record_stamp(
 /// Propagates any database error, and [`CaseError::WriteReturnedNothing`]
 /// if `entry_id` names no docket entry.
 pub async fn record_integrity_check(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     entry_id: Uuid,
     source_sha256_hex: &str,
     matched: bool,
 ) -> Result<DocketEntry, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_record_integrity_check(&pg, entry_id, source_sha256_hex, matched).await;
-    }
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET \
-             integrity_checked_at = time::now(), \
-             integrity_source_sha256_hex = $source_sha256_hex, \
-             integrity_matched = $matched \
-             RETURN {DOCKET_ENTRY_SELECT}"
-        ))
-        .bind(("id", record_id(DOCKET_ENTRY_TABLE, entry_id)))
-        .bind(("source_sha256_hex", source_sha256_hex.to_string()))
-        .bind(("matched", matched))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DocketEntryRow> = response.take(0)?;
-    row.and_then(DocketEntryRow::into_entry)
-        .ok_or(CaseError::WriteReturnedNothing("docket entry"))
+    let pg = authority::authority().await?;
+    pg_record_integrity_check(&pg, entry_id, source_sha256_hex, matched).await
 }
 
 /// The case's docket, in insertion order.
@@ -1194,23 +771,9 @@ pub async fn record_integrity_check(
 ///
 /// # Errors
 /// Propagates any database error.
-pub async fn docket(db: &SurrealDb, case_id: Uuid) -> Result<Vec<DocketEntry>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_docket(&pg, case_id).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {DOCKET_ENTRY_SELECT} FROM {DOCKET_ENTRY_TABLE} \
-             WHERE case_id = $case ORDER BY id ASC"
-        ))
-        .bind(("case", record_id(CASE_TABLE, case_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DocketEntryRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DocketEntryRow::into_entry)
-        .collect())
+pub async fn docket(_db: &ApplicationStore, case_id: Uuid) -> Result<Vec<DocketEntry>, CaseError> {
+    let pg = authority::authority().await?;
+    pg_docket(&pg, case_id).await
 }
 
 /// True when the entry has no document filed against it yet — the
@@ -1265,7 +828,7 @@ fn appearance_from_entry(entry: &DocketEntry, project_id: Uuid) -> Option<Appear
 /// # Errors
 /// Propagates any database error.
 pub async fn current_appearances_for_case(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     case_id: Uuid,
     project_id: Uuid,
 ) -> Result<Vec<Appearance>, CaseError> {
@@ -1285,7 +848,7 @@ pub async fn current_appearances_for_case(
 /// # Errors
 /// Propagates any database error.
 pub async fn current_appearances_for_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<Appearance>, CaseError> {
     let mut appearances = Vec::new();
@@ -1301,7 +864,7 @@ pub async fn current_appearances_for_project(
 /// # Errors
 /// Propagates any database error.
 pub async fn current_appearances_for_projects(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_ids: &[Uuid],
 ) -> Result<Vec<Appearance>, CaseError> {
     let mut appearances = Vec::new();
@@ -1319,30 +882,10 @@ pub async fn current_appearances_for_projects(
 /// # Errors
 /// Propagates any database error.
 pub async fn undated_hearings_and_trials(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
 ) -> Result<Vec<UndatedAppearance>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_undated_hearings_and_trials(&pg).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {DOCKET_ENTRY_SELECT} FROM {DOCKET_ENTRY_TABLE} \
-             WHERE kind IN ['hearing', 'trial'] AND scheduled_on IS NONE \
-             ORDER BY id ASC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DocketEntryRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DocketEntryRow::into_entry)
-        .map(|entry| UndatedAppearance {
-            id: entry.id,
-            case_id: entry.case_id,
-            kind: entry.kind,
-            title: entry.title,
-        })
-        .collect())
+    let pg = authority::authority().await?;
+    pg_undated_hearings_and_trials(&pg).await
 }
 
 /// What a new served discovery set needs.
@@ -1365,40 +908,11 @@ pub struct NewDiscoveryRequest<'a> {
 /// # Errors
 /// Propagates any database error.
 pub async fn serve_discovery(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     new: &NewDiscoveryRequest<'_>,
 ) -> Result<DiscoveryRequest, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_serve_discovery(&pg, new).await;
-    }
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             case_id = $case_id, docket_entry_id = $docket_entry_id, device = $device, \
-             set_number = $set_number, propounding_party = $propounding_party, \
-             responding_party = $responding_party, served_on = $served_on, \
-             responses_due_on = $responses_due_on, status = 'served' \
-             RETURN {DISCOVERY_REQUEST_SELECT}"
-        ))
-        .bind(("id", record_id(DISCOVERY_REQUEST_TABLE, id)))
-        .bind(("case_id", record_id(CASE_TABLE, new.case_id)))
-        .bind((
-            "docket_entry_id",
-            new.docket_entry_id
-                .map(|e| record_id(DOCKET_ENTRY_TABLE, e)),
-        ))
-        .bind(("device", new.device.as_str().to_string()))
-        .bind(("set_number", i64::from(new.set_number)))
-        .bind(("propounding_party", new.propounding_party.to_string()))
-        .bind(("responding_party", new.responding_party.to_string()))
-        .bind(("served_on", new.served_on.map(str::to_string)))
-        .bind(("responses_due_on", new.responses_due_on.map(str::to_string)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DiscoveryRequestRow> = response.take(0)?;
-    row.and_then(DiscoveryRequestRow::into_request)
-        .ok_or(CaseError::WriteReturnedNothing("discovery request"))
+    let pg = authority::authority().await?;
+    pg_serve_discovery(&pg, new).await
 }
 
 /// Every served set on a case, oldest first.
@@ -1406,25 +920,11 @@ pub async fn serve_discovery(
 /// # Errors
 /// Propagates any database error.
 pub async fn discovery_requests(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     case_id: Uuid,
 ) -> Result<Vec<DiscoveryRequest>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_discovery_requests(&pg, case_id).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {DISCOVERY_REQUEST_SELECT} FROM {DISCOVERY_REQUEST_TABLE} \
-             WHERE case_id = $case ORDER BY id ASC"
-        ))
-        .bind(("case", record_id(CASE_TABLE, case_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DiscoveryRequestRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DiscoveryRequestRow::into_request)
-        .collect())
+    let pg = authority::authority().await?;
+    pg_discovery_requests(&pg, case_id).await
 }
 
 /// Add a numbered item to a served set.
@@ -1432,34 +932,13 @@ pub async fn discovery_requests(
 /// # Errors
 /// Propagates any database error.
 pub async fn add_item(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     discovery_request_id: Uuid,
     item_number: i32,
     request_text: &str,
 ) -> Result<DiscoveryItem, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_add_item(&pg, discovery_request_id, item_number, request_text).await;
-    }
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             discovery_request_id = $request_id, item_number = $item_number, \
-             request_text = $request_text, response_text = NONE, objections = NONE \
-             RETURN {DISCOVERY_ITEM_SELECT}"
-        ))
-        .bind(("id", record_id(DISCOVERY_ITEM_TABLE, id)))
-        .bind((
-            "request_id",
-            record_id(DISCOVERY_REQUEST_TABLE, discovery_request_id),
-        ))
-        .bind(("item_number", i64::from(item_number)))
-        .bind(("request_text", request_text.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DiscoveryItemRow> = response.take(0)?;
-    row.and_then(DiscoveryItemRow::into_item)
-        .ok_or(CaseError::WriteReturnedNothing("discovery item"))
+    let pg = authority::authority().await?;
+    pg_add_item(&pg, discovery_request_id, item_number, request_text).await
 }
 
 /// Answer one item, optionally asserting objections.
@@ -1468,29 +947,13 @@ pub async fn add_item(
 /// [`CaseError::ItemNotFound`] when no item carries `item_id`, or any
 /// database error.
 pub async fn answer_item(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     item_id: Uuid,
     response_text: &str,
     objections: Option<&str>,
 ) -> Result<DiscoveryItem, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_answer_item(&pg, item_id, response_text, objections).await;
-    }
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET \
-             response_text = $response_text, objections = $objections, updated_at = time::now() \
-             RETURN {DISCOVERY_ITEM_SELECT}"
-        ))
-        .bind(("id", record_id(DISCOVERY_ITEM_TABLE, item_id)))
-        .bind(("response_text", Some(response_text.to_string())))
-        .bind(("objections", objections.map(str::to_string)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DiscoveryItemRow> = response.take(0)?;
-    rows.into_iter()
-        .find_map(DiscoveryItemRow::into_item)
-        .ok_or(CaseError::ItemNotFound(item_id))
+    let pg = authority::authority().await?;
+    pg_answer_item(&pg, item_id, response_text, objections).await
 }
 
 /// A served set's items, in item order.
@@ -1498,28 +961,11 @@ pub async fn answer_item(
 /// # Errors
 /// Propagates any database error.
 pub async fn items(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     discovery_request_id: Uuid,
 ) -> Result<Vec<DiscoveryItem>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_items(&pg, discovery_request_id).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {DISCOVERY_ITEM_SELECT} FROM {DISCOVERY_ITEM_TABLE} \
-             WHERE discovery_request_id = $request ORDER BY item_number ASC"
-        ))
-        .bind((
-            "request",
-            record_id(DISCOVERY_REQUEST_TABLE, discovery_request_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DiscoveryItemRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DiscoveryItemRow::into_item)
-        .collect())
+    let pg = authority::authority().await?;
+    pg_items(&pg, discovery_request_id).await
 }
 
 // The PostgreSQL path, under the `postgres::cases` authority. Each helper

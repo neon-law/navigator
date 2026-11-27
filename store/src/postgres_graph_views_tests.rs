@@ -6,8 +6,8 @@
 //! these surfaces have no Surreal counterpart to stay in parity with.
 
 use super::{firm_view, lawyer_view, project_view, FirmView, GraphView, MAX_GRAPH_DEPTH};
+use crate::postgres::fixtures::{connect, fresh_schema};
 use crate::postgres::PostgresDb;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
 use std::collections::BTreeSet;
 
 /// A synthetic two-firm graph: Firm A holds two lawyers (lead and

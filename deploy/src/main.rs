@@ -47,7 +47,6 @@ mod scraper;
 mod sendgrid_openapi;
 mod site_asset;
 mod ssh_keys;
-mod surreal_free_tests;
 mod video_prepare;
 
 use cli::commands::{
@@ -407,6 +406,27 @@ mod help_tests {
             "example-project",
             "HCAPTCHA_SECRET",
         ])
+        .is_ok());
+    }
+
+    #[test]
+    fn dbos_activation_requires_both_acknowledgements() {
+        let invocation = [
+            "hudson",
+            "ops",
+            "postgres",
+            "activate-dbos",
+            "--environment",
+            "example-row",
+        ];
+        for acknowledgement in ["--operator-writers-held", "--acknowledge-discard"] {
+            assert!(Cli::try_parse_from(invocation.into_iter().chain([acknowledgement])).is_err());
+        }
+        assert!(Cli::try_parse_from(
+            invocation
+                .into_iter()
+                .chain(["--operator-writers-held", "--acknowledge-discard"]),
+        )
         .is_ok());
     }
 
@@ -780,8 +800,7 @@ enum Command {
     /// Read and update a Person in the deployment's own store, directly.
     ///
     /// Distinct from `navigator site …` verbs, which speak HTTP to a running
-    /// site: these open the `SurrealDB` coordinates `NAVIGATOR_SURREAL_*`
-    /// names — the same handle the web app uses.
+    /// site: these open the application PostgreSQL connection.
     #[command(hide = true)]
     Person {
         #[command(subcommand)]
@@ -1254,7 +1273,7 @@ enum SiteCmd {
     /// (`store::synthetic_portfolio`). Connects to whatever store and
     /// storage the environment names — the same seam `site seed` uses —
     /// so applying to persistent staging is an explicit operator action
-    /// with the right `NAVIGATOR_SURREAL_*`/storage env pointed there.
+    /// with PostgreSQL and object storage pointed there.
     ///
     /// Refuses before any write unless `--target staging` is given exactly
     /// and the deployment has already disclosed
@@ -1891,14 +1910,6 @@ enum OpsCmd {
         #[arg(long)]
         check: bool,
     },
-    /// Select the workspace tests that start no `SurrealDB` engine, for the PR
-    /// gate: writes a nextest filterset, a coverage ignore regex, and the
-    /// `features` targets into `--out`. Run from the repository root.
-    SurrealFreeTests {
-        /// The directory the three selection files are written into.
-        #[arg(long)]
-        out: PathBuf,
-    },
     /// Firm-scoped diagnostics.
     Firms {
         #[command(subcommand)]
@@ -2173,7 +2184,7 @@ enum EmailSummaryCmd {
         receipt: uuid::Uuid,
         /// Vouch that the receipt's `confirmed` Slack post was a
         /// provider-failure notice, and name the operator. Reopens the
-        /// delivery only after selected-engine recovery admission. An interrupted
+        /// delivery only after DBOS recovery admission. An interrupted
         /// DBOS run preserves its confirmed delivery rather than reopening it.
         #[arg(long, value_name = "ACTOR")]
         after_failed_result: Option<String>,
@@ -2187,8 +2198,7 @@ enum EmailSummaryCmd {
     /// List every delivery currently quarantined in `UNKNOWN`, the state
     /// `deliver_summary` records when Slack's response is lost, times out,
     /// or comes back a retryable HTTP status — an operator can't reconcile
-    /// what they can't see. Reads `NAVIGATOR_SURREAL_*` only; changes
-    /// nothing.
+    /// what they can't see. Reads delivery receipts from PostgreSQL.
     Quarantined,
     /// Record that a quarantined delivery's Slack post actually succeeded,
     /// moving it to `confirmed` so replay stops treating it as in doubt.
@@ -3342,7 +3352,6 @@ fn run() -> ExitCode {
             | OpsCmd::ReleaseDefaultTag { .. }
             | OpsCmd::Release { .. }
             | OpsCmd::Notices { .. }
-            | OpsCmd::SurrealFreeTests { .. }
             | OpsCmd::Firms { .. }
             | OpsCmd::PrivateTerms { .. }
             | OpsCmd::Postgres(_)
@@ -3365,7 +3374,6 @@ fn run() -> ExitCode {
                 }
             },
             OpsCmd::Notices { out, check } => notices::run(&out, check),
-            OpsCmd::SurrealFreeTests { out } => surreal_free_tests::run(&out),
             OpsCmd::CutRelease {
                 repo,
                 manifest_path,
@@ -3472,12 +3480,11 @@ fn devx_result(result: anyhow::Result<()>) -> ExitCode {
 }
 
 /// Admit operator commands to the activated PostgreSQL application store.
-async fn application_store() -> anyhow::Result<store::surreal::SurrealDb> {
-    store::postgres::PostgresDb::application().await?;
-    Ok(store::surreal::SurrealDb::uninitialized())
+async fn application_store() -> anyhow::Result<store::application_store::ApplicationStore> {
+    Ok(store::application_store::ApplicationStore::connect().await?)
 }
 
-async fn open_application_store() -> Result<store::surreal::SurrealDb, ExitCode> {
+async fn open_application_store() -> Result<store::application_store::ApplicationStore, ExitCode> {
     application_store().await.map_err(|error| {
         eprintln!("hudson: postgres: {error}");
         ExitCode::from(2)
@@ -3487,7 +3494,7 @@ async fn open_application_store() -> Result<store::surreal::SurrealDb, ExitCode>
 /// Resolve the `person` argument — a Person UUID or an email (primary or
 /// alias) — to the Person's id.
 async fn resolve_person_id(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     spec: &str,
 ) -> Result<uuid::Uuid, String> {
     if let Ok(id) = spec.parse::<uuid::Uuid>() {
@@ -3606,7 +3613,7 @@ async fn run_person(action: PersonCmd) -> ExitCode {
 use cli::notation_render::{run_render, run_word_redline};
 
 async fn run_catalog_seed(dir: &std::path::Path) -> ExitCode {
-    let surreal = match open_application_store().await {
+    let application_store = match open_application_store().await {
         Ok(s) => s,
         Err(code) => return code,
     };
@@ -3617,7 +3624,7 @@ async fn run_catalog_seed(dir: &std::path::Path) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let report = match import::import_directory(&surreal, &storage, dir).await {
+    let report = match import::import_directory(&application_store, &storage, dir).await {
         Ok(r) => r,
         Err(e) => {
             eprintln!("navigator: site seed: {e}");
@@ -3651,7 +3658,7 @@ async fn run_synthetic_portfolio(target: Option<String>, apply: bool) -> ExitCod
             return ExitCode::from(2);
         }
     };
-    let surreal = match open_application_store().await {
+    let application_store = match open_application_store().await {
         Ok(s) => s,
         Err(code) => return code,
     };
@@ -3663,10 +3670,21 @@ async fn run_synthetic_portfolio(target: Option<String>, apply: bool) -> ExitCod
         }
     };
     let result = if apply {
-        store::synthetic_portfolio::apply(&surreal, &storage, environment, target.as_deref()).await
+        store::synthetic_portfolio::apply(
+            &application_store,
+            &storage,
+            environment,
+            target.as_deref(),
+        )
+        .await
     } else {
-        store::synthetic_portfolio::dry_run(&surreal, &storage, environment, target.as_deref())
-            .await
+        store::synthetic_portfolio::dry_run(
+            &application_store,
+            &storage,
+            environment,
+            target.as_deref(),
+        )
+        .await
     };
     let plan = match result {
         Ok(plan) => plan,

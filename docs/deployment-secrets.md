@@ -78,8 +78,7 @@ hudson ops secrets apply --deployment <row> --project-id <project> --service pos
 The web apply writes each coordinate-sourced object to Secret Manager, reads every secret object's `versions/latest`,
 and applies `<name>-web-secrets`; a key with no value fails naming `ops secrets set`. The service apply reads only that
 service's keys and applies only that service's mounted-file Secrets, so `ops secrets set --service postgres` followed by
-it is how a record row gains an optional PostgreSQL login such as `NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD`
-([`postgres-kubernetes.md`](postgres-kubernetes.md#archives-opt-in)). `--check` compares SOPS with Secret Manager and so
+it is how a record row gains a dedicated PostgreSQL login secret. `--check` compares SOPS with Secret Manager and so
 works only with `--deployments-dir`.
 
 ## Rotation revokes nothing unless you rotate at the provider
@@ -142,8 +141,8 @@ Two properties are load-bearing rather than incidental:
 If publishing the value in a pull request would be a disclosure, it is key material. Otherwise it is a coordinate.
 
 Project IDs, cluster and namespace names, bucket names, hostnames, the Workspace login domain, Drive folder and shared
-Drive IDs, the GitHub App ID and bot login, and the SurrealDB namespace and database are coordinates. Database URLs,
-session and webhook signing secrets, OAuth client secrets, API keys, and private keys are key material.
+Drive IDs, the GitHub App ID and bot login, and PostgreSQL database names are coordinates. Database URLs, session and
+webhook signing secrets, OAuth client secrets, API keys, and private keys are key material.
 
 Four boot-required keys are in neither file. `NAVIGATOR_CLAMD_ADDR`, `NAVIGATOR_STORAGE_BACKEND`,
 `NAVIGATOR_EMAIL_BACKEND`, and `GOOGLE_OAUTH_CLIENT_IDS` ship as inline Deployment env — `ship::INLINE_ENV_WEB_KEYS`

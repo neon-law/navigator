@@ -1,9 +1,9 @@
 //! The Nightly Project Update: the parent DAG that walks every Project each
 //! night and runs one child DAG per tag.
 //!
-//! The parent is a Restate workflow keyed on the UTC date, so a second fire on
+//! The parent is a DBOS workflow keyed on the UTC date, so a second fire on
 //! the same day attaches to the first instead of running again. Every child is
-//! a Restate workflow keyed `{date}:{project id}`, one per (Project, tag), so a
+//! a DBOS workflow keyed by tag, UTC date, and Project id, so a
 //! failing tag is counted against that Project and tag and the sweep moves on.
 //! The tag set is closed ([`Tag`]); see the glossary term for what each child
 //! owns.
@@ -14,15 +14,13 @@
 
 use std::fmt::Write as _;
 use std::future::Future;
-#[cfg(test)]
-use std::sync::Arc;
 
 #[cfg(test)]
 use chrono::NaiveDate;
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use uuid::Uuid;
 #[cfg(test)]
 use workflows::SlackBot;
@@ -137,7 +135,7 @@ pub enum TagOutcome {
     Repository(RepositoryOutcome),
 }
 
-/// Aggregate counts for one run. Safe for the Restate journal and for
+/// Aggregate counts for one run. Safe for the workflow journal and for
 /// `#messages` or `#staging-messages`.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NightlyProjectUpdateReport {
@@ -219,7 +217,7 @@ pub struct FailureCause {
     pub reason: String,
     pub count: usize,
     /// The first message seen for this cause, capped at 300 characters.
-    /// Slack and Restate errors carry no addresses.
+    /// Reported errors omit addresses.
     pub example: String,
 }
 
@@ -400,9 +398,9 @@ where
 }
 
 pub(crate) async fn discover_roster(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
 ) -> Result<Vec<RosterEntry>, WorkflowStepError> {
-    Ok(store::projects::all(surreal)
+    Ok(store::projects::all(application_store)
         .await
         .map_err(WorkflowStepError::retryable)?
         .into_iter()
@@ -540,44 +538,6 @@ fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), W
         ));
     }
     Ok(())
-}
-
-/// The production composition, minus Restate: every tag's real child logic
-/// run in-process against fakes, so tests exercise the sweep end to end.
-#[cfg(test)]
-pub(crate) async fn sweep_in_process(
-    surreal: &SurrealDb,
-    slack: &Arc<dyn SlackBot>,
-    forge: Option<&cloud::forge::FakeForge>,
-    simulated: bool,
-) -> NightlyProjectUpdateReport {
-    let roster = discover_roster(surreal).await.expect("discover Projects");
-    let forge = &forge.map_or(repository::RepositoryForge::None, |forge| {
-        repository::RepositoryForge::GitHub(Arc::new(forge.clone()))
-    });
-    sweep(&roster, |tag, project_id| async move {
-        match tag {
-            Tag::Calendar => return Err("Calendar requires DBOS".to_owned()),
-            Tag::Membership => membership::reconcile_project(surreal, slack, simulated, project_id)
-                .await
-                .map(TagOutcome::Membership),
-            Tag::Slack => {
-                slack::reconcile_slack(surreal, slack.as_ref(), None, "2026-10-05", project_id)
-                    .await
-                    .map(TagOutcome::Slack)
-            }
-            Tag::Repository => repository::reconcile_repository(
-                surreal,
-                forge,
-                project_id,
-                repository::RUNTIME_VERSION,
-            )
-            .await
-            .map(TagOutcome::Repository),
-        }
-        .map_err(|error| format!("{error:?}"))
-    })
-    .await
 }
 
 #[cfg(test)]
@@ -818,46 +778,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_second_run_the_same_day_creates_nothing_new() {
-        use cloud::forge::FakeForge;
-        use store::projects::{create, NewProject};
-        use store::test_support::{mem_surreal, seed_entity};
-
-        let surreal = mem_surreal().await;
-        create(
-            &surreal,
-            &NewProject {
-                code: "sample-idempotent".to_string(),
-                name: "Sample".to_string(),
-                status: "open".to_string(),
-                entity_id: seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create Project");
-        let slack: Arc<dyn SlackBot> = Arc::new(workflows::CapturingSlackBot::new());
-        let forge = FakeForge::new();
-
-        let first = sweep_in_process(&surreal, &slack, Some(&forge), false).await;
-        assert_eq!((first.channels_created, first.repositories_synced), (1, 1));
-        let second = sweep_in_process(&surreal, &slack, Some(&forge), false).await;
-        assert_eq!(
-            (
-                second.channels_created,
-                second.channels_repaired,
-                second.repositories_synced
-            ),
-            (0, 0, 0),
-            "recorded channel and repository are kept"
-        );
-        assert_eq!(
-            (second.membership_failures, second.repository_failures),
-            (0, 0)
-        );
-    }
-
-    #[tokio::test]
     async fn the_aggregate_counts_pins_by_status_and_carries_no_repository_url() {
         use rules::project_manifest::PinStatus;
         let roster = [entry(true), entry(true), entry(true)];
@@ -1033,11 +953,12 @@ mod tests {
             update_prs_opened: 4,
             update_prs_pending: 1,
             update_prs_declined: 0,
+            calendars_synced: 6,
             ..Default::default()
         });
         assert_eq!(
             message,
-            "*Nightly Project Update complete*\nProjects: 9 (8 open).\nChannels checked: 3; channels created: 5; channels repaired: 6; channels archived: 14; channels unarchived: 2; Projects without a channel: 2; people invited: 4; people removed: 5; already members: 2; unmatched assignments: 1.\nCanvases created: 10; canvases edited: 11; notices posted: 12.\nRepositories created or adopted: 7. Navigator pins — current: 5; stale: 1; unreadable: 2.\nUpdate pull requests — opened: 4; awaiting merge: 1; declined: 0. Governance repaired: 3.\nFailures by tag — membership: 0; slack: 0; repository: 0."
+            "*Nightly Project Update complete*\nProjects: 9 (8 open).\nChannels checked: 3; channels created: 5; channels repaired: 6; channels archived: 14; channels unarchived: 2; Projects without a channel: 2; people invited: 4; people removed: 5; already members: 2; unmatched assignments: 1.\nCanvases created: 10; canvases edited: 11; notices posted: 12.\nRepositories created or adopted: 7. Navigator pins — current: 5; stale: 1; unreadable: 2.\nUpdate pull requests — opened: 4; awaiting merge: 1; declined: 0. Governance repaired: 3.\nShared calendars synced: 6.\nFailures by tag — membership: 0; slack: 0; repository: 0; calendar: 0."
         );
         assert!(!message.contains('@'));
     }

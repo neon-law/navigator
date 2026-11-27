@@ -75,7 +75,7 @@ async fn lock(conn: &mut PgConnection, project: Uuid) -> Result<(), Error> {
 /// An omitted zone is frozen to the original revision on replay and to the reviewed draft on correction.
 pub async fn resolve_draft(
     pg: &PostgresDb,
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     project: Uuid,
     id: Uuid,
     revision: Option<i64>,

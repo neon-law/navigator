@@ -12,10 +12,10 @@ async fn a_logged_call_carries_its_direction_and_role_at_the_top_level() {
                 .fetch_one(pg.pool())
                 .await
                 .unwrap();
-        let surreal = crate::surreal::SurrealDb::uninitialized();
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
 
         let call = record_call(
-            &surreal,
+            &application_store,
             &NewCall {
                 project_id,
                 counterparty: "client@example.com".into(),
@@ -40,11 +40,11 @@ async fn a_logged_call_carries_its_direction_and_role_at_the_top_level() {
         assert_eq!(call.call.as_ref().unwrap().direction, "inbound");
 
         // The firm kept the note internal, so the client lens hides it.
-        assert!(for_project_client_visible(&surreal, project_id)
+        assert!(for_project_client_visible(&application_store, project_id)
             .await
             .unwrap()
             .is_empty());
-        let persisted = for_project(&surreal, project_id).await.unwrap();
+        let persisted = for_project(&application_store, project_id).await.unwrap();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].id, call.id);
         assert_eq!(persisted[0].direction, "inbound");

@@ -56,14 +56,14 @@ SECURITY.md for private vulnerability reports.
 **Scope is not the gate — the local KIND loop is.** A contribution may be as ambitious as the problem demands: a
 sweeping refactor, a new service beside the existing ones, even replacing a subsystem. What every change must do is run
 inside the local KIND cluster that `cargo run --release -p hudson -- dev up` stands up — the loop that already runs
-SurrealDB, Rauthy, SeaweedFS, Restate, and OpenObserve in one KIND dependency tier. A change that introduces a new
-dependency wires it into that loop in the same pull request, with a KIND manifest beside the existing ones, so the whole
-stack still comes up locally.
+PostgreSQL, Rauthy, SeaweedFS, and OpenObserve in one KIND dependency tier. A change that introduces a new dependency
+wires it into that loop in the same pull request, with a KIND manifest beside the existing ones, so the whole stack
+still comes up locally.
 
-That rule keeps the local dependencies reproducible. PostgreSQL owns new storage, SurrealDB supports the compatibility
-lane, and object storage holds document bytes. Use the local stand-ins to test the application's behavior, then verify
-the selected deployment's managed services separately. A laptop test does not prove cloud IAM, backups, or production
-availability. An authorized contributor opens the pull request after the relevant checks pass.
+That rule keeps the local dependencies reproducible. PostgreSQL stores application data and DBOS state. Object storage
+holds document bytes. Use the local stand-ins to test the application's behavior, then verify the selected deployment's
+managed services separately. A laptop test does not prove cloud IAM, backups, or production availability. An authorized
+contributor opens the pull request after the relevant checks pass.
 
 ### View content images locally
 
@@ -147,20 +147,16 @@ checkout before changing the real setting; contributors normally work through a 
 
 ### Work with the store
 
-PostgreSQL is the authority for new storage. SurrealDB remains a compatibility lane for domains still using it. `dev up`
-writes the worktree's connection contract into `.devx/env`; use that environment for the selected checkout.
+PostgreSQL is the application store. `dev up` writes the worktree's connection contract into `.devx/env`; use that
+environment for the selected checkout.
 
 - PostgreSQL schema and migrations live under `store/postgres/`.
 - New storage tests use the PostgreSQL fixture described in `docs/test-database.md`.
-- SurrealDB compatibility configuration uses `NAVIGATOR_SURREAL_ENDPOINT`, `_NAMESPACE`, and `_DATABASE`.
 
 ---
 
 Read `docs/test-database.md` before adding a storage test, and follow the PostgreSQL skill for schema changes and
-migrations. Keep authorization, isolation, and migration behavior covered. The embedded SurrealDB harness is deprecated;
-use it only when maintaining the existing compatibility lane. That lane's definitions live in
-`store/src/schema/navigator.surql`. Do not treat its embedded test engine as proof of persistence or recovery in a
-deployed database.
+migrations. Keep authorization, isolation, persistence, and recovery covered.
 
 ### Add a fillable government PDF
 

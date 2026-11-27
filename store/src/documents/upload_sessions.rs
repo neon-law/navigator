@@ -7,12 +7,10 @@ use sqlx::{postgres::PgRow, Row};
 use uuid::Uuid;
 
 use super::{
-    UploadSession, UploadSessionArgs, UploadSessionError, UploadSessionRow, UPLOAD_SESSION_SELECT,
+    UploadSession, UploadSessionArgs, UploadSessionError, UPLOAD_SESSION_SELECT,
     UPLOAD_SESSION_TABLE as TABLE,
 };
 use crate::postgres::PostgresDb;
-use crate::postgres_backfill::Copied;
-use crate::surreal::SurrealDb;
 
 fn session(row: &PgRow) -> Result<UploadSession, sqlx::Error> {
     Ok(UploadSession {
@@ -150,26 +148,4 @@ pub(super) async fn remove(pg: &PostgresDb, session_id: Uuid) -> Result<(), sqlx
     .execute(&pg.0)
     .await?;
     Ok(())
-}
-
-/// Copy every SurrealDB session PostgreSQL does not hold, keeping its id and
-/// resume point, so an in-flight upload resumes after the switch.
-pub(crate) async fn copy_from_surreal(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-) -> Result<Copied, surrealdb::Error> {
-    let rows: Vec<UploadSessionRow> = surreal
-        .query(format!("SELECT {UPLOAD_SESSION_SELECT} FROM {TABLE}"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?
-        .take(0)?;
-    let mut copied = Copied::default();
-    for row in rows {
-        let Some(row) = row.into_upload_session() else {
-            copied.unrepresentable(TABLE);
-            continue;
-        };
-        copied.record(TABLE, Some(row.id), insert(pg, &row).await);
-    }
-    Ok(copied)
 }

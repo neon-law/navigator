@@ -4,7 +4,7 @@ Navigator uses one image hub, two runtime Google Cloud projects, and the deploym
 live today: `<deployment>` and the production deployment. A deployment—not a project—is the isolation unit: it owns one
 store database, four GCS buckets, one GKE Autopilot cluster, one Kubernetes namespace, one runtime Google service
 account, one delegated Workspace service-account credential, one `deployments/<name>/` config, one Google Workspace
-Drive root, one Restate environment, and one public hostname. A deployment exists because its directory exists.
+Drive root, one DBOS executor configuration, and one public hostname. A deployment exists because its directory exists.
 
 The tree lives beneath an operator-managed root outside this checkout. Set `NAVIGATOR_DEPLOYMENTS_DIR` before running
 commands; see [`deployment-secrets`](deployment-secrets.md).
@@ -49,12 +49,9 @@ cluster.
 | `<deployment>` | `staging.guiebshook.com` |
 | the production deployment | its configured brand hosts |
 
-Each row also serves a workflows host beside its public one: `workflows-<deployment>` for `<deployment>` and
-`<deployment>` for production. Both are set per deployment as `NAVIGATOR_PUBLIC_HOST` and `NAVIGATOR_WORKFLOWS_HOST`.
-
 **One production.** One deployment serves real matters, and `<deployment>` is the only public host that reaches them.
 Staging carries a public name so a link to it resolves. Its perimeter is the tailnet allowlist, which keeps the human
-surface private while the public workflows host remains reachable by external machine callers.
+surface private. DBOS ingress stays within the deployment namespace.
 
 Production is a rollable deployment. Its `deployments/<name>/` directory carries both `config.toml` and
 `secrets.enc.yaml`. `release-deploy.yml` rolls each stable release onto it after staging passes its health checks, and
@@ -62,10 +59,9 @@ holds every prerelease at staging; see [`release-automation.md`](release-automat
 by hand with [`manual-roll.md`](manual-roll.md).
 
 Its substrate is provisioned in its own project under its own prefix: the Autopilot cluster and the
-`<prefix>-gateway-ip` global address. The store is a hosted SurrealDB instance provisioned at the store provider, not by
-this repository. The gateway address is a deployment coordinate, not a fact about Navigator: it lives in the
-deployment's `config.toml` as `NAVIGATOR_GATEWAY_IP`, and `gcloud compute addresses describe <prefix>-gateway-ip
---global --format='value(address)'` prints the current value.
+`<prefix>-gateway-ip` global address. The PostgreSQL service runs in the deployment cluster. The gateway address is a
+deployment coordinate, not a fact about Navigator: it lives in the deployment's `config.toml` as `NAVIGATOR_GATEWAY_IP`,
+and `gcloud compute addresses describe <prefix>-gateway-ip --global --format='value(address)'` prints the current value.
 
 `<deployment>` and `<deployment>` both resolve to that address and are served by this deployment's Ingress, each with
 its own `ManagedCertificate` Active, and every other registered brand host the same way — the release inventory covers
@@ -100,15 +96,9 @@ For a resource prefix `<name>`, set:
 Bucket names are globally scoped in GCS. If one of these short names is already taken, add a stable organization prefix
 to all four bucket names; do not change the deployment prefix used for other resources.
 
-`NAVIGATOR_PUBLIC_HOST` is the exact public host in the matrix, and `NAVIGATOR_WORKFLOWS_HOST` is the workflows host
-beside it: `<deployment>` for production, `workflows-<deployment>` for `<deployment>`. Both rows sit on `<deployment>`,
-and staging's names are a subdomain and a hyphenated sibling rather than a separate domain, so a deployment never
-borrows another row's host. Set `NAV_BASE_URL` to `https://$NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_URL` to
-`https://$NAVIGATOR_WORKFLOWS_HOST/`, and `NAVIGATOR_ASSET_BASE_URL` to `$NAV_BASE_URL/assets`. The backing GCS bucket
-remains private; the application reads it through Workload Identity and serves this bounded public marketing lane at the
-same origin. `ops ship` derives the web pod's `CANONICAL_HOST` from `NAVIGATOR_PUBLIC_HOST`. Set
-`NAVIGATOR_PRIMARY_DOMAIN` to that same host for Restate registration; otherwise canonical-host middleware or Restate
-registration can silently target a different site.
+`NAVIGATOR_PUBLIC_HOST` names the deployment's public host. Set `NAV_BASE_URL` to `https://$NAVIGATOR_PUBLIC_HOST` and
+`NAVIGATOR_ASSET_BASE_URL` to `$NAV_BASE_URL/assets`. The application serves public assets from the configured private
+bucket through Workload Identity. Ship derives `CANONICAL_HOST` from the public host.
 
 `NAVIGATOR_SUMMARY_ENVELOPE_RECIPIENTS` is the inbound-summary SMTP allowlist, set per row in the Deploy repository.
 Each row names the final recipient SendGrid Inbound Parse receives after any Google Workspace routing rewrite (normally
@@ -116,15 +106,15 @@ the row's Parse intake address), not the visible `To:` header or original suppor
 present blank value fails boot. There is no compiled default.
 
 `NAVIGATOR_SUMMARY_ENABLED=true` opts a row into the durable review lane. It also requires `NAVIGATOR_DEPLOYMENT_ID`,
-`NAVIGATOR_SUMMARY_CHANNEL_ID`, `SENDGRID_INBOUND_PUBLIC_KEY`, the row's HTTPS `RESTATE_BROKER_URL`, and
-`NAVIGATOR_GCP_PROJECT_ID`; web and `workflows-service` must receive the same gate and coordinates. The GCP project must
-have Vertex AI enabled and the runtime service account must have `roles/aiplatform.user`. Model, location, and
-input/output limits have shared defaults and can be overridden per row. `NAVIGATOR_SUMMARY_FIRM_ID` is an optional
-override; unset, web files each receipt under the Firm wearing the `neon` brand. `NAVIGATOR_SUMMARY_PROVIDER_ACCOUNT`
-defaults to `sendgrid`. `hudson ops deployments` refuses a row that enables the lane without every key it boots with.
-Gemini is the only summary provider. Claude was removed on 2026-09-24 because Vertex Model Garden granted the deployment
-projects no request quota for `anthropic-claude-haiku-4-5` and refused the self-serve increase for lack of usage
-history; restoring it means a quota grant first, then the adapter from git history.
+`NAVIGATOR_SUMMARY_CHANNEL_ID`, `SENDGRID_INBOUND_PUBLIC_KEY`, and `NAVIGATOR_GCP_PROJECT_ID`. The DBOS executor runs
+inside `web`. The GCP project must have Vertex AI enabled and the runtime service account must have
+`roles/aiplatform.user`. Model, location, and input/output limits have shared defaults and can be overridden per row.
+`NAVIGATOR_SUMMARY_FIRM_ID` is an optional override; unset, web files each receipt under the Firm wearing the `neon`
+brand. `NAVIGATOR_SUMMARY_PROVIDER_ACCOUNT` defaults to `sendgrid`. `hudson ops deployments` refuses a row that enables
+the lane without every key it boots with. Gemini is the only summary provider. Claude was removed on 2026-09-24 because
+Vertex Model Garden granted the deployment projects no request quota for `anthropic-claude-haiku-4-5` and refused the
+self-serve increase for lack of usage history; restoring it means a quota grant first, then the adapter from git
+history.
 
 The `EmailSummary` workflow gates the model on the sender: its `check-sender` step looks up the `From:` address, or a
 text's phone number, in `person` (a phone matches ignoring punctuation and a leading US `1`). A known person gets the
@@ -136,9 +126,9 @@ Every hosted row uses `NAVIGATOR_ENVIRONMENT=production` and `NAVIGATOR_CREDENTI
 `<deployment>` remains the proving release ring through its config, namespace, data plane, and hostname—not through a
 weaker runtime profile. The same `NAVIGATOR_SIMULATED_MATTERS=true` coordinate that discloses the synthetic data plane
 also appends a final `from Staging` line to every Slack body that deployment posts (ops notices, Project-channel bot,
-and Firm-private notices). Restate jobs do not rewrite their bodies with a second staging parenthetical. Local KIND is
-`NAVIGATOR_ENVIRONMENT=dev` and does not. Set `GOOGLE_OAUTH_REQUIRED_HD=<deployment>` on both rows. This value is the
-selected Workspace login domain, not necessarily the site's public hostname.
+and Firm-private notices). DBOS jobs preserve the simulated-matter labels. Local KIND is `NAVIGATOR_ENVIRONMENT=dev` and
+does not. Set `GOOGLE_OAUTH_REQUIRED_HD=<deployment>` on both rows. This value is the selected Workspace login domain,
+not necessarily the site's public hostname.
 
 The login domain names one Workspace tenant. An identity in another organization's Workspace holds none here, which is
 why the value is the selected login domain rather than the site's public hostname.
@@ -148,20 +138,18 @@ why the value is the selected login domain rather than the site's public hostnam
 Every hosted row gets the same GKE setup; only the pod count differs, and `hudson ops ship` reads it from
 `NAVIGATOR_SIMULATED_MATTERS` in the row's `config.toml`:
 
-| `NAVIGATOR_SIMULATED_MATTERS` | `navigator-web` | `workflows-service` | PodDisruptionBudget |
-| --- | --- | --- | --- |
-| `"true"` (staging) | 1 | 1 | none |
-| `"false"` or unset (production) | 2 | 2 | `minAvailable: 1` for each |
+| `NAVIGATOR_SIMULATED_MATTERS` | `navigator-web` | PodDisruptionBudget |
+| --- | --- | --- |
+| `"true"` (staging) | 1 | none |
+| `"false"` or unset (production) | 2 | `minAvailable: 1` |
 
 Any other value stops the ship before render. A one-pod row carries no budget, because `minAvailable: 1` over one pod
-would block every node drain. `web` rolls with a surge pod (`maxSurge: 1`, `maxUnavailable: 0`) on either row. The
-worker keeps `maxSurge: 0`, so at two pods it replaces one pod at a time.
+would block every node drain. `web` rolls with a surge pod (`maxSurge: 1`, `maxUnavailable: 0`) on either row.
 
 Two pods are safe on both tiers. `web` keeps no single-writer disk: its `NAVIGATOR_GIT_REPO_ROOT` directory is per-pod
-scratch (`emptyDir`). Project repositories live on the forge, so nothing in `web` commits there. The Restate handlers in
-`workflows-service` are stateless HTTP. Each DBOS host takes its pod name as `NAVIGATOR_DBOS_EXECUTOR_ID`, and every
-schedule keys its workflow id on its slot, so a second pod joins the same scheduled run instead of starting another one.
-See [DBOS durability](dbos-durability.md#several-replicas).
+scratch (`emptyDir`). Project repositories live on the forge, so nothing in `web` commits there. Each DBOS host takes
+its pod name as `NAVIGATOR_DBOS_EXECUTOR_ID`, and every schedule keys its workflow id on its slot, so a second pod joins
+the same scheduled run instead of starting another one. See [DBOS durability](dbos-durability.md#several-replicas).
 
 ## Why the brand is the image
 
@@ -174,7 +162,7 @@ misconfigured deployment cannot serve one entity's pages under another entity's 
 each key is compiled in rather than read from config.
 
 Staging and production keep their own data planes. A reset, secret rotation, version rollback, or failed certificate in
-one row cannot cross a database, bucket, cluster, runtime principal, or Restate journal boundary. Staging proves the
+one row cannot cross a database, bucket, cluster, runtime principal, or DBOS database boundary. Staging proves the
 shared application through its sample-matter lane, while the build and route suites prove both public faces the one
 image serves.
 
@@ -267,47 +255,12 @@ archive](iceberg-archive.md)).
 - [`dns`](dns.md) — idempotent DNSimple reconciliation.
 - [`gitops`](gitops.md) — release creation and the ordered per-deployment rollout.
 
-## DBOS-only workflow hosting
+## DBOS workflow hosting
 
-A deployment explicitly selects the native cohost with `NAVIGATOR_WORKFLOWS_IN_WEB="true"`,
-`NAVIGATOR_DBOS_ENABLED="true"`, and `NAVIGATOR_WORKFLOW_ENGINE="dbos"`. Ship requires every registered direct and
-indirect caller's DBOS selector to be explicitly true in the deployment coordinates. A missing, false, or malformed
-selector refuses the plan before mutation; enabling the executor alone never proves complete caller ownership. Runtime
-mixed cohosting still requires Restate; ship deliberately requires complete caller ownership before selecting this
-topology. Authenticated submissions use the cohost's loopback listener, by default `http://127.0.0.1:9083`. An explicit
-ingress override must remain a loopback origin matching `WORKFLOWS_SERVICE_HEALTH_LISTEN`; an old external worker URL is
-refused. `NAVIGATOR_DBOS_INGRESS_TOKEN` stays in the deployment Secret and is never rendered as plaintext.
+The web process hosts the executor and the authenticated ingress. In-process callers use the configured loopback origin.
+Nightly Project Update and YouTube Comments Poll submit through the namespace-private `navigator-web-dbos` Service.
+Their pod selectors are the only remote callers admitted by the network policy. The bearer comes from the deployment
+Secret. The two jobs keep their daily and fifteen-minute schedules.
 
-This profile renders the selectors into web, omits the separate worker and its proxy, network resources and certificate,
-and moves supported schedule loops to DBOS. Image rolls, restarts and rollout waits target web, and Restate registration
-is skipped. The operational archive ServiceAccount remains. The default topology keeps its separate worker and required
-Restate registration while retained work drains.
-
-Select this profile only after verifying retained Restate work has drained and recovery is accepted: applying its
-Ingress removes the worker's public route. Omitting desired objects does not delete existing resources, so ship does not
-prune the worker, cancel old invocations or certify an empty Restate journal. Retire retained resources through a
-separately authorized operator step. The profile does not change backup retention or image publication. Native routing
-does not migrate paused invocations, virtual-object state or retained journals. Preserve and reconcile that history
-explicitly before retirement, including work owned by handlers outside the current native registry.
-
-Nightly Project updates and YouTube polling retain their daily and fifteen-minute CronJobs: these native endpoints do
-not own timer loops. Their authenticated requests use the cluster-internal `navigator-web-dbos` Service, never a CronJob
-pod's loopback address. The cohost listener must bind `0.0.0.0` at a fixed port distinct from web's port; a custom port
-reaches both Service and NetworkPolicy. The native policy preserves web's existing port and admits DBOS traffic only
-from those two same-namespace trigger pod selectors. No external Ingress exposes the DBOS endpoint.
-
-Only this profile hosts NightlyProjectUpdate, YoutubeCommentsPoller, and SocialPublishReconciler in `web`. A mixed
-deployment's `web` executor runs the app-owned daily schedules alone and binds no authenticated DBOS ingress, and the
-`web` artifact's embedded registry refuses partial caller ownership. On a mixed row,
-`NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED`, `NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED`, and
-`NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED` therefore change nothing in the render: their Restate CronJobs stay
-as they are, so a row can stage every selector before it selects the complete profile. None of the three moves into
-`web` by itself.
-
-Native ship keeps automatic BillingCanary and invoice reconciliation starts off by default while registering their
-manual DBOS routes. Opt in explicitly with `NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED=true` or
-`NAVIGATOR_DBOS_RECONCILE_INVOICES_SCHEDULE_ENABLED=true`; false keeps the timer off, and malformed values are refused.
-The offline plan reports these choices. Complete native cohosting defaults these timers off even outside ship;
-standalone and mixed hosts retain their existing automatic-start defaults. Before selecting the complete profile,
-compare other timer loops with each environment's approved activation and cadence. Manual or disabled provider workflows
-need an explicit activation decision independent of their engine selection.
+Ship reconciles the web image and waits for readiness before it removes retired deployment resources. [DBOS
+durability](dbos-durability.md) describes the database login and recovery procedure.

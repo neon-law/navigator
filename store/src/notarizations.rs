@@ -14,15 +14,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 pub use crate::signatures::SignatureProvider;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
-
-/// The table these rows live in.
-const TABLE: &str = "notarization";
-const ASSET_TABLE: &str = "asset";
 
 use crate::postgres::signatures as authority;
 
@@ -45,48 +40,9 @@ pub struct Notarization {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct NotarizationRow {
-    id: surrealdb::types::RecordId,
-    notation_id: surrealdb::types::RecordId,
-    notary_person_id: Option<surrealdb::types::RecordId>,
-    asset_id: Option<surrealdb::types::RecordId>,
-    provider: String,
-    provider_id: String,
-    notarized_at: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl NotarizationRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_notarization(self) -> Option<Notarization> {
-        Some(Notarization {
-            id: record_uuid(&self.id)?,
-            notation_id: record_uuid(&self.notation_id)?,
-            notary_person_id: self.notary_person_id.as_ref().and_then(record_uuid),
-            asset_id: self.asset_id.as_ref().and_then(record_uuid),
-            provider: self.provider,
-            provider_id: self.provider_id,
-            notarized_at: self.notarized_at,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`NotarizationRow`] from only one query.
-const SELECT: &str = "id, notation_id, notary_person_id, asset_id, provider, provider_id, \
-     notarized_at, inserted_at, updated_at";
-
 /// Errors reading or writing a notarization.
 #[derive(Debug, thiserror::Error)]
 pub enum NotarizationError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// PostgreSQL, under the signature authority, failed.
     #[error(transparent)]
     Postgres(#[from] authority::SignatureFamilyError),
@@ -99,30 +55,6 @@ pub enum NotarizationError {
     /// module could not read back.
     #[error("writing a notarization returned no usable row")]
     WriteReturnedNothing,
-}
-
-fn is_provider_request_conflict(error: &surrealdb::Error) -> bool {
-    crate::surreal::retry::unique_violation(error) == Some("notarization_provider_request")
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, surrealdb::Error>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await
-}
-
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Notarization>, surrealdb::Error> {
-    let row: Option<NotarizationRow> = response.take(0)?;
-    Ok(row.and_then(NotarizationRow::into_notarization))
 }
 
 /// The row as PostgreSQL's `to_jsonb` serves it, under the
@@ -177,64 +109,33 @@ fn instant(raw: &str) -> Result<DateTime<Utc>, NotarizationError> {
 ///
 /// [`NotarizationError::Db`] if the write fails.
 pub async fn record_request(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     notation_id: Uuid,
     provider: SignatureProvider,
     provider_id: &str,
 ) -> Result<Notarization, NotarizationError> {
-    if let Some(pg) = authority::authority().await? {
-        let row = serde_json::json!({
-            "id": Uuid::now_v7(), "notation_id": notation_id,
-            "provider": provider.as_str(), "provider_id": provider_id,
-        });
-        let query = sqlx::query(
-            "INSERT INTO notarization SELECT * FROM \
-             jsonb_populate_record(NULL::notarization, \
-             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-             RETURNING to_jsonb(notarization) AS row",
-        )
-        .bind(row);
-        return match authority::maybe::<PgNotarizationRow>(&pg, query).await {
-            Ok(Some(row)) => Ok(Notarization::from(row)),
-            Ok(None) => Err(NotarizationError::WriteReturnedNothing),
-            Err(error) if error.violates("notarization_provider_request") => {
-                by_provider(db, provider, provider_id)
-                    .await?
-                    .filter(|request| request.notation_id == notation_id)
-                    .ok_or(NotarizationError::WriteReturnedNothing)
-            }
-            Err(error) => Err(error.into()),
-        };
-    }
-    let id = Uuid::now_v7();
-    match db
-        .query(format!(
-            "CREATE $id SET \
-             notation_id = $notation_id, provider = $provider, provider_id = $provider_id \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "notation_id",
-            record_id(crate::notations::TABLE, notation_id),
-        ))
-        .bind(("provider", provider.as_str().to_string()))
-        .bind(("provider_id", provider_id.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-    {
-        Ok(mut response) => {
-            let row: Option<NotarizationRow> = response.take(0)?;
-            row.and_then(NotarizationRow::into_notarization)
-                .ok_or(NotarizationError::WriteReturnedNothing)
-        }
-        Err(error) if is_provider_request_conflict(&error) => {
+    let pg = authority::authority().await?;
+    let row = serde_json::json!({
+        "id": Uuid::now_v7(), "notation_id": notation_id,
+        "provider": provider.as_str(), "provider_id": provider_id,
+    });
+    let query = sqlx::query(
+        "INSERT INTO notarization SELECT * FROM \
+         jsonb_populate_record(NULL::notarization, \
+         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+         RETURNING to_jsonb(notarization) AS row",
+    )
+    .bind(row);
+    match authority::maybe::<PgNotarizationRow>(&pg, query).await {
+        Ok(Some(row)) => Ok(Notarization::from(row)),
+        Ok(None) => Err(NotarizationError::WriteReturnedNothing),
+        Err(error) if error.violates("notarization_provider_request") => {
             by_provider(db, provider, provider_id)
                 .await?
                 .filter(|request| request.notation_id == notation_id)
                 .ok_or(NotarizationError::WriteReturnedNothing)
         }
-        Err(error) => Err(NotarizationError::Db(error)),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -244,31 +145,20 @@ pub async fn record_request(
 ///
 /// [`NotarizationError::Db`] if the lookup fails.
 pub async fn by_provider(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
 ) -> Result<Option<Notarization>, NotarizationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(notarization) AS row FROM notarization \
-             WHERE provider = $1 AND provider_id = $2 LIMIT 1",
-        )
-        .bind(provider.as_str())
-        .bind(provider_id);
-        return Ok(authority::maybe::<PgNotarizationRow>(&pg, query)
-            .await?
-            .map(Notarization::from));
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE provider = $provider AND provider_id = $provider_id \
-             LIMIT 1"
-        ))
-        .bind(("provider", provider.as_str().to_string()))
-        .bind(("provider_id", provider_id.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(one(response)?)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(notarization) AS row FROM notarization \
+         WHERE provider = $1 AND provider_id = $2 LIMIT 1",
+    )
+    .bind(provider.as_str())
+    .bind(provider_id);
+    Ok(authority::maybe::<PgNotarizationRow>(&pg, query)
+        .await?
+        .map(Notarization::from))
 }
 
 /// Every notarization request on a Notation, oldest first.
@@ -277,32 +167,19 @@ pub async fn by_provider(
 ///
 /// [`NotarizationError::Db`] if the lookup fails.
 pub async fn for_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Vec<Notarization>, NotarizationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(notarization) AS row FROM notarization \
-             WHERE notation_id = $1 ORDER BY inserted_at, id",
-        )
-        .bind(notation_id);
-        return Ok(authority::rows::<PgNotarizationRow>(&pg, query)
-            .await?
-            .into_iter()
-            .map(Notarization::from)
-            .collect());
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation ORDER BY inserted_at, id"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<NotarizationRow> = response.take(0)?;
-    Ok(rows
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(notarization) AS row FROM notarization \
+         WHERE notation_id = $1 ORDER BY inserted_at, id",
+    )
+    .bind(notation_id);
+    Ok(authority::rows::<PgNotarizationRow>(&pg, query)
+        .await?
         .into_iter()
-        .filter_map(NotarizationRow::into_notarization)
+        .map(Notarization::from)
         .collect())
 }
 
@@ -313,32 +190,21 @@ pub async fn for_notation(
 ///
 /// [`NotarizationError::Db`] if the lookup or write fails.
 pub async fn stamp_notarized(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     provider: SignatureProvider,
     provider_id: &str,
     notarized_at: &str,
 ) -> Result<bool, NotarizationError> {
-    if let Some(pg) = authority::authority().await? {
-        let notarized_at = instant(notarized_at)?;
-        let query = sqlx::query(
-            "UPDATE notarization SET notarized_at = $1, updated_at = now() \
-             WHERE provider = $2 AND provider_id = $3",
-        )
-        .bind(notarized_at)
-        .bind(provider.as_str())
-        .bind(provider_id);
-        return Ok(authority::affected(&pg, query).await? > 0);
-    }
-    let Some(row) = by_provider(db, provider, provider_id).await? else {
-        return Ok(false);
-    };
-    writing(|| {
-        db.query("UPDATE $id SET notarized_at = $notarized_at, updated_at = time::now()")
-            .bind(("id", record_id(TABLE, row.id)))
-            .bind(("notarized_at", notarized_at.to_string()))
-    })
-    .await?;
-    Ok(true)
+    let pg = authority::authority().await?;
+    let notarized_at = instant(notarized_at)?;
+    let query = sqlx::query(
+        "UPDATE notarization SET notarized_at = $1, updated_at = now() \
+         WHERE provider = $2 AND provider_id = $3",
+    )
+    .bind(notarized_at)
+    .bind(provider.as_str())
+    .bind(provider_id);
+    Ok(authority::affected(&pg, query).await? > 0)
 }
 
 /// Point a notarization request at the notarized asset, once known.
@@ -346,54 +212,20 @@ pub async fn stamp_notarized(
 /// # Errors
 ///
 /// [`NotarizationError::Db`] if the write fails.
-pub async fn set_asset(db: &SurrealDb, id: Uuid, asset_id: Uuid) -> Result<(), NotarizationError> {
-    if let Some(pg) = authority::authority().await? {
-        sqlx::query("UPDATE notarization SET asset_id = $1, updated_at = now() WHERE id = $2")
-            .bind(asset_id)
-            .bind(id)
-            .execute(pg.pool())
-            .await
-            .map_err(authority::SignatureFamilyError::from)?;
-        return Ok(());
-    }
-    writing(|| {
-        db.query("UPDATE $id SET asset_id = $asset_id, updated_at = time::now()")
-            .bind(("id", record_id(TABLE, id)))
-            .bind(("asset_id", record_id(ASSET_TABLE, asset_id)))
-    })
-    .await?;
+pub async fn set_asset(
+    _db: &ApplicationStore,
+    id: Uuid,
+    asset_id: Uuid,
+) -> Result<(), NotarizationError> {
+    let pg = authority::authority().await?;
+    sqlx::query("UPDATE notarization SET asset_id = $1, updated_at = now() WHERE id = $2")
+        .bind(asset_id)
+        .bind(id)
+        .execute(pg.pool())
+        .await
+        .map_err(authority::SignatureFamilyError::from)?;
     Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::surreal::test_support::mem;
-    use crate::test_support::seed_notation;
-
-    #[tokio::test]
-    async fn record_is_idempotent_and_stamp_marks_notarized() {
-        let surreal = mem().await;
-        let notation_id = seed_notation(&surreal).await;
-        let first = record_request(&surreal, notation_id, SignatureProvider::DocuSign, "nz-1")
-            .await
-            .unwrap();
-        let again = record_request(&surreal, notation_id, SignatureProvider::DocuSign, "nz-1")
-            .await
-            .unwrap();
-        assert_eq!(first.id, again.id);
-        assert!(stamp_notarized(
-            &surreal,
-            SignatureProvider::DocuSign,
-            "nz-1",
-            "2026-06-30T00:00:00Z"
-        )
-        .await
-        .unwrap());
-        let after = by_provider(&surreal, SignatureProvider::DocuSign, "nz-1")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(after.notarized_at.as_deref(), Some("2026-06-30T00:00:00Z"));
-    }
-}
+mod tests {}

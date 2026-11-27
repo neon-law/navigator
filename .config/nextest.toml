@@ -99,13 +99,7 @@ retries = { backoff = "exponential", count = 2, delay = "2s", jitter = true }
 status-level = "pass"
 final-status-level = "flaky"
 
-# Tests on the embedded SurrealDB 4 engine intermittently hang, a different
-# test each time and in any crate that uses it (workflows-service, portal).
-# Kill one after 5 minutes so the ci profile's retries run it again and JUnit
-# records it as FLAKY, instead of the shard sitting until the job timeout. The
-# slowest passing test takes about 210 s. deploy.yml's browser suites in
-# `features` share the ci profile and legitimately run longer, so they are
-# left out.
+# Bound retries for workspace tests. KIND browser scenarios have their own timeouts.
 [[profile.ci.overrides]]
 filter = "not package(features)"
 slow-timeout = { period = "60s", terminate-after = 5 }

@@ -49,10 +49,13 @@ pub trait DriDigestSource: Send + Sync {
     async fn open_pitch_counts(&self) -> Result<Vec<BrandOpenPitch>, DriDigestError>;
 }
 
-struct SurrealDriDigestSource(store::surreal::SurrealDb, DeploymentSlackFirm);
+struct DeploymentDriDigestSource(
+    store::application_store::ApplicationStore,
+    DeploymentSlackFirm,
+);
 
 #[async_trait::async_trait]
-impl DriDigestSource for SurrealDriDigestSource {
+impl DriDigestSource for DeploymentDriDigestSource {
     async fn projects(&self) -> Result<Vec<ProjectDriSummary>, DriDigestError> {
         store::projects::dri_digest(&self.0)
             .await
@@ -67,7 +70,7 @@ impl DriDigestSource for SurrealDriDigestSource {
 }
 
 struct ApplicationDriDigestSource {
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     postgres: store::postgres::PostgresDb,
     firm: DeploymentSlackFirm,
 }
@@ -77,7 +80,7 @@ impl DriDigestSource for ApplicationDriDigestSource {
     async fn projects(&self) -> Result<Vec<ProjectDriSummary>, DriDigestError> {
         store::postgres::PostgresDb::with_application_db(
             self.postgres.clone(),
-            store::projects::dri_digest(&self.surreal),
+            store::projects::dri_digest(&self.application_store),
         )
         .await
         .map_err(|_| DriDigestError::Projects)?
@@ -86,7 +89,7 @@ impl DriDigestSource for ApplicationDriDigestSource {
     async fn open_pitch_counts(&self) -> Result<Vec<BrandOpenPitch>, DriDigestError> {
         store::postgres::PostgresDb::with_application_db(
             self.postgres.clone(),
-            slack_firm_open_pitch_counts(&self.surreal, self.firm),
+            slack_firm_open_pitch_counts(&self.application_store, self.firm),
         )
         .await
         .map_err(|_| DriDigestError::Counts)?
@@ -104,14 +107,14 @@ pub struct Context {
 impl Context {
     /// Inject delivery and an owned store whose admission is checked on each read.
     pub fn with_store(
-        surreal: store::surreal::SurrealDb,
+        application_store: store::application_store::ApplicationStore,
         postgres: store::postgres::PostgresDb,
         notifier: Arc<dyn Notifier>,
         simulated: bool,
     ) -> Self {
         Self::with_source(
             Arc::new(ApplicationDriDigestSource {
-                surreal,
+                application_store,
                 postgres,
                 firm: DeploymentSlackFirm::DefaultBrand,
             }),
@@ -120,12 +123,11 @@ impl Context {
         )
     }
 
-    /// Construct a host context from the same Project accessors used by the
-    /// Restate service. The digest posts with the deployment's bot to
+    /// The digest posts with the deployment's bot to
     /// `SLACK_GENERAL_CHANNEL_ID`, beside `GeneralNag`'s open-matters notice;
     /// an enabled schedule requires the channel.
     pub fn from_lookup<F>(
-        surreal: store::surreal::SurrealDb,
+        application_store: store::application_store::ApplicationStore,
         bot: Arc<dyn crate::SlackBot>,
         simulated: bool,
         lookup: F,
@@ -137,7 +139,7 @@ impl Context {
             .map_err(|_| super::SettingsError::Invalid(SLACK_FIRM_ENV))?;
         let channel = super::required_channel(lookup, "SLACK_GENERAL_CHANNEL_ID")?;
         Ok(Self {
-            source: Arc::new(SurrealDriDigestSource(surreal, firm)),
+            source: Arc::new(DeploymentDriDigestSource(application_store, firm)),
             notifier: Arc::new(crate::notify::ChannelNotifier::new(bot, channel)),
             simulated,
         })
@@ -329,7 +331,7 @@ mod tests {
     fn enabled_schedule_posts_to_the_general_channel() {
         let context = |channel: &'static str| {
             super::Context::from_lookup(
-                store::surreal::SurrealDb::uninitialized(),
+                store::application_store::ApplicationStore::uninitialized(),
                 std::sync::Arc::new(crate::CapturingSlackBot::new()),
                 false,
                 move |key| (key == "SLACK_GENERAL_CHANNEL_ID").then(|| channel.to_owned()),
@@ -346,56 +348,56 @@ mod tests {
     async fn native_source_lists_only_open_projects_with_both_dri_sides() {
         store::test_support::with_postgres(async {
             use store::persons::{self, NewPerson, Role};
-            use store::projects::{designate_dri_in_surreal, DriSide};
+            use store::projects::{designate_dri, DriSide};
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let surreal = store::surreal::SurrealDb::uninitialized();
-            let (matter, admin) = super::native_project_fixture::matter(&surreal).await;
+            let application_store = store::application_store::ApplicationStore::uninitialized();
+            let (matter, admin) = super::native_project_fixture::matter(&application_store).await;
             let firm = matter
                 .firm_id
                 .expect("the native Project fixture has a Firm");
-            let assigned = store::projects::find_by_id(&surreal, matter.id)
+            let assigned = store::projects::find_by_id(&application_store, matter.id)
                 .await
                 .unwrap()
                 .unwrap();
             assert_eq!(assigned.firm_id, Some(firm));
             assert_eq!(assigned.brand, matter.brand);
             assert_eq!(assigned.entity_id, matter.entity_id);
-            assert!(persons::find_by_id(&surreal, admin)
+            assert!(persons::find_by_id(&application_store, admin)
                 .await
                 .unwrap()
                 .is_some());
             let unassigned_project = super::native_project_fixture::new_project(
-                &surreal,
+                &application_store,
                 firm,
                 &matter.brand,
                 matter.entity_id,
             )
             .await;
-            let unassigned = store::projects::find_by_id(&surreal, unassigned_project.id)
+            let unassigned = store::projects::find_by_id(&application_store, unassigned_project.id)
                 .await
                 .unwrap()
                 .unwrap();
             let lawyer = persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::with_role("Synthetic Lawyer", "dri-lawyer@example.test", Role::Lawyer),
             )
             .await
             .unwrap();
             let client = persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Synthetic Client", "dri-client@example.test"),
             )
             .await
             .unwrap();
-            designate_dri_in_surreal(&surreal, matter.id, lawyer.id, DriSide::Lawyer)
+            designate_dri(&application_store, matter.id, lawyer.id, DriSide::Lawyer)
                 .await
                 .unwrap();
-            designate_dri_in_surreal(&surreal, matter.id, client.id, DriSide::Client)
+            designate_dri(&application_store, matter.id, client.id, DriSide::Client)
                 .await
                 .unwrap();
             for status in ["closed", "archived"] {
                 store::projects::create(
-                    &surreal,
+                    &application_store,
                     &store::projects::NewProject {
                         code: format!("synthetic-{status}"),
                         name: format!("Synthetic {status} project"),
@@ -411,7 +413,7 @@ mod tests {
             }
             let slack_firm = crate::firm_slack::DeploymentSlackFirm::Configured(firm);
             let source = super::ApplicationDriDigestSource {
-                surreal: surreal.clone(),
+                application_store: application_store.clone(),
                 postgres: pg.clone(),
                 firm: slack_firm,
             };
@@ -430,7 +432,7 @@ mod tests {
                 lines[0].open
             };
             assert_eq!(open(source.open_pitch_counts().await.unwrap()), 3);
-            let strict_source = super::SurrealDriDigestSource(surreal, slack_firm);
+            let strict_source = super::DeploymentDriDigestSource(application_store, slack_firm);
             assert_eq!(strict_source.projects().await.unwrap().len(), 2);
             assert_eq!(open(strict_source.open_pitch_counts().await.unwrap()), 3);
             pg.pool().close().await;

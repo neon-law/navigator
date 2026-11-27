@@ -7,7 +7,7 @@
 //! practice manages) so we don't paginate. Sorted by `name`.
 
 use serde_json::{json, Value};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 
 use super::ToolError;
 
@@ -28,11 +28,14 @@ pub fn descriptor() -> Value {
     })
 }
 
-pub async fn call(surreal: &SurrealDb, _arguments: &Value) -> Result<Value, ToolError> {
-    let rows = store::entities::all(surreal).await?;
+pub async fn call(
+    application_store: &ApplicationStore,
+    _arguments: &Value,
+) -> Result<Value, ToolError> {
+    let rows = store::entities::all(application_store).await?;
     // Both reference tables live in the same engine as `entity` now.
-    let types = store::entity_types::list(surreal, &[]).await?;
-    let jurs = store::jurisdictions::list_all(surreal).await?;
+    let types = store::entity_types::list(application_store, &[]).await?;
+    let jurs = store::jurisdictions::list_all(application_store).await?;
 
     let by_type = |id: uuid::Uuid| {
         types
@@ -92,12 +95,12 @@ mod tests {
     use uuid::Uuid;
 
     async fn seed_jurisdiction(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         name: &str,
         code: &str,
     ) -> Uuid {
         store::jurisdictions::create(
-            surreal,
+            application_store,
             &store::jurisdictions::NewJurisdiction::new(name, code, "state"),
         )
         .await
@@ -105,18 +108,24 @@ mod tests {
         .id
     }
 
-    async fn seed_entity_type(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
-        store::entity_types::create(surreal, name).await.unwrap().id
+    async fn seed_entity_type(
+        application_store: &store::application_store::ApplicationStore,
+        name: &str,
+    ) -> Uuid {
+        store::entity_types::create(application_store, name)
+            .await
+            .unwrap()
+            .id
     }
 
     async fn seed(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         name: &str,
         et_id: Uuid,
         jur_id: Uuid,
     ) -> Uuid {
         store::entities::create(
-            surreal,
+            application_store,
             &store::entities::NewEntity {
                 name: name.into(),
                 entity_type_id: et_id,
@@ -144,8 +153,8 @@ mod tests {
     #[tokio::test]
     async fn empty_database_returns_zero_count_not_an_error() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let r = call(&surreal, &json!({})).await.unwrap();
+            let application_store = crate::test_fixtures::handle();
+            let r = call(&application_store, &json!({})).await.unwrap();
             assert_eq!(r["structuredContent"]["count"], 0);
             let text = r["content"][0]["text"].as_str().unwrap();
             assert!(text.contains("No entities"));
@@ -156,13 +165,13 @@ mod tests {
     #[tokio::test]
     async fn returns_seeded_entities_sorted_by_name() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
-            let llc = seed_entity_type(&surreal, "Multi Member LLC").await;
-            let trust = seed_entity_type(&surreal, "Family Trust").await;
-            seed(&surreal, "Zeta Holdings", llc, jur).await;
-            seed(&surreal, "Alpha Trust", trust, jur).await;
-            let r = call(&surreal, &json!({})).await.unwrap();
+            let application_store = crate::test_fixtures::handle();
+            let jur = seed_jurisdiction(&application_store, "Nevada", "NV").await;
+            let llc = seed_entity_type(&application_store, "Multi Member LLC").await;
+            let trust = seed_entity_type(&application_store, "Family Trust").await;
+            seed(&application_store, "Zeta Holdings", llc, jur).await;
+            seed(&application_store, "Alpha Trust", trust, jur).await;
+            let r = call(&application_store, &json!({})).await.unwrap();
             let names: Vec<&str> = r["structuredContent"]["entities"]
                 .as_array()
                 .unwrap()
@@ -177,17 +186,17 @@ mod tests {
     #[tokio::test]
     async fn each_row_carries_id_name_type_and_jurisdiction() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
-            let trust = seed_entity_type(&surreal, "Family Trust").await;
+            let application_store = crate::test_fixtures::handle();
+            let jur = seed_jurisdiction(&application_store, "Nevada", "NV").await;
+            let trust = seed_entity_type(&application_store, "Family Trust").await;
             seed(
-                &surreal,
+                &application_store,
                 crate::test_fixtures::ORGANIZATION.as_str(),
                 trust,
                 jur,
             )
             .await;
-            let r = call(&surreal, &json!({})).await.unwrap();
+            let r = call(&application_store, &json!({})).await.unwrap();
             let row = &r["structuredContent"]["entities"][0];
             assert_eq!(row["name"], crate::test_fixtures::ORGANIZATION.as_str());
             assert_eq!(row["entity_type"], "Family Trust");
@@ -201,17 +210,17 @@ mod tests {
     #[tokio::test]
     async fn summary_lists_each_entity_with_type_and_jurisdiction() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
-            let trust = seed_entity_type(&surreal, "Family Trust").await;
+            let application_store = crate::test_fixtures::handle();
+            let jur = seed_jurisdiction(&application_store, "Nevada", "NV").await;
+            let trust = seed_entity_type(&application_store, "Family Trust").await;
             seed(
-                &surreal,
+                &application_store,
                 crate::test_fixtures::ORGANIZATION.as_str(),
                 trust,
                 jur,
             )
             .await;
-            let r = call(&surreal, &json!({})).await.unwrap();
+            let r = call(&application_store, &json!({})).await.unwrap();
             let text = r["content"][0]["text"].as_str().unwrap();
             assert!(text.contains("1 entities:"));
             assert!(text.contains(&format!(
@@ -225,17 +234,19 @@ mod tests {
     #[tokio::test]
     async fn ignores_arguments_silently() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let jur = seed_jurisdiction(&surreal, "Nevada", "NV").await;
-            let trust = seed_entity_type(&surreal, "Family Trust").await;
+            let application_store = crate::test_fixtures::handle();
+            let jur = seed_jurisdiction(&application_store, "Nevada", "NV").await;
+            let trust = seed_entity_type(&application_store, "Family Trust").await;
             seed(
-                &surreal,
+                &application_store,
                 crate::test_fixtures::ORGANIZATION.as_str(),
                 trust,
                 jur,
             )
             .await;
-            let r = call(&surreal, &json!({ "garbage": 42 })).await.unwrap();
+            let r = call(&application_store, &json!({ "garbage": 42 }))
+                .await
+                .unwrap();
             assert_eq!(r["structuredContent"]["count"], 1);
         })
         .await;

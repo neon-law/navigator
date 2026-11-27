@@ -1,8 +1,8 @@
 //! Capture transports for the explicitly simulated, embedded development harness.
 use super::HostMode;
 use std::sync::Arc;
+use store::application_store::ApplicationStore;
 use store::postgres::PostgresDb;
-use store::surreal::SurrealDb;
 use store::DeploymentEnvironment;
 use workflows::{CapturingEmail, CapturingNotifier, CapturingSlackBot};
 
@@ -66,11 +66,11 @@ impl LocalProviders {
 
     pub(super) fn general_nag(
         &self,
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         pg: PostgresDb,
     ) -> workflows::dbos_engine::general_nag::Context {
         workflows::dbos_engine::general_nag::Context::with_store(
-            surreal,
+            application_store,
             pg,
             self.slack.clone(),
             CHANNEL.into(),
@@ -80,11 +80,11 @@ impl LocalProviders {
 
     pub(super) fn dri_digest(
         &self,
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         pg: PostgresDb,
     ) -> workflows::dbos_engine::dri_digest::Context {
         workflows::dbos_engine::dri_digest::Context::with_store(
-            surreal,
+            application_store,
             pg,
             self.notifier.clone(),
             true,
@@ -93,11 +93,11 @@ impl LocalProviders {
 
     pub(super) fn notation_reset(
         &self,
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         environment: &'static str,
     ) -> workflows::dbos_engine::notation_reset::Context {
         workflows::dbos_engine::notation_reset::Context {
-            surreal,
+            application_store,
             slack: self.slack.clone(),
             channel_id: CHANNEL.into(),
             environment,
@@ -126,7 +126,7 @@ impl LocalProviders {
 
     pub(super) fn reconcile(
         &self,
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         pg: PostgresDb,
         get: &impl Fn(&str) -> Option<String>,
     ) -> anyhow::Result<crate::dbos_reconcile::Context> {
@@ -135,7 +135,7 @@ impl LocalProviders {
             get,
         )?;
         Ok(crate::dbos_reconcile::Context::with_provider(
-            surreal,
+            application_store,
             pg,
             self.billing.clone(),
             self.slack.clone(),

@@ -1,6 +1,6 @@
 //! Person merge rolls back tagged links and its actual AGE projection together.
+use store::application_store::ApplicationStore;
 use store::postgres::PostgresDb;
-use store::surreal::SurrealDb;
 
 #[path = "support/merge_claim_refusal.rs"]
 mod merge_claim_refusal;
@@ -17,7 +17,7 @@ mod merge_billing_refusal;
 #[tokio::test]
 async fn native_merge_preserves_typed_reference_metadata_and_derives_the_kept_identity_graph() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = PostgresDb::application().await.unwrap();
         let parent = native_project::create("synthetic-native-merge-parent").await;
         let scenario = merge_fixture::Scenario::seed(&db, &pg, &parent).await;
@@ -32,7 +32,7 @@ async fn native_merge_preserves_typed_reference_metadata_and_derives_the_kept_id
 #[tokio::test]
 async fn rejected_graph_merge_preserves_all_rows_then_retries_with_typed_links_and_handles() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = PostgresDb::application().await.unwrap();
         let parent = native_project::create("synthetic-merge-parent").await;
         let scenario = merge_fixture::Scenario::seed(&db, &pg, &parent).await;

@@ -232,7 +232,7 @@ pub mod derive {
     /// The Firm's calibration, read as `viewer`. A store that cannot answer
     /// marks the panel unavailable rather than failing the page.
     pub async fn load_firm(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         viewer: Option<uuid::Uuid>,
         firm_id: uuid::Uuid,
     ) -> OutcomeCalibrationView {
@@ -246,7 +246,9 @@ pub mod derive {
         let Ok(pg) = store::postgres::PostgresDb::from_env().await else {
             return unavailable;
         };
-        match store::outcome_calibration::firm_calibration(surreal, &pg, viewer, firm_id).await {
+        match store::outcome_calibration::firm_calibration(application_store, &pg, viewer, firm_id)
+            .await
+        {
             Ok(calibration) => firm(&calibration),
             Err(error) => {
                 tracing::warn!(error = %error, "firm page: outcome calibration failed");

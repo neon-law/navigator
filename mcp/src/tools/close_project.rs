@@ -56,7 +56,7 @@ struct Args {
 }
 
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
     let args: Args = super::decode_args(arguments)?;
@@ -67,7 +67,7 @@ pub async fn call(
     }
 
     let closed = store::projects::transition_project_with_reason(
-        surreal,
+        application_store,
         args.project_id,
         store::projects::Transition::Close,
         Some(args.reason),
@@ -113,15 +113,15 @@ mod tests {
     use store::test_support::seed_entity;
     use uuid::Uuid;
 
-    async fn project(surreal: &store::surreal::SurrealDb) -> Uuid {
-        crate::test_fixtures::seed_brands(surreal).await;
+    async fn project(application_store: &store::application_store::ApplicationStore) -> Uuid {
+        crate::test_fixtures::seed_brands(application_store).await;
         let id = create(
-            surreal,
+            application_store,
             &NewProject {
                 code: format!("close-{}", Uuid::now_v7().simple()),
                 name: "Closeable matter".into(),
                 status: "open".into(),
-                entity_id: seed_entity(surreal).await,
+                entity_id: seed_entity(application_store).await,
                 ..Default::default()
             },
         )
@@ -161,12 +161,12 @@ mod tests {
     #[tokio::test]
     async fn closes_project_and_stamps_date() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let id = project(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            let id = project(&application_store).await;
             let effective_at = chrono::Utc::now();
 
             let result = call(
-                &surreal,
+                &application_store,
                 &json!({
                     "project_id": id,
                     "attestation": true,
@@ -195,16 +195,16 @@ mod tests {
     #[tokio::test]
     async fn requires_attestation_and_rejects_unknown_fields() {
         store::test_support::with_postgres(async {
-        let surreal = crate::test_fixtures::handle();
-        let id = project(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let id = project(&application_store).await;
 
-        let error = call(&surreal, &json!({"project_id": id}))
+        let error = call(&application_store, &json!({"project_id": id}))
             .await
             .expect_err("missing attestation must be rejected");
         assert!(matches!(error, ToolError::InvalidArguments(_)));
 
         let error = call(
-            &surreal,
+            &application_store,
             &json!({"project_id": id, "attestation": true, "reason": "pitch_declined", "closed_at": "now"}),
         )
         .await

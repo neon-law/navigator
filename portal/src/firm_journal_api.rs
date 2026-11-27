@@ -19,7 +19,12 @@ async fn authorize(
     firm: Uuid,
 ) -> Result<(), ApiError> {
     let allowed = store::firm_capability::FirmCapability::ManageJournal
-        .resolve(&state.surreal, session.role, session.person_id, firm)
+        .resolve(
+            &state.application_store,
+            session.role,
+            session.person_id,
+            firm,
+        )
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     if !allowed.is_allowed() {
@@ -69,7 +74,7 @@ pub(super) async fn statement(
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm).await?;
     if let Some(project) = query.project_id {
-        let project = store::projects::find_by_id(&state.surreal, project)
+        let project = store::projects::find_by_id(&state.application_store, project)
             .await
             .map_err(|e| ApiError::Db(e.to_string()))?
             .ok_or(ApiError::NotFound)?;
@@ -125,9 +130,7 @@ pub(super) async fn migration_triage(
     // handoff proves all captured Journal rows represented, with no unresolved
     // rows or integrity differences. Pending/unknown history is not a clean report.
     match store::postgres::PostgresDb::application().await {
-        Ok(_) => {
-            Ok(Json(Vec::<store::journal_startup_migration::TriageItem>::new()).into_response())
-        }
+        Ok(_) => Ok(Json(Vec::<serde_json::Value>::new()).into_response()),
         Err(_) => Ok(StatusCode::SERVICE_UNAVAILABLE.into_response()),
     }
 }
@@ -160,9 +163,9 @@ async fn apply_command(
     }
     let store = journal_store().await?;
     let result = if preview {
-        store.preview(&state.surreal, &entry).await
+        store.preview(&state.application_store, &entry).await
     } else {
-        store.post(&state.surreal, &entry).await
+        store.post(&state.application_store, &entry).await
     };
     Ok(match result {
         Ok(id) => (
@@ -198,7 +201,7 @@ pub(super) async fn reconcile(
         return Err(ApiError::Forbidden);
     }
     let store = journal_store().await?;
-    let audit = journal::reconcile(&state.surreal, store.postgres(), &request).await;
+    let audit = journal::reconcile(&state.application_store, store.postgres(), &request).await;
     Ok(match audit {
         Ok(audit) => Json(audit).into_response(),
         Err(e) => journal_error(&e),
@@ -219,7 +222,7 @@ pub(super) async fn mercury(
     Json(request): Json<MercuryRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm).await?;
-    let project = store::projects::find_by_id(&state.surreal, request.project_id)
+    let project = store::projects::find_by_id(&state.application_store, request.project_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
@@ -228,7 +231,7 @@ pub(super) async fn mercury(
     }
     let kms = crate::integrations::runtime_kms_from_env().await;
     match mercury_snapshot(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         kms.as_ref(),
         request.project_id,
@@ -251,7 +254,7 @@ pub(super) async fn mercury(
 /// Download evidence into private Documents. Refresh expired signed attachment
 /// URLs by rereading only the same transaction; never enumerate the account.
 pub async fn mercury_snapshot(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     kms: &dyn cloud::RuntimeKms,
     project: Uuid,
@@ -358,7 +361,7 @@ pub async fn mercury_snapshot(
     Ok(snapshot)
 }
 async fn private_evidence(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     project: Uuid,
     name: &str,
@@ -416,7 +419,7 @@ struct MercuryImportOutcome {
 /// Everything one import transaction needs, grouped so the per-transaction
 /// step stays readable.
 struct MercuryImportContext<'a> {
-    surreal: &'a store::surreal::SurrealDb,
+    application_store: &'a store::application_store::ApplicationStore,
     storage: &'a std::sync::Arc<dyn cloud::StorageService>,
     pg: &'a store::postgres::PostgresDb,
     /// The Firm's Projects as `(code, id)`, sorted by code, so allocation is
@@ -456,7 +459,7 @@ pub(super) async fn mercury_import(
     };
     let kms = crate::integrations::runtime_kms_from_env().await;
     let credential = store::firm_secrets::resolve_firm_credential(
-        &state.surreal,
+        &state.application_store,
         firm,
         store::firm_secrets::IntegrationProvider::Mercury,
         store::firm_secrets::IntegrationSecretKind::MercuryReadToken,
@@ -488,7 +491,7 @@ pub(super) async fn mercury_import(
         }
         Err(_) => return Ok(refused("bank_evidence_unavailable")),
     };
-    let mut projects: Vec<(String, Uuid)> = store::projects::all(&state.surreal)
+    let mut projects: Vec<(String, Uuid)> = store::projects::all(&state.application_store)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .into_iter()
@@ -500,7 +503,7 @@ pub(super) async fn mercury_import(
         .await
         .map_err(|_| ApiError::Db("PostgreSQL cost store unavailable".to_string()))?;
     let context = MercuryImportContext {
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         storage: &state.storage,
         pg: &pg,
         projects: &projects,
@@ -619,7 +622,7 @@ async fn import_one(
     }
     let evidence_bytes = serde_json::to_vec_pretty(transaction).unwrap_or_default();
     let Ok(evidence_document) = private_evidence(
-        context.surreal,
+        context.application_store,
         context.storage,
         project_id,
         &format!("accounting-source-{}.json", transaction.id),
@@ -639,7 +642,7 @@ async fn import_one(
         };
         let digest = store::documents::sha256_hex(&bytes);
         let Ok(document) = private_evidence(
-            context.surreal,
+            context.application_store,
             context.storage,
             project_id,
             &format!("accounting-receipt-{digest}"),
@@ -674,7 +677,7 @@ async fn import_one(
         return outcome;
     };
     match Box::pin(costs::create(
-        context.surreal,
+        context.application_store,
         context.pg,
         project_id,
         context.actor_id,
@@ -716,7 +719,7 @@ pub(super) async fn xero(
     Json(request): Json<XeroRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm).await?;
-    let project = store::projects::find_by_id(&state.surreal, request.project_id)
+    let project = store::projects::find_by_id(&state.application_store, request.project_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
@@ -749,7 +752,7 @@ async fn xero_snapshot(state: &ApiState, request: &XeroRequest) -> anyhow::Resul
     ] {
         credentials.push(
             resolve_project_credential(
-                &state.surreal,
+                &state.application_store,
                 request.project_id,
                 IntegrationProvider::Xero,
                 kind,
@@ -1008,7 +1011,7 @@ async fn xero_snapshot(state: &ApiState, request: &XeroRequest) -> anyhow::Resul
     let digest = store::documents::sha256_hex(&bytes);
     let name = format!("accounting-source-{digest}.json");
     let evidence = private_evidence(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         request.project_id,
         &name,
@@ -1022,7 +1025,7 @@ async fn xero_snapshot(state: &ApiState, request: &XeroRequest) -> anyhow::Resul
         let hash = store::documents::sha256_hex(&bytes);
         source_evidence.push(
             private_evidence(
-                &state.surreal,
+                &state.application_store,
                 &state.storage,
                 request.project_id,
                 &format!("xero-support-{hash}.json"),
@@ -1037,7 +1040,7 @@ async fn xero_snapshot(state: &ApiState, request: &XeroRequest) -> anyhow::Resul
         let hash = store::documents::sha256_hex(&listing);
         source_evidence.push(
             private_evidence(
-                &state.surreal,
+                &state.application_store,
                 &state.storage,
                 request.project_id,
                 &format!("xero-attachment-list-{hash}.json"),
@@ -1051,7 +1054,7 @@ async fn xero_snapshot(state: &ApiState, request: &XeroRequest) -> anyhow::Resul
             let hash = store::documents::sha256_hex(&bytes);
             receipts.push(
                 private_evidence(
-                    &state.surreal,
+                    &state.application_store,
                     &state.storage,
                     request.project_id,
                     &format!("accounting-receipt-{hash}"),
@@ -1290,288 +1293,6 @@ mod tests {
 
     // --- bulk Mercury import ---
 
-    /// One listed transaction, with optional JSON-field overrides; a `null`
-    /// override removes the field. `amount` stays a raw JSON numeral because
-    /// the import must read the provider's exact decimal text.
-    fn mercury_tx(id: Uuid, overrides: &serde_json::Value) -> cloud::mercury::Transaction {
-        let mut base = serde_json::json!({
-            "id": id,
-            "accountId": Uuid::now_v7(),
-            "amount": 12.34,
-            "status": "sent",
-            "postedAt": "2026-10-01T00:00:00+00:00",
-            "counterpartyName": "Acme Supplies",
-            "attachments": []
-        });
-        if let (Some(target), Some(patch)) = (base.as_object_mut(), overrides.as_object()) {
-            for (key, value) in patch {
-                if value.is_null() {
-                    target.remove(key);
-                } else {
-                    target.insert(key.clone(), value.clone());
-                }
-            }
-        }
-        serde_json::from_value(base).unwrap()
-    }
-
-    /// The disposable fixture database, created and migrated once per process.
-    static FIXTURE_DB: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
-
-    /// The Postgres handle the import writes through, against a disposable
-    /// database on the synthetic fixture.
-    async fn import_pg() -> Option<store::postgres::PostgresDb> {
-        let port = store::test_support::postgres_test_port();
-        let options = |database: &str| {
-            sqlx::postgres::PgConnectOptions::new()
-                .host("127.0.0.1")
-                .port(port)
-                .username("postgres")
-                .password("synthetic")
-                .database(database)
-                .ssl_mode(sqlx::postgres::PgSslMode::Disable)
-        };
-        let database = FIXTURE_DB
-            .get_or_init(|| async {
-                let database = format!("navigator_firm_journal_{}", uuid::Uuid::new_v4().simple());
-                let admin = sqlx::postgres::PgPoolOptions::new()
-                    .max_connections(1)
-                    .connect_with(options("postgres"))
-                    .await
-                    .expect("connect to the synthetic PostgreSQL fixture");
-                let create = format!("CREATE DATABASE \"{database}\"");
-                sqlx::query(sqlx::AssertSqlSafe(create))
-                    .execute(&admin)
-                    .await
-                    .expect("create the disposable fixture database");
-                let migrated = store::postgres::PostgresDb::connect(options(&database))
-                    .await
-                    .expect("connect the disposable fixture database");
-                migrated
-                    .migrate_embedded(None)
-                    .await
-                    .expect("migrate the disposable fixture database");
-                database
-            })
-            .await
-            .clone();
-        Some(
-            store::postgres::PostgresDb::connect(options(&database))
-                .await
-                .unwrap(),
-        )
-    }
-
-    /// A synthetic Project whose hyphenated code appears verbatim as one
-    /// token of a provider free-text field.
-    async fn import_project(surreal: &store::surreal::SurrealDb) -> (String, Uuid) {
-        let jurisdiction = store::jurisdictions::create(
-            surreal,
-            &store::jurisdictions::NewJurisdiction::new(
-                "Mercury import jurisdiction",
-                format!("MERCURY-{}", Uuid::new_v4()),
-                "state",
-            ),
-        )
-        .await
-        .unwrap();
-        let entity_type = store::entity_types::create(
-            surreal,
-            &format!("Mercury import entity type {}", Uuid::new_v4()),
-        )
-        .await
-        .unwrap();
-        let entity = store::entities::create(
-            surreal,
-            &store::entities::NewEntity {
-                name: "Mercury import matter entity".into(),
-                entity_type_id: entity_type.id,
-                jurisdiction_id: jurisdiction.id,
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: None,
-            },
-        )
-        .await
-        .unwrap();
-        let code = format!("mercury-import-{}", Uuid::new_v4().simple());
-        let project = store::projects::create(
-            surreal,
-            &store::projects::NewProject {
-                code: code.clone(),
-                name: "Mercury import matter".into(),
-                status: "open".into(),
-                entity_id: entity.id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        (code, project.id)
-    }
-
-    async fn import_context<'a>(
-        surreal: &'a store::surreal::SurrealDb,
-        pg: &'a store::postgres::PostgresDb,
-        storage: &'a std::sync::Arc<dyn cloud::StorageService>,
-        projects: &'a [(String, Uuid)],
-        client: &'a cloud::mercury::Mercury,
-        dry_run: bool,
-    ) -> MercuryImportContext<'a> {
-        MercuryImportContext {
-            surreal,
-            storage,
-            pg,
-            projects,
-            client,
-            // The actor must exist as a Person so the import's mirror step
-            // can write it before the creation trigger's foreign key needs
-            // it — in production the actor is always the session's person.
-            actor_id: store::persons::create(
-                surreal,
-                &store::persons::NewPerson::new(
-                    "Mercury import actor",
-                    format!("mercury-import-{}@example.test", Uuid::new_v4()),
-                ),
-            )
-            .await
-            .unwrap()
-            .id,
-            dry_run,
-        }
-    }
-
-    #[tokio::test]
-    async fn import_one_skips_each_ineligible_transaction_for_its_named_reason() {
-        let Some(pg) = import_pg().await else {
-            return;
-        };
-        let surreal = store::test_support::mem_surreal().await;
-        let state = crate::test_support::app_state(surreal.clone()).await;
-        let (code, project_id) = import_project(&surreal).await;
-        let (other, other_id) = import_project(&surreal).await;
-        let projects = vec![(code, project_id), (other, other_id)];
-        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context =
-            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
-        let cases = [
-            (serde_json::json!({ "postedAt": null }), "unposted"),
-            (
-                serde_json::json!({ "postedAt": "01-02-2026" }),
-                "unreadable_posted_at",
-            ),
-            (serde_json::json!({ "status": "pending" }), "status"),
-            (serde_json::json!({ "amount": "abc" }), "unreadable_amount"),
-            (serde_json::json!({ "amount": 1.005 }), "unreadable_amount"),
-            (serde_json::json!({ "amount": 0 }), "non_positive_amount"),
-            (
-                serde_json::json!({ "counterpartyName": "Unrelated Vendor" }),
-                "unallocated",
-            ),
-            (
-                serde_json::json!({
-                    "counterpartyName": format!("{} and {}", projects[0].0, projects[1].0)
-                }),
-                "ambiguous",
-            ),
-        ];
-        for (patch, reason) in cases {
-            let outcome = Box::pin(import_one(&context, &mercury_tx(Uuid::now_v7(), &patch))).await;
-            assert_eq!(outcome.disposition, "skipped", "case {reason}");
-            assert_eq!(outcome.reason.as_deref(), Some(reason), "case {reason}");
-            assert_eq!(outcome.project_code, None, "case {reason}");
-            assert_eq!(outcome.cost_id, None, "case {reason}");
-        }
-    }
-
-    #[tokio::test]
-    async fn import_one_plans_a_dry_run_without_creating_a_cost() {
-        let Some(pg) = import_pg().await else {
-            return;
-        };
-        let surreal = store::test_support::mem_surreal().await;
-        let state = crate::test_support::app_state(surreal.clone()).await;
-        let (code, project_id) = import_project(&surreal).await;
-        let projects = vec![(code.clone(), project_id)];
-        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, true).await;
-        let transaction = mercury_tx(
-            Uuid::now_v7(),
-            &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
-        );
-        let outcome = Box::pin(import_one(&context, &transaction)).await;
-        assert_eq!(outcome.disposition, "planned");
-        assert_eq!(outcome.project_code.as_deref(), Some(code.as_str()));
-        assert!(outcome.cost_id.is_none());
-    }
-
-    #[tokio::test]
-    async fn import_one_files_evidence_creates_the_cost_and_skips_the_rerun() {
-        let Some(pg) = import_pg().await else {
-            return;
-        };
-        let surreal = store::test_support::mem_surreal().await;
-        let state = crate::test_support::app_state(surreal.clone()).await;
-        let (code, project_id) = import_project(&surreal).await;
-        let projects = vec![(code.clone(), project_id)];
-        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context =
-            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
-        let transaction = mercury_tx(
-            Uuid::now_v7(),
-            &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
-        );
-        let first = Box::pin(import_one(&context, &transaction)).await;
-        assert_eq!(first.disposition, "imported");
-        assert_eq!(first.project_code.as_deref(), Some(code.as_str()));
-        let cost_id = first.cost_id.expect("an imported cost carries its id");
-        let second = Box::pin(import_one(&context, &transaction)).await;
-        assert_eq!(second.disposition, "skipped");
-        assert_eq!(second.reason.as_deref(), Some("already_imported"));
-        assert_eq!(second.cost_id, Some(cost_id));
-        // A payee the cost store refuses still files the evidence first,
-        // then reports the rejection instead of charging the card.
-        let refused = mercury_tx(
-            Uuid::now_v7(),
-            &serde_json::json!({
-                "counterpartyName": "",
-                "note": format!("Acme Supplies {code}")
-            }),
-        );
-        let outcome = Box::pin(import_one(&context, &refused)).await;
-        assert_eq!(outcome.disposition, "skipped");
-        assert_eq!(outcome.reason.as_deref(), Some("cost_rejected"));
-    }
-
-    #[tokio::test]
-    async fn import_one_skips_a_transaction_whose_receipt_cannot_be_fetched() {
-        let Some(pg) = import_pg().await else {
-            return;
-        };
-        let surreal = store::test_support::mem_surreal().await;
-        let state = crate::test_support::app_state(surreal.clone()).await;
-        let (code, project_id) = import_project(&surreal).await;
-        let projects = vec![(code.clone(), project_id)];
-        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context =
-            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
-        let transaction = mercury_tx(
-            Uuid::now_v7(),
-            &serde_json::json!({
-                "counterpartyName": format!("Acme Supplies {code}"),
-                "attachments": [{
-                    "fileName": "receipt.pdf",
-                    "attachmentType": "receipt",
-                    "url": "http://127.0.0.1/private"
-                }]
-            }),
-        );
-        let outcome = Box::pin(import_one(&context, &transaction)).await;
-        assert_eq!(outcome.disposition, "skipped");
-        assert_eq!(outcome.reason.as_deref(), Some("receipt_unavailable"));
-    }
-
     // --- HTTP doors ---
 
     use axum::body::Body;
@@ -1667,9 +1388,12 @@ mod tests {
         entity
     }
 
-    async fn door_firm(surreal: &store::surreal::SurrealDb, label: &str) -> Uuid {
+    async fn door_firm(
+        application_store: &store::application_store::ApplicationStore,
+        label: &str,
+    ) -> Uuid {
         let admin = store::persons::create(
-            surreal,
+            application_store,
             &NewPerson::with_role(
                 "Synthetic journal administrator",
                 format!("journal-admin-{label}-{}@example.com", Uuid::now_v7()),
@@ -1679,7 +1403,7 @@ mod tests {
         .await
         .unwrap();
         store::firms::create(
-            surreal,
+            application_store,
             &store::firms::NewFirm {
                 name: format!("Synthetic journal firm {label} {}", Uuid::now_v7()),
                 status: "active".into(),
@@ -1692,9 +1416,12 @@ mod tests {
         .id
     }
 
-    async fn door_project(surreal: &store::surreal::SurrealDb, firm: Uuid) -> Uuid {
+    async fn door_project(
+        application_store: &store::application_store::ApplicationStore,
+        firm: Uuid,
+    ) -> Uuid {
         store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: format!("journal-door-{}", Uuid::now_v7().simple()),
                 name: "Synthetic journal matter".into(),
@@ -1710,7 +1437,7 @@ mod tests {
     }
 
     async fn door_fixture() -> DoorFixture {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         sqlx::query("INSERT INTO brand(name,brand_key) VALUES ('Synthetic Brand','neon')")
             .execute(
                 store::postgres::PostgresDb::application()
@@ -1720,12 +1447,12 @@ mod tests {
             )
             .await
             .unwrap();
-        let firm = door_firm(&surreal, "own").await;
-        let other = door_firm(&surreal, "other").await;
-        let project = door_project(&surreal, firm).await;
-        let foreign_project = door_project(&surreal, other).await;
+        let firm = door_firm(&application_store, "own").await;
+        let other = door_firm(&application_store, "other").await;
+        let project = door_project(&application_store, firm).await;
+        let foreign_project = door_project(&application_store, other).await;
         let owner = store::persons::create(
-            &surreal,
+            &application_store,
             &NewPerson::with_role(
                 "Synthetic journal owner",
                 format!("journal-owner-{}@example.com", Uuid::now_v7()),
@@ -1736,7 +1463,7 @@ mod tests {
         .unwrap()
         .id;
         let lawyer = store::persons::create(
-            &surreal,
+            &application_store,
             &NewPerson::with_role(
                 "Synthetic unaffiliated lawyer",
                 format!("journal-lawyer-{}@example.com", Uuid::now_v7()),
@@ -1747,7 +1474,7 @@ mod tests {
         .unwrap()
         .id;
         DoorFixture {
-            app: crate::router(crate::test_support::app_state(surreal).await),
+            app: crate::router(crate::test_support::app_state(application_store).await),
             firm,
             owner,
             lawyer,
@@ -1814,7 +1541,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn journal_reads_use_postgres_and_require_explicit_source_for_triage() {
+    async fn journal_reads_use_postgres_and_report_no_pending_triage() {
         store::test_support::with_postgres(async {
             let fixture = door_fixture().await;
             let owner = door_bearer(fixture.owner, Role::Owner);
@@ -1864,7 +1591,8 @@ mod tests {
                 None,
             )
             .await;
-            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body, "[]");
         })
         .await;
     }
@@ -2138,7 +1866,7 @@ pub(super) async fn solana(
     Json(request): Json<SolanaRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm).await?;
-    let project = store::projects::find_by_id(&state.surreal, request.project_id)
+    let project = store::projects::find_by_id(&state.application_store, request.project_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
@@ -2167,7 +1895,7 @@ async fn solana_snapshot(
     .await?;
     let digest = store::documents::sha256_hex(&bytes);
     let document = private_evidence(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         request.project_id,
         &format!("accounting-chain-{digest}.json"),

@@ -1,5 +1,4 @@
-# navigator-web Deployment. Connects to the in-cluster SurrealDB, SeaweedFS,
-# Rauthy, and Restate by their service DNS names.
+# navigator-web Deployment. Runs DBOS and connects to PostgreSQL, SeaweedFS, and Rauthy.
 
 apiVersion: v1
 kind: Secret
@@ -219,12 +218,8 @@ spec:
           volumeMounts:
             - name: repos
               mountPath: /var/lib/navigator/repos
-          # Boot applies the Surreal schema and the seed before the server
-          # listens, which took ~58s against production's data on
-          # 26.10.29-rc.1. A liveness probe timed from container start killed
-          # it at ~60s, so a pod could only win that race. The startup probe
-          # holds liveness and readiness off until the server answers,
-          # allowing up to five minutes.
+          # Allow up to five minutes for database admission, seed, and DBOS startup.
+          # Kubernetes defers liveness and readiness until this probe succeeds.
           startupProbe:
             httpGet:
               path: /app/health

@@ -59,8 +59,8 @@ pub async fn get_project_notation_new_form() -> Result<ProjectNotationNewView, S
         return Ok(hidden(role).await);
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(project) = store::projects::find_by_code(&surreal, &project_code)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(project) = store::projects::find_by_code(&application_store, &project_code)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
     else {
@@ -85,9 +85,14 @@ pub async fn get_project_notation_new_form() -> Result<ProjectNotationNewView, S
     // Keep the form's read scope identical to the existing POST command: a
     // lawyer must participate in the matter, while Admin/Owner retain the
     // command layer's privileged bypass.
-    if !store::access::can_see_project_as_lawyer(&surreal, person_id, store_role, project.id)
-        .await
-        .map_err(|e| ServerFnError::new(e.clone()))?
+    if !store::access::can_see_project_as_lawyer(
+        &application_store,
+        person_id,
+        store_role,
+        project.id,
+    )
+    .await
+    .map_err(|e| ServerFnError::new(e.clone()))?
     {
         return Ok(hidden(role).await);
     }

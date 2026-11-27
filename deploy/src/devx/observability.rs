@@ -684,7 +684,7 @@ fn kubernetes_client(ca_bundle: &[Vec<u8>]) -> Result<reqwest::Client> {
     // engine, so it installs one too. Without it `ops observability`
     // aborts mid-run — after applying the collector and before the
     // `Rules` object that needs the operator it was about to wait for.
-    store::surreal::install_tls_provider();
+    store::tls::install_provider();
     let roots = ca_bundle
         .iter()
         .map(|der| reqwest::Certificate::from_der(der))

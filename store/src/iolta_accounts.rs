@@ -36,13 +36,12 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::{RecordId, SurrealValue};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::jurisdictions::JURISDICTION_TYPE_STATE;
 use crate::postgres::accounting as authority;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The prefix a Xero bank account's name carries to declare which state's
 /// IOLTA pool it is — the account-side twin of the `Matter <code>` reference
@@ -91,7 +90,7 @@ pub fn jurisdiction_scope_from_account_name(name: &str) -> Option<String> {
 ///
 /// [`IoltaAccountError::Jurisdictions`] when the lookup itself fails.
 pub async fn resolve_jurisdiction_scope(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     account_name: &str,
 ) -> Result<Option<Uuid>, IoltaAccountError> {
     let Some(code) = jurisdiction_scope_from_account_name(account_name) else {
@@ -105,11 +104,6 @@ pub async fn resolve_jurisdiction_scope(
     }
     Ok(Some(jurisdiction.id))
 }
-
-/// The SurrealDB table holding the pooled-account mirror.
-pub(crate) const TABLE: &str = "iolta_account";
-const SELECT: &str = "jurisdiction_id, xero_account_id, xero_account_code, name, currency, \
-                      balance_cents, mirrored_at, inserted_at, updated_at";
 
 /// One state's pooled IOLTA account, as Xero last reported it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -134,35 +128,6 @@ pub struct IoltaAccount {
     pub mirrored_at: Option<DateTime<Utc>>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-#[derive(serde::Deserialize, SurrealValue)]
-struct IoltaAccountRow {
-    jurisdiction_id: RecordId,
-    xero_account_id: String,
-    xero_account_code: Option<String>,
-    name: String,
-    currency: String,
-    balance_cents: i64,
-    mirrored_at: Option<surrealdb::types::Datetime>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl IoltaAccountRow {
-    fn into_account(self) -> Option<IoltaAccount> {
-        Some(IoltaAccount {
-            jurisdiction_id: record_uuid(&self.jurisdiction_id)?,
-            xero_account_id: self.xero_account_id,
-            xero_account_code: self.xero_account_code,
-            name: self.name,
-            currency: self.currency,
-            balance_cents: self.balance_cents,
-            mirrored_at: self.mirrored_at.map(Into::into),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
 }
 
 /// The pooled-account row as PostgreSQL's `to_jsonb` serves it. The row's
@@ -199,8 +164,6 @@ impl From<PgIoltaAccountRow> for IoltaAccount {
 /// Errors reading or writing the pooled-account mirror.
 #[derive(Debug, Error)]
 pub enum IoltaAccountError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Jurisdictions(#[from] crate::jurisdictions::JurisdictionError),
     #[error(transparent)]
@@ -231,23 +194,6 @@ pub enum IoltaAccountError {
     Postgres(#[from] crate::postgres::accounting::AccountingAuthorityError),
 }
 
-/// Run a write under the crate's one retry policy. Unlike
-/// [`crate::xero_invoices`] there is no create-race to classify: the mirror
-/// writes with `UPSERT` onto the Xero account id, so a racing second read of
-/// the same account converges on the one row instead of colliding.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, IoltaAccountError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(IoltaAccountError::Db)
-}
-
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<IoltaAccount>, IoltaAccountError> {
-    let row: Option<IoltaAccountRow> = response.take(0)?;
-    Ok(row.and_then(IoltaAccountRow::into_account))
-}
-
 /// What the nightly mirror captures for one pooled account.
 #[derive(Clone, Debug)]
 pub struct UpsertIoltaAccount {
@@ -276,7 +222,7 @@ pub struct UpsertIoltaAccount {
 /// [`IoltaAccountError::NoSuchJurisdiction`], [`IoltaAccountError::NotAState`],
 /// [`IoltaAccountError::JurisdictionTaken`], or [`IoltaAccountError::Db`].
 pub async fn upsert(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     input: &UpsertIoltaAccount,
 ) -> Result<IoltaAccount, IoltaAccountError> {
     let jurisdiction = crate::jurisdictions::find_by_id(db, input.jurisdiction_id)
@@ -297,72 +243,44 @@ pub async fn upsert(
         }
     }
 
-    if let Some(pg) = authority::authority().await? {
-        let row = serde_json::json!({
-            "id": input.xero_account_id, "jurisdiction_id": input.jurisdiction_id,
-            "xero_account_id": input.xero_account_id,
-            "xero_account_code": input.xero_account_code, "name": input.name,
-            "currency": input.currency, "balance_cents": input.balance_cents,
-            "mirrored_at": input.mirrored_at,
-        });
-        let query = sqlx::query(
-            "INSERT INTO iolta_account SELECT * FROM \
-             jsonb_populate_record(NULL::iolta_account, \
-             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-             ON CONFLICT (id) DO UPDATE SET jurisdiction_id = EXCLUDED.jurisdiction_id, \
-             xero_account_code = EXCLUDED.xero_account_code, name = EXCLUDED.name, \
-             currency = EXCLUDED.currency, balance_cents = EXCLUDED.balance_cents, \
-             mirrored_at = EXCLUDED.mirrored_at, updated_at = now() \
-             RETURNING to_jsonb(iolta_account) AS row",
-        )
-        .bind(row);
-        // The pre-check races with concurrent upserts; the unique index is
-        // the final word, and it reads as JurisdictionTaken like the
-        // SurrealDB path's.
-        let written = match authority::maybe::<PgIoltaAccountRow>(&pg, query).await {
-            Ok(row) => row
-                .map(Into::into)
-                .ok_or(IoltaAccountError::WriteReturnedNothing)?,
-            Err(error) if error.violates("iolta_account_jurisdiction_key") => {
-                let existing = for_jurisdiction(db, input.jurisdiction_id)
-                    .await?
-                    .map_or_else(|| input.xero_account_id.clone(), |row| row.xero_account_id);
-                return Err(IoltaAccountError::JurisdictionTaken {
-                    jurisdiction_id: input.jurisdiction_id,
-                    existing,
-                });
-            }
-            Err(error) => return Err(error.into()),
-        };
-        return Ok(written);
-    }
-
-    let response = writing(|| {
-        db.query(format!(
-            "UPSERT $id SET jurisdiction_id = $jurisdiction_id, \
-             xero_account_id = $xero_account_id, xero_account_code = $xero_account_code, \
-             name = $name, currency = $currency, balance_cents = $balance_cents, \
-             mirrored_at = $mirrored_at, \
-             inserted_at = IF inserted_at THEN inserted_at ELSE time::now() END, \
-             updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", RecordId::new(TABLE, input.xero_account_id.clone())))
-        .bind((
-            "jurisdiction_id",
-            record_id(crate::jurisdictions::TABLE, input.jurisdiction_id),
-        ))
-        .bind(("xero_account_id", input.xero_account_id.clone()))
-        .bind(("xero_account_code", input.xero_account_code.clone()))
-        .bind(("name", input.name.clone()))
-        .bind(("currency", input.currency.clone()))
-        .bind(("balance_cents", input.balance_cents))
-        .bind((
-            "mirrored_at",
-            surrealdb::types::Datetime::from(input.mirrored_at),
-        ))
-    })
-    .await?;
-    one(response)?.ok_or(IoltaAccountError::WriteReturnedNothing)
+    let pg = authority::authority().await?;
+    let row = serde_json::json!({
+        "id": input.xero_account_id, "jurisdiction_id": input.jurisdiction_id,
+        "xero_account_id": input.xero_account_id,
+        "xero_account_code": input.xero_account_code, "name": input.name,
+        "currency": input.currency, "balance_cents": input.balance_cents,
+        "mirrored_at": input.mirrored_at,
+    });
+    let query = sqlx::query(
+        "INSERT INTO iolta_account SELECT * FROM \
+         jsonb_populate_record(NULL::iolta_account, \
+         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+         ON CONFLICT (id) DO UPDATE SET jurisdiction_id = EXCLUDED.jurisdiction_id, \
+         xero_account_code = EXCLUDED.xero_account_code, name = EXCLUDED.name, \
+         currency = EXCLUDED.currency, balance_cents = EXCLUDED.balance_cents, \
+         mirrored_at = EXCLUDED.mirrored_at, updated_at = now() \
+         RETURNING to_jsonb(iolta_account) AS row",
+    )
+    .bind(row);
+    // The pre-check races with concurrent upserts; the unique index is
+    // the final word, and it reads as JurisdictionTaken like the
+    // SurrealDB path's.
+    let written = match authority::maybe::<PgIoltaAccountRow>(&pg, query).await {
+        Ok(row) => row
+            .map(Into::into)
+            .ok_or(IoltaAccountError::WriteReturnedNothing)?,
+        Err(error) if error.violates("iolta_account_jurisdiction_key") => {
+            let existing = for_jurisdiction(db, input.jurisdiction_id)
+                .await?
+                .map_or_else(|| input.xero_account_id.clone(), |row| row.xero_account_id);
+            return Err(IoltaAccountError::JurisdictionTaken {
+                jurisdiction_id: input.jurisdiction_id,
+                existing,
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
+    Ok(written)
 }
 
 /// The pooled account mirrored for one state, if any.
@@ -371,30 +289,18 @@ pub async fn upsert(
 ///
 /// [`IoltaAccountError::Db`] when the lookup fails.
 pub async fn for_jurisdiction(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     jurisdiction_id: Uuid,
 ) -> Result<Option<IoltaAccount>, IoltaAccountError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(iolta_account) AS row FROM iolta_account \
-             WHERE jurisdiction_id = $1 LIMIT 1",
-        )
-        .bind(jurisdiction_id);
-        return Ok(authority::maybe::<PgIoltaAccountRow>(&pg, query)
-            .await?
-            .map(Into::into));
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE jurisdiction_id = $jurisdiction_id LIMIT 1"
-        ))
-        .bind((
-            "jurisdiction_id",
-            record_id(crate::jurisdictions::TABLE, jurisdiction_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(iolta_account) AS row FROM iolta_account \
+         WHERE jurisdiction_id = $1 LIMIT 1",
+    )
+    .bind(jurisdiction_id);
+    Ok(authority::maybe::<PgIoltaAccountRow>(&pg, query)
+        .await?
+        .map(Into::into))
 }
 
 /// The pooled account a matter's client funds belong in, resolved from the
@@ -408,7 +314,7 @@ pub async fn for_jurisdiction(
 ///
 /// [`IoltaAccountError::Db`] or a failure reading the Project.
 pub async fn for_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Option<IoltaAccount>, IoltaAccountError> {
     let Some(project) = crate::projects::find_by_id(db, project_id).await? else {
@@ -431,28 +337,16 @@ pub async fn for_project(
 /// # Errors
 ///
 /// [`IoltaAccountError::Db`] when the query fails.
-pub async fn all(db: &SurrealDb) -> Result<Vec<IoltaAccount>, IoltaAccountError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(iolta_account) AS row FROM iolta_account \
-             ORDER BY inserted_at ASC",
-        );
-        return Ok(authority::rows::<PgIoltaAccountRow>(&pg, query)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect());
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<IoltaAccountRow> = response.take(0)?;
-    Ok(rows
+pub async fn all(_db: &ApplicationStore) -> Result<Vec<IoltaAccount>, IoltaAccountError> {
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(iolta_account) AS row FROM iolta_account \
+         ORDER BY inserted_at ASC",
+    );
+    Ok(authority::rows::<PgIoltaAccountRow>(&pg, query)
+        .await?
         .into_iter()
-        .filter_map(IoltaAccountRow::into_account)
+        .map(Into::into)
         .collect())
 }
 
@@ -462,19 +356,19 @@ mod tests {
         all, for_jurisdiction, for_project, jurisdiction_scope_from_account_name,
         resolve_jurisdiction_scope, upsert, IoltaAccountError, UpsertIoltaAccount,
     };
+    use crate::application_store::ApplicationStore;
     use crate::jurisdictions::NewJurisdiction;
-    use crate::surreal::SurrealDb;
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
 
-    async fn state(db: &SurrealDb, name: &str, code: &str) -> Uuid {
+    async fn state(db: &ApplicationStore, name: &str, code: &str) -> Uuid {
         crate::jurisdictions::create(db, &NewJurisdiction::new(name, code, "state"))
             .await
             .unwrap()
             .id
     }
 
-    async fn project_in(db: &SurrealDb, code: &str, jurisdiction_id: Option<Uuid>) -> Uuid {
+    async fn project_in(db: &ApplicationStore, code: &str, jurisdiction_id: Option<Uuid>) -> Uuid {
         crate::test_support::seed_compiled_brands_postgres(db).await;
         let entity_id = crate::test_support::seed_entity(db).await;
         crate::projects::create(
@@ -510,7 +404,7 @@ mod tests {
     #[tokio::test]
     async fn two_states_carry_two_pooled_accounts() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let nevada = state(&db, "Nevada", "NV").await;
             let california = state(&db, "California", "CA").await;
 
@@ -535,7 +429,7 @@ mod tests {
     #[tokio::test]
     async fn re_mirroring_the_same_account_refreshes_one_row() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let nevada = state(&db, "Nevada", "NV").await;
             upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
                 .await
@@ -558,7 +452,7 @@ mod tests {
     #[tokio::test]
     async fn a_second_xero_account_for_one_state_is_refused() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let nevada = state(&db, "Nevada", "NV").await;
             upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
                 .await
@@ -583,7 +477,7 @@ mod tests {
     #[tokio::test]
     async fn a_country_jurisdiction_cannot_hold_a_pooled_account() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let us = crate::jurisdictions::create(
                 &db,
                 &NewJurisdiction::new("United States", "US", "country"),
@@ -604,7 +498,7 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_jurisdiction_is_refused() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let attached = upsert(&db, &mirror(Uuid::now_v7(), "xero-x", "IOLTA XX")).await;
             assert!(
                 matches!(attached, Err(IoltaAccountError::NoSuchJurisdiction(_))),
@@ -620,7 +514,7 @@ mod tests {
     #[tokio::test]
     async fn a_matter_resolves_its_account_through_its_jurisdiction() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let nevada = state(&db, "Nevada", "NV").await;
             let california = state(&db, "California", "CA").await;
             upsert(&db, &mirror(nevada, "xero-nv", "IOLTA NV — Trust"))
@@ -658,7 +552,7 @@ mod tests {
     #[tokio::test]
     async fn a_country_scoped_matter_has_no_pooled_account() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let us = crate::jurisdictions::create(
                 &db,
                 &NewJurisdiction::new("United States", "US", "country"),
@@ -705,7 +599,7 @@ mod tests {
     #[tokio::test]
     async fn an_account_naming_an_unknown_or_non_state_code_is_unscoped() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             state(&db, "Nevada", "NV").await;
             crate::jurisdictions::create(
                 &db,

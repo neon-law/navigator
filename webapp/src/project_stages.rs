@@ -240,7 +240,7 @@ fn event_rows(
 /// PostgreSQL renders (the dashboard workbench renders without a stage).
 #[cfg(feature = "server")]
 pub(crate) async fn read_stage(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     pg: &store::postgres::PostgresDb,
     project: &store::projects::Project,
 ) -> Result<MatterStageView, ServerFnError> {
@@ -265,7 +265,7 @@ pub(crate) async fn read_stage(
         .collect();
     let actor_ids: Vec<uuid::Uuid> = history.iter().map(|row| row.actor_person_id).collect();
     let names: std::collections::HashMap<uuid::Uuid, String> =
-        store::persons::find_by_ids(surreal, &actor_ids)
+        store::persons::find_by_ids(application_store, &actor_ids)
             .await
             .map_err(crate::lawyer_project_detail::server_error)?
             .into_iter()
@@ -309,8 +309,8 @@ pub async fn get_matter_stage() -> Result<MatterStageView, ServerFnError> {
         .unwrap_or_default();
     let person_id = person_id.and_then(|raw| raw.parse::<uuid::Uuid>().ok());
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .map_err(crate::lawyer_project_detail::server_error)?
     else {
@@ -324,9 +324,10 @@ pub async fn get_matter_stage() -> Result<MatterStageView, ServerFnError> {
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    let viewer = store::access::matter_viewer(&surreal, person_id, store_role, project.id)
-        .await
-        .map_err(crate::lawyer_project_detail::server_error)?;
+    let viewer =
+        store::access::matter_viewer(&application_store, person_id, store_role, project.id)
+            .await
+            .map_err(crate::lawyer_project_detail::server_error)?;
     if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
         return Err(hidden_matter());
     }
@@ -335,7 +336,7 @@ pub async fn get_matter_stage() -> Result<MatterStageView, ServerFnError> {
         crate::lawyer_project_detail::server_error("the stage store is unavailable")
     })?;
 
-    read_stage(&surreal, &pg, &project).await
+    read_stage(&application_store, &pg, &project).await
 }
 
 #[cfg(test)]

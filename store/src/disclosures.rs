@@ -13,17 +13,12 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::Row;
-use surrealdb::types::SurrealValue;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
 use crate::postgres_graph::graph_authority;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
-
-/// The table these rows live in.
-const TABLE: &str = "disclosure";
-const ENTITY_TABLE: &str = "entity";
 
 /// A conflict the firm has recorded against an Entity.
 pub const KIND_CONFLICT: &str = "conflict";
@@ -38,8 +33,6 @@ pub const CONFLICT_KINDS: &[&str] = &[KIND_CONFLICT, KIND_RELATED_PARTY];
 #[derive(Debug, Error)]
 pub enum DisclosureError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// The authoritative PostgreSQL store refused the read or write.
     #[error("PostgreSQL: {0}")]
     Postgres(#[from] sqlx::Error),
@@ -62,32 +55,6 @@ pub struct Disclosure {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct DisclosureRow {
-    id: surrealdb::types::RecordId,
-    entity_id: Option<surrealdb::types::RecordId>,
-    project_id: Option<surrealdb::types::RecordId>,
-    kind: String,
-    summary: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl DisclosureRow {
-    fn into_disclosure(self) -> Option<Disclosure> {
-        Some(Disclosure {
-            id: record_uuid(&self.id)?,
-            entity_id: self.entity_id.as_ref().and_then(record_uuid),
-            project_id: self.project_id.as_ref().and_then(record_uuid),
-            kind: self.kind,
-            summary: self.summary,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
 /// The projection every read shares, in both engines.
 const SELECT: &str = "id, entity_id, project_id, kind, summary, inserted_at, updated_at";
 
@@ -103,7 +70,7 @@ fn from_pg(row: &sqlx::postgres::PgRow) -> Result<Disclosure, sqlx::Error> {
     })
 }
 
-async fn authority() -> Result<Option<PostgresDb>, DisclosureError> {
+async fn authority() -> Result<PostgresDb, DisclosureError> {
     graph_authority().await.map_err(DisclosureError::Engine)
 }
 
@@ -120,72 +87,40 @@ pub struct NewDisclosure<'a> {
 ///
 /// # Errors
 /// Propagates any database error.
-pub async fn record(db: &SurrealDb, new: &NewDisclosure<'_>) -> Result<Uuid, DisclosureError> {
+pub async fn record(
+    _db: &ApplicationStore,
+    new: &NewDisclosure<'_>,
+) -> Result<Uuid, DisclosureError> {
     let id = Uuid::now_v7();
-    if let Some(pg) = authority().await? {
-        sqlx::query(
-            "INSERT INTO \"disclosure\" (id, entity_id, project_id, kind, summary, \
-             inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, now(), now())",
-        )
-        .bind(id)
-        .bind(new.entity_id)
-        .bind(new.project_id)
-        .bind(new.kind)
-        .bind(new.summary)
-        .execute(&pg.0)
-        .await?;
-        return Ok(id);
-    }
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             entity_id = $entity_id, project_id = $project_id, kind = $kind, summary = $summary \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "entity_id",
-            new.entity_id.map(|e| record_id(ENTITY_TABLE, e)),
-        ))
-        .bind((
-            "project_id",
-            new.project_id
-                .map(|p| record_id(crate::projects::PROJECT_TABLE, p)),
-        ))
-        .bind(("kind", new.kind.to_string()))
-        .bind(("summary", new.summary.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DisclosureRow> = response.take(0)?;
-    Ok(row
-        .and_then(DisclosureRow::into_disclosure)
-        .map_or(id, |d| d.id))
+    let pg = authority().await?;
+    sqlx::query(
+        "INSERT INTO \"disclosure\" (id, entity_id, project_id, kind, summary, \
+         inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, now(), now())",
+    )
+    .bind(id)
+    .bind(new.entity_id)
+    .bind(new.project_id)
+    .bind(new.kind)
+    .bind(new.summary)
+    .execute(&pg.0)
+    .await?;
+    Ok(id)
 }
 
 /// Every disclosure, oldest first — the lawyer directory listing.
 ///
 /// # Errors
 /// Propagates any database error.
-pub async fn all(db: &SurrealDb) -> Result<Vec<Disclosure>, DisclosureError> {
-    if let Some(pg) = authority().await? {
-        return sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {SELECT} FROM \"disclosure\" ORDER BY id ASC"
-        )))
-        .fetch_all(&pg.0)
-        .await?
-        .iter()
-        .map(|row| from_pg(row).map_err(DisclosureError::from))
-        .collect();
-    }
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY id ASC"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DisclosureRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DisclosureRow::into_disclosure)
-        .collect())
+pub async fn all(_db: &ApplicationStore) -> Result<Vec<Disclosure>, DisclosureError> {
+    let pg = authority().await?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM \"disclosure\" ORDER BY id ASC"
+    )))
+    .fetch_all(&pg.0)
+    .await?
+    .iter()
+    .map(|row| from_pg(row).map_err(DisclosureError::from))
+    .collect()
 }
 
 /// Every conflict / related-party disclosure that names an Entity,
@@ -200,35 +135,19 @@ pub async fn all(db: &SurrealDb) -> Result<Vec<Disclosure>, DisclosureError> {
 /// # Errors
 /// Propagates any database error.
 pub(crate) async fn conflict_summaries_by_entity(
-    db: &SurrealDb,
-    postgres: Option<&PostgresDb>,
+    pg: &PostgresDb,
 ) -> Result<std::collections::HashMap<Uuid, Vec<String>>, DisclosureError> {
     let kinds: Vec<String> = CONFLICT_KINDS.iter().map(|k| (*k).to_string()).collect();
-    let rows: Vec<Disclosure> = if let Some(pg) = postgres {
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {SELECT} FROM \"disclosure\" \
+    let rows: Vec<Disclosure> = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM \"disclosure\" \
              WHERE kind = ANY($1) AND entity_id IS NOT NULL ORDER BY id ASC"
-        )))
-        .bind(&kinds)
-        .fetch_all(&pg.0)
-        .await?
-        .iter()
-        .map(from_pg)
-        .collect::<Result<_, _>>()?
-    } else {
-        let mut response = db
-            .query(format!(
-                "SELECT {SELECT} FROM {TABLE} \
-                 WHERE kind IN $kinds AND entity_id != NONE ORDER BY id ASC"
-            ))
-            .bind(("kinds", kinds))
-            .await
-            .and_then(surrealdb::IndexedResults::check)?;
-        let rows: Vec<DisclosureRow> = response.take(0)?;
-        rows.into_iter()
-            .filter_map(DisclosureRow::into_disclosure)
-            .collect()
-    };
+    )))
+    .bind(&kinds)
+    .fetch_all(&pg.0)
+    .await?
+    .iter()
+    .map(from_pg)
+    .collect::<Result<_, _>>()?;
     let mut by_entity: std::collections::HashMap<Uuid, Vec<String>> =
         std::collections::HashMap::new();
     for row in rows {
@@ -240,153 +159,4 @@ pub(crate) async fn conflict_summaries_by_entity(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        all, conflict_summaries_by_entity, record, NewDisclosure, KIND_CONFLICT, KIND_RELATED_PARTY,
-    };
-    use crate::postgres::PostgresDb;
-    use crate::postgres_graph::with_test_authority;
-    use crate::surreal::test_support::mem;
-    use crate::surreal::SurrealDb;
-    use crate::test_support::{seed_entity, seed_project_surreal};
-    use uuid::Uuid;
-
-    #[tokio::test]
-    async fn a_disclosure_records_against_an_entity_a_matter_or_neither() {
-        let surreal = mem().await;
-        let entity_id = seed_entity(&surreal).await;
-        let project_id = seed_project_surreal(&surreal, "matter").await;
-
-        record(
-            &surreal,
-            &NewDisclosure {
-                entity_id: Some(entity_id),
-                project_id: None,
-                kind: KIND_CONFLICT,
-                summary: "Adverse to an existing client",
-            },
-        )
-        .await
-        .unwrap();
-        record(
-            &surreal,
-            &NewDisclosure {
-                entity_id: None,
-                project_id: Some(project_id),
-                kind: "related_party",
-                summary: "Matter-scoped disclosure",
-            },
-        )
-        .await
-        .unwrap();
-        // Neither link set: a disclosure the firm made that is about
-        // nothing in the database yet.
-        record(
-            &surreal,
-            &NewDisclosure {
-                entity_id: None,
-                project_id: None,
-                kind: KIND_CONFLICT,
-                summary: "Unattached",
-            },
-        )
-        .await
-        .unwrap();
-
-        let rows = all(&surreal).await.unwrap();
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].entity_id, Some(entity_id));
-        assert_eq!(rows[1].project_id, Some(project_id));
-        assert!(rows[2].entity_id.is_none() && rows[2].project_id.is_none());
-    }
-
-    /// The conflict-lookup scenario, on whichever engine the caller's
-    /// authority scope selects: both conflict kinds, a non-conflict kind,
-    /// and an unattached conflict, against one entity.
-    async fn record_conflict_scenario(surreal: &SurrealDb, entity_id: Uuid) {
-        for (entity, kind, summary) in [
-            (Some(entity_id), KIND_CONFLICT, "Adverse to Acme"),
-            (
-                Some(entity_id),
-                KIND_RELATED_PARTY,
-                "Shares a principal with Acme",
-            ),
-            (Some(entity_id), "engagement_terms", "Not a conflict kind"),
-            (None, KIND_CONFLICT, "Names no entity"),
-        ] {
-            record(
-                surreal,
-                &NewDisclosure {
-                    entity_id: entity,
-                    project_id: None,
-                    kind,
-                    summary,
-                },
-            )
-            .await
-            .unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn the_conflict_lookup_takes_both_kinds_and_skips_unattached_rows() {
-        // Under-inclusive here is a missed conflict, so both kinds must
-        // appear — and a row naming no entity has no entity to raise a
-        // finding against.
-        let surreal = mem().await;
-        let entity_id = seed_entity(&surreal).await;
-        record_conflict_scenario(&surreal, entity_id).await;
-
-        let by_entity = conflict_summaries_by_entity(&surreal, None).await.unwrap();
-        assert_eq!(by_entity.len(), 1);
-        assert_eq!(
-            by_entity[&entity_id],
-            vec!["Adverse to Acme", "Shares a principal with Acme"],
-        );
-    }
-
-    #[tokio::test]
-    async fn the_conflict_lookup_is_empty_with_nothing_recorded() {
-        let surreal = mem().await;
-        assert!(conflict_summaries_by_entity(&surreal, None)
-            .await
-            .unwrap()
-            .is_empty());
-    }
-
-    /// Under the AGE engine the rows land in PostgreSQL only, and every
-    /// read — the listing and the conflict lookup — answers from there.
-    #[tokio::test]
-    async fn the_age_engine_records_and_reads_disclosures_in_postgres_only() {
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
-        let Some((options, database)) = fresh_schema().await else {
-            return;
-        };
-        let pg: PostgresDb = connect(&options, &database).await;
-        let surreal = mem().await;
-        // The disclosure table carries no foreign keys, so the entity
-        // needs no PostgreSQL row of its own.
-        let entity_id = Uuid::now_v7();
-
-        with_test_authority(Some(pg.clone()), async {
-            record_conflict_scenario(&surreal, entity_id).await;
-            assert_eq!(all(&surreal).await.unwrap().len(), 4);
-        })
-        .await;
-
-        let by_entity = conflict_summaries_by_entity(&surreal, Some(&pg))
-            .await
-            .unwrap();
-        assert_eq!(
-            by_entity[&entity_id],
-            vec!["Adverse to Acme", "Shares a principal with Acme"],
-        );
-        assert!(
-            with_test_authority(None, all(&surreal))
-                .await
-                .unwrap()
-                .is_empty(),
-            "SurrealDB received nothing"
-        );
-    }
-}
+mod tests {}

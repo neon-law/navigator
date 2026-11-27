@@ -20,7 +20,7 @@
 //!
 //! **The key-value layer is optimistic, so a write can lose a race.**
 //! [`writing`] re-runs the statement under the crate's one retry policy,
-//! [`crate::surreal::retry`]. The seed and `cli import` both ingest template
+//! `crate::surreal::retry`. The seed and `cli import` both ingest template
 //! bodies on every boot, and the cucumber suite shares one engine across
 //! concurrent scenarios, so idempotence under contention is the contract.
 //!
@@ -37,10 +37,9 @@ use chrono::{DateTime, Utc};
 use cloud::StorageService;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::application_store::ApplicationStore;
 pub use model::documents::sha256_hex;
 
 /// The table these rows live in.
@@ -207,122 +206,6 @@ pub struct AssetHistory {
     pub revisions: Vec<Asset>,
 }
 
-/// The row as the engine reads and writes it. Separate from [`Asset`]
-/// because the SDK owns its own `RecordId` and `Datetime`, and the
-/// conversion belongs at this seam rather than in every caller.
-#[derive(SurrealValue)]
-struct AssetRow {
-    id: surrealdb::types::RecordId,
-    storage_key: String,
-    secondary_storage_key: Option<String>,
-    content_type: String,
-    byte_size: i64,
-    sha256_hex: String,
-    project_id: Option<surrealdb::types::RecordId>,
-    filename: Option<String>,
-    kind: Option<String>,
-    source: Option<String>,
-    received_at: Option<String>,
-    description: Option<String>,
-    visibility: String,
-    slug: Option<String>,
-    published_at: Option<String>,
-    source_message_id: Option<String>,
-    source_sender: Option<String>,
-    source_received_at: Option<String>,
-    source_subject: Option<String>,
-    metadata: Option<Json>,
-    derived_from: Option<Json>,
-    transcript_quality: Option<String>,
-    signing: Option<Json>,
-    notarization: Option<Json>,
-    evidence: Option<Json>,
-    folder: Option<String>,
-    deleted_at: Option<surrealdb::types::Datetime>,
-    purge_after: Option<surrealdb::types::Datetime>,
-    deleted_by_person_id: Option<surrealdb::types::RecordId>,
-    deleted_commit_sha: Option<String>,
-    legal_hold_at: Option<surrealdb::types::Datetime>,
-    purged_at: Option<surrealdb::types::Datetime>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl AssetRow {
-    /// `None` when the record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`].
-    fn into_asset(self) -> Option<Asset> {
-        Some(Asset {
-            id: record_uuid(&self.id)?,
-            storage_key: self.storage_key,
-            secondary_storage_key: self.secondary_storage_key,
-            content_type: self.content_type,
-            byte_size: self.byte_size,
-            sha256_hex: self.sha256_hex,
-            // A link this module could not have written reads back as
-            // "unscoped" rather than failing the whole row: the byte
-            // pointer is still usable, and the project scope is what the
-            // caller's own ACL already decided.
-            project_id: self.project_id.as_ref().and_then(record_uuid),
-            filename: self.filename,
-            kind: self.kind,
-            source: self.source,
-            received_at: self.received_at,
-            description: self.description,
-            visibility: self.visibility,
-            slug: self.slug,
-            published_at: self.published_at,
-            source_message_id: self.source_message_id,
-            source_sender: self.source_sender,
-            source_received_at: self.source_received_at,
-            source_subject: self.source_subject,
-            metadata: self.metadata,
-            derived_from: self.derived_from,
-            transcript_quality: self.transcript_quality,
-            // A stored value this build cannot read reads back as unrecorded
-            // rather than failing the whole row.
-            signing: self
-                .signing
-                .and_then(|signing| serde_json::from_value(signing).ok()),
-            notarization: self
-                .notarization
-                .and_then(|notarization| serde_json::from_value(notarization).ok())
-                .unwrap_or_default(),
-            // A stored value this build cannot read reads back as unrecorded
-            // rather than failing the whole row.
-            evidence: self
-                .evidence
-                .and_then(|evidence| serde_json::from_value(evidence).ok()),
-            // A stored value this build cannot read reads back as unrecorded
-            // rather than failing the whole row.
-            folder: self.folder,
-            deleted_at: self.deleted_at.map(Into::into),
-            purge_after: self.purge_after.map(Into::into),
-            deleted_by_person_id: self.deleted_by_person_id.as_ref().and_then(record_uuid),
-            deleted_commit_sha: self.deleted_commit_sha,
-            legal_hold_at: self.legal_hold_at.map(Into::into),
-            purged_at: self.purged_at.map(Into::into),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new field cannot reach [`AssetRow`] from only one query.
-pub(crate) const SELECT: &str = "id, storage_key, secondary_storage_key, content_type, byte_size, \
-     sha256_hex, project_id, filename, kind, source, received_at, description, visibility, slug, \
-     published_at, source_message_id, source_sender, source_received_at, source_subject, metadata, \
-     derived_from, transcript_quality, signing, notarization, evidence, folder, deleted_at, purge_after, \
-     deleted_by_person_id, deleted_commit_sha, legal_hold_at, purged_at, \
-     inserted_at, updated_at";
-
-/// The predicate every default read carries: a soft-deleted document drops
-/// out of the matter page and the ordinary lists. The reads that serve a
-/// lawyer looking at a deleted document ([`revisions`], [`find_by_id`],
-/// [`for_project_including_deleted`]) leave it off.
-const LIVE: &str = "deleted_at IS NONE";
-
 /// Errors from [`ingest_content`] / [`fetch`].
 #[derive(Debug, thiserror::Error)]
 pub enum AssetError {
@@ -334,8 +217,6 @@ pub enum AssetError {
     Authority(#[from] crate::postgres::matter::MatterAuthorityError),
     #[error("storage: {0}")]
     Storage(#[from] cloud::StorageError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back — see [`AssetRow::into_asset`].
     #[error("writing an asset returned no usable row")]
@@ -344,68 +225,12 @@ pub enum AssetError {
     Postgres(String),
 }
 
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here — for this slice, none at all. How long a
-/// lost race is re-run, and which engine conditions count as a lost
-/// race, are one policy for the whole crate.
-///
-/// Still `pub(crate)`: [`crate::documents`] and [`crate::templates`]
-/// write these tables too, and reach the policy through this seam.
-pub(crate) async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, surrealdb::Error>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await
-}
-
-/// Mirror each written asset row into PostgreSQL. A no-op unless the mirror
-/// is configured; a failure is logged and left for parity, never returned.
-pub(crate) async fn mirror_writes(db: &SurrealDb, ids: &[Uuid]) {
-    if !crate::postgres_mirror::reading_source() {
-        match matter::authority().await {
-            Ok(Some(_)) => return,
-            Err(_) => {
-                tracing::warn!("Asset metadata authority unavailable");
-                return;
-            }
-            Ok(None) => {}
-        }
-    }
-
-    let keys: Vec<_> = ids
-        .iter()
-        .copied()
-        .map(crate::postgres_mirror::MirrorKey::Asset)
-        .collect();
-    crate::postgres_mirror::after_writes(db, keys).await;
-}
-
-async fn patch_postgres(id: Uuid, changes: Json) -> Result<bool, AssetError> {
-    let Some(pg) = matter::authority_for(TABLE).await? else {
-        return Ok(false);
-    };
+async fn patch_postgres(id: Uuid, changes: Json) -> Result<(), AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
     native::patch(&pg, id, changes)
         .await?
         .ok_or(AssetError::WriteReturnedNothing)?;
-    Ok(true)
-}
-
-/// Read one asset out of a query response, dropping a row this module
-/// could not have written.
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Asset>, AssetError> {
-    let row: Option<AssetRow> = response.take(0)?;
-    Ok(row.and_then(AssetRow::into_asset))
-}
-
-/// Read every asset out of a query response, in the order the engine
-/// returned them.
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Asset>, AssetError> {
-    let rows: Vec<AssetRow> = response.take(0)?;
-    Ok(rows.into_iter().filter_map(AssetRow::into_asset).collect())
+    Ok(())
 }
 
 /// Byte size of the object at `key`, or `None` when the key is absent.
@@ -445,22 +270,14 @@ pub async fn object_sha256(
 ///
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
-pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(
-            native::rows(&pg, "AND r.id=($1->>'id')::uuid", json!({"id":id}))
-                .await?
-                .into_iter()
-                .next(),
-        );
-    }
-
-    let response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+pub async fn find_by_id(_db: &ApplicationStore, id: Uuid) -> Result<Option<Asset>, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(
+        native::rows(&pg, "AND r.id=($1->>'id')::uuid", json!({"id":id}))
+            .await?
+            .into_iter()
+            .next(),
+    )
 }
 
 /// Resolve many assets by id in one round trip — what a listing does after
@@ -469,54 +286,31 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Asset>, Asset
 ///
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
-pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::rows(
-            &pg,
-            "AND r.id IN (SELECT jsonb_array_elements_text($1->'ids')::uuid)",
-            json!({"ids":ids}),
-        )
-        .await;
-    }
-
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let keys: Vec<surrealdb::types::RecordId> =
-        ids.iter().map(|id| record_id(TABLE, *id)).collect();
-    let response = db
-        .query(format!("SELECT {SELECT} FROM $ids"))
-        .bind(("ids", keys))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn find_by_ids(_db: &ApplicationStore, ids: &[Uuid]) -> Result<Vec<Asset>, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::rows(
+        &pg,
+        "AND r.id IN (SELECT jsonb_array_elements_text($1->'ids')::uuid)",
+        json!({"ids":ids}),
+    )
+    .await
 }
 
 /// Every asset on a Project, newest first — the lawyer document listing.
 ///
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
-pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::rows(
-            &pg,
-            "AND r.project_id=($1->>'project')::uuid AND r.deleted_at IS NULL ORDER BY id DESC",
-            json!({"project":project_id}),
-        )
-        .await;
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project AND {LIVE} ORDER BY id DESC"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn for_project(
+    _db: &ApplicationStore,
+    project_id: Uuid,
+) -> Result<Vec<Asset>, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::rows(
+        &pg,
+        "AND r.project_id=($1->>'project')::uuid AND r.deleted_at IS NULL ORDER BY id DESC",
+        json!({"project":project_id}),
+    )
+    .await
 }
 
 /// The metadata used to display or download a Project Inbox attachment.
@@ -559,27 +353,24 @@ impl From<Asset> for AttachmentMetadata {
 
 /// Metadata for an already-authorized Inbox attachment download.
 pub async fn inbox_attachment_metadata(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     asset_id: Uuid,
 ) -> Result<Option<AttachmentMetadata>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return sqlx::query(
-            "SELECT id, project_id, filename, kind, content_type, storage_key FROM asset WHERE id = $1",
-        )
-        .bind(asset_id)
-        .try_map(|row| AttachmentMetadata::from_row(&row))
-        .fetch_optional(pg.pool())
-        .await
-        .map_err(|error| AssetError::Postgres(error.to_string()));
-    }
-
-    Ok(find_by_id(db, asset_id).await?.map(Into::into))
+    let pg = matter::authority_for(TABLE).await?;
+    sqlx::query(
+        "SELECT id, project_id, filename, kind, content_type, storage_key FROM asset WHERE id = $1",
+    )
+    .bind(asset_id)
+    .try_map(|row| AttachmentMetadata::from_row(&row))
+    .fetch_optional(pg.pool())
+    .await
+    .map_err(|error| AssetError::Postgres(error.to_string()))
 }
 
 /// Resolve metadata for a Project Inbox Message's authorized attachment IDs
 /// and older filed revisions. The primary slot precedes the filed revisions.
 pub async fn project_inbox_attachments(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     message_id: Uuid,
     primary: Option<Uuid>,
@@ -591,45 +382,32 @@ pub async fn project_inbox_attachments(
         .collect();
     let source = message_id.to_string();
 
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        // A linked ID can name a bare Asset or one on this Project. Only
-        // live Project files may enter through the older provenance slot.
-        let mut rows: Vec<(AttachmentMetadata, Option<String>)> = sqlx::query(
-            "SELECT id, project_id, filename, kind, content_type, storage_key, slug FROM asset
-             WHERE (id = ANY($1) AND (project_id IS NULL OR project_id = $2))
-                OR (project_id = $2 AND source_message_id = $3 AND deleted_at IS NULL)",
+    let pg = matter::authority_for(TABLE).await?;
+    // A linked ID can name a bare Asset or one on this Project. Only
+    // live Project files may enter through the older provenance slot.
+    let mut rows: Vec<(AttachmentMetadata, Option<String>)> = sqlx::query(
+        "SELECT id, project_id, filename, kind, content_type, storage_key, slug FROM asset
+         WHERE (id = ANY($1) AND (project_id IS NULL OR project_id = $2))
+            OR (project_id = $2 AND source_message_id = $3 AND deleted_at IS NULL)",
+    )
+    .bind(&ids)
+    .bind(project_id)
+    .bind(&source)
+    .try_map(|row| {
+        use sqlx::Row;
+        Ok((AttachmentMetadata::from_row(&row)?, row.try_get("slug")?))
+    })
+    .fetch_all(pg.pool())
+    .await
+    .map_err(|error: sqlx::Error| AssetError::Postgres(error.to_string()))?;
+    rows.sort_by_key(|(asset, slug)| {
+        (
+            Some(asset.id) != primary,
+            mail_attachment_index(slug.as_deref()),
+            asset.id,
         )
-        .bind(&ids)
-        .bind(project_id)
-        .bind(&source)
-        .try_map(|row| {
-            use sqlx::Row;
-            Ok((AttachmentMetadata::from_row(&row)?, row.try_get("slug")?))
-        })
-        .fetch_all(pg.pool())
-        .await
-        .map_err(|error: sqlx::Error| AssetError::Postgres(error.to_string()))?;
-        rows.sort_by_key(|(asset, slug)| {
-            (
-                Some(asset.id) != primary,
-                mail_attachment_index(slug.as_deref()),
-                asset.id,
-            )
-        });
-        return Ok(rows.into_iter().map(|(asset, _)| asset).collect());
-    }
-    let mut direct = find_by_ids(db, &ids).await?;
-    direct.retain(|asset| asset.project_id.is_none_or(|id| id == project_id));
-    let filed = find_by_source_message_id(db, project_id, &source).await?;
-    Ok(direct
-        .iter()
-        .position(|asset| Some(asset.id) == primary)
-        .map(|index| direct.remove(index))
-        .into_iter()
-        .chain(filed)
-        .chain(direct)
-        .map(Into::into)
-        .collect())
+    });
+    Ok(rows.into_iter().map(|(asset, _)| asset).collect())
 }
 
 fn mail_attachment_index(slug: Option<&str>) -> u64 {
@@ -648,29 +426,12 @@ fn mail_attachment_index(slug: Option<&str>) -> u64 {
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn find_by_source_message_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     source_message_id: &str,
 ) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let mut assets=native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.source_message_id=$1->>'message' AND r.deleted_at IS NULL",json!({"project":project_id,"message":source_message_id})).await?;
-        assets.sort_by_key(|asset| mail_attachment_index(asset.slug.as_deref()));
-        return Ok(assets);
-    }
-
-    let mut assets = many(
-        db.query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
-             AND source_message_id = $message AND {LIVE}"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("message", source_message_id))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?,
-    )?;
+    let pg = matter::authority_for(TABLE).await?;
+    let mut assets=native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.source_message_id=$1->>'message' AND r.deleted_at IS NULL",json!({"project":project_id,"message":source_message_id})).await?;
     assets.sort_by_key(|asset| mail_attachment_index(asset.slug.as_deref()));
     Ok(assets)
 }
@@ -681,29 +442,16 @@ pub async fn find_by_source_message_id(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn for_project_including_deleted(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::rows(
-            &pg,
-            "AND r.project_id=($1->>'project')::uuid ORDER BY id DESC",
-            json!({"project":project_id}),
-        )
-        .await;
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project ORDER BY id DESC"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = matter::authority_for(TABLE).await?;
+    native::rows(
+        &pg,
+        "AND r.project_id=($1->>'project')::uuid ORDER BY id DESC",
+        json!({"project":project_id}),
+    )
+    .await
 }
 
 /// Read every asset on a Project once, then group slugged rows into
@@ -718,7 +466,7 @@ pub async fn for_project_including_deleted(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn grouped_for_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<AssetHistory>, AssetError> {
     let assets = for_project(db, project_id).await?;
@@ -762,29 +510,18 @@ pub async fn grouped_for_project(
 /// # Errors
 ///
 /// [`AssetError::Db`] if the lookup fails.
-pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::count(
-            &pg,
-            "AND r.project_id=($1->>'project')::uuid",
-            json!({"project":project_id}),
-        )
-        .await?
-            > 0);
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM {TABLE} WHERE project_id = $project LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(!ids.is_empty())
+pub async fn exists_for_project(
+    _db: &ApplicationStore,
+    project_id: Uuid,
+) -> Result<bool, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(native::count(
+        &pg,
+        "AND r.project_id=($1->>'project')::uuid",
+        json!({"project":project_id}),
+    )
+    .await?
+        > 0)
 }
 
 /// The document asset on `project_id` carrying `filename`, if one exists.
@@ -802,28 +539,12 @@ pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn find_by_project_and_filename(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     filename: &str,
 ) -> Result<Option<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.filename=$1->>'filename' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1",json!({"project":project_id,"filename":filename})).await? .into_iter().next());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE project_id = $project AND filename = $filename AND {LIVE} \
-             ORDER BY id DESC LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("filename", filename.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.filename=$1->>'filename' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1",json!({"project":project_id,"filename":filename})).await? .into_iter().next())
 }
 
 /// The asset on `project_id` matching `(filename, sha256_hex)` — the
@@ -833,29 +554,13 @@ pub async fn find_by_project_and_filename(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn find_filed_copy(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     filename: &str,
     sha256_hex: &str,
 ) -> Result<Option<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.filename=$1->>'filename' AND r.sha256_hex=$1->>'sha' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1",json!({"project":project_id,"filename":filename,"sha":sha256_hex})).await? .into_iter().next());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
-             AND filename = $filename AND sha256_hex = $sha AND {LIVE} LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("filename", filename.to_string()))
-        .bind(("sha", sha256_hex.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.filename=$1->>'filename' AND r.sha256_hex=$1->>'sha' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1",json!({"project":project_id,"filename":filename,"sha":sha256_hex})).await? .into_iter().next())
 }
 
 /// The oldest live asset on `project_id` holding exactly `sha256_hex`,
@@ -865,27 +570,12 @@ pub async fn find_filed_copy(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn find_live_by_sha256(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     sha256_hex: &str,
 ) -> Result<Option<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.sha256_hex=$1->>'sha' AND r.deleted_at IS NULL ORDER BY id ASC LIMIT 1",json!({"project":project_id,"sha":sha256_hex})).await? .into_iter().next());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
-             AND sha256_hex = $sha AND {LIVE} ORDER BY id ASC LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("sha", sha256_hex.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.sha256_hex=$1->>'sha' AND r.deleted_at IS NULL ORDER BY id ASC LIMIT 1",json!({"project":project_id,"sha":sha256_hex})).await? .into_iter().next())
 }
 
 /// Set `visibility` on **every** row this matter holds for
@@ -904,42 +594,20 @@ pub async fn find_live_by_sha256(
 /// # Errors
 /// [`AssetError::Db`] if the update fails.
 pub async fn sync_visibility(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     filename: &str,
     sha256_hex: &str,
     visibility: &str,
 ) -> Result<usize, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let rows=native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.filename=$1->>'filename' AND r.sha256_hex=$1->>'sha' AND r.visibility<>$1->>'visibility'",json!({"project":project_id,"filename":filename,"sha":sha256_hex,"visibility":visibility})).await?;
-        for row in &rows {
-            native::patch(&pg, row.id, json!({"visibility":visibility}))
-                .await?
-                .ok_or(AssetError::WriteReturnedNothing)?;
-        }
-        return Ok(rows.len());
+    let pg = matter::authority_for(TABLE).await?;
+    let rows=native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.filename=$1->>'filename' AND r.sha256_hex=$1->>'sha' AND r.visibility<>$1->>'visibility'",json!({"project":project_id,"filename":filename,"sha":sha256_hex,"visibility":visibility})).await?;
+    for row in &rows {
+        native::patch(&pg, row.id, json!({"visibility":visibility}))
+            .await?
+            .ok_or(AssetError::WriteReturnedNothing)?;
     }
-
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE {TABLE} SET visibility = $visibility, updated_at = time::now() \
-             WHERE project_id = $project AND filename = $filename \
-             AND sha256_hex = $sha AND visibility != $visibility \
-             RETURN id"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("filename", filename.to_string()))
-        .bind(("sha", sha256_hex.to_string()))
-        .bind(("visibility", visibility.to_string()))
-    })
-    .await?;
-    let changed: Vec<surrealdb::types::RecordId> = response.take((0, "id"))?;
-    let ids: Vec<Uuid> = changed.iter().filter_map(record_uuid).collect();
-    mirror_writes(db, &ids).await;
-    Ok(changed.len())
+    Ok(rows.len())
 }
 
 /// The newest asset on `project_id` carrying `kind`, or `None`.
@@ -950,27 +618,12 @@ pub async fn sync_visibility(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn latest_of_kind(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     kind: &str,
 ) -> Result<Option<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.kind=$1->>'kind' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1",json!({"project":project_id,"kind":kind})).await? .into_iter().next());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project AND kind = $kind \
-             AND {LIVE} ORDER BY id DESC LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("kind", kind.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.kind=$1->>'kind' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1",json!({"project":project_id,"kind":kind})).await? .into_iter().next())
 }
 
 /// Whether any asset on a matter **other than** `project_id` points at
@@ -984,29 +637,12 @@ pub async fn latest_of_kind(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn referenced_by_another_project(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     storage_key: &str,
 ) -> Result<bool, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::count(&pg,"AND (r.storage_key=$1->>'key' OR r.secondary_storage_key=$1->>'key') AND r.project_id IS NOT NULL AND r.project_id<>($1->>'project')::uuid",json!({"project":project_id,"key":storage_key})).await? > 0);
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM {TABLE} \
-             WHERE (storage_key = $key OR secondary_storage_key = $key) \
-             AND project_id != NONE AND project_id != $project LIMIT 1"
-        ))
-        .bind(("key", storage_key.to_string()))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let found: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(found.is_some())
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(native::count(&pg,"AND (r.storage_key=$1->>'key' OR r.secondary_storage_key=$1->>'key') AND r.project_id IS NOT NULL AND r.project_id<>($1->>'project')::uuid",json!({"project":project_id,"key":storage_key})).await? > 0)
 }
 
 /// Whether an unpurged row other than those in `excluding` still points at
@@ -1017,28 +653,12 @@ pub async fn referenced_by_another_project(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn storage_key_needed_elsewhere(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     storage_key: &str,
     excluding: &[Uuid],
 ) -> Result<bool, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::count(&pg,"AND (r.storage_key=$1->>'key' OR r.secondary_storage_key=$1->>'key') AND r.purged_at IS NULL AND r.id NOT IN(SELECT jsonb_array_elements_text($1->'excluded')::uuid)",json!({"key":storage_key,"excluded":excluding})).await? > 0);
-    }
-
-    let excluded: Vec<surrealdb::types::RecordId> =
-        excluding.iter().map(|id| record_id(TABLE, *id)).collect();
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM {TABLE} \
-             WHERE (storage_key = $key OR secondary_storage_key = $key) \
-             AND purged_at IS NONE AND id NOT IN $excluded LIMIT 1"
-        ))
-        .bind(("key", storage_key.to_string()))
-        .bind(("excluded", excluded))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let found: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(found.is_some())
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(native::count(&pg,"AND (r.storage_key=$1->>'key' OR r.secondary_storage_key=$1->>'key') AND r.purged_at IS NULL AND r.id NOT IN(SELECT jsonb_array_elements_text($1->'excluded')::uuid)",json!({"key":storage_key,"excluded":excluding})).await? > 0)
 }
 
 /// Whether an unpurged row on `project_id` other than those in `excluding`
@@ -1047,33 +667,13 @@ pub async fn storage_key_needed_elsewhere(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn digest_needed_elsewhere(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     sha256_hex: &str,
     excluding: &[Uuid],
 ) -> Result<bool, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::count(&pg,"AND r.project_id=($1->>'project')::uuid AND r.sha256_hex=$1->>'sha' AND r.purged_at IS NULL AND r.id NOT IN(SELECT jsonb_array_elements_text($1->'excluded')::uuid)",json!({"project":project_id,"sha":sha256_hex,"excluded":excluding})).await? > 0);
-    }
-
-    let excluded: Vec<surrealdb::types::RecordId> =
-        excluding.iter().map(|id| record_id(TABLE, *id)).collect();
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM {TABLE} \
-             WHERE project_id = $project AND sha256_hex = $sha \
-             AND purged_at IS NONE AND id NOT IN $excluded LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("sha", sha256_hex.to_string()))
-        .bind(("excluded", excluded))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let found: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(found.is_some())
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(native::count(&pg,"AND r.project_id=($1->>'project')::uuid AND r.sha256_hex=$1->>'sha' AND r.purged_at IS NULL AND r.id NOT IN(SELECT jsonb_array_elements_text($1->'excluded')::uuid)",json!({"project":project_id,"sha":sha256_hex,"excluded":excluding})).await? > 0)
 }
 
 /// Every soft-deleted row the purge has not removed, oldest first, at most
@@ -1081,27 +681,19 @@ pub async fn digest_needed_elsewhere(
 ///
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
-pub async fn soft_deleted_unpurged(db: &SurrealDb, limit: usize) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL ORDER BY id ASC LIMIT ($1->>'limit')::bigint",json!({"limit":i64::try_from(limit).unwrap_or(i64::MAX)})).await;
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE deleted_at IS NOT NONE \
-             AND purged_at IS NONE ORDER BY id ASC LIMIT $limit"
-        ))
-        .bind(("limit", i64::try_from(limit).unwrap_or(i64::MAX)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn soft_deleted_unpurged(
+    _db: &ApplicationStore,
+    limit: usize,
+) -> Result<Vec<Asset>, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL ORDER BY id ASC LIMIT ($1->>'limit')::bigint",json!({"limit":i64::try_from(limit).unwrap_or(i64::MAX)})).await
 }
 
 /// Every revision of the chain `asset` belongs to, soft-deleted or not.
 ///
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
-pub async fn chain(db: &SurrealDb, asset: &Asset) -> Result<Vec<Asset>, AssetError> {
+pub async fn chain(db: &ApplicationStore, asset: &Asset) -> Result<Vec<Asset>, AssetError> {
     chain_of(db, asset).await
 }
 
@@ -1111,29 +703,12 @@ pub async fn chain(db: &SurrealDb, asset: &Asset) -> Result<Vec<Asset>, AssetErr
 ///
 /// # Errors
 /// [`AssetError::Db`] if the count fails.
-pub async fn count_for_projects(db: &SurrealDb, project_ids: &[Uuid]) -> Result<usize, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::count(&pg,"AND r.project_id IN(SELECT jsonb_array_elements_text($1->'projects')::uuid) AND r.deleted_at IS NULL",json!({"projects":project_ids})).await;
-    }
-
-    if project_ids.is_empty() {
-        return Ok(0);
-    }
-    let keys: Vec<surrealdb::types::RecordId> = project_ids
-        .iter()
-        .map(|id| record_id(crate::projects::PROJECT_TABLE, *id))
-        .collect();
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE count() FROM {TABLE} WHERE project_id IN $projects AND {LIVE} GROUP ALL"
-        ))
-        .bind(("projects", keys))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    // `GROUP ALL` yields no row at all when nothing matched, which is a
-    // count of zero rather than an error.
-    let counted: Option<i64> = response.take(0)?;
-    Ok(usize::try_from(counted.unwrap_or(0)).unwrap_or(0))
+pub async fn count_for_projects(
+    _db: &ApplicationStore,
+    project_ids: &[Uuid],
+) -> Result<usize, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::count(&pg,"AND r.project_id IN(SELECT jsonb_array_elements_text($1->'projects')::uuid) AND r.deleted_at IS NULL",json!({"projects":project_ids})).await
 }
 
 /// `(project_id, kind)` for every asset filed across `project_ids`, in one
@@ -1144,42 +719,16 @@ pub async fn count_for_projects(db: &SurrealDb, project_ids: &[Uuid]) -> Result<
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn kinds_by_projects(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_ids: &[Uuid],
 ) -> Result<Vec<(Uuid, Option<String>)>, AssetError> {
-    #[derive(SurrealValue)]
-    struct KindRow {
-        project_id: Option<surrealdb::types::RecordId>,
-        kind: Option<String>,
-    }
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(sqlx::query_as(
-            "SELECT project_id,kind FROM asset WHERE project_id=ANY($1) AND deleted_at IS NULL",
-        )
-        .bind(project_ids)
-        .fetch_all(pg.pool())
-        .await?);
-    }
-
-    if project_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let keys: Vec<surrealdb::types::RecordId> = project_ids
-        .iter()
-        .map(|id| record_id(crate::projects::PROJECT_TABLE, *id))
-        .collect();
-    let mut response = db
-        .query(format!(
-            "SELECT project_id, kind FROM {TABLE} WHERE project_id IN $projects AND {LIVE}"
-        ))
-        .bind(("projects", keys))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<KindRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| Some((record_uuid(r.project_id.as_ref()?)?, r.kind)))
-        .collect())
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(sqlx::query_as(
+        "SELECT project_id,kind FROM asset WHERE project_id=ANY($1) AND deleted_at IS NULL",
+    )
+    .bind(project_ids)
+    .fetch_all(pg.pool())
+    .await?)
 }
 
 /// Server-stamped evidence that an onboarding upload names a completed DocuSign envelope.
@@ -1206,16 +755,9 @@ pub(crate) fn verified_onboarding_envelope(metadata: Option<&serde_json::Value>)
 ///
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
-pub async fn list_all(db: &SurrealDb) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::rows(&pg, "ORDER BY id DESC", json!({})).await;
-    }
-
-    let response = db
-        .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY id DESC"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn list_all(_db: &ApplicationStore) -> Result<Vec<Asset>, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::rows(&pg, "ORDER BY id DESC", json!({})).await
 }
 
 /// Delete the asset `id`, returning the row that was removed so a caller
@@ -1229,19 +771,9 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Asset>, AssetError> {
 ///
 /// # Errors
 /// [`AssetError::Db`] if the delete fails.
-pub async fn delete(db: &SurrealDb, id: Uuid) -> Result<Option<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::delete(&pg, id).await;
-    }
-
-    let response = writing(|| {
-        db.query("DELETE $id RETURN BEFORE")
-            .bind(("id", record_id(TABLE, id)))
-    })
-    .await?;
-    let deleted = one(response)?;
-    mirror_writes(db, &[id]).await;
-    Ok(deleted)
+pub async fn delete(_db: &ApplicationStore, id: Uuid) -> Result<Option<Asset>, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::delete(&pg, id).await
 }
 
 /// Whether any asset row still points at `storage_key`.
@@ -1253,28 +785,17 @@ pub async fn delete(db: &SurrealDb, id: Uuid) -> Result<Option<Asset>, AssetErro
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn storage_key_is_referenced(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     storage_key: &str,
 ) -> Result<bool, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::count(
-            &pg,
-            "AND r.storage_key=$1->>'key'",
-            json!({"key":storage_key}),
-        )
-        .await?
-            > 0);
-    }
-
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM {TABLE} WHERE storage_key = $key LIMIT 1"
-        ))
-        .bind(("key", storage_key.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let found: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(found.is_some())
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(native::count(
+        &pg,
+        "AND r.storage_key=$1->>'key'",
+        json!({"key":storage_key}),
+    )
+    .await?
+        > 0)
 }
 
 /// Ingest `bytes` as a bare content asset: dedup by SHA-256, write to
@@ -1289,80 +810,13 @@ pub async fn storage_key_is_referenced(
 /// # Errors
 /// [`AssetError`] on a storage or database failure.
 pub async fn ingest_content(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     bytes: &[u8],
     content_type: &str,
 ) -> Result<Uuid, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::ingest_content(&pg, storage, bytes, content_type).await;
-    }
-
-    let sha_hex = sha256_hex(bytes);
-    if let Some(existing) = find_bare_by_sha(db, &sha_hex).await? {
-        return Ok(existing.id);
-    }
-    let storage_key = format!("blobs/{sha_hex}");
-    storage.put(&storage_key, bytes, content_type).await?;
-    let byte_size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
-
-    let id = Uuid::now_v7();
-    let mut response = writing(|| {
-        db.query(format!(
-            "CREATE $id SET \
-             storage_key = $storage_key, \
-             content_type = $content_type, \
-             byte_size = $byte_size, \
-             sha256_hex = $sha256_hex, \
-             visibility = $visibility, \
-             metadata = NONE \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("storage_key", storage_key.clone()))
-        .bind(("content_type", content_type.to_string()))
-        .bind(("byte_size", byte_size))
-        .bind(("sha256_hex", sha_hex.clone()))
-        .bind((
-            "visibility",
-            crate::documents::visibility::INTERNAL.to_string(),
-        ))
-    })
-    .await?;
-
-    let row: Option<AssetRow> = response.take(0)?;
-    let id = row
-        .and_then(AssetRow::into_asset)
-        .map(|a| a.id)
-        .ok_or(AssetError::WriteReturnedNothing)?;
-    mirror_writes(db, &[id]).await;
-    Ok(id)
-}
-
-/// The bare asset holding `sha_hex`, if one exists. Bare means
-/// `filename` unset — a document asset sharing the bytes is a different
-/// row with different metadata and must never be handed to this lane.
-async fn find_bare_by_sha(db: &SurrealDb, sha_hex: &str) -> Result<Option<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(
-            &pg,
-            "AND r.sha256_hex=$1->>'sha' AND r.filename IS NULL ORDER BY id LIMIT 1",
-            json!({"sha":sha_hex}),
-        )
-        .await?
-        .into_iter()
-        .next());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE sha256_hex = $sha AND filename IS NONE LIMIT 1"
-        ))
-        .bind(("sha", sha_hex.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = matter::authority_for(TABLE).await?;
+    native::ingest_content(&pg, storage, bytes, content_type).await
 }
 
 /// Fetch an asset's bytes from storage by asset id.
@@ -1370,7 +824,7 @@ async fn find_bare_by_sha(db: &SurrealDb, sha_hex: &str) -> Result<Option<Asset>
 /// # Errors
 /// [`AssetError`] when the row is missing or storage fails.
 pub async fn fetch(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     asset_id: Uuid,
 ) -> Result<Vec<u8>, AssetError> {
@@ -1422,35 +876,21 @@ pub enum Lens {
 /// # Errors
 /// Propagates any database error.
 pub async fn current(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     slug: &str,
     lens: Lens,
 ) -> Result<Option<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let suffix=match lens { Lens::Lawyer=>"AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1", Lens::Client=>"AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' AND r.deleted_at IS NULL AND r.published_at IS NOT NULL AND r.visibility=$1->>'visible' ORDER BY id DESC LIMIT 1" };
-        return Ok(native::rows(&pg,suffix,json!({"project":project_id,"slug":slug,"visible":crate::documents::visibility::CLIENT})).await?.into_iter().next());
-    }
-
-    let lens_filter = match lens {
-        Lens::Lawyer => "",
-        Lens::Client => " AND published_at IS NOT NONE AND visibility = $visible",
-    };
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE project_id = $project AND slug = $slug AND {LIVE}{lens_filter} \
-             ORDER BY id DESC LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("slug", slug.to_string()))
-        .bind(("visible", crate::documents::visibility::CLIENT.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = matter::authority_for(TABLE).await?;
+    let suffix=match lens { Lens::Lawyer=>"AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1", Lens::Client=>"AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' AND r.deleted_at IS NULL AND r.published_at IS NOT NULL AND r.visibility=$1->>'visible' ORDER BY id DESC LIMIT 1" };
+    Ok(native::rows(
+        &pg,
+        suffix,
+        json!({"project":project_id,"slug":slug,"visible":crate::documents::visibility::CLIENT}),
+    )
+    .await?
+    .into_iter()
+    .next())
 }
 
 /// Every revision of `(project_id, slug)`, newest first.
@@ -1463,32 +903,17 @@ pub async fn current(
 /// # Errors
 /// Propagates any database error.
 pub async fn revisions(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     slug: &str,
 ) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::rows(
-            &pg,
-            "AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' ORDER BY id DESC",
-            json!({"project":project_id,"slug":slug}),
-        )
-        .await;
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE project_id = $project AND slug = $slug ORDER BY id DESC"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("slug", slug.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = matter::authority_for(TABLE).await?;
+    native::rows(
+        &pg,
+        "AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' ORDER BY id DESC",
+        json!({"project":project_id,"slug":slug}),
+    )
+    .await
 }
 
 /// Every revision of the requested document identities on one Project,
@@ -1501,30 +926,15 @@ pub async fn revisions(
 /// # Errors
 /// Propagates any database error.
 pub async fn revisions_for_slugs(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     slugs: &[String],
 ) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.slug IN(SELECT jsonb_array_elements_text($1->'slugs')) ORDER BY slug ASC,id DESC",json!({"project":project_id,"slugs":slugs})).await;
-    }
-
     if slugs.is_empty() {
         return Ok(Vec::new());
     }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE project_id = $project AND slug IN $slugs ORDER BY slug ASC, id DESC"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("slugs", slugs.to_vec()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = matter::authority_for(TABLE).await?;
+    native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.slug IN(SELECT jsonb_array_elements_text($1->'slugs')) ORDER BY slug ASC,id DESC",json!({"project":project_id,"slugs":slugs})).await
 }
 
 /// Set the visibility of one asset that belongs to `project_id`.
@@ -1536,7 +946,7 @@ pub async fn revisions_for_slugs(
 /// # Errors
 /// Propagates any database error.
 pub async fn set_visibility(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     visibility: &str,
@@ -1548,22 +958,8 @@ pub async fn set_visibility(
     if asset.visibility == visibility {
         return Ok(Some(false));
     }
-    if patch_postgres(asset_id, json!({"visibility":visibility})).await? {
-        return Ok(Some(true));
-    }
-    if asset.kind.as_deref() == Some("onboarding") {
-        return Err(matter::MatterAuthorityError::Unavailable.into());
-    }
-    let response = writing(|| {
-        db.query("UPDATE $id SET visibility = $visibility, updated_at = time::now()")
-            .bind(("id", record_id(TABLE, asset_id)))
-            .bind(("visibility", visibility.to_string()))
-    })
-    .await?;
-    if one(response)?.is_none() {
-        return Err(AssetError::WriteReturnedNothing);
-    }
-    mirror_writes(db, &[asset_id]).await;
+    patch_postgres(asset_id, json!({"visibility":visibility})).await?;
+
     Ok(Some(true))
 }
 
@@ -1591,7 +987,7 @@ pub enum SetFolderError {
 /// # Errors
 /// [`SetFolderError`] — a rejected folder name or a database failure.
 pub async fn set_folder(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     folder: Option<&str>,
@@ -1606,33 +1002,12 @@ pub async fn set_folder(
     if asset.folder.as_deref() == folder.map(crate::document_pointers::MatterFolder::as_str) {
         return Ok(Some(false));
     }
-    if patch_postgres(
+    patch_postgres(
         asset_id,
         json!({"folder":folder.map(crate::document_pointers::MatterFolder::as_str)}),
     )
-    .await?
-    {
-        return Ok(Some(true));
-    }
-    let response = match folder {
-        Some(folder) => writing(|| {
-            db.query("UPDATE $id SET folder = $folder, updated_at = time::now()")
-                .bind(("id", record_id(TABLE, asset_id)))
-                .bind(("folder", folder.as_str()))
-        })
-        .await
-        .map_err(AssetError::from)?,
-        None => writing(|| {
-            db.query("UPDATE $id SET folder = NONE, updated_at = time::now()")
-                .bind(("id", record_id(TABLE, asset_id)))
-        })
-        .await
-        .map_err(AssetError::from)?,
-    };
-    if one(response)?.is_none() {
-        return Err(AssetError::WriteReturnedNothing.into());
-    }
-    mirror_writes(db, &[asset_id]).await;
+    .await?;
+
     Ok(Some(true))
 }
 
@@ -1670,7 +1045,7 @@ pub enum SoftDeleteError {
 /// Every revision of the document identity `asset` belongs to — its slug
 /// chain, or the row alone when it has no slug. A blank slug is not an
 /// identity: rows that share it stay independent.
-async fn chain_of(db: &SurrealDb, asset: &Asset) -> Result<Vec<Asset>, AssetError> {
+async fn chain_of(db: &ApplicationStore, asset: &Asset) -> Result<Vec<Asset>, AssetError> {
     let Some(project_id) = asset.project_id else {
         return Ok(vec![asset.clone()]);
     };
@@ -1684,22 +1059,12 @@ async fn chain_of(db: &SurrealDb, asset: &Asset) -> Result<Vec<Asset>, AssetErro
     Ok(chain)
 }
 
-/// How long the stamp statement may run. The public edge closes a request
-/// that has not answered in about 30 seconds, and the PostgreSQL mirror still
-/// runs after the stamp, so the statement stops with that remaining.
-const STAMP_TIMEOUT: &str = "8s";
-
-/// Fields the stamp needs. The full asset projection includes `any` values
-/// the stamp does not read; the delete door stays on this narrower read.
-const STAMP_TARGET: &str = "project_id, slug, kind, deleted_at, purge_after";
-
-#[derive(surrealdb::types::SurrealValue)]
 struct StampTarget {
-    project_id: Option<surrealdb::types::RecordId>,
+    project_id: Option<Uuid>,
     slug: Option<String>,
     kind: Option<String>,
-    deleted_at: Option<surrealdb::types::Datetime>,
-    purge_after: Option<surrealdb::types::Datetime>,
+    deleted_at: Option<DateTime<Utc>>,
+    purge_after: Option<DateTime<Utc>>,
 }
 
 struct StampMember {
@@ -1709,31 +1074,21 @@ struct StampMember {
 }
 
 async fn read_stamp_target(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     asset_id: Uuid,
 ) -> Result<Option<StampTarget>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let row = native::rows(&pg, "AND r.id=($1->>'id')::uuid", json!({"id":asset_id}))
-            .await?
-            .into_iter()
-            .next();
-        return Ok(row.map(|asset| StampTarget {
-            project_id: asset
-                .project_id
-                .map(|id| record_id(crate::projects::PROJECT_TABLE, id)),
-            slug: asset.slug,
-            kind: asset.kind,
-            deleted_at: asset.deleted_at.map(Into::into),
-            purge_after: asset.purge_after.map(Into::into),
-        }));
-    }
-
-    let mut response = db
-        .query(format!("SELECT {STAMP_TARGET} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, asset_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(response.take(0)?)
+    let pg = matter::authority_for(TABLE).await?;
+    let row = native::rows(&pg, "AND r.id=($1->>'id')::uuid", json!({"id":asset_id}))
+        .await?
+        .into_iter()
+        .next();
+    Ok(row.map(|asset| StampTarget {
+        project_id: asset.project_id,
+        slug: asset.slug,
+        kind: asset.kind,
+        deleted_at: asset.deleted_at,
+        purge_after: asset.purge_after,
+    }))
 }
 
 /// Soft-delete the document identity `asset_id` belongs to: every revision
@@ -1749,7 +1104,7 @@ async fn read_stamp_target(
 /// [`SoftDeleteError`] for a row off the Project, a `closed_repository`
 /// document, or a database failure.
 pub async fn soft_delete(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     deleted_by: Uuid,
@@ -1759,7 +1114,7 @@ pub async fn soft_delete(
     let Some(target) = read_stamp_target(db, asset_id).await? else {
         return Err(SoftDeleteError::NotOnProject);
     };
-    if target.project_id.as_ref().and_then(record_uuid) != Some(project_id) {
+    if target.project_id != Some(project_id) {
         return Err(SoftDeleteError::NotOnProject);
     }
     if target.kind.as_deref() == Some(rules::kind::Kind::ClosedRepository.as_str()) {
@@ -1793,12 +1148,11 @@ pub async fn soft_delete(
     for row in members.iter().filter(|row| row.deleted_at.is_none()) {
         stamp_row(db, row.id, deleted_by, commit_sha, now, purge_after).await?;
     }
-    let stamped: Vec<Uuid> = members
+    let _stamped: Vec<Uuid> = members
         .iter()
         .filter(|row| row.deleted_at.is_none())
         .map(|row| row.id)
         .collect();
-    mirror_writes(db, &stamped).await;
     Ok(SoftDeletion {
         slug,
         revisions: members.len(),
@@ -1809,7 +1163,7 @@ pub async fn soft_delete(
 }
 
 async fn stamp_members(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     target: &StampTarget,
@@ -1836,43 +1190,21 @@ async fn stamp_members(
 fn member_from_target(asset_id: Uuid, target: &StampTarget) -> StampMember {
     StampMember {
         id: asset_id,
-        deleted_at: target.deleted_at.map(Into::into),
-        purge_after: target.purge_after.map(Into::into),
+        deleted_at: target.deleted_at,
+        purge_after: target.purge_after,
     }
 }
 
 async fn stamp_row(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     asset_id: Uuid,
     deleted_by: Uuid,
     commit_sha: Option<&str>,
     now: DateTime<Utc>,
     purge_after: DateTime<Utc>,
 ) -> Result<(), AssetError> {
-    if patch_postgres(asset_id,json!({"deleted_at":now,"purge_after":purge_after,"deleted_by_person_id":deleted_by,"deleted_commit_sha":commit_sha})).await? { return Ok(()); }
+    patch_postgres(asset_id,json!({"deleted_at":now,"purge_after":purge_after,"deleted_by_person_id":deleted_by,"deleted_commit_sha":commit_sha})).await?;
 
-    writing(|| {
-        db.query(format!(
-            "UPDATE $id SET deleted_at = $deleted_at, purge_after = $purge_after, \
-             deleted_by_person_id = $person, deleted_commit_sha = $sha, \
-             updated_at = time::now() RETURN NONE TIMEOUT {STAMP_TIMEOUT}"
-        ))
-        .bind(("id", record_id(TABLE, asset_id)))
-        .bind(("deleted_at", surrealdb::types::Datetime::from(now)))
-        .bind(("purge_after", surrealdb::types::Datetime::from(purge_after)))
-        .bind(("person", record_id("person", deleted_by)))
-        .bind(("sha", commit_sha.map(str::to_string)))
-    })
-    .await?;
-    let mut response = db
-        .query("SELECT VALUE deleted_at IS NOT NONE FROM ONLY $id LIMIT 1")
-        .bind(("id", record_id(TABLE, asset_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let stamped: Option<bool> = response.take(0)?;
-    if stamped != Some(true) {
-        return Err(AssetError::WriteReturnedNothing);
-    }
     Ok(())
 }
 
@@ -1905,7 +1237,7 @@ pub enum RestoreError {
 /// [`RestoreError`] for a row off the Project, a purged chain, or a database
 /// failure.
 pub async fn restore(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
 ) -> Result<Restoration, RestoreError> {
@@ -1921,28 +1253,14 @@ pub async fn restore(
     }
     let mut changed = false;
     for row in chain.iter().filter(|row| row.deleted_at.is_some()) {
-        if patch_postgres(row.id,json!({"deleted_at":null,"purge_after":null,"deleted_by_person_id":null,"deleted_commit_sha":null})).await? { changed=true; continue; }
-        let response = writing(|| {
-            db.query(
-                "UPDATE $id SET deleted_at = NONE, purge_after = NONE, \
-                 deleted_by_person_id = NONE, deleted_commit_sha = NONE, \
-                 updated_at = time::now()",
-            )
-            .bind(("id", record_id(TABLE, row.id)))
-        })
-        .await
-        .map_err(AssetError::from)?;
-        if one(response)?.is_none() {
-            return Err(AssetError::WriteReturnedNothing.into());
-        }
+        patch_postgres(row.id,json!({"deleted_at":null,"purge_after":null,"deleted_by_person_id":null,"deleted_commit_sha":null})).await?;
         changed = true;
     }
-    let cleared: Vec<Uuid> = chain
+    let _cleared: Vec<Uuid> = chain
         .iter()
         .filter(|row| row.deleted_at.is_some())
         .map(|row| row.id)
         .collect();
-    mirror_writes(db, &cleared).await;
     Ok(Restoration {
         slug: asset.slug,
         revisions: chain.len(),
@@ -1957,7 +1275,7 @@ pub async fn restore(
 /// # Errors
 /// [`AssetError`] on a database failure.
 pub async fn set_legal_hold(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     held: bool,
@@ -1971,26 +1289,9 @@ pub async fn set_legal_hold(
     };
     let chain = chain_of(db, &asset).await?;
     for row in &chain {
-        if patch_postgres(row.id, json!({"legal_hold_at":held.then_some(now)})).await? {
-            continue;
-        }
-        let response = writing(|| {
-            let query = if held {
-                "UPDATE $id SET legal_hold_at = $now, updated_at = time::now()"
-            } else {
-                "UPDATE $id SET legal_hold_at = NONE, updated_at = time::now()"
-            };
-            db.query(query)
-                .bind(("id", record_id(TABLE, row.id)))
-                .bind(("now", surrealdb::types::Datetime::from(now)))
-        })
-        .await?;
-        if one(response)?.is_none() {
-            return Err(AssetError::WriteReturnedNothing);
-        }
+        patch_postgres(row.id, json!({"legal_hold_at":held.then_some(now)})).await?;
     }
-    let held: Vec<Uuid> = chain.iter().map(|row| row.id).collect();
-    mirror_writes(db, &held).await;
+    let _held: Vec<Uuid> = chain.iter().map(|row| row.id).collect();
     Ok(Some(chain.len()))
 }
 
@@ -2000,20 +1301,12 @@ pub async fn set_legal_hold(
 ///
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
-pub async fn due_for_purge(db: &SurrealDb, now: DateTime<Utc>) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL AND r.purge_after<=($1->>'now')::timestamptz ORDER BY id ASC",json!({"now":now})).await;
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE deleted_at IS NOT NONE \
-             AND purged_at IS NONE AND purge_after <= $now ORDER BY id ASC"
-        ))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn due_for_purge(
+    _db: &ApplicationStore,
+    now: DateTime<Utc>,
+) -> Result<Vec<Asset>, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL AND r.purge_after<=($1->>'now')::timestamptz ORDER BY id ASC",json!({"now":now})).await
 }
 
 /// Record that the governed expunge removed the bytes of every row in `ids`.
@@ -2021,25 +1314,13 @@ pub async fn due_for_purge(db: &SurrealDb, now: DateTime<Utc>) -> Result<Vec<Ass
 /// # Errors
 /// [`AssetError`] on a database failure.
 pub async fn mark_purged(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     ids: &[Uuid],
     now: DateTime<Utc>,
 ) -> Result<(), AssetError> {
     for id in ids {
-        if patch_postgres(*id, json!({"purged_at":now})).await? {
-            continue;
-        }
-        let response = writing(|| {
-            db.query("UPDATE $id SET purged_at = $now, updated_at = time::now()")
-                .bind(("id", record_id(TABLE, *id)))
-                .bind(("now", surrealdb::types::Datetime::from(now)))
-        })
-        .await?;
-        if one(response)?.is_none() {
-            return Err(AssetError::WriteReturnedNothing);
-        }
+        patch_postgres(*id, json!({"purged_at":now})).await?;
     }
-    mirror_writes(db, ids).await;
     Ok(())
 }
 
@@ -2063,112 +1344,12 @@ pub enum RowRestore {
 ///
 /// # Errors
 /// [`AssetError`] on a database failure.
-pub async fn restore_archived(db: &SurrealDb, asset: &Asset) -> Result<RowRestore, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::restore(&pg, asset).await;
-    }
-
-    restore_in_surreal(db, asset).await
-}
-
-async fn restore_in_surreal(db: &SurrealDb, asset: &Asset) -> Result<RowRestore, AssetError> {
-    if let Some(existing) = find_by_id(db, asset.id).await? {
-        return Ok(if &existing == asset {
-            RowRestore::Identical
-        } else {
-            RowRestore::Conflict
-        });
-    }
-    let datetime = |value: Option<DateTime<Utc>>| value.map(surrealdb::types::Datetime::from);
-    let response = writing(|| {
-        db.query(format!(
-            "CREATE $id SET storage_key = $storage_key, \
-             secondary_storage_key = $secondary_storage_key, content_type = $content_type, \
-             byte_size = $byte_size, sha256_hex = $sha256_hex, project_id = $project_id, \
-             filename = $filename, kind = $kind, source = $source, received_at = $received_at, \
-             description = $description, visibility = $visibility, slug = $slug, \
-             published_at = $published_at, source_message_id = $source_message_id, \
-             source_sender = $source_sender, source_received_at = $source_received_at, \
-             source_subject = $source_subject, metadata = $metadata, \
-             derived_from = $derived_from, transcript_quality = $transcript_quality, \
-             signing = $signing, notarization = $notarization, evidence = $evidence, \
-             folder = $folder, deleted_at = $deleted_at, \
-             purge_after = $purge_after, deleted_by_person_id = $deleted_by, \
-             deleted_commit_sha = $deleted_commit_sha, legal_hold_at = $legal_hold_at, \
-             purged_at = $purged_at, inserted_at = $inserted_at, updated_at = $updated_at \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, asset.id)))
-        .bind(("storage_key", asset.storage_key.clone()))
-        .bind(("secondary_storage_key", asset.secondary_storage_key.clone()))
-        .bind(("content_type", asset.content_type.clone()))
-        .bind(("byte_size", asset.byte_size))
-        .bind(("sha256_hex", asset.sha256_hex.clone()))
-        .bind((
-            "project_id",
-            asset
-                .project_id
-                .map(|id| record_id(crate::projects::PROJECT_TABLE, id)),
-        ))
-        .bind(("filename", asset.filename.clone()))
-        .bind(("kind", asset.kind.clone()))
-        .bind(("source", asset.source.clone()))
-        .bind(("received_at", asset.received_at.clone()))
-        .bind(("description", asset.description.clone()))
-        .bind(("visibility", asset.visibility.clone()))
-        .bind(("slug", asset.slug.clone()))
-        .bind(("published_at", asset.published_at.clone()))
-        .bind(("source_message_id", asset.source_message_id.clone()))
-        .bind(("source_sender", asset.source_sender.clone()))
-        .bind(("source_received_at", asset.source_received_at.clone()))
-        .bind(("source_subject", asset.source_subject.clone()))
-        .bind(("metadata", asset.metadata.clone()))
-        .bind(("derived_from", asset.derived_from.clone()))
-        .bind(("transcript_quality", asset.transcript_quality.clone()))
-        .bind((
-            "signing",
-            asset
-                .signing
-                .and_then(|signing| serde_json::to_value(signing).ok()),
-        ))
-        .bind((
-            "notarization",
-            (!asset.notarization.is_empty())
-                .then(|| serde_json::to_value(&asset.notarization).ok())
-                .flatten(),
-        ))
-        .bind((
-            "evidence",
-            asset
-                .evidence
-                .as_ref()
-                .and_then(|evidence| serde_json::to_value(evidence).ok()),
-        ))
-        .bind(("folder", asset.folder.clone()))
-        .bind(("deleted_at", datetime(asset.deleted_at)))
-        .bind(("purge_after", datetime(asset.purge_after)))
-        .bind((
-            "deleted_by",
-            asset.deleted_by_person_id.map(|id| record_id("person", id)),
-        ))
-        .bind(("deleted_commit_sha", asset.deleted_commit_sha.clone()))
-        .bind(("legal_hold_at", datetime(asset.legal_hold_at)))
-        .bind(("purged_at", datetime(asset.purged_at)))
-        .bind((
-            "inserted_at",
-            surrealdb::types::Datetime::from(asset.inserted_at),
-        ))
-        .bind((
-            "updated_at",
-            surrealdb::types::Datetime::from(asset.updated_at),
-        ))
-    })
-    .await?;
-    if one(response)?.is_none() {
-        return Err(AssetError::WriteReturnedNothing);
-    }
-    mirror_writes(db, &[asset.id]).await;
-    Ok(RowRestore::Created)
+pub async fn restore_archived(
+    _db: &ApplicationStore,
+    asset: &Asset,
+) -> Result<RowRestore, AssetError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::restore(&pg, asset).await
 }
 
 /// Why [`assign_slug`] wrote nothing.
@@ -2219,7 +1400,7 @@ pub struct AssignSlug<'a> {
 /// [`AssignSlugError`] when the row is out of the Project, already slugged,
 /// the slug collides with a chain, or `slug` / `kind` fail validation.
 pub async fn assign_slug(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     assignment: AssignSlug<'_>,
@@ -2270,43 +1451,11 @@ pub async fn assign_slug(
     if let Some(kind) = &kind {
         changes["kind"] = json!(kind);
     }
-    if patch_postgres(asset_id, changes).await? {
-        return Ok(find_by_id(db, asset_id)
-            .await?
-            .ok_or(AssetError::WriteReturnedNothing)?);
-    }
-    let response = match &kind {
-        Some(kind) => writing(|| {
-            db.query("UPDATE $id SET slug = $slug, kind = $kind, updated_at = time::now()")
-                .bind(("id", record_id(TABLE, asset_id)))
-                .bind(("slug", slug.to_string()))
-                .bind(("kind", kind.clone()))
-        })
-        .await
-        .map_err(AssetError::from)?,
-        None => writing(|| {
-            db.query("UPDATE $id SET slug = $slug, updated_at = time::now()")
-                .bind(("id", record_id(TABLE, asset_id)))
-                .bind(("slug", slug.to_string()))
-        })
-        .await
-        .map_err(AssetError::from)?,
-    };
-    if one(response)?.is_none() {
-        return Err(AssetError::WriteReturnedNothing.into());
-    }
-    mirror_writes(db, &[asset_id]).await;
-    let written = find_by_id(db, asset_id)
+    patch_postgres(asset_id, changes).await?;
+
+    Ok(find_by_id(db, asset_id)
         .await?
-        .ok_or(AssetError::WriteReturnedNothing)?;
-    if written.sha256_hex != asset.sha256_hex
-        || written.storage_key != asset.storage_key
-        || written.byte_size != asset.byte_size
-        || written.id != asset.id
-    {
-        return Err(AssetError::WriteReturnedNothing.into());
-    }
-    Ok(written)
+        .ok_or(AssetError::WriteReturnedNothing)?)
 }
 
 /// Why [`reclassify_kind`] wrote nothing.
@@ -2350,7 +1499,7 @@ fn is_asset_kind(kind: Option<&str>) -> bool {
 /// [`ReclassifyKindError`] when the row is out of the Project, its kind (or a
 /// chain sibling's) is already accepted, or `kind` fails validation.
 pub async fn reclassify_kind(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     kind: &str,
@@ -2390,21 +1539,8 @@ pub async fn reclassify_kind(
         ids.push(asset.id);
     }
     for id in ids.iter().copied() {
-        if patch_postgres(id, json!({"kind":kind})).await? {
-            continue;
-        }
-        let response = writing(|| {
-            db.query("UPDATE $id SET kind = $kind, updated_at = time::now()")
-                .bind(("id", record_id(TABLE, id)))
-                .bind(("kind", kind.to_string()))
-        })
-        .await
-        .map_err(AssetError::from)?;
-        if one(response)?.is_none() {
-            return Err(AssetError::WriteReturnedNothing.into());
-        }
+        patch_postgres(id, json!({"kind":kind})).await?;
     }
-    mirror_writes(db, &ids).await;
     let written = find_by_id(db, asset_id)
         .await?
         .ok_or(AssetError::WriteReturnedNothing)?;
@@ -2452,7 +1588,7 @@ pub enum ReclassifyAcceptedKindError {
 /// [`ReclassifyAcceptedKindError`] when the row is out of the Project, its
 /// kind is not accepted, `kind` fails validation, or nothing would change.
 pub async fn reclassify_accepted_kind(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     kind: &str,
@@ -2492,21 +1628,8 @@ pub async fn reclassify_accepted_kind(
         ids.push(asset.id);
     }
     for id in ids.iter().copied() {
-        if patch_postgres(id, json!({"kind":kind})).await? {
-            continue;
-        }
-        let response = writing(|| {
-            db.query("UPDATE $id SET kind = $kind, updated_at = time::now()")
-                .bind(("id", record_id(TABLE, id)))
-                .bind(("kind", kind.to_string()))
-        })
-        .await
-        .map_err(AssetError::from)?;
-        if one(response)?.is_none() {
-            return Err(AssetError::WriteReturnedNothing.into());
-        }
+        patch_postgres(id, json!({"kind":kind})).await?;
     }
-    mirror_writes(db, &ids).await;
     let written = find_by_id(db, asset_id)
         .await?
         .ok_or(AssetError::WriteReturnedNothing)?;
@@ -2562,7 +1685,7 @@ pub enum ReslugError {
 /// target is unchanged or not a valid identity for this row's filename, or
 /// the target already names a chain.
 pub async fn reslug(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     new_slug: &str,
@@ -2603,21 +1726,8 @@ pub async fn reslug(
         ids.push(asset.id);
     }
     for id in ids.iter().copied() {
-        if patch_postgres(id, json!({"slug":new_slug})).await? {
-            continue;
-        }
-        let response = writing(|| {
-            db.query("UPDATE $id SET slug = $slug, updated_at = time::now()")
-                .bind(("id", record_id(TABLE, id)))
-                .bind(("slug", new_slug.to_string()))
-        })
-        .await
-        .map_err(AssetError::from)?;
-        if one(response)?.is_none() {
-            return Err(AssetError::WriteReturnedNothing.into());
-        }
+        patch_postgres(id, json!({"slug":new_slug})).await?;
     }
-    mirror_writes(db, &ids).await;
     let written = find_by_id(db, asset_id)
         .await?
         .ok_or(AssetError::WriteReturnedNothing)?;
@@ -2676,7 +1786,7 @@ pub struct RepairedObject {
 /// [`RepairStorageError`] when the asset is out of the Project, the present
 /// object does not match the recorded digest, or no sibling holds the bytes.
 pub async fn repair_missing_object(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &dyn StorageService,
     project_id: Uuid,
     asset_id: Uuid,
@@ -2749,18 +1859,8 @@ pub async fn repair_missing_object(
             .await
             .map_err(AssetError::from)?;
     }
-    if repoint && !patch_postgres(asset_id, json!({"storage_key":canonical})).await? {
-        let response = writing(|| {
-            db.query("UPDATE $id SET storage_key = $storage_key, updated_at = time::now()")
-                .bind(("id", record_id(TABLE, asset_id)))
-                .bind(("storage_key", canonical.clone()))
-        })
-        .await
-        .map_err(AssetError::from)?;
-        if one(response)?.is_none() {
-            return Err(AssetError::WriteReturnedNothing.into());
-        }
-        mirror_writes(db, &[asset_id]).await;
+    if repoint {
+        patch_postgres(asset_id, json!({"storage_key":canonical})).await?;
     }
     let verified = object_sha256(storage, &canonical).await?;
     if verified.as_deref() != Some(asset.sha256_hex.as_str()) {
@@ -2774,22 +1874,18 @@ pub async fn repair_missing_object(
 }
 
 async fn repair_project_code(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<String, RepairStorageError> {
     let authority = matter::authority_for(TABLE)
         .await
         .map_err(AssetError::from)?;
     let missing = crate::projects::ProjectStoreError::NoSuchProject(project_id);
-    let code = if let Some(pg) = authority {
+    let code = {
+        let pg = authority;
         native::project_code(&pg, project_id)
             .await?
             .ok_or(missing)?
-    } else {
-        crate::projects::find_by_id(db, project_id)
-            .await?
-            .ok_or(missing)?
-            .code
     };
     Ok(code)
 }
@@ -2823,8 +1919,6 @@ pub enum RevisionError {
     },
     #[error(transparent)]
     Ingest(#[from] crate::documents::IngestError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Asset(#[from] AssetError),
 }
@@ -2903,7 +1997,7 @@ pub(crate) fn head_triple(head: &Asset, chain_len: usize) -> ExpectedHead {
 /// [`RevisionError`] when a rule rejects the write, or on a storage or
 /// database failure.
 pub async fn file_revision(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &crate::documents::IngestArgs<'_>,
     identity: &crate::documents::DocumentIdentity<'_>,
@@ -2927,7 +2021,7 @@ pub async fn file_revision(
 /// [`RevisionError`] when a rule rejects the write, the expected head no
 /// longer matches, or on a storage or database failure.
 pub async fn file_revision_with_expected_head(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &crate::documents::IngestArgs<'_>,
     identity: &crate::documents::DocumentIdentity<'_>,
@@ -2945,7 +2039,7 @@ pub async fn file_revision_with_expected_head(
 /// [`RevisionError`] when a rule rejects the write, or on a storage or
 /// database failure.
 pub async fn file_revision_with_provenance(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &crate::documents::IngestArgs<'_>,
     identity: &crate::documents::DocumentIdentity<'_>,
@@ -2966,7 +2060,7 @@ pub async fn file_revision_with_provenance(
 /// [`RevisionError`] when a rule rejects the write, the expected head no
 /// longer matches, or on a storage or database failure.
 pub async fn file_revision_with_provenance_and_expected_head(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &crate::documents::IngestArgs<'_>,
     identity: &crate::documents::DocumentIdentity<'_>,
@@ -3011,7 +2105,7 @@ pub(crate) fn preserve_drive_metadata(
 }
 
 async fn file_revision_inner(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &crate::documents::IngestArgs<'_>,
     identity: &crate::documents::DocumentIdentity<'_>,
@@ -3019,131 +2113,24 @@ async fn file_revision_inner(
     expected_head: Option<&ExpectedHead>,
     bytes: &[u8],
 ) -> Result<Filed, RevisionError> {
-    if let Some(pg) = matter::authority_for(TABLE)
+    let pg = matter::authority_for(TABLE)
         .await
-        .map_err(AssetError::from)?
-    {
-        return native::file_revision(
-            &pg,
-            storage,
-            args,
-            identity,
-            provenance,
-            expected_head,
-            bytes,
-        )
-        .await;
-    }
-
-    if args.kind == "onboarding" {
-        let pg = crate::postgres::PostgresDb::from_env()
-            .await
-            .map_err(|error| AssetError::Postgres(error.to_string()))?;
-        return Box::pin(crate::onboarding::file_document(
-            &pg,
-            storage,
-            args,
-            identity,
-            expected_head,
-            bytes,
-        ))
-        .await;
-    }
-    // Rule 1 — the lane is closed. An unrecognized string is rejected by
-    // the same arm as a valid-but-wrong-lane one: neither classifies a
-    // document that can be filed on a matter.
-    if !rules::kind::Kind::parse(args.kind).is_some_and(|k| k.valid_for(rules::kind::Lane::Asset)) {
-        return Err(RevisionError::KindNotFilable(args.kind.to_string()));
-    }
-
-    // An unslugged artifact is a one-off: it is a revision of nothing, so
-    // rules 2 and 3 have no chain to consult.
-    let Some(slug) = identity.slug else {
-        let doc =
-            ingest_with_optional_provenance(db, storage, args, identity, provenance, bytes).await?;
-        return Ok(Filed::Revision(doc));
-    };
-
-    let latest = current(db, args.project_id, slug, Lens::Lawyer).await?;
-    let mut preserved_identity = identity.clone();
-    if let Some(head) = latest.as_ref() {
-        preserve_drive_metadata(&mut preserved_identity, head)?;
-    }
-    let identity = &preserved_identity;
-    if let Some(head) = latest {
-        // Rule 2 — kind is immutable across the chain.
-        if let Some(existing) = head.kind.as_deref() {
-            if existing != args.kind {
-                return Err(RevisionError::KindChanged {
-                    slug: slug.to_string(),
-                    existing: existing.to_string(),
-                    attempted: args.kind.to_string(),
-                });
-            }
-        }
-        // Rule 3 — identical bytes and verified execution evidence change nothing.
-        if head.sha256_hex == sha256_hex(bytes) {
-            return Ok(Filed::Unchanged { asset_id: head.id });
-        }
-    }
-
-    // LAW-284 conditional append. A caller that read the chain before
-    // uploading sends the head it saw; the triple is validated here, as
-    // late as the engine allows, against a fresh read of the live chain —
-    // the lose-then-re-read-and-validate shape the mail lane's
-    // `stable_asset_id` election uses, applied to ordinary appends.
-    if let Some(expected) = expected_head {
-        let chain = revisions(db, args.project_id, slug).await?;
-        match chain.first() {
-            // The live head already holds these exact bytes — the second of
-            // two concurrent identical uploads, or a retry after an
-            // ambiguous timeout. The chain holding the caller's bytes is
-            // the one outcome no conflict could improve on, so Rule 3 wins
-            // over the triple compare and nothing is inserted. A
-            // soft-deleted head does not qualify: Rule 3's no-CAS read is
-            // the deleted-filtered `current`, which would file a fresh
-            // revision over it, and the two paths must agree.
-            Some(head) if head.deleted_at.is_none() && head.sha256_hex == sha256_hex(bytes) => {
-                return Ok(Filed::Unchanged { asset_id: head.id });
-            }
-            Some(head) => {
-                let live = head_triple(head, chain.len());
-                if *expected != live {
-                    return Err(RevisionError::HeadConflict {
-                        slug: slug.to_string(),
-                        current: Some(live),
-                    });
-                }
-            }
-            // The caller named a head; the live chain has none — every
-            // revision was soft-deleted after the caller read it. There is
-            // no head to validate against, so the precondition is gone.
-            None => {
-                return Err(RevisionError::HeadConflict {
-                    slug: slug.to_string(),
-                    current: None,
-                });
-            }
-        }
-        // Residual race, documented rather than hidden: between the read
-        // above and the `CREATE` inside the ingest, another append can
-        // still land — SurrealDB runs the two as separate statements, not
-        // one transaction (module doc). The window is one statement wide,
-        // and the ABA shape (the head replaced by a byte-identical head
-        // with a new id) is caught, because the triple compares ids, not
-        // only digests.
-    }
-
-    let doc =
-        ingest_with_optional_provenance(db, storage, args, identity, provenance, bytes).await?;
-    // Rule 4 — a superseded revision is internal by default.
-    demote_superseded(db, args.project_id, slug, doc.asset_id).await?;
-    Ok(Filed::Revision(doc))
+        .map_err(AssetError::from)?;
+    native::file_revision(
+        &pg,
+        storage,
+        args,
+        identity,
+        provenance,
+        expected_head,
+        bytes,
+    )
+    .await
 }
 
 /// Refresh a verified import's source receipt and placement without forking its identity.
 pub(crate) async fn refresh_drive_import(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     asset_id: Uuid,
     file_id: &str,
@@ -3179,20 +2166,8 @@ pub(crate) async fn refresh_drive_import(
     if head.metadata.as_ref() == Some(&metadata) && head.filename.as_deref() == Some(filename) {
         return Ok(());
     }
-    if patch_postgres(asset_id, json!({"metadata":metadata,"filename":filename})).await? {
-        return Ok(());
-    }
-    let response = writing(|| {
-        db.query("UPDATE $id SET metadata=$metadata, filename=$filename, updated_at=time::now()")
-            .bind(("id", record_id(TABLE, asset_id)))
-            .bind(("metadata", metadata.clone()))
-            .bind(("filename", filename.to_owned()))
-    })
-    .await?;
-    if one(response)?.is_none() {
-        return Err(AssetError::WriteReturnedNothing);
-    }
-    mirror_writes(db, &[asset_id]).await;
+    patch_postgres(asset_id, json!({"metadata":metadata,"filename":filename})).await?;
+
     Ok(())
 }
 
@@ -3207,106 +2182,35 @@ pub(crate) async fn refresh_drive_import(
 /// # Errors
 /// [`AssetError::Db`] if the update fails.
 pub async fn demote_superseded(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     slug: &str,
     current: Uuid,
 ) -> Result<usize, AssetError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        let rows=native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' AND r.id<>($1->>'current')::uuid AND r.visibility<>$1->>'internal'",json!({"project":project_id,"slug":slug,"current":current,"internal":crate::documents::visibility::INTERNAL})).await?;
-        for row in &rows {
-            native::patch(
-                &pg,
-                row.id,
-                json!({"visibility":crate::documents::visibility::INTERNAL}),
-            )
-            .await?
-            .ok_or(AssetError::WriteReturnedNothing)?;
-        }
-        return Ok(rows.len());
+    let pg = matter::authority_for(TABLE).await?;
+    let rows=native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' AND r.id<>($1->>'current')::uuid AND r.visibility<>$1->>'internal'",json!({"project":project_id,"slug":slug,"current":current,"internal":crate::documents::visibility::INTERNAL})).await?;
+    for row in &rows {
+        native::patch(
+            &pg,
+            row.id,
+            json!({"visibility":crate::documents::visibility::INTERNAL}),
+        )
+        .await?
+        .ok_or(AssetError::WriteReturnedNothing)?;
     }
-
-    let internal = crate::documents::visibility::INTERNAL;
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE {TABLE} SET visibility = $internal, updated_at = time::now() \
-             WHERE project_id = $project AND slug = $slug AND id != $current \
-             AND visibility != $internal \
-             RETURN id"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .bind(("slug", slug.to_string()))
-        .bind(("current", record_id(TABLE, current)))
-        .bind(("internal", internal.to_string()))
-    })
-    .await?;
-    let changed: Vec<surrealdb::types::RecordId> = response.take((0, "id"))?;
-    let ids: Vec<Uuid> = changed.iter().filter_map(record_uuid).collect();
-    mirror_writes(db, &ids).await;
-    Ok(changed.len())
-}
-
-async fn ingest_with_optional_provenance(
-    db: &SurrealDb,
-    storage: &Arc<dyn StorageService>,
-    args: &crate::documents::IngestArgs<'_>,
-    identity: &crate::documents::DocumentIdentity<'_>,
-    provenance: Option<&crate::documents::MailProvenance<'_>>,
-    bytes: &[u8],
-) -> Result<crate::documents::IngestedDocument, crate::documents::IngestError> {
-    match provenance {
-        Some(provenance) => {
-            crate::documents::ingest_bytes_with_mail_provenance(
-                db, storage, args, identity, provenance, bytes,
-            )
-            .await
-        }
-        None => crate::documents::ingest_bytes_as(db, storage, args, identity, bytes).await,
-    }
-}
-
-/// Every asset in the database, for tests that count rows without a
-/// project scope.
-#[cfg(test)]
-async fn for_project_free(db: &SurrealDb) -> Vec<Asset> {
-    let response = db
-        .query(format!("SELECT {SELECT} FROM {TABLE}"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .unwrap();
-    many(response).unwrap()
+    Ok(rows.len())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        count_for_projects, current, due_for_purge, fetch, find_by_id, for_project,
-        for_project_including_deleted, grouped_for_project, ingest_content, kinds_by_projects,
-        latest_of_kind, mark_purged, restore, revisions, revisions_for_slugs, set_legal_hold,
-        sha256_hex, soft_delete, Asset, Lens, RestoreError, SoftDeleteError,
-    };
-    use crate::surreal::test_support::mem;
-    use crate::surreal::SurrealDb;
-    use chrono::{DateTime, Utc};
-    use cloud::{FsStorage, StorageService};
-    use serde_json::json;
-    use std::sync::Arc;
-    use uuid::Uuid;
+    use super::{revisions_for_slugs, sha256_hex};
+    use crate::application_store::ApplicationStore;
 
-    async fn fixtures() -> (SurrealDb, Arc<dyn StorageService>, tempfile::TempDir) {
-        let db = mem().await;
-        let tmp = tempfile::tempdir().unwrap();
-        let storage: Arc<dyn StorageService> =
-            Arc::new(FsStorage::new(tmp.path().to_path_buf()).await.unwrap());
-        (db, storage, tmp)
-    }
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn an_empty_revision_slug_batch_does_not_touch_the_database() {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         assert!(revisions_for_slugs(&db, Uuid::now_v7(), &[])
             .await
             .unwrap()
@@ -3314,1874 +2218,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ingest_content_writes_a_bare_asset_and_fetch_round_trips() {
-        let (db, storage, _tmp) = fixtures().await;
-        let id = ingest_content(&db, &storage, b"# a template body", "text/markdown")
-            .await
-            .unwrap();
-
-        let row = find_by_id(&db, id).await.unwrap().unwrap();
-        assert!(row.filename.is_none(), "bare content asset has no filename");
-        assert!(row.project_id.is_none());
-        assert!(row.source.is_none());
-        assert_eq!(row.content_type, "text/markdown");
-        assert!(row.storage_key.starts_with("blobs/"));
-
-        let bytes = fetch(&db, &storage, id).await.unwrap();
-        assert_eq!(bytes, b"# a template body");
-    }
-
-    #[tokio::test]
-    async fn ingest_content_dedupes_identical_bare_content() {
-        let (db, storage, _tmp) = fixtures().await;
-        let a = ingest_content(&db, &storage, b"same", "text/markdown")
-            .await
-            .unwrap();
-        let b = ingest_content(&db, &storage, b"same", "text/markdown")
-            .await
-            .unwrap();
-        assert_eq!(a, b, "identical bare content reuses the same asset row");
-        assert_eq!(super::for_project_free(&db).await.len(), 1);
-    }
-
-    /// The bare-content lane must never hand back a *document* asset that
-    /// merely shares bytes — the two carry different metadata and a
-    /// different expunge blast radius.
-    #[tokio::test]
-    async fn ingest_content_does_not_reuse_a_document_asset() {
-        let (db, storage, _tmp) = fixtures().await;
-        let bytes = b"shared bytes";
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        crate::documents::ingest_bytes(
-            &db,
-            &storage,
-            &crate::documents::IngestArgs {
-                project_id: project,
-                source: "upload",
-                filename: "doc.txt",
-                kind: "unclassified",
-                content_type: "text/plain",
-                description: None,
-                secondary_storage_key: None,
-                visibility: crate::documents::visibility::INTERNAL,
-            },
-            bytes,
-        )
-        .await
-        .unwrap();
-
-        let bare = ingest_content(&db, &storage, bytes, "text/plain")
-            .await
-            .unwrap();
-        let row = find_by_id(&db, bare).await.unwrap().unwrap();
-        assert!(
-            row.filename.is_none(),
-            "bare-content ingest must create a fresh bare asset, not reuse the document asset"
-        );
-        assert_eq!(super::for_project_free(&db).await.len(), 2);
-    }
-
-    /// The headline risk of moving this table: `assets.metadata` is the
-    /// ported JSONB column, and on a SCHEMAFULL table only `TYPE any`
-    /// accepts every shape it carries. Each near miss fails differently
-    /// and none of them fail at DEFINE time, so the round trip is pinned
-    /// here rather than inferred from the schema file.
-    #[tokio::test]
-    async fn metadata_round_trips_every_json_shape() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-
-        let shapes = [
-            (
-                "flat object",
-                json!({ "backdated_reason": "court file stamp" }),
-            ),
-            (
-                "nested object",
-                json!({ "entry": { "sequence": 12, "court": "NV-8th" }, "sealed": false }),
-            ),
-            (
-                "array",
-                json!([{ "exhibit": "A" }, { "exhibit": "B", "pages": 4 }]),
-            ),
-            ("bare scalar", json!(42)),
-        ];
-
-        for (shape, metadata) in shapes {
-            let doc = crate::documents::ingest_bytes_as(
-                &db,
-                &storage,
-                &crate::documents::IngestArgs {
-                    project_id: project,
-                    source: "upload",
-                    filename: "exhibit.pdf",
-                    kind: "unclassified",
-                    content_type: "application/pdf",
-                    description: None,
-                    secondary_storage_key: None,
-                    visibility: crate::documents::visibility::INTERNAL,
-                },
-                &crate::documents::DocumentIdentity {
-                    slug: None,
-                    published_at: None,
-                    metadata: Some(metadata.clone()),
-                    derived_from: None,
-                    transcript_quality: None,
-                    signing: None,
-                    notarization: Vec::new(),
-                    evidence: None,
-                    folder: None,
-                },
-                format!("bytes for {shape}").as_bytes(),
-            )
-            .await
-            .unwrap();
-
-            let read_back = find_by_id(&db, doc.asset_id).await.unwrap().unwrap();
-            assert_eq!(
-                read_back.metadata.as_ref(),
-                Some(&metadata),
-                "the {shape} shape drifted through the engine"
-            );
-        }
-    }
-
-    /// A row with no metadata reads back as `None`, not as a JSON null —
-    /// `TYPE any` carries no NOT NULL, so the absence has
-    /// to stay distinguishable from a stored null.
-    #[tokio::test]
-    async fn absent_metadata_reads_back_as_none() {
-        let (db, storage, _tmp) = fixtures().await;
-        let id = ingest_content(&db, &storage, b"no metadata here", "text/plain")
-            .await
-            .unwrap();
-        assert_eq!(find_by_id(&db, id).await.unwrap().unwrap().metadata, None);
-    }
-
-    #[tokio::test]
-    async fn a_historical_asset_without_transcript_fields_still_reads() {
-        let (db, storage, _tmp) = fixtures().await;
-        let id = ingest_content(&db, &storage, b"pre-LAW-76 asset", "text/plain")
-            .await
-            .unwrap();
-        db.query("UPDATE $id UNSET derived_from, transcript_quality")
-            .bind(("id", crate::surreal::record_id(super::TABLE, id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let row = find_by_id(&db, id).await.unwrap().unwrap();
-        assert_eq!(row.derived_from, None);
-        assert_eq!(row.transcript_quality, None);
-    }
-
-    #[tokio::test]
-    async fn a_historical_asset_without_a_signing_record_still_reads() {
-        let (db, storage, _tmp) = fixtures().await;
-        let id = ingest_content(&db, &storage, b"unsigned asset", "text/plain")
-            .await
-            .unwrap();
-        db.query("UPDATE $id UNSET signing")
-            .bind(("id", crate::surreal::record_id(super::TABLE, id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        assert_eq!(find_by_id(&db, id).await.unwrap().unwrap().signing, None);
-    }
-
-    #[tokio::test]
-    async fn a_signing_record_round_trips_through_the_engine() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let signing = crate::documents::Signing {
-            method: crate::documents::SigningMethod::WetInk,
-            signed_on: chrono::NaiveDate::from_ymd_opt(2026, 9, 4).unwrap(),
-        };
-        let ingested = crate::documents::ingest_bytes_as(
-            &db,
-            &storage,
-            &crate::documents::IngestArgs {
-                project_id: project,
-                source: "upload",
-                filename: "letter_signed.pdf",
-                kind: "onboarding",
-                content_type: "application/pdf",
-                description: None,
-                secondary_storage_key: None,
-                visibility: crate::documents::visibility::INTERNAL,
-            },
-            &crate::documents::DocumentIdentity {
-                slug: Some("onboarding/letter_signed.pdf"),
-                signing: Some(signing),
-                ..Default::default()
-            },
-            b"signed scan",
-        )
-        .await
-        .unwrap();
-
-        let row = find_by_id(&db, ingested.asset_id).await.unwrap().unwrap();
-        assert_eq!(row.signing, Some(signing));
-    }
-
-    #[tokio::test]
-    async fn notarizations_round_trip_and_a_historical_row_reads_as_none() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let notarization = vec![
-            crate::documents::Notarization {
-                method: crate::documents::NotarizationMethod::InPerson,
-                acknowledged_on: chrono::NaiveDate::from_ymd_opt(2026, 9, 4).unwrap(),
-                state: "NV".into(),
-                county: "Clark".into(),
-                commission_expires: chrono::NaiveDate::from_ymd_opt(2029, 1, 31).unwrap(),
-            },
-            crate::documents::Notarization {
-                method: crate::documents::NotarizationMethod::RemoteOnline,
-                acknowledged_on: chrono::NaiveDate::from_ymd_opt(2026, 9, 5).unwrap(),
-                state: "CA".into(),
-                county: "Los Angeles".into(),
-                commission_expires: chrono::NaiveDate::from_ymd_opt(2027, 6, 30).unwrap(),
-            },
-        ];
-        let ingested = crate::documents::ingest_bytes_as(
-            &db,
-            &storage,
-            &crate::documents::IngestArgs {
-                project_id: project,
-                source: "upload",
-                filename: "will_signed.pdf",
-                kind: "will",
-                content_type: "application/pdf",
-                description: None,
-                secondary_storage_key: None,
-                visibility: crate::documents::visibility::INTERNAL,
-            },
-            &crate::documents::DocumentIdentity {
-                slug: Some("will_signed.pdf"),
-                notarization: notarization.clone(),
-                ..Default::default()
-            },
-            b"notarized scan",
-        )
-        .await
-        .unwrap();
-        let row = find_by_id(&db, ingested.asset_id).await.unwrap().unwrap();
-        assert_eq!(row.notarization, notarization);
-
-        db.query("UPDATE $id UNSET notarization")
-            .bind((
-                "id",
-                crate::surreal::record_id(super::TABLE, ingested.asset_id),
-            ))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let historical = find_by_id(&db, ingested.asset_id).await.unwrap().unwrap();
-        assert!(historical.notarization.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_missing_asset_reads_back_as_none() {
-        let db = mem().await;
-        assert!(find_by_id(&db, uuid::Uuid::now_v7())
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
     async fn sha256_hex_matches_the_known_digest() {
         assert_eq!(
             sha256_hex(b"hello world"),
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-        );
-    }
-
-    /// Insertion order decides which revision is operative, and a
-    /// back-dated `published_at` must not reorder the chain.
-    #[tokio::test]
-    async fn insertion_order_decides_current_not_published_at() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let file = |bytes: &'static [u8], published: &'static str| {
-            let db = db.clone();
-            let storage = storage.clone();
-            async move {
-                crate::documents::ingest_bytes_as(
-                    &db,
-                    &storage,
-                    &crate::documents::IngestArgs {
-                        project_id: project,
-                        source: "upload",
-                        filename: "agreement.pdf",
-                        kind: "agreement",
-                        content_type: "application/pdf",
-                        description: None,
-                        secondary_storage_key: None,
-                        visibility: crate::documents::visibility::CLIENT,
-                    },
-                    &crate::documents::DocumentIdentity {
-                        slug: Some("agreement"),
-                        published_at: Some(published),
-                        metadata: None,
-                        derived_from: None,
-                        transcript_quality: None,
-                        signing: None,
-                        notarization: Vec::new(),
-                        evidence: None,
-                        folder: None,
-                    },
-                    bytes,
-                )
-                .await
-                .unwrap()
-            }
-        };
-
-        let first = file(b"v1", "2026-06-01T00:00:00Z").await;
-        // The second revision is *back-dated* below the first.
-        let second = file(b"v2", "2020-01-01T00:00:00Z").await;
-
-        let operative = super::current(&db, project, "agreement", super::Lens::Lawyer)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            operative.id, second.asset_id,
-            "the later insertion is current even though it is back-dated"
-        );
-
-        let chain: Vec<_> = super::revisions(&db, project, "agreement")
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|a: Asset| a.id)
-            .collect();
-        assert_eq!(chain, vec![second.asset_id, first.asset_id]);
-    }
-
-    /// The client lens skips an unpublished or lawyer-only revision sitting
-    /// above the one they executed.
-    #[tokio::test]
-    async fn the_client_lens_stops_at_the_latest_published_client_revision() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let file = |bytes: &'static [u8], published: Option<&'static str>, vis: &'static str| {
-            let db = db.clone();
-            let storage = storage.clone();
-            async move {
-                crate::documents::ingest_bytes_as(
-                    &db,
-                    &storage,
-                    &crate::documents::IngestArgs {
-                        project_id: project,
-                        source: "upload",
-                        filename: "agreement.pdf",
-                        kind: "agreement",
-                        content_type: "application/pdf",
-                        description: None,
-                        secondary_storage_key: None,
-                        visibility: vis,
-                    },
-                    &crate::documents::DocumentIdentity {
-                        slug: Some("agreement"),
-                        published_at: published,
-                        metadata: None,
-                        derived_from: None,
-                        transcript_quality: None,
-                        signing: None,
-                        notarization: Vec::new(),
-                        evidence: None,
-                        folder: None,
-                    },
-                    bytes,
-                )
-                .await
-                .unwrap()
-            }
-        };
-
-        let executed = file(
-            b"executed",
-            Some("2026-06-01T00:00:00Z"),
-            crate::documents::visibility::CLIENT,
-        )
-        .await;
-        // Lawyers keep working above it: an unpublished redline…
-        let redline = file(b"redline", None, crate::documents::visibility::CLIENT).await;
-
-        assert_eq!(
-            super::current(&db, project, "agreement", super::Lens::Lawyer)
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            redline.asset_id,
-            "lawyers see the redline they are still working on"
-        );
-        assert_eq!(
-            super::current(&db, project, "agreement", super::Lens::Client)
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            executed.asset_id,
-            "the client stays anchored to the executed revision"
-        );
-    }
-
-    /// Filing a revision makes every earlier revision of the chain
-    /// internal, whatever each was filed as, and leaves the new one as filed.
-    #[tokio::test]
-    async fn filing_a_revision_makes_the_earlier_revisions_internal() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let file = |bytes: &'static [u8], vis: &'static str| {
-            let db = db.clone();
-            let storage = storage.clone();
-            async move {
-                match super::file_revision(
-                    &db,
-                    &storage,
-                    &crate::documents::IngestArgs {
-                        project_id: project,
-                        source: "upload",
-                        filename: "pitch.pdf",
-                        kind: "memo",
-                        content_type: "application/pdf",
-                        description: None,
-                        secondary_storage_key: None,
-                        visibility: vis,
-                    },
-                    &crate::documents::DocumentIdentity {
-                        slug: Some("pitch"),
-                        published_at: None,
-                        metadata: None,
-                        derived_from: None,
-                        transcript_quality: None,
-                        signing: None,
-                        notarization: Vec::new(),
-                        evidence: None,
-                        folder: None,
-                    },
-                    bytes,
-                )
-                .await
-                .unwrap()
-                {
-                    super::Filed::Revision(doc) => doc.asset_id,
-                    super::Filed::Unchanged { .. } => panic!("expected a new revision"),
-                }
-            }
-        };
-        let shared = crate::documents::visibility::CLIENT;
-        let internal = crate::documents::visibility::INTERNAL;
-
-        let v1 = file(b"v1", shared).await;
-        let v2 = file(b"v2", shared).await;
-        let v3 = file(b"v3", internal).await;
-
-        let chain: Vec<(Uuid, String)> = super::revisions(&db, project, "pitch")
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|a: Asset| (a.id, a.visibility))
-            .collect();
-        assert_eq!(
-            chain,
-            vec![
-                (v3, internal.to_string()),
-                (v2, internal.to_string()),
-                (v1, internal.to_string()),
-            ]
-        );
-
-        let v4 = file(b"v4", shared).await;
-        let shared_ids: Vec<Uuid> = super::revisions(&db, project, "pitch")
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|a: &Asset| a.visibility == shared)
-            .map(|a| a.id)
-            .collect();
-        assert_eq!(shared_ids, vec![v4], "only the newest revision is shared");
-    }
-
-    /// A conditional [`super::file_revision_with_expected_head`] call with
-    /// an ordinary uploaded-document identity, for the LAW-284 tests.
-    async fn file_conditional(
-        db: &SurrealDb,
-        storage: &Arc<dyn StorageService>,
-        project: Uuid,
-        slug: &str,
-        bytes: &[u8],
-        expected: Option<&super::ExpectedHead>,
-    ) -> Result<super::Filed, super::RevisionError> {
-        super::file_revision_with_expected_head(
-            db,
-            storage,
-            &crate::documents::IngestArgs {
-                project_id: project,
-                source: "upload",
-                filename: "pitch.pdf",
-                kind: "memo",
-                content_type: "application/pdf",
-                description: None,
-                secondary_storage_key: None,
-                visibility: crate::documents::visibility::INTERNAL,
-            },
-            &crate::documents::DocumentIdentity {
-                slug: Some(slug),
-                published_at: None,
-                metadata: None,
-                derived_from: None,
-                transcript_quality: None,
-                signing: None,
-                notarization: Vec::new(),
-                evidence: None,
-                folder: None,
-            },
-            expected,
-            bytes,
-        )
-        .await
-    }
-
-    /// LAW-284: a conditional append whose expected head the live chain no
-    /// longer names is refused before inserting, carrying the live head's
-    /// triple — the silent UUIDv7 tie-break fork becomes an explicit,
-    /// recoverable conflict.
-    #[tokio::test]
-    async fn a_conditional_append_refuses_a_stale_head_and_names_the_live_one() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-
-        let first = file_conditional(&db, &storage, project, "pitch", b"v1", None)
-            .await
-            .unwrap();
-        let first_id = match first {
-            super::Filed::Revision(doc) => doc.asset_id,
-            super::Filed::Unchanged { .. } => panic!("a first filing is a revision"),
-        };
-        let expected = super::ExpectedHead {
-            asset_id: first_id,
-            version: 1,
-            sha256: sha256_hex(b"v1"),
-        };
-
-        // A writer holding the live head appends cleanly.
-        let second = match file_conditional(&db, &storage, project, "pitch", b"v2", Some(&expected))
-            .await
-            .unwrap()
-        {
-            super::Filed::Revision(doc) => doc,
-            super::Filed::Unchanged { .. } => panic!("different bytes are a new revision"),
-        };
-
-        // A writer that read the same first head — before the second landed
-        // — must now be refused, and refused with the live head's triple so
-        // it can restart without a second read.
-        let refused = file_conditional(&db, &storage, project, "pitch", b"v3", Some(&expected))
-            .await
-            .unwrap_err();
-        match refused {
-            super::RevisionError::HeadConflict { current, .. } => {
-                let current = current.expect("the live chain has a head to name");
-                assert_eq!(current.asset_id, second.asset_id);
-                assert_eq!(current.version, 2);
-                assert_eq!(current.sha256, sha256_hex(b"v2"));
-            }
-            other => panic!("expected a head conflict, got {other:?}"),
-        }
-
-        // Exactly the two appended revisions: the refusal inserted nothing.
-        let chain = revisions(&db, project, "pitch").await.unwrap();
-        assert_eq!(
-            chain.iter().map(|a| a.id).collect::<Vec<_>>(),
-            vec![second.asset_id, first_id]
-        );
-    }
-
-    /// LAW-284: a conditional append whose named head no longer exists on
-    /// the chain — the purge emptied it, so the precondition names an asset
-    /// the live chain cannot validate — conflicts with no current head to
-    /// name. (A soft-deleted head is different: the revisions door still
-    /// reports it operative, so a matching precondition holds and the
-    /// append files a fresh revision over it, exactly as the no-CAS path
-    /// would.)
-    #[tokio::test]
-    async fn a_conditional_append_on_a_chain_that_lost_its_head_conflicts_with_no_current() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-
-        // A precondition on a slug with no rows at all — the shape a purge
-        // leaves behind once the retention window has passed.
-        let expected = super::ExpectedHead {
-            asset_id: uuid::Uuid::now_v7(),
-            version: 1,
-            sha256: sha256_hex(b"v1"),
-        };
-
-        let refused = file_conditional(&db, &storage, project, "pitch", b"v2", Some(&expected))
-            .await
-            .unwrap_err();
-        match refused {
-            super::RevisionError::HeadConflict { current: None, .. } => {}
-            other => panic!("expected a head conflict with no live head, got {other:?}"),
-        }
-        assert!(
-            revisions(&db, project, "pitch").await.unwrap().is_empty(),
-            "the refusal inserted nothing"
-        );
-    }
-
-    /// LAW-284 §5d: a conditional append whose bytes the live head already
-    /// holds resolves to `Filed::Unchanged` — the stale-precondition retry
-    /// of an ambiguous upload deduplicates instead of forking a second row
-    /// with the same digest.
-    #[tokio::test]
-    async fn a_conditional_append_of_bytes_the_live_head_holds_is_unchanged() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-
-        let first = file_conditional(&db, &storage, project, "pitch", b"v1", None)
-            .await
-            .unwrap();
-        let first_id = match first {
-            super::Filed::Revision(doc) => doc.asset_id,
-            super::Filed::Unchanged { .. } => panic!("a first filing is a revision"),
-        };
-        let stale = super::ExpectedHead {
-            asset_id: first_id,
-            version: 1,
-            sha256: sha256_hex(b"v1"),
-        };
-
-        let second = match file_conditional(&db, &storage, project, "pitch", b"v2", Some(&stale))
-            .await
-            .unwrap()
-        {
-            super::Filed::Revision(doc) => doc,
-            super::Filed::Unchanged { .. } => panic!("different bytes are a new revision"),
-        };
-
-        // The retry that lost the race: same bytes as the live head, stale
-        // precondition. The late digest check on the CAS read resolves it
-        // without inserting.
-        let filed = file_conditional(&db, &storage, project, "pitch", b"v2", Some(&stale))
-            .await
-            .unwrap();
-        match filed {
-            super::Filed::Unchanged { asset_id } => assert_eq!(asset_id, second.asset_id),
-            super::Filed::Revision(doc) => panic!("expected an unchanged filing, got {doc:?}"),
-        }
-
-        let chain = revisions(&db, project, "pitch").await.unwrap();
-        assert_eq!(chain.len(), 2);
-        assert_eq!(
-            chain
-                .iter()
-                .filter(|a| a.sha256_hex == sha256_hex(b"v2"))
-                .count(),
-            1,
-            "no duplicate row for the same digest"
-        );
-    }
-
-    /// LAW-284: two conditional appends racing on one slug cannot fork the
-    /// chain. Both racers hold the same precondition; `tokio::join!` drives
-    /// both, and a oneshot pins the interleave the precondition covers — the
-    /// loser's validation runs only after the winner's `CREATE` has landed.
-    /// (Both racers validating before either inserts is the residual window
-    /// documented on `file_revision_inner`; no non-transactional CAS can
-    /// refuse it deterministically.) The loser is refused with the winner's
-    /// head named, inserts nothing, and the chain keeps exactly one
-    /// operative head.
-    #[tokio::test]
-    async fn two_conditional_appends_race_without_forking_the_chain() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-
-        let first = file_conditional(&db, &storage, project, "pitch", b"v1", None)
-            .await
-            .unwrap();
-        let first_id = match first {
-            super::Filed::Revision(doc) => doc.asset_id,
-            super::Filed::Unchanged { .. } => panic!("a first filing is a revision"),
-        };
-        let head = super::ExpectedHead {
-            asset_id: first_id,
-            version: 1,
-            sha256: sha256_hex(b"v1"),
-        };
-
-        let (release, wait) = tokio::sync::oneshot::channel::<()>();
-        let winner = async {
-            let landed = file_conditional(&db, &storage, project, "pitch", b"race-a", Some(&head))
-                .await
-                .unwrap();
-            let _ = release.send(());
-            landed
-        };
-        let loser = async {
-            wait.await.expect("the winner releases the loser");
-            file_conditional(&db, &storage, project, "pitch", b"race-b", Some(&head)).await
-        };
-        let (a, b) = tokio::join!(winner, loser);
-        let winner_doc = match (a, b) {
-            // The winner's block already unwrapped its filing; only the
-            // loser's result is still wrapped.
-            (super::Filed::Revision(doc), Err(super::RevisionError::HeadConflict { .. })) => doc,
-            (a, b) => panic!("expected one revision and one conflict, got {a:?} / {b:?}"),
-        };
-
-        let chain = revisions(&db, project, "pitch").await.unwrap();
-        assert_eq!(chain.len(), 2, "the loser's refusal inserted nothing");
-        assert_eq!(
-            chain[0].id, winner_doc.asset_id,
-            "one operative head: the winner's row"
-        );
-        assert_eq!(chain[0].sha256_hex, sha256_hex(b"race-a"));
-        assert!(chain[0].deleted_at.is_none(), "the operative head is live");
-        assert_eq!(chain[1].id, first_id);
-    }
-
-    /// LAW-284 §5d: two racers uploading the same bytes — the same-sha256
-    /// race today's behavior answers with two rows — resolve to one revision
-    /// and one `Filed::Unchanged`. The oneshot pins the interleave the
-    /// precondition covers: the loser's CAS read runs after the winner's
-    /// `CREATE`, its late digest check finds the winner's row holding its
-    /// exact bytes, and nothing is inserted.
-    #[tokio::test]
-    async fn two_conditional_appends_of_identical_bytes_file_one_revision() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-
-        let first = file_conditional(&db, &storage, project, "pitch", b"v1", None)
-            .await
-            .unwrap();
-        let first_id = match first {
-            super::Filed::Revision(doc) => doc.asset_id,
-            super::Filed::Unchanged { .. } => panic!("a first filing is a revision"),
-        };
-        let head = super::ExpectedHead {
-            asset_id: first_id,
-            version: 1,
-            sha256: sha256_hex(b"v1"),
-        };
-
-        let (release, wait) = tokio::sync::oneshot::channel::<()>();
-        let winner = async {
-            let landed = file_conditional(&db, &storage, project, "pitch", b"twin", Some(&head))
-                .await
-                .unwrap();
-            let _ = release.send(());
-            landed
-        };
-        let loser = async {
-            wait.await.expect("the winner releases the loser");
-            file_conditional(&db, &storage, project, "pitch", b"twin", Some(&head)).await
-        };
-        let (a, b) = tokio::join!(winner, loser);
-        let (revision, unchanged) = match (a, b) {
-            (super::Filed::Revision(doc), Ok(super::Filed::Unchanged { asset_id })) => {
-                (doc, asset_id)
-            }
-            (a, b) => panic!("expected a revision and an unchanged, got {a:?} / {b:?}"),
-        };
-        assert_eq!(
-            unchanged, revision.asset_id,
-            "the loser's upload ends on the winner's row"
-        );
-
-        let chain = revisions(&db, project, "pitch").await.unwrap();
-        assert_eq!(chain.len(), 2);
-        assert_eq!(
-            chain
-                .iter()
-                .filter(|a| a.sha256_hex == sha256_hex(b"twin"))
-                .count(),
-            1,
-            "no duplicate digest row from the race"
-        );
-        assert_eq!(chain[0].id, unchanged);
-    }
-
-    async fn ingest_named(
-        db: &SurrealDb,
-        storage: &Arc<dyn StorageService>,
-        project: uuid::Uuid,
-        filename: &str,
-        kind: &str,
-        slug: Option<&str>,
-        bytes: &[u8],
-    ) -> Asset {
-        let ingested = crate::documents::ingest_bytes_as(
-            db,
-            storage,
-            &crate::documents::IngestArgs {
-                project_id: project,
-                source: "upload",
-                filename,
-                kind,
-                content_type: "text/plain",
-                description: None,
-                secondary_storage_key: None,
-                visibility: crate::documents::visibility::INTERNAL,
-            },
-            &crate::documents::DocumentIdentity {
-                slug,
-                published_at: None,
-                metadata: None,
-                derived_from: None,
-                transcript_quality: None,
-                signing: None,
-                notarization: Vec::new(),
-                evidence: None,
-                folder: None,
-            },
-            bytes,
-        )
-        .await
-        .unwrap();
-        find_by_id(db, ingested.asset_id).await.unwrap().unwrap()
-    }
-
-    #[tokio::test]
-    async fn assign_slug_sets_slug_and_kind_without_touching_bytes() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let before = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            None,
-            b"slugless bytes",
-        )
-        .await;
-
-        let after = super::assign_slug(
-            &db,
-            project,
-            before.id,
-            super::AssignSlug {
-                slug: "notes/note.txt",
-                kind: Some("exhibit"),
-                dry_run: false,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(after.slug.as_deref(), Some("notes/note.txt"));
-        assert_eq!(after.kind.as_deref(), Some("exhibit"));
-        assert_eq!(after.sha256_hex, before.sha256_hex);
-        assert_eq!(after.storage_key, before.storage_key);
-        assert_eq!(after.byte_size, before.byte_size);
-        assert_eq!(after.id, before.id);
-    }
-
-    #[tokio::test]
-    async fn assign_slug_refuses_a_row_that_already_has_a_slug() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            Some("notes/note.txt"),
-            b"already slugged",
-        )
-        .await;
-
-        let err = super::assign_slug(
-            &db,
-            project,
-            row.id,
-            super::AssignSlug {
-                slug: "other/note.txt",
-                kind: None,
-                dry_run: false,
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, super::AssignSlugError::AlreadySlugged));
-        let stored = find_by_id(&db, row.id).await.unwrap().unwrap();
-        assert_eq!(stored.slug.as_deref(), Some("notes/note.txt"));
-    }
-
-    #[tokio::test]
-    async fn assign_slug_refuses_a_slug_that_already_has_a_chain() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            Some("notes/note.txt"),
-            b"chain head",
-        )
-        .await;
-        let slugless = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            None,
-            b"a different document",
-        )
-        .await;
-
-        let err = super::assign_slug(
-            &db,
-            project,
-            slugless.id,
-            super::AssignSlug {
-                slug: "notes/note.txt",
-                kind: Some("memo"),
-                dry_run: false,
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, super::AssignSlugError::ChainExists(_)));
-        let stored = find_by_id(&db, slugless.id).await.unwrap().unwrap();
-        assert!(stored.slug.is_none());
-        assert_eq!(stored.kind.as_deref(), Some("unclassified"));
-    }
-
-    #[tokio::test]
-    async fn assign_slug_refuses_a_kind_outside_the_asset_lane() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            None,
-            b"kind check",
-        )
-        .await;
-
-        let err = super::assign_slug(
-            &db,
-            project,
-            row.id,
-            super::AssignSlug {
-                slug: "notes/note.txt",
-                kind: Some("review_queue_workbench"),
-                dry_run: false,
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, super::AssignSlugError::InvalidKind(_)));
-        let stored = find_by_id(&db, row.id).await.unwrap().unwrap();
-        assert!(stored.slug.is_none());
-        assert_eq!(stored.kind.as_deref(), Some("unclassified"));
-    }
-
-    async fn force_kind(db: &SurrealDb, asset_id: uuid::Uuid, kind: &str) {
-        db.query("UPDATE $id SET kind = $kind")
-            .bind(("id", super::record_id(super::TABLE, asset_id)))
-            .bind(("kind", kind.to_string()))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn reclassify_kind_rewrites_a_legacy_kind_across_the_chain() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let first = ingest_named(
-            &db,
-            &storage,
-            project,
-            "filing.txt",
-            "unclassified",
-            Some("filing.txt"),
-            b"first revision",
-        )
-        .await;
-        let second = ingest_named(
-            &db,
-            &storage,
-            project,
-            "filing.txt",
-            "unclassified",
-            Some("filing.txt"),
-            b"second revision",
-        )
-        .await;
-        force_kind(&db, first.id, "Formation Filing").await;
-        force_kind(&db, second.id, "Formation Filing").await;
-
-        let preview = super::reclassify_kind(&db, project, second.id, "filing", true)
-            .await
-            .unwrap();
-        assert_eq!(preview.kind.as_deref(), Some("filing"));
-        let untouched = find_by_id(&db, second.id).await.unwrap().unwrap();
-        assert_eq!(untouched.kind.as_deref(), Some("Formation Filing"));
-
-        let written = super::reclassify_kind(&db, project, second.id, "filing", false)
-            .await
-            .unwrap();
-        assert_eq!(written.kind.as_deref(), Some("filing"));
-        assert_eq!(written.slug, second.slug);
-        assert_eq!(written.sha256_hex, second.sha256_hex);
-        assert_eq!(written.storage_key, second.storage_key);
-        let sibling = find_by_id(&db, first.id).await.unwrap().unwrap();
-        assert_eq!(sibling.kind.as_deref(), Some("filing"));
-    }
-
-    #[tokio::test]
-    async fn reclassify_kind_refuses_a_row_whose_kind_is_accepted() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "memo.txt",
-            "memo",
-            Some("memo.txt"),
-            b"a valid memo",
-        )
-        .await;
-
-        let err = super::reclassify_kind(&db, project, row.id, "letter", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, super::ReclassifyKindError::KindAccepted(_)));
-        let stored = find_by_id(&db, row.id).await.unwrap().unwrap();
-        assert_eq!(stored.kind.as_deref(), Some("memo"));
-    }
-
-    #[tokio::test]
-    async fn reclassify_kind_refuses_a_target_outside_the_asset_lane() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "receipt.txt",
-            "unclassified",
-            Some("receipt.txt"),
-            b"legacy receipt",
-        )
-        .await;
-        force_kind(&db, row.id, "Receipt").await;
-
-        let err = super::reclassify_kind(&db, project, row.id, "review_queue_workbench", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, super::ReclassifyKindError::InvalidKind(_)));
-        let stored = find_by_id(&db, row.id).await.unwrap().unwrap();
-        assert_eq!(stored.kind.as_deref(), Some("Receipt"));
-    }
-
-    #[tokio::test]
-    async fn reclassify_kind_refuses_a_chain_with_an_accepted_revision() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let valid = ingest_named(
-            &db,
-            &storage,
-            project,
-            "contract.txt",
-            "agreement",
-            Some("contract.txt"),
-            b"valid revision",
-        )
-        .await;
-        let legacy = ingest_named(
-            &db,
-            &storage,
-            project,
-            "contract.txt",
-            "agreement",
-            Some("contract.txt"),
-            b"legacy revision",
-        )
-        .await;
-        force_kind(&db, legacy.id, "Consulting Contract").await;
-
-        let err = super::reclassify_kind(&db, project, legacy.id, "inbound_contract", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            super::ReclassifyKindError::ChainHasAcceptedKind(_)
-        ));
-        let stored = find_by_id(&db, legacy.id).await.unwrap().unwrap();
-        assert_eq!(stored.kind.as_deref(), Some("Consulting Contract"));
-        let head = find_by_id(&db, valid.id).await.unwrap().unwrap();
-        assert_eq!(head.kind.as_deref(), Some("agreement"));
-    }
-
-    #[tokio::test]
-    async fn reclassify_accepted_kind_rewrites_every_revision_without_touching_bytes() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let first = ingest_named(
-            &db,
-            &storage,
-            project,
-            "draft.md",
-            "memo",
-            Some("drafts/draft.md"),
-            b"first draft",
-        )
-        .await;
-        let second = ingest_named(
-            &db,
-            &storage,
-            project,
-            "draft.md",
-            "memo",
-            Some("drafts/draft.md"),
-            b"second draft",
-        )
-        .await;
-
-        let preview =
-            super::reclassify_accepted_kind(&db, project, second.id, "unclassified", true)
-                .await
-                .unwrap();
-        assert_eq!(preview.kind.as_deref(), Some("unclassified"));
-        let untouched = find_by_id(&db, second.id).await.unwrap().unwrap();
-        assert_eq!(untouched.kind.as_deref(), Some("memo"));
-
-        let written =
-            super::reclassify_accepted_kind(&db, project, second.id, "unclassified", false)
-                .await
-                .unwrap();
-        assert_eq!(written.kind.as_deref(), Some("unclassified"));
-        for (before, id) in [(&first, first.id), (&second, second.id)] {
-            let stored = find_by_id(&db, id).await.unwrap().unwrap();
-            assert_eq!(stored.kind.as_deref(), Some("unclassified"));
-            assert_eq!(stored.slug, before.slug);
-            assert_eq!(stored.sha256_hex, before.sha256_hex);
-            assert_eq!(stored.storage_key, before.storage_key);
-            assert_eq!(stored.byte_size, before.byte_size);
-        }
-    }
-
-    #[tokio::test]
-    async fn reclassify_accepted_kind_refuses_a_legacy_kind_a_same_kind_and_a_bad_target() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let other = crate::test_support::seed_project_surreal(&db, "other").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "memo.txt",
-            "memo",
-            Some("memo.txt"),
-            b"a valid memo",
-        )
-        .await;
-
-        let err = super::reclassify_accepted_kind(&db, other, row.id, "letter", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            super::ReclassifyAcceptedKindError::NotOnProject
-        ));
-        let err = super::reclassify_accepted_kind(&db, project, row.id, "memo", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            super::ReclassifyAcceptedKindError::KindUnchanged(_)
-        ));
-        let err =
-            super::reclassify_accepted_kind(&db, project, row.id, "review_queue_workbench", false)
-                .await
-                .unwrap_err();
-        assert!(matches!(
-            err,
-            super::ReclassifyAcceptedKindError::InvalidKind(_)
-        ));
-
-        force_kind(&db, row.id, "Legacy Memo").await;
-        let err = super::reclassify_accepted_kind(&db, project, row.id, "letter", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            super::ReclassifyAcceptedKindError::KindNotAccepted(_)
-        ));
-        let stored = find_by_id(&db, row.id).await.unwrap().unwrap();
-        assert_eq!(stored.kind.as_deref(), Some("Legacy Memo"));
-    }
-
-    #[tokio::test]
-    async fn reslug_moves_a_bare_legacy_slug_and_its_chain_without_touching_bytes() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        // Legacy chain: a bare slug with no extension of its own, set before
-        // slugs had to carry the source filename's extension (LAW-26).
-        let first = ingest_named(
-            &db,
-            &storage,
-            project,
-            "summons-wendell-prine.pdf",
-            "filing",
-            Some("summons-wendell-prine"),
-            b"first revision",
-        )
-        .await;
-        let second = ingest_named(
-            &db,
-            &storage,
-            project,
-            "summons-wendell-prine.pdf",
-            "filing",
-            Some("summons-wendell-prine"),
-            b"second revision",
-        )
-        .await;
-
-        let preview = super::reslug(&db, project, second.id, "summons-wendell-prine.pdf", true)
-            .await
-            .unwrap();
-        assert_eq!(preview.slug.as_deref(), Some("summons-wendell-prine.pdf"));
-        let untouched = find_by_id(&db, second.id).await.unwrap().unwrap();
-        assert_eq!(untouched.slug.as_deref(), Some("summons-wendell-prine"));
-
-        let written = super::reslug(&db, project, second.id, "summons-wendell-prine.pdf", false)
-            .await
-            .unwrap();
-        assert_eq!(written.slug.as_deref(), Some("summons-wendell-prine.pdf"));
-        assert_eq!(written.sha256_hex, second.sha256_hex);
-        assert_eq!(written.storage_key, second.storage_key);
-        assert_eq!(written.byte_size, second.byte_size);
-        assert_eq!(written.kind, second.kind);
-        let sibling = find_by_id(&db, first.id).await.unwrap().unwrap();
-        assert_eq!(
-            sibling.slug.as_deref(),
-            Some("summons-wendell-prine.pdf"),
-            "the whole chain moves together, not only the requested revision"
-        );
-    }
-
-    #[tokio::test]
-    async fn reslug_moves_a_valid_identity_and_refuses_a_no_op() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            Some("notes/note.txt"),
-            b"already a valid identity",
-        )
-        .await;
-
-        let err = super::reslug(&db, project, row.id, "notes/note.txt", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, super::ReslugError::SlugUnchanged(_)));
-
-        let moved = super::reslug(&db, project, row.id, "filed/forms/note.txt", false)
-            .await
-            .unwrap();
-        assert_eq!(moved.slug.as_deref(), Some("filed/forms/note.txt"));
-        assert_eq!(moved.sha256_hex, row.sha256_hex);
-        assert_eq!(moved.storage_key, row.storage_key);
-    }
-
-    #[tokio::test]
-    async fn reslug_refuses_a_row_with_no_slug() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            None,
-            b"slugless",
-        )
-        .await;
-
-        let err = super::reslug(&db, project, row.id, "notes/note.txt", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, super::ReslugError::NoSlug));
-    }
-
-    #[tokio::test]
-    async fn reslug_refuses_an_occupied_target() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            Some("notes/note.txt"),
-            b"already occupies the target",
-        )
-        .await;
-        let legacy = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            Some("note"),
-            b"a different document",
-        )
-        .await;
-
-        let err = super::reslug(&db, project, legacy.id, "notes/note.txt", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, super::ReslugError::TargetOccupied(_)));
-        let stored = find_by_id(&db, legacy.id).await.unwrap().unwrap();
-        assert_eq!(stored.slug.as_deref(), Some("note"));
-    }
-
-    #[tokio::test]
-    async fn reslug_refuses_a_target_missing_the_source_extension() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            Some("note"),
-            b"legacy bare slug",
-        )
-        .await;
-
-        let err = super::reslug(&db, project, row.id, "renamed-note", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, super::ReslugError::InvalidTarget(_)));
-        let stored = find_by_id(&db, row.id).await.unwrap().unwrap();
-        assert_eq!(stored.slug.as_deref(), Some("note"));
-    }
-
-    #[tokio::test]
-    async fn reslug_refuses_an_asset_on_another_project() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let other_project = crate::test_support::seed_project_surreal(&db, "other-matter").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            Some("note"),
-            b"cross project",
-        )
-        .await;
-
-        let err = super::reslug(&db, other_project, row.id, "notes/note.txt", false)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, super::ReslugError::NotOnProject));
-    }
-
-    #[tokio::test]
-    async fn repair_copies_a_sibling_object_onto_the_missing_key() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let bytes = b"shared document bytes";
-        let broken = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            None,
-            bytes,
-        )
-        .await;
-        let holder = ingest_named(
-            &db,
-            &storage,
-            project,
-            "copy.txt",
-            "unclassified",
-            Some("copies/copy.txt"),
-            bytes,
-        )
-        .await;
-        let sibling_key = format!("{}-held", broken.storage_key);
-        storage
-            .put(&sibling_key, bytes, "text/plain")
-            .await
-            .unwrap();
-        super::writing(|| {
-            db.query("UPDATE $id SET storage_key = $storage_key")
-                .bind(("id", crate::surreal::record_id(super::TABLE, holder.id)))
-                .bind(("storage_key", sibling_key.clone()))
-        })
-        .await
-        .unwrap();
-        storage.delete(&broken.storage_key).await.unwrap();
-
-        let repaired =
-            super::repair_missing_object(&db, storage.as_ref(), project, broken.id, false)
-                .await
-                .unwrap();
-        assert!(repaired.copied);
-        assert_eq!(repaired.storage_key, broken.storage_key);
-        let stored = find_by_id(&db, broken.id).await.unwrap().unwrap();
-        assert_eq!(stored.storage_key, broken.storage_key);
-        assert_eq!(stored.sha256_hex, broken.sha256_hex);
-        assert_eq!(
-            super::object_sha256(storage.as_ref(), &stored.storage_key)
-                .await
-                .unwrap()
-                .as_deref(),
-            Some(stored.sha256_hex.as_str())
-        );
-    }
-
-    #[tokio::test]
-    async fn repair_refuses_when_no_sibling_holds_the_content() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let row = ingest_named(
-            &db,
-            &storage,
-            project,
-            "note.txt",
-            "unclassified",
-            None,
-            b"only copy",
-        )
-        .await;
-        storage.delete(&row.storage_key).await.unwrap();
-
-        let err = super::repair_missing_object(&db, storage.as_ref(), project, row.id, false)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, super::RepairStorageError::NoSibling));
-        let stored = find_by_id(&db, row.id).await.unwrap().unwrap();
-        assert_eq!(stored.storage_key, row.storage_key);
-        assert_eq!(stored.sha256_hex, row.sha256_hex);
-        assert!(super::object_head(storage.as_ref(), &row.storage_key)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    async fn lawyer(db: &SurrealDb) -> Uuid {
-        crate::persons::create(
-            db,
-            &crate::persons::NewPerson::new("Nick", "nick@neonlaw.com"),
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    /// A two-revision document, newest last.
-    async fn two_revisions(
-        db: &SurrealDb,
-        storage: &Arc<dyn StorageService>,
-        project: Uuid,
-    ) -> (Asset, Asset) {
-        let first = ingest_named(
-            db,
-            storage,
-            project,
-            "memo.txt",
-            "memo",
-            Some("memos/memo.txt"),
-            b"first",
-        )
-        .await;
-        let second = ingest_named(
-            db,
-            storage,
-            project,
-            "memo.txt",
-            "memo",
-            Some("memos/memo.txt"),
-            b"second",
-        )
-        .await;
-        (first, second)
-    }
-
-    fn at(day: u32) -> DateTime<Utc> {
-        chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 10, day, 12, 0, 0).unwrap()
-    }
-
-    /// ENG-862: a soft delete stamps the whole chain with who, which commit,
-    /// and the purge date 180 days out, and drops it from every default read
-    /// while a lawyer can still read it.
-    #[tokio::test]
-    async fn soft_delete_stamps_the_chain_and_hides_it_from_default_reads() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let (first, second) = two_revisions(&db, &storage, project).await;
-        let person = lawyer(&db).await;
-
-        let deletion = soft_delete(&db, project, first.id, person, Some("abc1234"), at(2))
-            .await
-            .unwrap();
-
-        assert!(deletion.changed);
-        assert_eq!(deletion.revisions, 2);
-        assert_eq!(deletion.deleted_at, at(2));
-        assert_eq!(deletion.purge_after, at(2) + chrono::Duration::days(180));
-        for id in [first.id, second.id] {
-            let row = find_by_id(&db, id).await.unwrap().unwrap();
-            assert_eq!(row.deleted_at, Some(at(2)));
-            assert_eq!(row.purge_after, Some(deletion.purge_after));
-            assert_eq!(row.deleted_by_person_id, Some(person));
-            assert_eq!(row.deleted_commit_sha.as_deref(), Some("abc1234"));
-        }
-        assert!(for_project(&db, project).await.unwrap().is_empty());
-        assert!(grouped_for_project(&db, project).await.unwrap().is_empty());
-        assert!(current(&db, project, "memos/memo.txt", Lens::Lawyer)
-            .await
-            .unwrap()
-            .is_none());
-        assert!(current(&db, project, "memos/memo.txt", Lens::Client)
-            .await
-            .unwrap()
-            .is_none());
-        assert!(latest_of_kind(&db, project, "memo")
-            .await
-            .unwrap()
-            .is_none());
-        assert_eq!(count_for_projects(&db, &[project]).await.unwrap(), 0);
-        assert!(kinds_by_projects(&db, &[project]).await.unwrap().is_empty());
-        // A lawyer still reads the chain, in full.
-        assert_eq!(
-            revisions(&db, project, "memos/memo.txt")
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            for_project_including_deleted(&db, project)
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-
-    #[tokio::test]
-    async fn a_direct_retirement_hides_the_chain_without_a_repository_commit() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let (first, second) = two_revisions(&db, &storage, project).await;
-        let person = lawyer(&db).await;
-
-        let deletion = soft_delete(&db, project, first.id, person, None, at(2))
-            .await
-            .unwrap();
-
-        assert!(deletion.changed);
-        assert_eq!(deletion.revisions, 2);
-        for id in [first.id, second.id] {
-            let row = find_by_id(&db, id).await.unwrap().unwrap();
-            assert_eq!(row.deleted_by_person_id, Some(person));
-            assert!(row.deleted_at.is_some());
-            assert!(row.deleted_commit_sha.is_none());
-        }
-        assert!(for_project(&db, project).await.unwrap().is_empty());
-    }
-
-    /// A blank slug is not a document identity, so retiring one such row
-    /// leaves every other blank-slug row on the matter live.
-    #[tokio::test]
-    async fn a_blank_slug_retires_that_row_alone() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let first = ingest_named(
-            &db,
-            &storage,
-            project,
-            "image001.png",
-            "unclassified",
-            Some(""),
-            b"one",
-        )
-        .await;
-        let second = ingest_named(
-            &db,
-            &storage,
-            project,
-            "image002.png",
-            "unclassified",
-            Some(""),
-            b"two",
-        )
-        .await;
-        let person = lawyer(&db).await;
-
-        let deletion = soft_delete(&db, project, first.id, person, None, at(2))
-            .await
-            .unwrap();
-
-        assert!(deletion.changed);
-        assert_eq!(deletion.revisions, 1);
-        assert!(deletion.slug.is_none());
-        assert!(find_by_id(&db, first.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .deleted_at
-            .is_some());
-        let other = find_by_id(&db, second.id).await.unwrap().unwrap();
-        assert!(other.slug.as_deref().is_none_or(str::is_empty));
-        assert!(other.deleted_at.is_none());
-        assert_eq!(for_project(&db, project).await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn deleting_a_deleted_chain_again_keeps_the_original_stamps() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let (first, _) = two_revisions(&db, &storage, project).await;
-        let person = lawyer(&db).await;
-        soft_delete(&db, project, first.id, person, Some("abc1234"), at(2))
-            .await
-            .unwrap();
-
-        let again = soft_delete(&db, project, first.id, person, Some("def5678"), at(9))
-            .await
-            .unwrap();
-
-        assert!(!again.changed);
-        assert_eq!(again.deleted_at, at(2), "the first deletion's stamps stand");
-        let row = find_by_id(&db, first.id).await.unwrap().unwrap();
-        assert_eq!(row.deleted_commit_sha.as_deref(), Some("abc1234"));
-    }
-
-    #[tokio::test]
-    async fn a_closed_repository_and_a_foreign_row_are_never_soft_deleted() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let other = crate::test_support::seed_project_surreal(&db, "other").await;
-        let archive = ingest_named(
-            &db,
-            &storage,
-            project,
-            "matter-closed-repository.zip",
-            "closed_repository",
-            Some("closed_repository.zip"),
-            b"zip",
-        )
-        .await;
-        let person = lawyer(&db).await;
-
-        assert!(matches!(
-            soft_delete(&db, project, archive.id, person, Some("abc1234"), at(2)).await,
-            Err(SoftDeleteError::ClosedRepository)
-        ));
-        assert!(matches!(
-            soft_delete(&db, other, archive.id, person, Some("abc1234"), at(2)).await,
-            Err(SoftDeleteError::NotOnProject)
-        ));
-        assert!(find_by_id(&db, archive.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .deleted_at
-            .is_none());
-    }
-
-    /// Restoring within the window returns the document and its full revision
-    /// history to every default read.
-    #[tokio::test]
-    async fn restore_returns_the_chain_and_its_history() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let (first, second) = two_revisions(&db, &storage, project).await;
-        let person = lawyer(&db).await;
-        soft_delete(&db, project, second.id, person, Some("abc1234"), at(2))
-            .await
-            .unwrap();
-
-        let restored = restore(&db, project, first.id).await.unwrap();
-
-        assert!(restored.changed);
-        assert_eq!(restored.revisions, 2);
-        let live = for_project(&db, project).await.unwrap();
-        assert_eq!(live.len(), 2);
-        assert!(live.iter().all(|row| row.deleted_at.is_none()
-            && row.purge_after.is_none()
-            && row.deleted_by_person_id.is_none()
-            && row.deleted_commit_sha.is_none()));
-        assert_eq!(
-            current(&db, project, "memos/memo.txt", Lens::Lawyer)
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            second.id
-        );
-        assert!(!restore(&db, project, first.id).await.unwrap().changed);
-    }
-
-    #[tokio::test]
-    async fn a_purged_chain_cannot_be_restored() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let (first, second) = two_revisions(&db, &storage, project).await;
-        let person = lawyer(&db).await;
-        soft_delete(&db, project, first.id, person, Some("abc1234"), at(2))
-            .await
-            .unwrap();
-        mark_purged(&db, &[first.id, second.id], at(9))
-            .await
-            .unwrap();
-
-        assert!(matches!(
-            restore(&db, project, first.id).await,
-            Err(RestoreError::Purged)
-        ));
-    }
-
-    /// Retention: only rows past `purge_after`, and never one already purged.
-    #[tokio::test]
-    async fn due_for_purge_lists_only_rows_past_their_window_that_are_not_purged() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let person = lawyer(&db).await;
-        let old = ingest_named(
-            &db,
-            &storage,
-            project,
-            "old.txt",
-            "memo",
-            Some("old.txt"),
-            b"old",
-        )
-        .await;
-        let recent = ingest_named(
-            &db,
-            &storage,
-            project,
-            "recent.txt",
-            "memo",
-            Some("recent.txt"),
-            b"recent",
-        )
-        .await;
-        let live = ingest_named(
-            &db,
-            &storage,
-            project,
-            "live.txt",
-            "memo",
-            Some("live.txt"),
-            b"live",
-        )
-        .await;
-        soft_delete(&db, project, old.id, person, Some("abc1234"), at(1))
-            .await
-            .unwrap();
-        soft_delete(
-            &db,
-            project,
-            recent.id,
-            person,
-            Some("abc1234"),
-            at(1) + chrono::Duration::days(100),
-        )
-        .await
-        .unwrap();
-        let after_window = at(1) + chrono::Duration::days(181);
-
-        let due = due_for_purge(&db, after_window).await.unwrap();
-
-        assert_eq!(
-            due.iter().map(|row| row.id).collect::<Vec<_>>(),
-            vec![old.id]
-        );
-        assert!(!due.iter().any(|row| row.id == live.id));
-        let exactly = at(1) + chrono::Duration::days(180);
-        assert_eq!(
-            due_for_purge(&db, exactly).await.unwrap().len(),
-            1,
-            "the boundary is due"
-        );
-        assert!(due_for_purge(&db, exactly - chrono::Duration::seconds(1))
-            .await
-            .unwrap()
-            .is_empty());
-        mark_purged(&db, &[old.id], after_window).await.unwrap();
-        assert!(due_for_purge(&db, after_window).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_legal_hold_is_placed_and_released_on_the_whole_chain() {
-        let (db, storage, _tmp) = fixtures().await;
-        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
-        let (first, second) = two_revisions(&db, &storage, project).await;
-
-        assert_eq!(
-            set_legal_hold(&db, project, first.id, true, at(2))
-                .await
-                .unwrap(),
-            Some(2)
-        );
-        for id in [first.id, second.id] {
-            assert_eq!(
-                find_by_id(&db, id).await.unwrap().unwrap().legal_hold_at,
-                Some(at(2))
-            );
-        }
-        assert_eq!(
-            set_legal_hold(&db, project, second.id, false, at(3))
-                .await
-                .unwrap(),
-            Some(2)
-        );
-        assert!(find_by_id(&db, first.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .legal_hold_at
-            .is_none());
-        let elsewhere = crate::test_support::seed_project_surreal(&db, "other").await;
-        assert_eq!(
-            set_legal_hold(&db, elsewhere, first.id, true, at(2))
-                .await
-                .unwrap(),
-            None
         );
     }
 }

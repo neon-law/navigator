@@ -19,8 +19,8 @@
 mod module_records;
 mod sample_records;
 
+use crate::application_store::ApplicationStore;
 use crate::jurisdictions::{self, NewJurisdiction};
-use crate::surreal::SurrealDb;
 pub use model::seed::{
     glossary_token, AddressEntityRef, EntityTypeRef, OperatorEntityNameRef, OperatorPersonRef,
     OperatorProjectRef, OperatorProjectReferenceRec, OperatorRelationshipLogRec, PhoneRec,
@@ -556,7 +556,7 @@ pub enum ScopeViolation {
 /// bootstrap seeding, without permitting a caller to name arbitrary SurrealQL
 /// tables or fields.
 pub async fn reconcile_yaml(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     model: SeedModel,
     yaml: &str,
     firm_anchor: &str,
@@ -566,7 +566,7 @@ pub async fn reconcile_yaml(
     validate_yaml(model, yaml)?;
     let scope_project = match actor.project_scope {
         Some(code) => Some(
-            crate::projects::find_by_code(surreal, code)
+            crate::projects::find_by_code(application_store, code)
                 .await?
                 .ok_or_else(|| {
                     anyhow::Error::new(ScopeViolation::UnknownProject(code.to_string()))
@@ -575,15 +575,22 @@ pub async fn reconcile_yaml(
         None => None,
     };
     if let Some(project) = &scope_project {
-        require_seed_admin_project(surreal, actor, project).await?;
+        require_seed_admin_project(application_store, actor, project).await?;
     }
     match model {
         SeedModel::Person => {
-            reconcile_people(surreal, yaml, overwrite, actor, scope_project.as_ref()).await
+            reconcile_people(
+                application_store,
+                yaml,
+                overwrite,
+                actor,
+                scope_project.as_ref(),
+            )
+            .await
         }
         SeedModel::Entity => {
             reconcile_entities(
-                surreal,
+                application_store,
                 yaml,
                 firm_anchor,
                 overwrite,
@@ -593,24 +600,33 @@ pub async fn reconcile_yaml(
             .await
         }
         SeedModel::PersonProjectRole => {
-            reconcile_person_project_roles(surreal, yaml, actor, scope_project.as_ref()).await
+            reconcile_person_project_roles(application_store, yaml, actor, scope_project.as_ref())
+                .await
         }
         SeedModel::PersonEntityRole => {
-            reconcile_person_entity_roles(surreal, yaml, actor, scope_project.as_ref()).await
+            reconcile_person_entity_roles(application_store, yaml, actor, scope_project.as_ref())
+                .await
         }
         SeedModel::Address => {
-            reconcile_addresses(surreal, yaml, actor, scope_project.as_ref()).await
+            reconcile_addresses(application_store, yaml, actor, scope_project.as_ref()).await
         }
         SeedModel::RelationshipLog => {
-            reconcile_relationship_logs(surreal, yaml, actor, scope_project.as_ref()).await
+            reconcile_relationship_logs(application_store, yaml, actor, scope_project.as_ref())
+                .await
         }
         SeedModel::ProjectReference => {
-            reconcile_project_references(surreal, yaml, firm_anchor, actor, scope_project.as_ref())
-                .await
+            reconcile_project_references(
+                application_store,
+                yaml,
+                firm_anchor,
+                actor,
+                scope_project.as_ref(),
+            )
+            .await
         }
         SeedModel::FiduciaryRole => {
             module_records::reconcile_fiduciary_roles(
-                surreal,
+                application_store,
                 yaml,
                 overwrite,
                 actor,
@@ -620,7 +636,7 @@ pub async fn reconcile_yaml(
         }
         SeedModel::EstateAsset => {
             module_records::reconcile_estate_assets(
-                surreal,
+                application_store,
                 yaml,
                 overwrite,
                 actor,
@@ -630,7 +646,7 @@ pub async fn reconcile_yaml(
         }
         SeedModel::CapTableHolding => {
             module_records::reconcile_cap_table_holdings(
-                surreal,
+                application_store,
                 yaml,
                 overwrite,
                 actor,
@@ -650,17 +666,18 @@ pub async fn reconcile_yaml(
 /// in the error only — both are refused, per the issue's ambiguous-case
 /// default.
 async fn authorize_person_project_scope(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Uuid,
     project: &crate::projects::Project,
 ) -> anyhow::Result<()> {
-    if crate::projects::participation_for_person(surreal, person_id, project.id)
+    if crate::projects::participation_for_person(application_store, person_id, project.id)
         .await?
         .is_some()
     {
         return Ok(());
     }
-    let elsewhere = crate::projects::participations_for_person(surreal, person_id).await?;
+    let elsewhere =
+        crate::projects::participations_for_person(application_store, person_id).await?;
     Err(anyhow::Error::new(if elsewhere.is_empty() {
         ScopeViolation::Unlinked
     } else {
@@ -675,7 +692,10 @@ async fn authorize_person_project_scope(
 /// ([`crate::brand_domains`]). `owner` and `admin` are never seeded; the
 /// people editor assigns them under the bootstrap-owner guards. Every record
 /// is checked before any is written, so a refused document writes nothing.
-async fn check_seed_roles(surreal: &SurrealDb, records: &[PersonRec]) -> anyhow::Result<()> {
+async fn check_seed_roles(
+    application_store: &ApplicationStore,
+    records: &[PersonRec],
+) -> anyhow::Result<()> {
     use crate::persons::Role;
     let mut policy = None;
     for rec in records {
@@ -689,7 +709,7 @@ async fn check_seed_roles(surreal: &SurrealDb, records: &[PersonRec]) -> anyhow:
             ),
             Some(role @ (Role::Lawyer | Role::Clerk)) => {
                 if policy.is_none() {
-                    policy = Some(crate::brand_domains::current(surreal).await?);
+                    policy = Some(crate::brand_domains::current(application_store).await?);
                 }
                 let policy = policy.as_ref().expect("policy loaded above");
                 if !policy.admits(&rec.email) {
@@ -736,7 +756,7 @@ fn seed_role_authority(
 
 #[allow(clippy::too_many_lines)]
 async fn reconcile_people(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     overwrite: bool,
     actor: &ReconcileActor<'_>,
@@ -752,12 +772,12 @@ async fn reconcile_people(
         may_change_roles: actor.may_change_roles,
     };
     let records = parse_seed::<PersonRec>(yaml, SeedModel::Person, &["email"])?;
-    check_seed_roles(surreal, &records).await?;
+    check_seed_roles(application_store, &records).await?;
     for rec in records {
         let key = rec.email.clone();
         let name = rec.name.clone();
         let wanted_phones = rec.wanted_phones()?;
-        let existing = find_person_for_record(surreal, &rec).await?;
+        let existing = find_person_for_record(application_store, &rec).await?;
         let new_aliases = rec.wanted_aliases(&rec.email, None);
         match existing {
             None => {
@@ -770,7 +790,7 @@ async fn reconcile_people(
                 }
                 if !actor.dry_run {
                     let created = crate::people_commands::create_person(
-                        surreal,
+                        application_store,
                         &crate::people_commands::CreatePersonCommand {
                             name: rec.name,
                             email: rec.email,
@@ -787,11 +807,11 @@ async fn reconcile_people(
                     )
                     .await
                     .map_err(|error| anyhow::anyhow!(error.user_message()))?;
-                    record_aliases(surreal, created.id, &new_aliases).await?;
-                    record_phones(surreal, created.id, &wanted_phones).await?;
+                    record_aliases(application_store, created.id, &new_aliases).await?;
+                    record_phones(application_store, created.id, &wanted_phones).await?;
                     if let Some(project) = scope_project {
                         crate::projects::add_participation(
-                            surreal,
+                            application_store,
                             project.id,
                             created.id,
                             crate::projects::participation_for_role(created.role),
@@ -800,7 +820,7 @@ async fn reconcile_people(
                     }
                 }
                 if actor.dry_run {
-                    warnings.extend(same_name_warnings(surreal, &name).await?);
+                    warnings.extend(same_name_warnings(application_store, &name).await?);
                 }
                 report.created += 1;
                 report.records.push(ReconcileRecord {
@@ -825,9 +845,10 @@ async fn reconcile_people(
                     .into_iter()
                     .collect();
                 if let Some(project) = scope_project {
-                    authorize_person_project_scope(surreal, existing.id, project).await?;
+                    authorize_person_project_scope(application_store, existing.id, project).await?;
                 }
-                let additions = additional_phones(surreal, existing.id, &wanted_phones).await?;
+                let additions =
+                    additional_phones(application_store, existing.id, &wanted_phones).await?;
                 if additions.is_empty() {
                     report.unchanged += 1;
                     report.records.push(ReconcileRecord {
@@ -846,13 +867,13 @@ async fn reconcile_people(
                         ..ReconcileRecord::default()
                     });
                     if !actor.dry_run {
-                        record_phones(surreal, existing.id, &additions).await?;
+                        record_phones(application_store, existing.id, &additions).await?;
                     }
                 }
             }
             Some(existing) => {
                 if let Some(project) = scope_project {
-                    authorize_person_project_scope(surreal, existing.id, project).await?;
+                    authorize_person_project_scope(application_store, existing.id, project).await?;
                 }
                 let mut changed_fields = person_changed_fields(&existing, &rec);
                 // The lookup ignores letter case, so a record can match a row
@@ -871,7 +892,7 @@ async fn reconcile_people(
                 let missing_aliases: Vec<String> = if wanted.is_empty() {
                     wanted
                 } else {
-                    let held = crate::persons::aliases(surreal, existing.id).await?;
+                    let held = crate::persons::aliases(application_store, existing.id).await?;
                     wanted
                         .into_iter()
                         .filter(|email| !held.contains(email))
@@ -880,7 +901,8 @@ async fn reconcile_people(
                 if !missing_aliases.is_empty() {
                     changed_fields.push("emails".to_string());
                 }
-                let missing_phones = missing_phones(surreal, existing.id, &wanted_phones).await?;
+                let missing_phones =
+                    missing_phones(application_store, existing.id, &wanted_phones).await?;
                 if !missing_phones.is_empty() {
                     changed_fields.push("phones".to_string());
                 }
@@ -905,9 +927,10 @@ async fn reconcile_people(
                         ..ReconcileRecord::default()
                     });
                     if !actor.dry_run {
-                        update_person_from_seed(surreal, &existing, rec, &update_ctx).await?;
-                        record_aliases(surreal, existing.id, &missing_aliases).await?;
-                        record_phones(surreal, existing.id, &missing_phones).await?;
+                        update_person_from_seed(application_store, &existing, rec, &update_ctx)
+                            .await?;
+                        record_aliases(application_store, existing.id, &missing_aliases).await?;
+                        record_phones(application_store, existing.id, &missing_phones).await?;
                     }
                 }
             }
@@ -920,9 +943,12 @@ async fn reconcile_people(
 /// (case-insensitively). A service-list attorney who changes firms arrives
 /// under a new email, and the email-keyed import would otherwise create a
 /// second Person for the same human without a word (LAW-169).
-async fn same_name_warnings(surreal: &SurrealDb, name: &str) -> anyhow::Result<Vec<String>> {
+async fn same_name_warnings(
+    application_store: &ApplicationStore,
+    name: &str,
+) -> anyhow::Result<Vec<String>> {
     let name = name.trim();
-    let namesakes = crate::persons::search(surreal, Some(name), None, 20).await?;
+    let namesakes = crate::persons::search(application_store, Some(name), None, 20).await?;
     Ok(namesakes
         .into_iter()
         .filter(|person| person.name.trim().eq_ignore_ascii_case(name))
@@ -936,13 +962,13 @@ async fn same_name_warnings(surreal: &SurrealDb, name: &str) -> anyhow::Result<V
 }
 
 async fn update_person_from_seed(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     existing: &crate::persons::Person,
     rec: PersonRec,
     update_ctx: &crate::people_commands::UpdateContext<'_>,
 ) -> anyhow::Result<()> {
     crate::people_commands::update_person(
-        surreal,
+        application_store,
         existing.id,
         &crate::people_commands::UpdatePersonCommand {
             name: Some(rec.name),
@@ -965,7 +991,7 @@ async fn update_person_from_seed(
     .map_err(|error| anyhow::anyhow!(error.user_message()))?;
     if existing.profile_image_url != rec.profile_image_url {
         crate::persons::edit(
-            surreal,
+            application_store,
             existing.id,
             &crate::persons::PersonEdit {
                 profile_image_url: Some(rec.profile_image_url),
@@ -979,7 +1005,7 @@ async fn update_person_from_seed(
 }
 
 async fn reconcile_entities(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     firm_anchor: &str,
     overwrite: bool,
@@ -993,22 +1019,24 @@ async fn reconcile_entities(
     for rec in
         parse_seed::<OperatorEntityRec>(yaml, SeedModel::Entity, &["name", "entity_type_id"])?
     {
-        let entity_type = crate::entity_types::find_by_name(surreal, &rec.entity_type.name)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "entity seed references unknown entity type {:?}",
-                    rec.entity_type.name
-                )
-            })?;
+        let entity_type =
+            crate::entity_types::find_by_name(application_store, &rec.entity_type.name)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "entity seed references unknown entity type {:?}",
+                        rec.entity_type.name
+                    )
+                })?;
         let jurisdiction_name = declared_jurisdiction_name(&rec.name, &rec.entity_type)?;
-        let jurisdiction = jurisdictions::find_by_name(surreal, jurisdiction_name)
+        let jurisdiction = jurisdictions::find_by_name(application_store, jurisdiction_name)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!("entity seed references unknown jurisdiction {jurisdiction_name:?}")
             })?;
         let existing =
-            crate::entities::find_by_name_and_type(surreal, &rec.name, entity_type.id).await?;
+            crate::entities::find_by_name_and_type(application_store, &rec.name, entity_type.id)
+                .await?;
         let mut record = ReconcileRecord {
             key: format!("{} / {}", rec.name, rec.entity_type.name),
             jurisdiction: Some(jurisdiction_name.to_string()),
@@ -1021,7 +1049,7 @@ async fn reconcile_entities(
                 }
                 if !dry_run {
                     crate::entity_commands::create_entity_with_contact(
-                        surreal,
+                        application_store,
                         firm_anchor,
                         &crate::entity_commands::CreateEntityCommand {
                             name: rec.name,
@@ -1057,7 +1085,7 @@ async fn reconcile_entities(
                     record.changed_fields = changed_fields;
                     if !dry_run {
                         update_entity_from_seed(
-                            surreal,
+                            application_store,
                             existing.id,
                             firm_anchor,
                             jurisdiction.id,
@@ -1075,14 +1103,14 @@ async fn reconcile_entities(
 }
 
 async fn update_entity_from_seed(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     firm_anchor: &str,
     jurisdiction_id: Uuid,
     record: OperatorEntityRec,
 ) -> anyhow::Result<()> {
     crate::entity_commands::patch_entity(
-        surreal,
+        application_store,
         id,
         firm_anchor,
         &crate::entity_commands::EntityPatch {
@@ -1101,13 +1129,13 @@ async fn update_entity_from_seed(
 }
 
 async fn require_seed_admin_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor: &ReconcileActor<'_>,
     project: &crate::projects::Project,
 ) -> anyhow::Result<()> {
     if actor.actor_role == crate::persons::Role::Admin
         && !crate::projects::can_administer_project(
-            surreal,
+            application_store,
             actor.actor_person_id,
             actor.actor_role,
             project,
@@ -1120,7 +1148,7 @@ async fn require_seed_admin_project(
 }
 
 async fn reconcile_person_project_roles(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     actor: &ReconcileActor<'_>,
     scope_project: Option<&crate::projects::Project>,
@@ -1135,7 +1163,7 @@ async fn reconcile_person_project_roles(
         &["person_id", "project_id"],
     )? {
         let key = format!("{} / {}", rec.person.email, rec.project.code);
-        let person = crate::persons::find_by_email_ci(surreal, &rec.person.email)
+        let person = crate::persons::find_by_email_ci(application_store, &rec.person.email)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1143,7 +1171,7 @@ async fn reconcile_person_project_roles(
                     rec.person.email
                 )
             })?;
-        let project = crate::projects::find_by_code(surreal, &rec.project.code)
+        let project = crate::projects::find_by_code(application_store, &rec.project.code)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1156,9 +1184,9 @@ async fn reconcile_person_project_roles(
                 return Err(anyhow::Error::new(ScopeViolation::CrossProject));
             }
         }
-        require_seed_admin_project(surreal, actor, &project).await?;
+        require_seed_admin_project(application_store, actor, &project).await?;
         let participation = crate::projects::participation_for_role(person.role);
-        if crate::projects::participation_for_person(surreal, person.id, project.id)
+        if crate::projects::participation_for_person(application_store, person.id, project.id)
             .await?
             .is_some()
         {
@@ -1170,8 +1198,13 @@ async fn reconcile_person_project_roles(
             });
         } else {
             if !actor.dry_run {
-                crate::projects::add_participation(surreal, project.id, person.id, participation)
-                    .await?;
+                crate::projects::add_participation(
+                    application_store,
+                    project.id,
+                    person.id,
+                    participation,
+                )
+                .await?;
             }
             report.created += 1;
             let warnings = if participation == "client" {
@@ -1191,7 +1224,7 @@ async fn reconcile_person_project_roles(
 }
 
 async fn reconcile_person_entity_roles(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     actor: &ReconcileActor<'_>,
     scope_project: Option<&crate::projects::Project>,
@@ -1206,7 +1239,7 @@ async fn reconcile_person_entity_roles(
         &["person_id", "entity_id"],
     )? {
         let key = format!("{} / {} / {}", rec.person.email, rec.entity.name, rec.role);
-        let person = crate::persons::find_by_email_ci(surreal, &rec.person.email)
+        let person = crate::persons::find_by_email_ci(application_store, &rec.person.email)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1214,7 +1247,7 @@ async fn reconcile_person_entity_roles(
                     rec.person.email
                 )
             })?;
-        let entity = crate::entities::find_by_name(surreal, &rec.entity.name)
+        let entity = crate::entities::find_by_name(application_store, &rec.entity.name)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1227,7 +1260,7 @@ async fn reconcile_person_entity_roles(
                 return Err(anyhow::Error::new(ScopeViolation::CrossProject));
             }
         }
-        if crate::entity_roles::find(surreal, person.id, entity.id, &rec.role)
+        if crate::entity_roles::find(application_store, person.id, entity.id, &rec.role)
             .await?
             .is_some()
         {
@@ -1239,7 +1272,8 @@ async fn reconcile_person_entity_roles(
             });
         } else {
             if !actor.dry_run {
-                crate::entity_roles::grant(surreal, person.id, entity.id, &rec.role).await?;
+                crate::entity_roles::grant(application_store, person.id, entity.id, &rec.role)
+                    .await?;
             }
             report.created += 1;
             report.records.push(ReconcileRecord {
@@ -1260,7 +1294,7 @@ async fn reconcile_person_entity_roles(
 /// row it writes carries that Project; a row naming another Project is
 /// refused. An unrestricted session records the Project a row names.
 async fn reconcile_relationship_logs(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     actor: &ReconcileActor<'_>,
     scope_project: Option<&crate::projects::Project>,
@@ -1275,7 +1309,7 @@ async fn reconcile_relationship_logs(
         &["subject_id", "action", "detail"],
     )? {
         let key = format!("{} / {} / {}", rec.subject.email, rec.action, rec.detail);
-        let person = crate::persons::find_by_email_ci(surreal, &rec.subject.email)
+        let person = crate::persons::find_by_email_ci(application_store, &rec.subject.email)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1284,7 +1318,7 @@ async fn reconcile_relationship_logs(
                 )
             })?;
         if let Some(project) = scope_project {
-            authorize_person_project_scope(surreal, person.id, project).await?;
+            authorize_person_project_scope(application_store, person.id, project).await?;
         }
         let project_id = match (scope_project, rec.project) {
             (Some(scope), Some(named)) if named.code != scope.code => {
@@ -1292,7 +1326,7 @@ async fn reconcile_relationship_logs(
             }
             (Some(scope), _) => Some(scope.id),
             (None, Some(named)) => Some(
-                crate::projects::find_by_code(surreal, &named.code)
+                crate::projects::find_by_code(application_store, &named.code)
                     .await?
                     .ok_or_else(|| {
                         anyhow::anyhow!(
@@ -1312,7 +1346,7 @@ async fn reconcile_relationship_logs(
             detail: rec.detail,
             project_id,
         };
-        if crate::relationship_logs::exists(surreal, &entry).await? {
+        if crate::relationship_logs::exists(application_store, &entry).await? {
             report.unchanged += 1;
             report.records.push(ReconcileRecord {
                 key,
@@ -1322,7 +1356,7 @@ async fn reconcile_relationship_logs(
             continue;
         }
         if !actor.dry_run {
-            crate::relationship_logs::record(surreal, &entry).await?;
+            crate::relationship_logs::record(application_store, &entry).await?;
         }
         report.created += 1;
         report.records.push(ReconcileRecord {
@@ -1342,7 +1376,7 @@ async fn reconcile_relationship_logs(
 /// Person. An existing Person or Entity is referenced as it is, whatever
 /// Project it belongs to, because a reference changes nothing on the row.
 async fn reconcile_project_references(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     firm_anchor: &str,
     actor: &ReconcileActor<'_>,
@@ -1364,7 +1398,7 @@ async fn reconcile_project_references(
                 return Err(anyhow::Error::new(ScopeViolation::CrossProject));
             }
             (Some(scope), _) => scope.clone(),
-            (None, Some(named)) => crate::projects::find_by_code(surreal, &named.code)
+            (None, Some(named)) => crate::projects::find_by_code(application_store, &named.code)
                 .await?
                 .ok_or_else(|| {
                     anyhow::anyhow!(
@@ -1377,13 +1411,20 @@ async fn reconcile_project_references(
             ),
         };
         let key = format!("{} / {party_key} / {reason}", project.code);
-        let party =
-            resolve_reference_party(surreal, firm_anchor, actor.dry_run, rec.person, rec.entity)
-                .await?;
+        let party = resolve_reference_party(
+            application_store,
+            firm_anchor,
+            actor.dry_run,
+            rec.person,
+            rec.entity,
+        )
+        .await?;
         let exists = match party {
-            Some(party) => crate::project_references::find(surreal, project.id, party, &reason)
-                .await?
-                .is_some(),
+            Some(party) => {
+                crate::project_references::find(application_store, project.id, party, &reason)
+                    .await?
+                    .is_some()
+            }
             None => false,
         };
         if exists {
@@ -1396,7 +1437,8 @@ async fn reconcile_project_references(
             continue;
         }
         if let (false, Some(party)) = (actor.dry_run, party) {
-            crate::project_references::reference(surreal, project.id, party, &reason).await?;
+            crate::project_references::reference(application_store, project.id, party, &reason)
+                .await?;
         }
         report.created += 1;
         report.records.push(ReconcileRecord {
@@ -1412,7 +1454,7 @@ async fn reconcile_project_references(
 /// `None` only on a dry run whose party does not exist yet: there is nothing
 /// to look up, and the plan reports the reference as new.
 async fn resolve_reference_party(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_anchor: &str,
     dry_run: bool,
     person: Option<OperatorReferencedPersonRef>,
@@ -1421,12 +1463,12 @@ async fn resolve_reference_party(
     match (person, entity) {
         (Some(person), _) => {
             let email = person.email.trim().to_string();
-            match crate::persons::find_by_email_ci(surreal, &email).await? {
+            match crate::persons::find_by_email_ci(application_store, &email).await? {
                 Some(existing) => Ok(Some(crate::project_references::Party::person(existing.id))),
                 None if dry_run => Ok(None),
                 None => {
                     let created = crate::people_commands::create_person(
-                        surreal,
+                        application_store,
                         &crate::people_commands::CreatePersonCommand {
                             name: person.name,
                             email,
@@ -1445,30 +1487,35 @@ async fn resolve_reference_party(
             }
         }
         (None, Some(entity)) => {
-            let entity_type = crate::entity_types::find_by_name(surreal, &entity.entity_type.name)
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "project_reference seed references unknown entity type {:?}",
-                        entity.entity_type.name
-                    )
-                })?;
+            let entity_type =
+                crate::entity_types::find_by_name(application_store, &entity.entity_type.name)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "project_reference seed references unknown entity type {:?}",
+                            entity.entity_type.name
+                        )
+                    })?;
             let jurisdiction_name = declared_jurisdiction_name(&entity.name, &entity.entity_type)?;
-            let jurisdiction = jurisdictions::find_by_name(surreal, jurisdiction_name)
+            let jurisdiction = jurisdictions::find_by_name(application_store, jurisdiction_name)
                 .await?
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "project_reference seed references unknown jurisdiction {jurisdiction_name:?}"
                     )
                 })?;
-            match crate::entities::find_by_name_and_type(surreal, &entity.name, entity_type.id)
-                .await?
+            match crate::entities::find_by_name_and_type(
+                application_store,
+                &entity.name,
+                entity_type.id,
+            )
+            .await?
             {
                 Some(existing) => Ok(Some(crate::project_references::Party::entity(existing.id))),
                 None if dry_run => Ok(None),
                 None => {
                     let created = crate::entity_commands::create_entity(
-                        surreal,
+                        application_store,
                         firm_anchor,
                         &crate::entity_commands::CreateEntityCommand {
                             name: entity.name,
@@ -1490,7 +1537,7 @@ async fn resolve_reference_party(
 
 /// Reconcile an Address by its owner, street, and postal code.
 async fn reconcile_addresses(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     actor: &ReconcileActor<'_>,
     scope_project: Option<&crate::projects::Project>,
@@ -1510,7 +1557,7 @@ async fn reconcile_addresses(
             ..Default::default()
         };
         let (owner, addresses) = if let Some(person) = rec.person {
-            let found = crate::persons::find_by_email_ci(surreal, &person.email)
+            let found = crate::persons::find_by_email_ci(application_store, &person.email)
                 .await?
                 .ok_or_else(|| {
                     anyhow::anyhow!(
@@ -1519,16 +1566,16 @@ async fn reconcile_addresses(
                     )
                 })?;
             if let Some(scope) = scope_project {
-                authorize_person_project_scope(surreal, found.id, scope).await?;
+                authorize_person_project_scope(application_store, found.id, scope).await?;
             }
             new.person_id = Some(found.id);
             (
                 person.email,
-                crate::addresses::for_person(surreal, found.id).await?,
+                crate::addresses::for_person(application_store, found.id).await?,
             )
         } else if let Some(entity) = rec.entity {
             let found = if let Some(kind) = entity.entity_type {
-                let kind = crate::entity_types::find_by_name(surreal, &kind.name)
+                let kind = crate::entity_types::find_by_name(application_store, &kind.name)
                     .await?
                     .ok_or_else(|| {
                         anyhow::anyhow!(
@@ -1536,9 +1583,10 @@ async fn reconcile_addresses(
                             kind.name
                         )
                     })?;
-                crate::entities::find_by_name_and_type(surreal, &entity.name, kind.id).await?
+                crate::entities::find_by_name_and_type(application_store, &entity.name, kind.id)
+                    .await?
             } else {
-                crate::entities::find_unique_by_name(surreal, &entity.name).await?
+                crate::entities::find_unique_by_name(application_store, &entity.name).await?
             }
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1552,7 +1600,7 @@ async fn reconcile_addresses(
             new.entity_id = Some(found.id);
             (
                 entity.name,
-                crate::addresses::for_entity(surreal, found.id).await?,
+                crate::addresses::for_entity(application_store, found.id).await?,
             )
         } else {
             anyhow::bail!("address seed must name an owner");
@@ -1570,7 +1618,7 @@ async fn reconcile_addresses(
             });
         } else {
             if !actor.dry_run {
-                crate::addresses::create(surreal, &new).await?;
+                crate::addresses::create(application_store, &new).await?;
             }
             report.created += 1;
             report.records.push(ReconcileRecord {
@@ -1644,22 +1692,22 @@ fn entity_changed_fields(
 /// Project, mailroom, letter, or answer row. Those live in
 /// [`seed_sample_portfolio`] and are applied on a `dev` profile only.
 pub async fn seed_canonical(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
 ) -> anyhow::Result<SeedReport> {
     let mut r = SeedReport::default();
-    seed_canonical_into(surreal, storage, &mut r).await?;
+    seed_canonical_into(application_store, storage, &mut r).await?;
     Ok(r)
 }
 
 #[cfg(feature = "test-support")]
 pub(crate) async fn seed_notation_catalog(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
 ) -> anyhow::Result<()> {
     let mut report = SeedReport::default();
-    seed_questions(surreal, &mut report).await?;
-    seed_templates(surreal, storage, &mut report).await
+    seed_questions(application_store, &mut report).await?;
+    seed_templates(application_store, storage, &mut report).await
 }
 
 /// Apply the compiled sample-matter fixture on top of the canonical seed.
@@ -1667,12 +1715,12 @@ pub(crate) async fn seed_notation_catalog(
 /// the reference rows the portal walkthrough needs. Applied on a `dev` profile
 /// only. Idempotent: a second run inserts zero duplicates.
 pub async fn seed_sample_portfolio(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
 ) -> anyhow::Result<SeedReport> {
     let mut r = SeedReport::default();
     seed_sample_portfolio_into(
-        surreal,
+        application_store,
         storage,
         &mut r,
         std::env::var(crate::sample_project::STAGE_ENV)
@@ -1691,9 +1739,12 @@ pub async fn seed_sample_portfolio(
 /// # Errors
 ///
 /// Propagates any store error from the underlying writes.
-pub async fn seed_brand(surreal: &SurrealDb, brand: BrandSeed) -> anyhow::Result<SeedReport> {
+pub async fn seed_brand(
+    application_store: &ApplicationStore,
+    brand: BrandSeed,
+) -> anyhow::Result<SeedReport> {
     let mut r = SeedReport::default();
-    seed_brand_into(surreal, brand, &mut r).await?;
+    seed_brand_into(application_store, brand, &mut r).await?;
     Ok(r)
 }
 
@@ -1704,23 +1755,26 @@ pub async fn seed_brand(surreal: &SurrealDb, brand: BrandSeed) -> anyhow::Result
 /// # Errors
 ///
 /// A seed that breaks the Post contract, or a store failure.
-pub async fn seed_brand_blog(surreal: &SurrealDb, brand: BrandSeed) -> anyhow::Result<SeedReport> {
+pub async fn seed_brand_blog(
+    application_store: &ApplicationStore,
+    brand: BrandSeed,
+) -> anyhow::Result<SeedReport> {
     let mut r = SeedReport::default();
-    seed_brand_blog_into(surreal, brand, &mut r).await?;
+    seed_brand_blog_into(application_store, brand, &mut r).await?;
     Ok(r)
 }
 
 async fn seed_brand_blog_into(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     brand: BrandSeed,
     r: &mut SeedReport,
 ) -> anyhow::Result<()> {
     // Handles first: a Post's social link may only name a recorded handle.
     if let Some((yaml, path)) = brand.social_handles() {
-        seed_social_handles(surreal, yaml, path, r).await?;
+        seed_social_handles(application_store, yaml, path, r).await?;
     }
     if let Some((yaml, path)) = brand.posts() {
-        seed_posts(surreal, yaml, path, r).await?;
+        seed_posts(application_store, yaml, path, r).await?;
     }
     Ok(())
 }
@@ -1753,12 +1807,12 @@ async fn seed_brand_blog_into(
 ///
 /// Propagates any store error from the underlying writes.
 pub async fn seed_environment(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     environment: crate::DeploymentEnvironment,
     brand: BrandSeed,
 ) -> anyhow::Result<SeedReport> {
-    seed_environment_with(surreal, storage, environment, brand).await
+    seed_environment_with(application_store, storage, environment, brand).await
 }
 
 /// [`seed_environment`], with the profile as an argument so a test drives both
@@ -1768,13 +1822,13 @@ pub async fn seed_environment(
 ///
 /// Propagates any store error from the underlying writes.
 pub async fn seed_environment_with(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     environment: crate::DeploymentEnvironment,
     brand: BrandSeed,
 ) -> anyhow::Result<SeedReport> {
     seed_environment_with_stage(
-        surreal,
+        application_store,
         storage,
         environment,
         brand,
@@ -1791,17 +1845,17 @@ pub async fn seed_environment_with(
 ///
 /// Returns a store or staged source error if the seed cannot be applied.
 pub async fn seed_environment_with_stage(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     environment: crate::DeploymentEnvironment,
     brand: BrandSeed,
     sample_stage: Option<&str>,
 ) -> anyhow::Result<SeedReport> {
     let mut r = SeedReport::default();
-    seed_canonical_into(surreal, storage, &mut r).await?;
-    seed_brand_into(surreal, brand, &mut r).await?;
+    seed_canonical_into(application_store, storage, &mut r).await?;
+    seed_brand_into(application_store, brand, &mut r).await?;
     if environment != crate::DeploymentEnvironment::Production {
-        seed_sample_portfolio_into(surreal, storage, &mut r, sample_stage).await?;
+        seed_sample_portfolio_into(application_store, storage, &mut r, sample_stage).await?;
     }
     Ok(r)
 }
@@ -1812,65 +1866,71 @@ pub async fn seed_environment_with_stage(
 /// than an error. A brand seeds no Entity of its own: an identity row is a
 /// public firm fact in the canonical layer or private runtime data.
 async fn seed_brand_into(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     brand: BrandSeed,
     r: &mut SeedReport,
 ) -> anyhow::Result<()> {
     if let Some((yaml, path)) = brand.mailrooms() {
-        seed_mailrooms(surreal, yaml, path, r).await?;
+        seed_mailrooms(application_store, yaml, path, r).await?;
     }
-    seed_addresses(surreal, brand, r).await?;
-    seed_brand_blog_into(surreal, brand, r).await
+    seed_addresses(application_store, brand, r).await?;
+    seed_brand_blog_into(application_store, brand, r).await
 }
 
 async fn seed_canonical_into(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     r: &mut SeedReport,
 ) -> anyhow::Result<()> {
-    seed_jurisdictions(surreal, r).await?;
-    seed_entity_types(surreal, r).await?;
-    seed_entities(surreal, canonical::ENTITY, "Entity.yaml", r).await?;
-    seed_firm_ein(surreal).await?;
+    seed_jurisdictions(application_store, r).await?;
+    seed_entity_types(application_store, r).await?;
+    seed_entities(application_store, canonical::ENTITY, "Entity.yaml", r).await?;
+    seed_firm_ein(application_store).await?;
     // The practice's Firm needs an existing `role = admin` person for its
     // Admin DRI (ENG-499: creation is atomic with one), so persons and their
     // roles must be seeded first.
-    seed_persons(surreal, r).await?;
-    seed_user_roles(surreal, r).await?;
+    seed_persons(application_store, r).await?;
+    seed_user_roles(application_store, r).await?;
     // `seed_practice` resolves/creates the practice Firm, then migrates the
     // compiled house-brand keys into `brand` rows scoped to it before
     // attaching each one: `store::firms::attach_brand` validates a key
     // against this table now, not the closed `CLOSED_BRAND_KEYS` array
     // (ENG-496), and every row it creates must already carry that Firm's id
     // (ENG-659).
-    seed_practice(surreal).await?;
-    seed_firm_memberships(surreal).await?;
-    seed_questions(surreal, r).await?;
-    seed_person_entity_roles(surreal, r).await?;
-    seed_credentials(surreal, r).await?;
-    seed_templates(surreal, storage, r).await?;
-    seed_testimonials(surreal, r).await?;
-    seed_glossary_terms(surreal, r).await?;
+    seed_practice(application_store).await?;
+    seed_firm_memberships(application_store).await?;
+    seed_questions(application_store, r).await?;
+    seed_person_entity_roles(application_store, r).await?;
+    seed_credentials(application_store, r).await?;
+    seed_templates(application_store, storage, r).await?;
+    seed_testimonials(application_store, r).await?;
+    seed_glossary_terms(application_store, r).await?;
     Ok(())
 }
 
 async fn seed_sample_portfolio_into(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     r: &mut SeedReport,
     sample_stage: Option<&str>,
 ) -> anyhow::Result<()> {
-    seed_mailrooms(surreal, sample_seeds::MAILROOM, "sample/Mailroom.yaml", r).await?;
-    seed_role_matrix_sample(surreal, storage, r, sample_stage).await?;
-    seed_firm_memberships(surreal).await?;
-    seed_git_repositories(surreal, r).await?;
-    seed_letters(surreal, r).await?;
-    seed_answers(surreal, r).await?;
-    seed_person_project_roles(surreal, r).await?;
-    seed_project_firm_ownership(surreal).await?;
-    let lex = ensure_lex_firm(surreal).await?;
-    seed_member_roles(surreal, lex.id).await?;
-    seed_sample_invoices(surreal).await?;
+    seed_mailrooms(
+        application_store,
+        sample_seeds::MAILROOM,
+        "sample/Mailroom.yaml",
+        r,
+    )
+    .await?;
+    seed_role_matrix_sample(application_store, storage, r, sample_stage).await?;
+    seed_firm_memberships(application_store).await?;
+    seed_git_repositories(application_store, r).await?;
+    seed_letters(application_store, r).await?;
+    seed_answers(application_store, r).await?;
+    seed_person_project_roles(application_store, r).await?;
+    seed_project_firm_ownership(application_store).await?;
+    let lex = ensure_lex_firm(application_store).await?;
+    seed_member_roles(application_store, lex.id).await?;
+    seed_sample_invoices(application_store).await?;
     Ok(())
 }
 
@@ -1878,19 +1938,20 @@ async fn seed_sample_portfolio_into(
 /// exactly like every other row this table carries, so the local Firm show
 /// page's invoice graphs have something to draw. One is fully paid, one is
 /// partly paid, and one is unpaid, across the fixture's three house brands.
-async fn seed_sample_invoices(surreal: &SurrealDb) -> anyhow::Result<()> {
+async fn seed_sample_invoices(application_store: &ApplicationStore) -> anyhow::Result<()> {
     let now = chrono::Utc::now();
     for (matter, amount_cents, paid_cents, days_ago) in [
         (&SAMPLE_MATTERS[0], 480_000_i64, 480_000_i64, 3_i64),
         (&SAMPLE_MATTERS[1], 250_000_i64, 0_i64, 10_i64),
         (&SAMPLE_MATTERS[2], 120_000_i64, 60_000_i64, 20_i64),
     ] {
-        let Some(project) = crate::projects::find_by_name(surreal, matter.name).await? else {
+        let Some(project) = crate::projects::find_by_name(application_store, matter.name).await?
+        else {
             continue;
         };
         let xero_invoice_id = format!("sample-invoice-{}", matter.code);
         crate::xero_invoices::upsert(
-            surreal,
+            application_store,
             &crate::xero_invoices::UpsertXeroInvoice {
                 project_id: project.id,
                 xero_invoice_id: xero_invoice_id.clone(),
@@ -1909,8 +1970,13 @@ async fn seed_sample_invoices(surreal: &SurrealDb) -> anyhow::Result<()> {
             } else {
                 "AUTHORISED"
             };
-            crate::xero_invoices::record_reconcile(surreal, &xero_invoice_id, status, paid_cents)
-                .await?;
+            crate::xero_invoices::record_reconcile(
+                application_store,
+                &xero_invoice_id,
+                status,
+                paid_cents,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -2087,18 +2153,18 @@ pub fn sample_matter_repository(code: &str) -> Option<&'static str> {
 ///
 /// Idempotent.
 async fn seed_role_matrix_sample(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     report: &mut SeedReport,
     sample_stage: Option<&str>,
 ) -> anyhow::Result<()> {
-    let nevada = jurisdictions::find_by_name(surreal, "Nevada")
+    let nevada = jurisdictions::find_by_name(application_store, "Nevada")
         .await?
         .ok_or_else(|| anyhow::anyhow!("seed: jurisdiction `Nevada` must be seeded first"))?;
 
     // One person per tier, matching the KIND Rauthy fixture's five accounts.
     let owner_id = ensure_dev_person(
-        surreal,
+        application_store,
         report,
         "Olive Owner",
         "owner@neonlaw.com",
@@ -2109,7 +2175,7 @@ async fn seed_role_matrix_sample(
     // deliberately given no participation on any of these matters (see below),
     // so its id is not bound.
     ensure_dev_person(
-        surreal,
+        application_store,
         report,
         "Ada Admin",
         "admin@neonlaw.com",
@@ -2117,7 +2183,7 @@ async fn seed_role_matrix_sample(
     )
     .await?;
     let lawyer_id = ensure_dev_person(
-        surreal,
+        application_store,
         report,
         "Lawrence Lawyer",
         "lawyer@neonlaw.com",
@@ -2125,7 +2191,7 @@ async fn seed_role_matrix_sample(
     )
     .await?;
     let clerk_id = ensure_dev_person(
-        surreal,
+        application_store,
         report,
         "Clara Clerk",
         "clerk@neonlaw.com",
@@ -2133,7 +2199,7 @@ async fn seed_role_matrix_sample(
     )
     .await?;
     let client_id = ensure_dev_person(
-        surreal,
+        application_store,
         report,
         "Cleo Client",
         "client@neonlaw.com",
@@ -2151,7 +2217,7 @@ async fn seed_role_matrix_sample(
         owner_id
     } else {
         ensure_dev_person(
-            surreal,
+            application_store,
             report,
             "Navigator Owner",
             &dri_email,
@@ -2169,7 +2235,7 @@ async fn seed_role_matrix_sample(
     };
     for matter in SAMPLE_MATTERS {
         open_sample_matter(
-            surreal,
+            application_store,
             storage,
             report,
             matter,
@@ -2207,7 +2273,7 @@ struct FixtureCast {
 /// different questions — who the fixture accounts are, and what one matter is —
 /// and only the second one repeats.
 async fn open_sample_matter(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     report: &mut SeedReport,
     matter: &SampleMatter,
@@ -2224,7 +2290,7 @@ async fn open_sample_matter(
     } = *cast;
     {
         let entity_type =
-            crate::entity_types::find_by_name(surreal, matter.client_kind.entity_type())
+            crate::entity_types::find_by_name(application_store, matter.client_kind.entity_type())
                 .await?
                 .ok_or_else(|| {
                     anyhow::anyhow!(
@@ -2233,7 +2299,7 @@ async fn open_sample_matter(
                     )
                 })?;
         let entity_id = ensure_dev_entity(
-            surreal,
+            application_store,
             report,
             matter.client_entity,
             entity_type.id,
@@ -2241,7 +2307,7 @@ async fn open_sample_matter(
         )
         .await?;
         let project_id = ensure_dev_project(
-            surreal,
+            application_store,
             report,
             matter.code,
             matter.name,
@@ -2251,24 +2317,28 @@ async fn open_sample_matter(
         )
         .await?;
 
-        crate::projects::set_repository_url(surreal, project_id, Some(matter.repository_url))
-            .await?;
+        crate::projects::set_repository_url(
+            application_store,
+            project_id,
+            Some(matter.repository_url),
+        )
+        .await?;
 
         // Client side and firm side. The disclosed lawyer is what lets the
         // supervised Clerk resolve the matter.
-        ensure_participation(surreal, report, project_id, client_id, "client").await?;
-        ensure_participation(surreal, report, project_id, lawyer_id, "lawyer").await?;
-        ensure_participation(surreal, report, project_id, clerk_id, "clerk").await?;
+        ensure_participation(application_store, report, project_id, client_id, "client").await?;
+        ensure_participation(application_store, report, project_id, lawyer_id, "lawyer").await?;
+        ensure_participation(application_store, report, project_id, clerk_id, "clerk").await?;
         // Owner gets a firm-side row so the demo matters appear in the Owner's
         // own list: since ENG-81 the whole matter surface — `/app/projects` and
         // `/app/projects/{code}` alike — is participation-scoped for every tier,
         // with no privileged bypass.
-        ensure_participation(surreal, report, project_id, owner_id, "owner").await?;
+        ensure_participation(application_store, report, project_id, owner_id, "owner").await?;
         // The DRI needs a participation row of its own: the matter surface is
         // participation-scoped for every tier, so accountability without
         // participation would name a DRI who cannot open the matter.
         if dri_id != owner_id {
-            ensure_participation(surreal, report, project_id, dri_id, "owner").await?;
+            ensure_participation(application_store, report, project_id, dri_id, "owner").await?;
         }
         // Admin deliberately gets **no** row. These matters are what an
         // administrator who was never assigned to a matter looks like, which is
@@ -2283,15 +2353,15 @@ async fn open_sample_matter(
         // nothing else is seeded. Naming it rather than the fixture lawyer keeps
         // the accountable side of every sample matter pointing at whoever
         // actually runs the deployment.
-        crate::projects::designate_dri_in_surreal(
-            surreal,
+        crate::projects::designate_dri(
+            application_store,
             project_id,
             dri_id,
             crate::projects::DriSide::Lawyer,
         )
         .await?;
-        crate::projects::designate_dri_in_surreal(
-            surreal,
+        crate::projects::designate_dri(
+            application_store,
             project_id,
             client_id,
             crate::projects::DriSide::Client,
@@ -2300,11 +2370,11 @@ async fn open_sample_matter(
 
         // The rows each declared page reads, and — when a source is staged —
         // the pages and Drafts themselves.
-        let project = crate::projects::find_by_id(surreal, project_id)
+        let project = crate::projects::find_by_id(application_store, project_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("seed: Project `{}` vanished", matter.code))?;
         sample_records::seed(
-            surreal,
+            application_store,
             storage,
             &project,
             lawyer_id,
@@ -2317,15 +2387,15 @@ async fn open_sample_matter(
 }
 
 async fn ensure_dev_person(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     report: &mut SeedReport,
     name: &str,
     email: &str,
     role: crate::persons::Role,
 ) -> anyhow::Result<Uuid> {
-    let existing = crate::persons::find_by_email_ci(surreal, email).await?;
+    let existing = crate::persons::find_by_email_ci(application_store, email).await?;
     let row = crate::persons::find_or_create(
-        surreal,
+        application_store,
         &crate::persons::NewPerson::with_role(name, email, role),
     )
     .await?;
@@ -2335,7 +2405,7 @@ async fn ensure_dev_person(
     }
     if row.name != name || row.role != role {
         crate::persons::edit(
-            surreal,
+            application_store,
             row.id,
             &crate::persons::PersonEdit {
                 name: Some(name.into()),
@@ -2355,24 +2425,29 @@ async fn ensure_dev_person(
 /// and a company engaging outside counsel is a different Entity shape from an
 /// individual plaintiff.
 async fn ensure_dev_entity(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     report: &mut SeedReport,
     name: &str,
     entity_type_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> anyhow::Result<Uuid> {
-    if let Some(row) = crate::entities::find_by_name_and_type(surreal, name, entity_type_id).await?
+    if let Some(row) =
+        crate::entities::find_by_name_and_type(application_store, name, entity_type_id).await?
     {
         // Same repair as `seed_entities`: a persisted row's
         // `jurisdiction_id` may name a jurisdiction the reset local
         // engine no longer holds, and the engine never validated it.
         if row.jurisdiction_id != jurisdiction_id {
-            crate::entities::repoint_jurisdiction(surreal, row.id, jurisdiction_id).await?;
+            crate::entities::repoint_jurisdiction(application_store, row.id, jurisdiction_id)
+                .await?;
         }
         return Ok(row.id);
     }
-    let row = crate::entities::create(surreal, &new_entity(name, entity_type_id, jurisdiction_id))
-        .await?;
+    let row = crate::entities::create(
+        application_store,
+        &new_entity(name, entity_type_id, jurisdiction_id),
+    )
+    .await?;
     report.entities_inserted += 1;
     Ok(row.id)
 }
@@ -2406,7 +2481,7 @@ fn new_entity(
 }
 
 async fn ensure_dev_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     report: &mut SeedReport,
     code: &str,
     name: &str,
@@ -2415,7 +2490,7 @@ async fn ensure_dev_project(
     brand: &str,
 ) -> anyhow::Result<Uuid> {
     // Matter Pages must inherit their actual Brand owner's Firm at creation.
-    let firm_id = crate::firms::firm_id_for_brand_key(surreal, brand)
+    let firm_id = crate::firms::firm_id_for_brand_key(application_store, brand)
         .await?
         .ok_or_else(|| anyhow::anyhow!("sample Brand has no Firm ownership seat"))?;
     let input = crate::projects::NewProject {
@@ -2430,9 +2505,14 @@ async fn ensure_dev_project(
         jurisdiction_id: None,
         description: Some(description.to_string()),
     };
-    let row = match crate::projects::find_by_code(surreal, code).await? {
-        Some(existing) => crate::projects::upsert_with_id(surreal, existing.id, &input).await?,
-        None => crate::projects::find_or_create_by_code(surreal, Uuid::now_v7(), &input).await?,
+    let row = match crate::projects::find_by_code(application_store, code).await? {
+        Some(existing) => {
+            crate::projects::upsert_with_id(application_store, existing.id, &input).await?
+        }
+        None => {
+            crate::projects::find_or_create_by_code(application_store, Uuid::now_v7(), &input)
+                .await?
+        }
     };
     report.projects_inserted += 1;
     Ok(row.id)
@@ -2440,25 +2520,30 @@ async fn ensure_dev_project(
 
 /// Idempotently record one person's participation on a project.
 async fn ensure_participation(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     report: &mut SeedReport,
     project_id: Uuid,
     person_id: Uuid,
     participation: &str,
 ) -> anyhow::Result<()> {
     if let Some(row) =
-        crate::projects::participation_for_person(surreal, person_id, project_id).await?
+        crate::projects::participation_for_person(application_store, person_id, project_id).await?
     {
         // Restore the seeded participation if a persisted database drifted it:
         // the client/lawyer visibility this fixture demonstrates depends on the
         // exact value, so a stale `paralegal` or blank row must be reconciled.
         if row.participation != participation {
-            crate::projects::update_participation(surreal, row.id, person_id, participation)
-                .await?;
+            crate::projects::update_participation(
+                application_store,
+                row.id,
+                person_id,
+                participation,
+            )
+            .await?;
         }
         return Ok(());
     }
-    ensure_participation_in_surreal(surreal, project_id, person_id, participation).await?;
+    ensure_project_participation(application_store, project_id, person_id, participation).await?;
     report.person_project_roles_inserted += 1;
     Ok(())
 }
@@ -2466,22 +2551,34 @@ async fn ensure_participation(
 /// Reconcile one participation row in the Surreal ledger. Split out because
 /// the memory-backed local engine resets with its pod, so this must
 /// converge whether the row is already there or not.
-async fn ensure_participation_in_surreal(
-    surreal: &SurrealDb,
+async fn ensure_project_participation(
+    application_store: &ApplicationStore,
     project_id: Uuid,
     person_id: Uuid,
     participation: &str,
 ) -> anyhow::Result<()> {
-    match crate::projects::participation_for_person(surreal, person_id, project_id).await? {
+    match crate::projects::participation_for_person(application_store, person_id, project_id)
+        .await?
+    {
         Some(existing) if existing.participation == participation => Ok(()),
         Some(existing) => {
-            crate::projects::update_participation(surreal, existing.id, person_id, participation)
-                .await?;
+            crate::projects::update_participation(
+                application_store,
+                existing.id,
+                person_id,
+                participation,
+            )
+            .await?;
             Ok(())
         }
         None => {
-            match crate::projects::add_participation(surreal, project_id, person_id, participation)
-                .await
+            match crate::projects::add_participation(
+                application_store,
+                project_id,
+                person_id,
+                participation,
+            )
+            .await
             {
                 Ok(_) => Ok(()),
                 // `person_project_role_pair` is UNIQUE, so a concurrent seed
@@ -2490,13 +2587,16 @@ async fn ensure_participation_in_surreal(
                 // row and reconcile its value, the same settle-on-one-row
                 // contract `find_or_create_by_code` gives the project itself.
                 Err(crate::projects::ProjectStoreError::DuplicateParticipation) => {
-                    if let Some(existing) =
-                        crate::projects::participation_for_person(surreal, person_id, project_id)
-                            .await?
+                    if let Some(existing) = crate::projects::participation_for_person(
+                        application_store,
+                        person_id,
+                        project_id,
+                    )
+                    .await?
                     {
                         if existing.participation != participation {
                             crate::projects::update_participation(
-                                surreal,
+                                application_store,
                                 existing.id,
                                 person_id,
                                 participation,
@@ -2730,7 +2830,7 @@ fn normalized_body_bytes(body: &str) -> std::borrow::Cow<'_, [u8]> {
 /// extend.
 #[allow(clippy::too_many_lines)]
 async fn seed_templates(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     report: &mut SeedReport,
 ) -> anyhow::Result<()> {
@@ -2758,7 +2858,7 @@ async fn seed_templates(
         // before hashing.
         let body_bytes = normalized_body_bytes(body);
         let asset_id =
-            crate::assets::ingest_content(surreal, storage, &body_bytes, "text/markdown")
+            crate::assets::ingest_content(application_store, storage, &body_bytes, "text/markdown")
                 .await
                 .map_err(|e| anyhow::anyhow!("{label}: ingest body asset: {e}"))?;
 
@@ -2768,7 +2868,7 @@ async fn seed_templates(
         // Notation already opened against the old bytes keeps resolving to
         // them (`notation.template_id` pins the version).
         let saved = crate::templates::save_version(
-            surreal,
+            application_store,
             None,
             code,
             crate::templates::Version {
@@ -2797,21 +2897,30 @@ struct CredentialRec {
     license_number: String,
 }
 
-async fn seed_credentials(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_credentials(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     for rec in parse::<CredentialRec>(canonical::CREDENTIAL, "Credential.yaml")? {
-        let Some(p) = crate::persons::find_by_email_ci(surreal, &rec.person.email).await? else {
+        let Some(p) =
+            crate::persons::find_by_email_ci(application_store, &rec.person.email).await?
+        else {
             continue;
         };
-        let Some(j) = jurisdictions::find_by_name(surreal, &rec.jurisdiction.name).await? else {
+        let Some(j) =
+            jurisdictions::find_by_name(application_store, &rec.jurisdiction.name).await?
+        else {
             continue;
         };
         // Find-or-grant rather than read-then-write: the seed runs on
         // every boot, and two boots racing would otherwise both miss the
         // read and collide on `credential_person_jurisdiction`.
-        let before = crate::credentials::find_by_person_and_jurisdiction(surreal, p.id, j.id)
-            .await?
-            .is_some();
-        crate::credentials::find_or_grant(surreal, p.id, j.id, &rec.license_number).await?;
+        let before =
+            crate::credentials::find_by_person_and_jurisdiction(application_store, p.id, j.id)
+                .await?
+                .is_some();
+        crate::credentials::find_or_grant(application_store, p.id, j.id, &rec.license_number)
+            .await?;
         if !before {
             report.credentials_inserted += 1;
         }
@@ -2836,9 +2945,12 @@ struct JurisdictionRec {
 /// write is keyed on slug, so an edited definition converges rather than
 /// appending a second row. It inserts nothing matter-scoped, which is why
 /// it is safe in production.
-async fn seed_glossary_terms(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_glossary_terms(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     report.glossary_terms_written +=
-        crate::glossary::materialize(surreal, crate::glossary::terms()).await?;
+        crate::glossary::materialize(application_store, crate::glossary::terms()).await?;
     Ok(())
 }
 
@@ -2846,16 +2958,19 @@ async fn seed_glossary_terms(surreal: &SurrealDb, report: &mut SeedReport) -> an
 /// ([`crate::postgres::catalog`] picks SurrealDB or PostgreSQL). Canonical seed data:
 /// it runs identically in every environment, production included, and
 /// is idempotent on `code`.
-async fn seed_jurisdictions(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_jurisdictions(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     for rec in parse::<JurisdictionRec>(canonical::JURISDICTION, "Jurisdiction.yaml")? {
-        if jurisdictions::find_by_code(surreal, &rec.code)
+        if jurisdictions::find_by_code(application_store, &rec.code)
             .await?
             .is_some()
         {
             continue;
         }
         match jurisdictions::create(
-            surreal,
+            application_store,
             &NewJurisdiction::new(rec.name, rec.code, rec.jurisdiction_type),
         )
         .await
@@ -2884,19 +2999,22 @@ struct EntityTypeRec {
 /// it runs identically in every environment, production included, and
 /// is idempotent on `name` — `find_or_create` absorbs a concurrent
 /// boot's winning write.
-async fn seed_entity_types(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_entity_types(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for rec in parse::<EntityTypeRec>(canonical::ENTITY_TYPE, "EntityType.yaml")? {
         if !seen.insert(rec.name.clone()) {
             continue;
         }
-        if crate::entity_types::find_by_name(surreal, &rec.name)
+        if crate::entity_types::find_by_name(application_store, &rec.name)
             .await?
             .is_some()
         {
             continue;
         }
-        crate::entity_types::find_or_create(surreal, &rec.name).await?;
+        crate::entity_types::find_or_create(application_store, &rec.name).await?;
         report.entity_types_inserted += 1;
     }
     Ok(())
@@ -2925,7 +3043,7 @@ fn declared_jurisdiction_name<'a>(
 }
 
 async fn seed_entities(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     path: &str,
     report: &mut SeedReport,
@@ -2938,7 +3056,7 @@ async fn seed_entities(
     // the row it is moving away from.
     let mut claim_anchor: Vec<(Uuid, String)> = Vec::new();
     for rec in parse::<EntityRec>(yaml, path)? {
-        let et = crate::entity_types::find_by_name(surreal, &rec.entity_type.name)
+        let et = crate::entity_types::find_by_name(application_store, &rec.entity_type.name)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -2947,19 +3065,20 @@ async fn seed_entities(
                 )
             })?;
         let jurisdiction_name = declared_jurisdiction_name(&rec.name, &rec.entity_type)?;
-        let jur = jurisdictions::find_by_name(surreal, jurisdiction_name)
+        let jur = jurisdictions::find_by_name(application_store, jurisdiction_name)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!("Entity.yaml references unknown jurisdiction {jurisdiction_name:?}")
             })?;
-        if let Some(row) = crate::entities::find_by_name_and_type(surreal, &rec.name, et.id).await?
+        if let Some(row) =
+            crate::entities::find_by_name_and_type(application_store, &rec.name, et.id).await?
         {
             // A persisted database can outlive the memory-backed local
             // engine, whose re-seeded jurisdictions carry fresh ids, and
             // the engine never validated the link. Repoint so the
             // reference resolves again instead of dangling.
             if row.jurisdiction_id != jur.id {
-                crate::entities::repoint_jurisdiction(surreal, row.id, jur.id).await?;
+                crate::entities::repoint_jurisdiction(application_store, row.id, jur.id).await?;
             }
             // Nothing above rewrites an existing row, so moving the
             // configured anchor would strand `firm_anchor_key` on the
@@ -2973,18 +3092,21 @@ async fn seed_entities(
                 match expected {
                     Some(key) => claim_anchor.push((row.id, key)),
                     None => {
-                        crate::entities::set_firm_anchor_key(surreal, row.id, None).await?;
+                        crate::entities::set_firm_anchor_key(application_store, row.id, None)
+                            .await?;
                     }
                 }
             }
             continue;
         }
-        match crate::entities::create(surreal, &new_entity(&rec.name, et.id, jur.id)).await {
+        match crate::entities::create(application_store, &new_entity(&rec.name, et.id, jur.id))
+            .await
+        {
             Ok(_) => report.entities_inserted += 1,
             // Claiming the anchor precedes writing its Entity. A concurrent
             // seed must wait for that row before later steps can resolve it.
             Err(crate::entities::EntityError::FirmAnchorTaken) => {
-                wait_for_seed_entity(surreal, &rec.name).await?;
+                wait_for_seed_entity(application_store, &rec.name).await?;
             }
             Err(error) => return Err(error.into()),
         }
@@ -2993,7 +3115,7 @@ async fn seed_entities(
         // Losing the key to a concurrent seed is the same outcome the create
         // arm absorbs: another pass already moved the anchor onto this
         // identity, so this one has nothing left to do.
-        match crate::entities::set_firm_anchor_key(surreal, id, Some(key)).await {
+        match crate::entities::set_firm_anchor_key(application_store, id, Some(key)).await {
             Ok(_) | Err(crate::entities::EntityError::FirmAnchorTaken) => {}
             Err(error) => return Err(error.into()),
         }
@@ -3003,10 +3125,13 @@ async fn seed_entities(
 
 /// Wait for a concurrent claimant to publish its Entity. A stranded claim
 /// fails the seed without releasing or replacing another writer's ownership.
-async fn wait_for_seed_entity(surreal: &SurrealDb, name: &str) -> anyhow::Result<()> {
+async fn wait_for_seed_entity(
+    application_store: &ApplicationStore,
+    name: &str,
+) -> anyhow::Result<()> {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if crate::entities::find_by_name(surreal, name)
+            if crate::entities::find_by_name(application_store, name)
                 .await?
                 .is_some()
             {
@@ -3022,11 +3147,12 @@ async fn wait_for_seed_entity(surreal: &SurrealDb, name: &str) -> anyhow::Result
 
 /// The firm's public EIN.
 /// The canonical seed runs in staging and production; only a missing EIN is filled.
-async fn seed_firm_ein(surreal: &SurrealDb) -> anyhow::Result<()> {
-    let entity_id = crate::entities::firm_anchor_holder(surreal, &FIRM_ENTITY_NAME.to_lowercase())
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("seed: firm Entity anchor missing"))?;
-    crate::entities::seed_ein(surreal, entity_id, "81-3099614").await?;
+async fn seed_firm_ein(application_store: &ApplicationStore) -> anyhow::Result<()> {
+    let entity_id =
+        crate::entities::firm_anchor_holder(application_store, &FIRM_ENTITY_NAME.to_lowercase())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("seed: firm Entity anchor missing"))?;
+    crate::entities::seed_ein(application_store, entity_id, "81-3099614").await?;
     Ok(())
 }
 
@@ -3252,13 +3378,13 @@ pub fn compiled_brand_name(key: &str) -> Option<&'static str> {
 /// Admin DRI edit. Idempotent: an existing name or key is this migration
 /// having already run, and only its typeface/colour are refreshed.
 async fn seed_brands(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm: &crate::firms::Firm,
     owner: SeedFirm,
 ) -> anyhow::Result<()> {
     for brand in COMPILED_BRANDS.iter().filter(|brand| brand.firm == owner) {
         crate::brands::seed_upsert(
-            surreal,
+            application_store,
             &crate::brands::NewBrand {
                 name: brand.name.to_string(),
                 key: brand.key.to_string(),
@@ -3276,20 +3402,22 @@ async fn seed_brands(
 
 /// Find or create the canonical practice Firm. The primary admin becomes
 /// Admin DRI only on creation.
-async fn ensure_practice_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firms::Firm> {
-    let entity = crate::entities::find_by_name(surreal, FIRM_ENTITY_NAME)
+async fn ensure_practice_firm(
+    application_store: &ApplicationStore,
+) -> anyhow::Result<crate::firms::Firm> {
+    let entity = crate::entities::find_by_name(application_store, FIRM_ENTITY_NAME)
         .await?
         .ok_or_else(|| anyhow::anyhow!("canonical seed is missing {FIRM_ENTITY_NAME}"))?;
-    let admin_dri = crate::persons::find_by_email_ci(surreal, PRIMARY_ADMIN_EMAIL)
+    let admin_dri = crate::persons::find_by_email_ci(application_store, PRIMARY_ADMIN_EMAIL)
         .await?
         .ok_or_else(|| {
             anyhow::anyhow!("canonical seed is missing the primary admin {PRIMARY_ADMIN_EMAIL}")
         })?
         .id;
-    match crate::firms::find_by_entity_id(surreal, entity.id).await? {
+    match crate::firms::find_by_entity_id(application_store, entity.id).await? {
         Some(firm) => Ok(firm),
         None => match crate::firms::create(
-            surreal,
+            application_store,
             &crate::firms::NewFirm {
                 name: FIRM_ENTITY_NAME.to_string(),
                 status: "active".to_string(),
@@ -3301,7 +3429,7 @@ async fn ensure_practice_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firm
         {
             Ok(firm) => Ok(firm),
             Err(crate::firms::FirmError::DuplicateEntity) => {
-                crate::firms::find_by_entity_id(surreal, entity.id)
+                crate::firms::find_by_entity_id(application_store, entity.id)
                     .await?
                     .ok_or_else(|| {
                         anyhow::anyhow!("firm for {FIRM_ENTITY_NAME} exists but did not read")
@@ -3318,20 +3446,22 @@ async fn ensure_practice_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firm
 /// Entity is left exactly as it is. Its Admin DRI is the same primary
 /// admin: the canonical seed ships exactly one person of record, and
 /// both firms' administration starts there.
-async fn ensure_lex_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firms::Firm> {
-    let entity = crate::entities::find_by_name(surreal, LEX_FIRM_ENTITY_NAME)
+async fn ensure_lex_firm(
+    application_store: &ApplicationStore,
+) -> anyhow::Result<crate::firms::Firm> {
+    let entity = crate::entities::find_by_name(application_store, LEX_FIRM_ENTITY_NAME)
         .await?
         .ok_or_else(|| anyhow::anyhow!("canonical seed is missing {LEX_FIRM_ENTITY_NAME}"))?;
-    let admin_dri = crate::persons::find_by_email_ci(surreal, PRIMARY_ADMIN_EMAIL)
+    let admin_dri = crate::persons::find_by_email_ci(application_store, PRIMARY_ADMIN_EMAIL)
         .await?
         .ok_or_else(|| {
             anyhow::anyhow!("canonical seed is missing the primary admin {PRIMARY_ADMIN_EMAIL}")
         })?
         .id;
-    match crate::firms::find_by_entity_id(surreal, entity.id).await? {
+    match crate::firms::find_by_entity_id(application_store, entity.id).await? {
         Some(firm) => Ok(firm),
         None => match crate::firms::create(
-            surreal,
+            application_store,
             &crate::firms::NewFirm {
                 name: LEX_FIRM_NAME.to_string(),
                 status: "active".to_string(),
@@ -3343,7 +3473,7 @@ async fn ensure_lex_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firms::Fi
         {
             Ok(firm) => Ok(firm),
             Err(crate::firms::FirmError::DuplicateEntity) => {
-                crate::firms::find_by_entity_id(surreal, entity.id)
+                crate::firms::find_by_entity_id(application_store, entity.id)
                     .await?
                     .ok_or_else(|| {
                         anyhow::anyhow!("firm for {LEX_FIRM_ENTITY_NAME} exists but did not read")
@@ -3376,11 +3506,11 @@ pub fn practice_worn_brand_keys() -> Vec<&'static str> {
 /// first (ENG-659: every compiled brand must be created *as* that Firm's
 /// own row, so the Firm has to exist before [`seed_brands`] runs), then
 /// attaches each key through `firm_brand`.
-async fn seed_practice(surreal: &SurrealDb) -> anyhow::Result<()> {
-    let firm = ensure_practice_firm(surreal).await?;
+async fn seed_practice(application_store: &ApplicationStore) -> anyhow::Result<()> {
+    let firm = ensure_practice_firm(application_store).await?;
     if firm.name == "Shook Law PLLC" {
         crate::firms::update(
-            surreal,
+            application_store,
             crate::persons::Role::Owner,
             None,
             firm.id,
@@ -3391,27 +3521,27 @@ async fn seed_practice(surreal: &SurrealDb) -> anyhow::Result<()> {
         )
         .await?;
     }
-    seed_brands(surreal, &firm, SeedFirm::Practice).await?;
+    seed_brands(application_store, &firm, SeedFirm::Practice).await?;
     for key in seeded_brand_keys(SeedFirm::Practice) {
-        match crate::firms::ensure_brand(surreal, firm.id, key).await {
+        match crate::firms::ensure_brand(application_store, firm.id, key).await {
             Ok(()) | Err(crate::firms::FirmError::DuplicateBrand) => {}
             Err(error) => return Err(error.into()),
         }
     }
     // The whole point of brand mobility is that the same key could wear
     // either firm at runtime, so the seed proves both shapes exist.
-    let lex = ensure_lex_firm(surreal).await?;
-    seed_brands(surreal, &lex, SeedFirm::Lex).await?;
+    let lex = ensure_lex_firm(application_store).await?;
+    seed_brands(application_store, &lex, SeedFirm::Lex).await?;
     for key in seeded_brand_keys(SeedFirm::Lex) {
-        match crate::firms::ensure_brand(surreal, lex.id, key).await {
+        match crate::firms::ensure_brand(application_store, lex.id, key).await {
             Ok(()) | Err(crate::firms::FirmError::DuplicateBrand) => {}
             Err(error) => return Err(error.into()),
         }
     }
-    align_canonical_brand_seats(surreal, firm.id, lex.id).await?;
+    align_canonical_brand_seats(application_store, firm.id, lex.id).await?;
     // Theme each Firm once its compiled brands sit on it.
-    seed_portal_theme(surreal, &firm, PRACTICE_PORTAL_THEME).await?;
-    seed_portal_theme(surreal, &lex, LEX_PORTAL_THEME).await?;
+    seed_portal_theme(application_store, &firm, PRACTICE_PORTAL_THEME).await?;
+    seed_portal_theme(application_store, &lex, LEX_PORTAL_THEME).await?;
     Ok(())
 }
 
@@ -3419,7 +3549,7 @@ async fn seed_practice(surreal: &SurrealDb) -> anyhow::Result<()> {
 /// tenancy does this inside `seed_brand`; this pass covers the SurrealDB
 /// seat and a Postgres seat the brand upsert left in place.
 async fn align_canonical_brand_seats(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     practice_id: Uuid,
     lex_id: Uuid,
 ) -> anyhow::Result<()> {
@@ -3428,14 +3558,16 @@ async fn align_canonical_brand_seats(
             SeedFirm::Practice => practice_id,
             SeedFirm::Lex => lex_id,
         };
-        let Some(current) = crate::firms::firm_id_for_brand_key(surreal, brand.key).await? else {
+        let Some(current) =
+            crate::firms::firm_id_for_brand_key(application_store, brand.key).await?
+        else {
             continue;
         };
         if current == target {
             continue;
         }
         crate::firms::move_brand(
-            surreal,
+            application_store,
             crate::persons::Role::Owner,
             None,
             brand.key,
@@ -3459,7 +3591,7 @@ pub const LEX_PORTAL_THEME: &str = "lex-tecnica";
 /// Admin already chose stays, and a deployment where the Firm no longer owns
 /// that Brand keeps each host's own look rather than failing the seed.
 async fn seed_portal_theme(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm: &crate::firms::Firm,
     key: &str,
 ) -> anyhow::Result<()> {
@@ -3470,7 +3602,15 @@ async fn seed_portal_theme(
         portal_theme_brand_key: Some(Some(key.to_string())),
         ..crate::firms::FirmEdit::default()
     };
-    match crate::firms::update(surreal, crate::persons::Role::Owner, None, firm.id, &edit).await {
+    match crate::firms::update(
+        application_store,
+        crate::persons::Role::Owner,
+        None,
+        firm.id,
+        &edit,
+    )
+    .await
+    {
         Ok(_) | Err(crate::firms::FirmError::ThemeBrandNotOwned(_, _)) => Ok(()),
         Err(error) => Err(error.into()),
     }
@@ -3478,24 +3618,27 @@ async fn seed_portal_theme(
 
 /// Grant `person_firm_role` to every Admin, Lawyer, and Clerk against the
 /// seeded practice. Owner stays the system-wide tier and gets no row.
-async fn seed_firm_memberships(surreal: &SurrealDb) -> anyhow::Result<()> {
-    let entity = crate::entities::find_by_name(surreal, FIRM_ENTITY_NAME)
+async fn seed_firm_memberships(application_store: &ApplicationStore) -> anyhow::Result<()> {
+    let entity = crate::entities::find_by_name(application_store, FIRM_ENTITY_NAME)
         .await?
         .ok_or_else(|| anyhow::anyhow!("canonical seed is missing {FIRM_ENTITY_NAME}"))?;
-    let Some(firm) = crate::firms::find_by_entity_id(surreal, entity.id).await? else {
+    let Some(firm) = crate::firms::find_by_entity_id(application_store, entity.id).await? else {
         return Ok(());
     };
-    seed_member_roles(surreal, firm.id).await
+    seed_member_roles(application_store, firm.id).await
 }
 
 /// Grant `person_firm_role` on `firm_id` to every Admin, Lawyer, and Clerk.
-async fn seed_member_roles(surreal: &SurrealDb, firm_id: Uuid) -> anyhow::Result<()> {
-    for person in crate::persons::list_directory(surreal).await? {
+async fn seed_member_roles(
+    application_store: &ApplicationStore,
+    firm_id: Uuid,
+) -> anyhow::Result<()> {
+    for person in crate::persons::list_directory(application_store).await? {
         let Some(membership) = crate::firms::FirmMembership::for_role(person.role) else {
             continue;
         };
         crate::firms::ensure_membership(
-            surreal,
+            application_store,
             &crate::firms::NewPersonFirmRole {
                 person_id: person.id,
                 firm_id,
@@ -3510,14 +3653,14 @@ async fn seed_member_roles(surreal: &SurrealDb, firm_id: Uuid) -> anyhow::Result
 
 /// Give unowned Projects to their brand's Firm, falling back to the seeded
 /// practice for brands no Firm wears.
-async fn seed_project_firm_ownership(surreal: &SurrealDb) -> anyhow::Result<()> {
-    let entity = crate::entities::find_by_name(surreal, FIRM_ENTITY_NAME)
+async fn seed_project_firm_ownership(application_store: &ApplicationStore) -> anyhow::Result<()> {
+    let entity = crate::entities::find_by_name(application_store, FIRM_ENTITY_NAME)
         .await?
         .ok_or_else(|| anyhow::anyhow!("canonical seed is missing {FIRM_ENTITY_NAME}"))?;
-    let Some(firm) = crate::firms::find_by_entity_id(surreal, entity.id).await? else {
+    let Some(firm) = crate::firms::find_by_entity_id(application_store, entity.id).await? else {
         return Ok(());
     };
-    crate::firms::backfill_unowned_projects(surreal, Some(firm.id)).await?;
+    crate::firms::backfill_unowned_projects(application_store, Some(firm.id)).await?;
     Ok(())
 }
 
@@ -3525,12 +3668,12 @@ async fn seed_project_firm_ownership(surreal: &SurrealDb) -> anyhow::Result<()> 
 /// Addresses split across two Persons are refused: they are one human the
 /// directory holds twice, and `navigator site person merge` is the fix.
 async fn find_person_for_record(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     rec: &PersonRec,
 ) -> anyhow::Result<Option<crate::persons::Person>> {
     let mut found: Vec<crate::persons::Person> = Vec::new();
     for email in rec.candidate_emails() {
-        if let Some(person) = crate::persons::find_by_any_email(surreal, email).await? {
+        if let Some(person) = crate::persons::find_by_any_email(application_store, email).await? {
             if !found.iter().any(|known| known.id == person.id) {
                 found.push(person);
             }
@@ -3554,12 +3697,12 @@ async fn find_person_for_record(
 
 /// Record every wanted alias on `person_id`.
 async fn record_aliases(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Uuid,
     wanted: &[String],
 ) -> anyhow::Result<()> {
     for email in wanted {
-        crate::persons::add_alias(surreal, person_id, email)
+        crate::persons::add_alias(application_store, person_id, email)
             .await
             .map_err(|error| anyhow::anyhow!("alias `{email}`: {error}"))?;
     }
@@ -3571,13 +3714,13 @@ async fn record_aliases(
 /// label and primary flag in place) and nothing is ever deleted — a
 /// number the record does not name is left where it is.
 async fn record_phones(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Uuid,
     wanted: &[SeedPhone],
 ) -> anyhow::Result<()> {
     for phone in wanted {
         crate::person_phones::set_phone(
-            surreal,
+            application_store,
             person_id,
             &phone.e164,
             phone.label,
@@ -3592,14 +3735,14 @@ async fn record_phones(
 /// The wanted phone numbers the Person does not already hold with the
 /// same label and primary flag — the change the record would make.
 async fn missing_phones(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Uuid,
     wanted: &[SeedPhone],
 ) -> anyhow::Result<Vec<SeedPhone>> {
     if wanted.is_empty() {
         return Ok(Vec::new());
     }
-    let held = crate::person_phones::list_phones(surreal, person_id).await?;
+    let held = crate::person_phones::list_phones(application_store, person_id).await?;
     Ok(wanted
         .iter()
         .filter(|want| {
@@ -3614,14 +3757,14 @@ async fn missing_phones(
 /// The phone numbers a non-overwriting seed may add, leaving every held
 /// number and its primary designation intact.
 async fn additional_phones(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Uuid,
     wanted: &[SeedPhone],
 ) -> anyhow::Result<Vec<SeedPhone>> {
     if wanted.is_empty() {
         return Ok(Vec::new());
     }
-    let held = crate::person_phones::list_phones(surreal, person_id).await?;
+    let held = crate::person_phones::list_phones(application_store, person_id).await?;
     let mut has_primary = held.iter().any(|phone| phone.is_primary);
     let mut has_any = !held.is_empty();
     let mut additions = Vec::new();
@@ -3642,7 +3785,10 @@ async fn additional_phones(
     Ok(additions)
 }
 
-async fn seed_persons(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_persons(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     for rec in parse::<PersonRec>(canonical::PERSON, "Person.yaml")? {
         anyhow::ensure!(
             rec.role.is_none(),
@@ -3651,16 +3797,16 @@ async fn seed_persons(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::R
         );
         let email = rec.email.clone();
         let wanted_phones = rec.wanted_phones()?;
-        let before = crate::persons::find_by_email_ci(surreal, &email).await?;
+        let before = crate::persons::find_by_email_ci(application_store, &email).await?;
         let person = crate::persons::find_or_create(
-            surreal,
+            application_store,
             &crate::persons::NewPerson {
                 profile_image_url: rec.profile_image_url,
                 ..crate::persons::NewPerson::new(rec.name, rec.email)
             },
         )
         .await?;
-        record_phones(surreal, person.id, &wanted_phones).await?;
+        record_phones(application_store, person.id, &wanted_phones).await?;
         if before.is_none() {
             report.persons_inserted += 1;
         }
@@ -3684,18 +3830,23 @@ struct TestimonialRec {
     display_order: i32,
 }
 
-async fn seed_testimonials(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_testimonials(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     for rec in parse::<TestimonialRec>(canonical::TESTIMONIAL, "Testimonial.yaml")? {
-        let Some(project) = crate::projects::find_by_name(surreal, &rec.project.codename).await?
+        let Some(project) =
+            crate::projects::find_by_name(application_store, &rec.project.codename).await?
         else {
             continue;
         };
-        let Some(person) = crate::persons::find_by_email_ci(surreal, &rec.person.email).await?
+        let Some(person) =
+            crate::persons::find_by_email_ci(application_store, &rec.person.email).await?
         else {
             continue;
         };
         crate::testimonials::find_or_create(
-            surreal,
+            application_store,
             &crate::testimonials::NewTestimonial {
                 project_id: project.id,
                 person_id: person.id,
@@ -3760,7 +3911,10 @@ fn require_firm_domain(email: &str, role: crate::persons::Role) -> anyhow::Resul
 /// `persons.role`. Resolve each user record by email, parse the role
 /// token, and update the row if the requested tier is higher than
 /// what's already stored. The ladder is owner > admin > lawyer > clerk > client.
-async fn seed_user_roles(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_user_roles(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     use crate::persons::Role;
 
     fn parse_role_token(s: &str) -> Role {
@@ -3775,13 +3929,15 @@ async fn seed_user_roles(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow
     for rec in parse::<UserRec>(canonical::USER, "User.yaml")? {
         let requested = parse_role_token(&rec.role);
         require_firm_domain(&rec.person.email, requested)?;
-        let Some(p) = crate::persons::find_by_email_ci(surreal, &rec.person.email).await? else {
+        let Some(p) =
+            crate::persons::find_by_email_ci(application_store, &rec.person.email).await?
+        else {
             continue;
         };
         if p.role.authority_rank() >= requested.authority_rank() {
             continue;
         }
-        crate::persons::set_role(surreal, p.id, requested).await?;
+        crate::persons::set_role(application_store, p.id, requested).await?;
         report.persons_updated += 1;
     }
     Ok(())
@@ -3796,16 +3952,20 @@ struct GitRepoRec {
 /// the table lives since its slice of #1093 (ENG-20). Idempotent on
 /// `remote_hash`; `find_or_create` absorbs a concurrent boot's winning
 /// write.
-async fn seed_git_repositories(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_git_repositories(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     for rec in parse::<GitRepoRec>(sample_seeds::GIT_REPOSITORY, "sample/GitRepository.yaml")? {
         let remote_hash = remote_hash(&rec.repository_name);
-        if crate::git_repositories::find_by_remote_hash(surreal, &remote_hash)
+        if crate::git_repositories::find_by_remote_hash(application_store, &remote_hash)
             .await?
             .is_some()
         {
             continue;
         }
-        crate::git_repositories::find_or_create(surreal, &remote_hash, &"0".repeat(40)).await?;
+        crate::git_repositories::find_or_create(application_store, &remote_hash, &"0".repeat(40))
+            .await?;
         report.git_repositories_inserted += 1;
     }
     Ok(())
@@ -3837,17 +3997,20 @@ struct QuestionRec {
     // [`question_help_text`] at the point a surface renders the question.
 }
 
-async fn seed_questions(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_questions(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     for rec in parse::<QuestionRec>(canonical::QUESTION, "Question.yaml")? {
         // `find_or_create` rather than read-then-insert: the cucumber
         // suites run scenarios concurrently against one shared engine, so a
         // seeder that assumed exclusivity would lose the race and surface
         // `CodeTaken`. It also keeps the second dev boot a no-op.
-        let existed = crate::questions::find_by_code(surreal, &rec.code)
+        let existed = crate::questions::find_by_code(application_store, &rec.code)
             .await?
             .is_some();
         let row = crate::questions::find_or_create(
-            surreal,
+            application_store,
             &crate::questions::NewQuestion::new(
                 rec.code.clone(),
                 rec.prompt,
@@ -3867,7 +4030,7 @@ async fn seed_questions(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow:
         // narrowed it is brought in line, since a notation's `audiences:`
         // may only speak for its own `custom_*` questions (N129).
         if let Some(audience) = rec.audience.filter(|a| *a != row.audience) {
-            crate::questions::set_audience(surreal, &rec.code, &audience).await?;
+            crate::questions::set_audience(application_store, &rec.code, &audience).await?;
         }
     }
     Ok(())
@@ -3922,20 +4085,20 @@ struct MailroomRec {
 /// is the row the `address` schema's missing XOR assert exists for: it
 /// names neither a person nor an entity.
 async fn seed_mailrooms(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     path: &str,
     report: &mut SeedReport,
 ) -> anyhow::Result<()> {
     for rec in parse::<MailroomRec>(yaml, path)? {
-        if crate::mailrooms::find_by_name(surreal, &rec.name)
+        if crate::mailrooms::find_by_name(application_store, &rec.name)
             .await?
             .is_some()
         {
             continue;
         }
         let addr = crate::addresses::create(
-            surreal,
+            application_store,
             &crate::addresses::NewAddress {
                 line1: format!("(via mailroom: {})", rec.name),
                 ..crate::addresses::NewAddress::default()
@@ -3945,7 +4108,8 @@ async fn seed_mailrooms(
         // Find-or-create, not create: the cucumber suites seed
         // concurrently against one shared engine, so the read above can
         // miss a mailroom another scenario is creating right now.
-        let created = crate::mailrooms::find_or_create(surreal, &rec.name, addr.id).await?;
+        let created =
+            crate::mailrooms::find_or_create(application_store, &rec.name, addr.id).await?;
         if created.address_id == addr.id {
             report.mailrooms_inserted += 1;
         }
@@ -3971,7 +4135,7 @@ struct EntityNameRef {
 /// Both `person_id` and `entity_id` are real `record<>` links since the
 /// entities cluster ported (ENG-120), so this step is single-engine.
 async fn seed_addresses(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     brand: BrandSeed,
     report: &mut SeedReport,
 ) -> anyhow::Result<()> {
@@ -3979,11 +4143,12 @@ async fn seed_addresses(
         return Ok(());
     };
     for rec in parse::<AddressRec>(yaml, path)? {
-        let Some(ent) = crate::entities::find_by_name(surreal, &rec.entity.name).await? else {
+        let Some(ent) = crate::entities::find_by_name(application_store, &rec.entity.name).await?
+        else {
             continue;
         };
         let (_, created) = crate::addresses::find_or_create_for_entity(
-            surreal,
+            application_store,
             &crate::addresses::NewAddress {
                 entity_id: Some(ent.id),
                 line1: rec.street,
@@ -4011,7 +4176,7 @@ struct SocialHandleRec {
 }
 
 async fn seed_social_handles(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     path: &str,
     report: &mut SeedReport,
@@ -4020,7 +4185,7 @@ async fn seed_social_handles(
         if crate::seed::compiled_brand_name(&rec.brand).is_none() {
             anyhow::bail!("{path}: `{}` is not a registered Brand", rec.brand);
         }
-        crate::social_handles::set(surreal, &rec.brand, &rec.provider, &rec.handle)
+        crate::social_handles::set(application_store, &rec.brand, &rec.provider, &rec.handle)
             .await
             .map_err(|error| anyhow::anyhow!("{path}: {error}"))?;
         report.social_handles_written += 1;
@@ -4076,7 +4241,7 @@ pub fn seeded_post_markdown() -> anyhow::Result<Vec<String>> {
 }
 
 async fn seed_posts(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     path: &str,
     report: &mut SeedReport,
@@ -4088,7 +4253,7 @@ async fn seed_posts(
             .with_timezone(&chrono::Utc);
         let mut links = Vec::new();
         for (provider, link) in &rec.social {
-            let handle = crate::social_handles::find(surreal, &rec.brand, provider)
+            let handle = crate::social_handles::find(application_store, &rec.brand, provider)
                 .await?
                 .ok_or_else(|| {
                     anyhow::anyhow!("{id}: the Brand has no {provider} handle in SocialHandle.yaml")
@@ -4102,7 +4267,7 @@ async fn seed_posts(
             });
         }
         let change = crate::posts::seed_post(
-            surreal,
+            application_store,
             &crate::posts::SourcePost {
                 brand_key: &rec.brand,
                 slug: &rec.slug,
@@ -4142,13 +4307,18 @@ struct MailroomNameRef {
     name: String,
 }
 
-async fn seed_letters(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_letters(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     for rec in parse::<LetterRec>(sample_seeds::LETTER, "sample/Letter.yaml")? {
-        let Some(mr) = crate::mailrooms::find_by_name(surreal, &rec.mailroom.name).await? else {
+        let Some(mr) =
+            crate::mailrooms::find_by_name(application_store, &rec.mailroom.name).await?
+        else {
             continue;
         };
         if crate::letters::find_by_mailroom_sender_summary(
-            surreal,
+            application_store,
             mr.id,
             &rec.sender,
             &rec.subject,
@@ -4159,7 +4329,7 @@ async fn seed_letters(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::R
             continue;
         }
         crate::letters::record(
-            surreal,
+            application_store,
             &crate::letters::NewLetter {
                 mailroom_id: mr.id,
                 // The canonical seed is firm-wide reference data, not tied to
@@ -4184,12 +4354,18 @@ struct AnswerRec {
     value: String,
 }
 
-async fn seed_answers(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
+async fn seed_answers(
+    application_store: &ApplicationStore,
+    report: &mut SeedReport,
+) -> anyhow::Result<()> {
     for rec in parse::<AnswerRec>(sample_seeds::ANSWER, "sample/Answer.yaml")? {
-        let Some(q) = crate::questions::find_by_code(surreal, &rec.question_code).await? else {
+        let Some(q) = crate::questions::find_by_code(application_store, &rec.question_code).await?
+        else {
             continue;
         };
-        let Some(p) = crate::persons::find_by_email_ci(surreal, &rec.person_email).await? else {
+        let Some(p) =
+            crate::persons::find_by_email_ci(application_store, &rec.person_email).await?
+        else {
             continue;
         };
         let value = crate::answers::primitive(&rec.value);
@@ -4197,10 +4373,14 @@ async fn seed_answers(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::R
         // second dev boot inserts zero duplicates. These fixtures are
         // person-scoped and carry no Notation, so there is no state to key
         // on — the value itself is the natural key.
-        if crate::answers::exists_with_value(surreal, q.id, p.id, &value).await? {
+        if crate::answers::exists_with_value(application_store, q.id, p.id, &value).await? {
             continue;
         }
-        crate::answers::record(surreal, &crate::answers::NewAnswer::new(q.id, p.id, value)).await?;
+        crate::answers::record(
+            application_store,
+            &crate::answers::NewAnswer::new(q.id, p.id, value),
+        )
+        .await?;
         report.answers_inserted += 1;
     }
     Ok(())
@@ -4214,22 +4394,25 @@ struct PersonEntityRoleRec {
 }
 
 async fn seed_person_entity_roles(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     report: &mut SeedReport,
 ) -> anyhow::Result<()> {
     for rec in parse::<PersonEntityRoleRec>(canonical::PERSON_ENTITY_ROLE, "PersonEntityRole.yaml")?
     {
-        let Some(p) = crate::persons::find_by_email_ci(surreal, &rec.person.email).await? else {
+        let Some(p) =
+            crate::persons::find_by_email_ci(application_store, &rec.person.email).await?
+        else {
             continue;
         };
-        let Some(e) = crate::entities::find_by_name(surreal, &rec.entity.name).await? else {
+        let Some(e) = crate::entities::find_by_name(application_store, &rec.entity.name).await?
+        else {
             continue;
         };
         // `grant` is find-or-create behind the UNIQUE `entity_role_tie`
         // index, so re-seeding a live database adds nothing and two
         // concurrent seeds settle on one edge rather than racing.
-        let existing = crate::entity_roles::find(surreal, p.id, e.id, &rec.role).await?;
-        crate::entity_roles::grant(surreal, p.id, e.id, &rec.role).await?;
+        let existing = crate::entity_roles::find(application_store, p.id, e.id, &rec.role).await?;
+        crate::entity_roles::grant(application_store, p.id, e.id, &rec.role).await?;
         if existing.is_none() {
             report.person_entity_roles_inserted += 1;
         }
@@ -4250,26 +4433,30 @@ struct ProjectCodenameRef {
 }
 
 async fn seed_person_project_roles(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     report: &mut SeedReport,
 ) -> anyhow::Result<()> {
     for rec in parse::<PersonProjectRoleRec>(
         sample_seeds::PERSON_PROJECT_ROLE,
         "sample/PersonProjectRole.yaml",
     )? {
-        let Some(p) = crate::persons::find_by_email_ci(surreal, &rec.person.email).await? else {
+        let Some(p) =
+            crate::persons::find_by_email_ci(application_store, &rec.person.email).await?
+        else {
             continue;
         };
-        let Some(pr) = crate::projects::find_by_name(surreal, &rec.project.codename).await? else {
+        let Some(pr) =
+            crate::projects::find_by_name(application_store, &rec.project.codename).await?
+        else {
             continue;
         };
-        if crate::projects::participation_for_person(surreal, p.id, pr.id)
+        if crate::projects::participation_for_person(application_store, p.id, pr.id)
             .await?
             .is_some()
         {
             continue;
         }
-        crate::projects::add_participation(surreal, pr.id, p.id, &rec.role).await?;
+        crate::projects::add_participation(application_store, pr.id, p.id, &rec.role).await?;
         report.person_project_roles_inserted += 1;
     }
     Ok(())
@@ -4295,18 +4482,23 @@ pub const NO_CHARGE_FEE_CLAUSE_BODY: &str = "The Firm charges no fee for this en
 ///
 /// Propagates any database error reading or writing the notation's clauses.
 pub async fn seed_no_charge_fee_clause(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     notation_id: Uuid,
 ) -> anyhow::Result<Uuid> {
-    let existing = crate::notation_clauses::for_notation(surreal, notation_id).await?;
+    let existing = crate::notation_clauses::for_notation(application_store, notation_id).await?;
     if let Some(clause) = existing
         .iter()
         .find(|c| c.body_markdown == NO_CHARGE_FEE_CLAUSE_BODY)
     {
         return Ok(clause.id);
     }
-    let id = crate::notation_clauses::append(surreal, notation_id, NO_CHARGE_FEE_CLAUSE_BODY, None)
-        .await?;
+    let id = crate::notation_clauses::append(
+        application_store,
+        notation_id,
+        NO_CHARGE_FEE_CLAUSE_BODY,
+        None,
+    )
+    .await?;
     Ok(id)
 }
 
@@ -4315,7 +4507,7 @@ mod tests {
     #[tokio::test]
     async fn startup_seed_replays_on_postgres_without_a_source_handle() {
         crate::test_support::with_postgres(async {
-            let source = crate::surreal::SurrealDb::uninitialized();
+            let source = crate::application_store::ApplicationStore::uninitialized();
             let root = tempfile::tempdir().unwrap();
             let storage: std::sync::Arc<dyn cloud::StorageService> =
                 std::sync::Arc::new(cloud::FsStorage::new(root.path()).await.unwrap());
@@ -4347,12 +4539,11 @@ mod tests {
     #[tokio::test]
     async fn reference_seeds_are_idempotent_under_the_postgres_catalog_authority() {
         crate::test_support::with_postgres(async {
-            let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await
-            else {
+            let Some((options, database)) = crate::postgres::fixtures::fresh_schema().await else {
                 return;
             };
-            let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let pg = crate::postgres::fixtures::connect(&options, &database).await;
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let seed = || async {
                 let mut report = SeedReport::default();
                 super::seed_glossary_terms(&db, &mut report).await.unwrap();
@@ -4393,7 +4584,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn brand_posts_seed_once_and_keep_confirmed_video_links() {
         crate::test_support::with_postgres(async {
-        let db = crate::surreal::SurrealDb::uninitialized();
+        let db = crate::application_store::ApplicationStore::uninitialized();
         crate::test_support::seed_compiled_brands_postgres(&db).await;
         let (handles, handles_path) = BrandSeed::Neon.social_handles().unwrap();
         let (posts, posts_path) = BrandSeed::Neon.posts().unwrap();
@@ -4499,7 +4690,7 @@ mod tests {
     #[tokio::test]
     async fn a_seeded_post_cannot_link_a_provider_the_brand_has_no_handle_on() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             crate::test_support::seed_compiled_brands_postgres(&db).await;
             let yaml = "records:\n  - brand: neon\n    slug: linked\n    title: Linked\n    \
                     description: A post.\n    status: published\n    \
@@ -4601,7 +4792,7 @@ mod tests {
     #[tokio::test]
     async fn operator_person_seed_creates_then_overwrites_only_when_requested() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let initial = r"
 lookup_fields:
   - email
@@ -4618,7 +4809,7 @@ records:
 ";
 
             let created = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 initial,
                 "Firm",
@@ -4633,7 +4824,7 @@ records:
             );
 
             let unchanged = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 changed,
                 "Firm",
@@ -4647,7 +4838,7 @@ records:
                 (0, 0, 1)
             );
             assert_eq!(
-                persons::find_by_email_ci(&surreal, "operator@example.com")
+                persons::find_by_email_ci(&application_store, "operator@example.com")
                     .await
                     .unwrap()
                     .unwrap()
@@ -4656,7 +4847,7 @@ records:
             );
 
             let overwritten = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 changed,
                 "Firm",
@@ -4674,7 +4865,7 @@ records:
                 (0, 1, 0)
             );
             assert_eq!(
-                persons::find_by_email_ci(&surreal, "operator@example.com")
+                persons::find_by_email_ci(&application_store, "operator@example.com")
                     .await
                     .unwrap()
                     .unwrap()
@@ -4687,14 +4878,14 @@ records:
 
     /// Approve `firm.example.com` as a Brand domain by giving the fixture
     /// `neon` Brand that website URL.
-    async fn approve_brand_domain(surreal: &crate::surreal::SurrealDb) {
-        crate::test_support::seed_compiled_brands_postgres(surreal).await;
-        let brand = crate::brands::find_by_key(surreal, "neon")
+    async fn approve_brand_domain(application_store: &crate::application_store::ApplicationStore) {
+        crate::test_support::seed_compiled_brands_postgres(application_store).await;
+        let brand = crate::brands::find_by_key(application_store, "neon")
             .await
             .unwrap()
             .expect("fixture brand");
         crate::brands::set_website_url(
-            surreal,
+            application_store,
             Role::Owner,
             brand.id,
             Some("https://firm.example.com"),
@@ -4709,8 +4900,11 @@ records:
         )
     }
 
-    async fn stored_role(surreal: &crate::surreal::SurrealDb, email: &str) -> Role {
-        persons::find_by_email_ci(surreal, email)
+    async fn stored_role(
+        application_store: &crate::application_store::ApplicationStore,
+        email: &str,
+    ) -> Role {
+        persons::find_by_email_ci(application_store, email)
             .await
             .unwrap()
             .expect("person")
@@ -4720,21 +4914,28 @@ records:
     #[tokio::test]
     async fn operator_person_seed_role_lawyer_on_a_brand_domain_is_created_as_lawyer() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            approve_brand_domain(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            approve_brand_domain(&application_store).await;
             let yaml = role_person_yaml("counsel@firm.example.com", "lawyer");
 
             let dry = ReconcileActor {
                 dry_run: true,
                 ..unrestricted_actor()
             };
-            let plan = reconcile_yaml(&surreal, SeedModel::Person, &yaml, "Firm", false, &dry)
-                .await
-                .expect("plan a lawyer on a Brand domain");
+            let plan = reconcile_yaml(
+                &application_store,
+                SeedModel::Person,
+                &yaml,
+                "Firm",
+                false,
+                &dry,
+            )
+            .await
+            .expect("plan a lawyer on a Brand domain");
             assert_eq!(plan.records[0].action, ReconcileAction::New);
 
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &yaml,
                 "Firm",
@@ -4744,7 +4945,7 @@ records:
             .await
             .expect("import a lawyer on a Brand domain");
             assert_eq!(
-                stored_role(&surreal, "counsel@firm.example.com").await,
+                stored_role(&application_store, "counsel@firm.example.com").await,
                 Role::Lawyer
             );
         })
@@ -4754,15 +4955,15 @@ records:
     #[tokio::test]
     async fn operator_person_seed_role_lawyer_off_every_brand_domain_is_refused() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            approve_brand_domain(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            approve_brand_domain(&application_store).await;
             let yaml = format!(
                 "{}  - email: counsel@elsewhere.example\n    name: Outside\n    role: lawyer\n",
                 person_yaml("first@example.com", "First")
             );
 
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &yaml,
                 "Firm",
@@ -4778,13 +4979,15 @@ records:
             );
             assert!(message.contains("firm.example.com"), "{message}");
             // The refusal is checked before any record is written.
-            assert!(persons::find_by_email_ci(&surreal, "first@example.com")
-                .await
-                .unwrap()
-                .is_none());
+            assert!(
+                persons::find_by_email_ci(&application_store, "first@example.com")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
 
             let admin = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &role_person_yaml("boss@firm.example.com", "admin"),
                 "Firm",
@@ -4801,10 +5004,10 @@ records:
     #[tokio::test]
     async fn operator_person_seed_without_a_role_creates_a_client_and_keeps_an_existing_tier() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            approve_brand_domain(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            approve_brand_domain(&application_store).await;
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("client@example.com", "Plain Client"),
                 "Firm",
@@ -4814,12 +5017,12 @@ records:
             .await
             .expect("import without a role");
             assert_eq!(
-                stored_role(&surreal, "client@example.com").await,
+                stored_role(&application_store, "client@example.com").await,
                 Role::Client
             );
 
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &role_person_yaml("counsel@firm.example.com", "lawyer"),
                 "Firm",
@@ -4829,7 +5032,7 @@ records:
             .await
             .expect("seed a lawyer");
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("counsel@firm.example.com", "Renamed Counsel"),
                 "Firm",
@@ -4839,7 +5042,7 @@ records:
             .await
             .expect("overwrite without a role");
             assert_eq!(
-                stored_role(&surreal, "counsel@firm.example.com").await,
+                stored_role(&application_store, "counsel@firm.example.com").await,
                 Role::Lawyer
             );
         })
@@ -4849,11 +5052,11 @@ records:
     #[tokio::test]
     async fn operator_person_seed_changes_an_existing_role_only_under_overwrite() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            approve_brand_domain(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            approve_brand_domain(&application_store).await;
             let email = "counsel@firm.example.com";
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml(email, "Co Counsel"),
                 "Firm",
@@ -4865,7 +5068,7 @@ records:
             let promote = role_person_yaml(email, "lawyer");
 
             let held = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &promote,
                 "Firm",
@@ -4876,14 +5079,14 @@ records:
             .expect("import without overwrite");
             assert_eq!(held.records[0].action, ReconcileAction::Unchanged);
             assert!(held.records[0].warnings[0].contains("--overwrite"));
-            assert_eq!(stored_role(&surreal, email).await, Role::Client);
+            assert_eq!(stored_role(&application_store, email).await, Role::Client);
 
             let no_authority = ReconcileActor {
                 may_change_roles: false,
                 ..unrestricted_actor()
             };
             let refused = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &promote,
                 "Firm",
@@ -4893,10 +5096,10 @@ records:
             .await
             .expect_err("a session without role authority is refused, not ignored");
             assert!(refused.to_string().contains("cannot assign role"));
-            assert_eq!(stored_role(&surreal, email).await, Role::Client);
+            assert_eq!(stored_role(&application_store, email).await, Role::Client);
 
             let changed = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &promote,
                 "Firm",
@@ -4909,10 +5112,10 @@ records:
             assert!(changed.records[0]
                 .changed_fields
                 .contains(&"role".to_string()));
-            assert_eq!(stored_role(&surreal, email).await, Role::Lawyer);
+            assert_eq!(stored_role(&application_store, email).await, Role::Lawyer);
 
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &role_person_yaml(email, "client"),
                 "Firm",
@@ -4921,7 +5124,7 @@ records:
             )
             .await
             .expect("an explicit client demotes under overwrite");
-            assert_eq!(stored_role(&surreal, email).await, Role::Client);
+            assert_eq!(stored_role(&application_store, email).await, Role::Client);
         })
         .await;
     }
@@ -4929,9 +5132,9 @@ records:
     #[tokio::test]
     async fn operator_person_seed_dry_run_flags_a_new_person_sharing_a_name() {
         crate::test_support::with_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
         reconcile_yaml(
-            &surreal,
+            &application_store,
             SeedModel::Person,
             &person_yaml("old.firm@example.com", "Pat Attorney"),
             "Firm",
@@ -4947,7 +5150,7 @@ records:
             actor_person_id: None,
             ..unrestricted_actor()
         };
-        let report = reconcile_yaml(&surreal, SeedModel::Person, moved, "Firm", false, &dry)
+        let report = reconcile_yaml(&application_store, SeedModel::Person, moved, "Firm", false, &dry)
             .await
             .expect("plan person seed");
 
@@ -4957,7 +5160,7 @@ records:
         assert!(report.records[1].warnings.is_empty());
 
         // A real write is not annotated, and the planned row is not created.
-        assert!(persons::find_by_email_ci(&surreal, "new.firm@example.com")
+        assert!(persons::find_by_email_ci(&application_store, "new.firm@example.com")
             .await
             .expect("read")
             .is_none());
@@ -4974,9 +5177,9 @@ records:
     #[tokio::test]
     async fn operator_person_seed_matches_previous_email_so_a_move_updates_one_person() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("old.firm@example.com", "Pat Attorney"),
                 "Firm",
@@ -4985,7 +5188,7 @@ records:
             )
             .await
             .expect("seed existing person");
-            let before = persons::find_by_email_ci(&surreal, "old.firm@example.com")
+            let before = persons::find_by_email_ci(&application_store, "old.firm@example.com")
                 .await
                 .unwrap()
                 .unwrap();
@@ -4995,21 +5198,30 @@ records:
                 dry_run: true,
                 ..unrestricted_actor()
             };
-            let plan = reconcile_yaml(&surreal, SeedModel::Person, &moved, "Firm", true, &dry)
-                .await
-                .expect("plan the move");
+            let plan = reconcile_yaml(
+                &application_store,
+                SeedModel::Person,
+                &moved,
+                "Firm",
+                true,
+                &dry,
+            )
+            .await
+            .expect("plan the move");
             assert_eq!(plan.records[0].action, ReconcileAction::Changed);
             assert!(plan.records[0]
                 .changed_fields
                 .contains(&"email".to_string()));
             assert!(plan.records[0].warnings.is_empty());
-            assert!(persons::find_by_email_ci(&surreal, "new.firm@example.com")
-                .await
-                .unwrap()
-                .is_none());
+            assert!(
+                persons::find_by_email_ci(&application_store, "new.firm@example.com")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &moved,
                 "Firm",
@@ -5020,19 +5232,19 @@ records:
             .expect("apply the move");
             assert_eq!(report.created, 0);
             assert_eq!(report.updated, 1);
-            let after = persons::find_by_email_ci(&surreal, "new.firm@example.com")
+            let after = persons::find_by_email_ci(&application_store, "new.firm@example.com")
                 .await
                 .unwrap()
                 .expect("the person now answers to the new primary email");
             assert_eq!(after.id, before.id);
-            let found = persons::find_by_any_email(&surreal, "old.firm@example.com")
+            let found = persons::find_by_any_email(&application_store, "old.firm@example.com")
                 .await
                 .unwrap();
             assert_eq!(found.map(|p| p.id), Some(before.id));
 
             // Re-running the same document changes nothing.
             let again = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &moved,
                 "Firm",
@@ -5050,10 +5262,10 @@ records:
     #[tokio::test]
     async fn operator_person_seed_records_listed_emails_as_aliases() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let yaml = moved_person_yaml("    emails:\n      - pat@elsewhere.example\n");
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &yaml,
                 "Firm",
@@ -5062,15 +5274,17 @@ records:
             )
             .await
             .expect("create with an alias");
-            let person = persons::find_by_email_ci(&surreal, "new.firm@example.com")
+            let person = persons::find_by_email_ci(&application_store, "new.firm@example.com")
                 .await
                 .unwrap()
                 .unwrap();
             assert_eq!(
-                persons::aliases(&surreal, person.id).await.unwrap(),
+                persons::aliases(&application_store, person.id)
+                    .await
+                    .unwrap(),
                 vec!["pat@elsewhere.example"]
             );
-            let found = persons::find_by_any_email(&surreal, "pat@elsewhere.example")
+            let found = persons::find_by_any_email(&application_store, "pat@elsewhere.example")
                 .await
                 .unwrap();
             assert_eq!(found.map(|p| p.id), Some(person.id));
@@ -5081,15 +5295,15 @@ records:
     #[tokio::test]
     async fn operator_person_seed_imports_phone_numbers() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let person = persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Stored Client", "new.firm@example.com"),
             )
             .await
             .unwrap();
             crate::person_phones::set_phone(
-                &surreal,
+                &application_store,
                 person.id,
                 "+17025550142",
                 crate::person_phones::PhoneLabel::Mobile,
@@ -5102,7 +5316,7 @@ records:
             );
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &yaml,
                 "Firm",
@@ -5114,7 +5328,7 @@ records:
 
             assert_eq!((report.created, report.updated, report.unchanged), (0, 1, 0));
             assert_eq!(report.records[0].changed_fields, vec!["phones"]);
-            let stored = persons::find_by_email_ci(&surreal, "new.firm@example.com")
+            let stored = persons::find_by_email_ci(&application_store, "new.firm@example.com")
                 .await
                 .unwrap()
                 .unwrap();
@@ -5122,7 +5336,7 @@ records:
                 stored.name, "Stored Client",
                 "without overwrite, the name stays"
             );
-            let phones = crate::person_phones::list_phones(&surreal, person.id)
+            let phones = crate::person_phones::list_phones(&application_store, person.id)
                 .await
                 .unwrap();
             assert_eq!(
@@ -5138,7 +5352,7 @@ records:
             );
 
             let again = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &yaml,
                 "Firm",
@@ -5155,10 +5369,10 @@ records:
     #[tokio::test]
     async fn operator_person_seed_refuses_a_number_that_is_not_e164() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let yaml = moved_person_yaml("    phone: \"555-1234\"\n");
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &yaml,
                 "Firm",
@@ -5172,7 +5386,7 @@ records:
                 "the rejection names the bad input and the expected format: {error}"
             );
             assert!(
-                persons::find_by_email_ci(&surreal, "new.firm@example.com")
+                persons::find_by_email_ci(&application_store, "new.firm@example.com")
                     .await
                     .expect("read")
                     .is_none(),
@@ -5185,10 +5399,10 @@ records:
     #[tokio::test]
     async fn operator_person_seed_refuses_addresses_that_belong_to_two_people() {
         crate::test_support::with_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
         for (email, name) in [("a@example.com", "Pat A"), ("b@example.com", "Pat B")] {
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml(email, name),
                 "Firm",
@@ -5200,7 +5414,7 @@ records:
         }
         let yaml = "lookup_fields:\n  - email\nrecords:\n  - email: a@example.com\n    name: Pat A\n    previous_email: b@example.com\n";
         let error = reconcile_yaml(
-            &surreal,
+            &application_store,
             SeedModel::Person,
             yaml,
             "Firm",
@@ -5217,10 +5431,10 @@ records:
     #[tokio::test]
     async fn operator_person_seed_dry_run_plans_without_writing() {
         crate::test_support::with_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
         let existing = person_yaml("existing@example.com", "Original Name");
         reconcile_yaml(
-            &surreal,
+            &application_store,
             SeedModel::Person,
             &existing,
             "Firm",
@@ -5232,7 +5446,7 @@ records:
 
         let planned = "lookup_fields:\n  - email\nrecords:\n  - email: existing@example.com\n    name: Revised Name\n    profile_image_url: https://example.com/revised.png\n  - email: new@example.com\n    name: New Person\n";
         let report = reconcile_yaml(
-            &surreal,
+            &application_store,
             SeedModel::Person,
             planned,
             "Firm",
@@ -5257,13 +5471,13 @@ records:
             vec!["name", "profile_image_url"]
         );
         assert_eq!(report.records[1].action, ReconcileAction::New);
-        assert!(persons::find_by_email_ci(&surreal, "new@example.com")
+        assert!(persons::find_by_email_ci(&application_store, "new@example.com")
             .await
             .expect("read planned person")
             .is_none());
 
         let unchanged = reconcile_yaml(
-            &surreal,
+            &application_store,
             SeedModel::Person,
             &existing,
             "Firm",
@@ -5288,20 +5502,20 @@ records:
     #[tokio::test]
     async fn operator_entity_seed_dry_run_resolves_references_without_writing() {
         crate::test_support::with_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
-        let entity_type = entity_types::create(&surreal, "Corporation")
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
+        let entity_type = entity_types::create(&application_store, "Corporation")
             .await
             .expect("create entity type");
         let original_jurisdiction =
-            jurisdictions::create(&surreal, &NewJurisdiction::new("Nevada", "NV", "state"))
+            jurisdictions::create(&application_store, &NewJurisdiction::new("Nevada", "NV", "state"))
                 .await
                 .expect("create original jurisdiction");
         let revised_jurisdiction =
-            jurisdictions::create(&surreal, &NewJurisdiction::new("California", "CA", "state"))
+            jurisdictions::create(&application_store, &NewJurisdiction::new("California", "CA", "state"))
                 .await
                 .expect("create revised jurisdiction");
         let entity = entities::create(
-            &surreal,
+            &application_store,
             &entities::NewEntity {
                 name: "Acme Example".into(),
                 entity_type_id: entity_type.id,
@@ -5316,7 +5530,7 @@ records:
         .expect("create existing entity");
         let planned = "lookup_fields:\n  - name\n  - entity_type_id\nrecords:\n  - name: Acme Example\n    entity_type:\n      name: Corporation\n      jurisdiction:\n        name: California\n  - name: New Example\n    entity_type:\n      name: Corporation\n      jurisdiction:\n        name: California\n";
         let report = reconcile_yaml(
-            &surreal,
+            &application_store,
             SeedModel::Entity,
             planned,
             "Firm",
@@ -5338,14 +5552,14 @@ records:
         assert_eq!(report.records[0].action, ReconcileAction::Changed);
         assert_eq!(report.records[0].changed_fields, vec!["jurisdiction"]);
         assert_eq!(report.records[1].action, ReconcileAction::New);
-        let persisted = entities::find_by_id(&surreal, entity.id)
+        let persisted = entities::find_by_id(&application_store, entity.id)
             .await
             .expect("read existing entity")
             .expect("existing entity remains");
         assert_eq!(persisted.jurisdiction_id, original_jurisdiction.id);
         assert_ne!(persisted.jurisdiction_id, revised_jurisdiction.id);
         assert!(
-            entities::find_by_name_and_type(&surreal, "New Example", entity_type.id)
+            entities::find_by_name_and_type(&application_store, "New Example", entity_type.id)
                 .await
                 .expect("read planned entity")
                 .is_none()
@@ -5360,17 +5574,17 @@ records:
     #[tokio::test]
     async fn entity_seed_names_the_jurisdiction_it_resolved() {
         crate::test_support::with_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
-        entity_types::create(&surreal, "Human")
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
+        entity_types::create(&application_store, "Human")
             .await
             .expect("create entity type");
-        jurisdictions::create(&surreal, &NewJurisdiction::new("Washington", "WA", "state"))
+        jurisdictions::create(&application_store, &NewJurisdiction::new("Washington", "WA", "state"))
             .await
             .expect("create jurisdiction");
         let yaml = "lookup_fields:\n  - name\n  - entity_type_id\nrecords:\n  - name: A Client\n    entity_type:\n      name: Human\n      jurisdiction:\n        name: Washington\n";
 
         let report = reconcile_yaml(
-            &surreal,
+            &application_store,
             SeedModel::Entity,
             yaml,
             "Firm",
@@ -5399,14 +5613,14 @@ records:
     #[tokio::test]
     async fn entity_seed_without_a_declared_jurisdiction_is_refused() {
         crate::test_support::with_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
-        entity_types::create(&surreal, "Human")
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
+        entity_types::create(&application_store, "Human")
             .await
             .expect("create entity type");
         let yaml = "lookup_fields:\n  - name\n  - entity_type_id\nrecords:\n  - name: A Client\n    entity_type:\n      name: Human\n";
 
         let error = reconcile_yaml(
-            &surreal,
+            &application_store,
             SeedModel::Entity,
             yaml,
             "Firm",
@@ -5423,7 +5637,7 @@ records:
         assert!(message.contains("A Client"), "{message}");
         assert!(message.contains("jurisdiction"), "{message}");
         assert!(
-            entities::find_by_name(&surreal, "A Client")
+            entities::find_by_name(&application_store, "A Client")
                 .await
                 .expect("read")
                 .is_none(),
@@ -5433,15 +5647,18 @@ records:
         .await;
     }
 
-    async fn project_fixture(surreal: &crate::surreal::SurrealDb, code: &str) -> projects::Project {
-        crate::test_support::seed_compiled_brands_postgres(surreal).await;
+    async fn project_fixture(
+        application_store: &crate::application_store::ApplicationStore,
+        code: &str,
+    ) -> projects::Project {
+        crate::test_support::seed_compiled_brands_postgres(application_store).await;
         projects::create(
-            surreal,
+            application_store,
             &projects::NewProject {
                 code: code.into(),
                 name: code.into(),
                 status: "open".into(),
-                entity_id: crate::test_support::seed_entity(surreal).await,
+                entity_id: crate::test_support::seed_entity(application_store).await,
                 ..Default::default()
             },
         )
@@ -5474,11 +5691,11 @@ records:
     #[tokio::test]
     async fn scoped_person_create_links_to_the_scoped_project() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let project = project_fixture(&surreal, "acme").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let project = project_fixture(&application_store, "acme").await;
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("new@example.com", "New Person"),
                 "Firm",
@@ -5489,12 +5706,12 @@ records:
             .expect("scoped create is allowed");
             assert_eq!((report.created, report.updated), (1, 0));
 
-            let person = persons::find_by_email_ci(&surreal, "new@example.com")
+            let person = persons::find_by_email_ci(&application_store, "new@example.com")
                 .await
                 .unwrap()
                 .unwrap();
             assert!(
-                projects::participation_for_person(&surreal, person.id, project.id)
+                projects::participation_for_person(&application_store, person.id, project.id)
                     .await
                     .unwrap()
                     .is_some(),
@@ -5507,17 +5724,20 @@ records:
     #[tokio::test]
     async fn scoped_person_update_is_allowed_when_already_in_the_scoped_project() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let project = project_fixture(&surreal, "acme").await;
-            let person = persons::create(&surreal, &NewPerson::new("Old Name", "in@example.com"))
-                .await
-                .unwrap();
-            projects::add_participation(&surreal, project.id, person.id, "client")
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let project = project_fixture(&application_store, "acme").await;
+            let person = persons::create(
+                &application_store,
+                &NewPerson::new("Old Name", "in@example.com"),
+            )
+            .await
+            .unwrap();
+            projects::add_participation(&application_store, project.id, person.id, "client")
                 .await
                 .unwrap();
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("in@example.com", "Renamed"),
                 "Firm",
@@ -5534,21 +5754,21 @@ records:
     #[tokio::test]
     async fn scoped_person_update_refuses_a_record_linked_to_a_different_project() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            project_fixture(&surreal, "acme").await;
-            let other = project_fixture(&surreal, "widget-works").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            project_fixture(&application_store, "acme").await;
+            let other = project_fixture(&application_store, "widget-works").await;
             let person = persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Elsewhere", "elsewhere@example.com"),
             )
             .await
             .unwrap();
-            projects::add_participation(&surreal, other.id, person.id, "client")
+            projects::add_participation(&application_store, other.id, person.id, "client")
                 .await
                 .unwrap();
 
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("elsewhere@example.com", "Renamed"),
                 "Firm",
@@ -5568,17 +5788,17 @@ records:
     #[tokio::test]
     async fn scoped_person_update_refuses_an_unlinked_record() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            project_fixture(&surreal, "acme").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            project_fixture(&application_store, "acme").await;
             persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Unlinked", "unlinked@example.com"),
             )
             .await
             .unwrap();
 
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("unlinked@example.com", "Renamed"),
                 "Firm",
@@ -5598,9 +5818,9 @@ records:
     #[tokio::test]
     async fn scoped_reconcile_refuses_a_project_code_naming_no_live_project() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("anyone@example.com", "Anyone"),
                 "Firm",
@@ -5618,13 +5838,17 @@ records:
     }
 
     async fn entity_type_and_jurisdiction(
-        surreal: &crate::surreal::SurrealDb,
+        application_store: &crate::application_store::ApplicationStore,
     ) -> (entity_types::EntityType, jurisdictions::Jurisdiction) {
-        let entity_type = entity_types::create(surreal, "LLC").await.unwrap();
-        let jurisdiction =
-            jurisdictions::create(surreal, &NewJurisdiction::new("Nevada", "NV", "state"))
-                .await
-                .unwrap();
+        let entity_type = entity_types::create(application_store, "LLC")
+            .await
+            .unwrap();
+        let jurisdiction = jurisdictions::create(
+            application_store,
+            &NewJurisdiction::new("Nevada", "NV", "state"),
+        )
+        .await
+        .unwrap();
         (entity_type, jurisdiction)
     }
 
@@ -5637,14 +5861,15 @@ records:
     #[tokio::test]
     async fn scoped_entity_create_is_refused() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            crate::test_support::seed_compiled_brands_postgres(&surreal).await;
-            let (entity_type, jurisdiction) = entity_type_and_jurisdiction(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            crate::test_support::seed_compiled_brands_postgres(&application_store).await;
+            let (entity_type, jurisdiction) =
+                entity_type_and_jurisdiction(&application_store).await;
             // The project's own entity exists, but the seed record names a
             // second, not-yet-created one — creation is what a scoped session
             // can never do (no project-owned link to originate).
             let anchor = entities::create(
-                &surreal,
+                &application_store,
                 &entities::NewEntity {
                     name: "Acme Holdco".into(),
                     entity_type_id: entity_type.id,
@@ -5658,7 +5883,7 @@ records:
             .await
             .unwrap();
             projects::create(
-                &surreal,
+                &application_store,
                 &projects::NewProject {
                     code: "acme".into(),
                     name: "acme".into(),
@@ -5671,7 +5896,7 @@ records:
             .unwrap();
 
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Entity,
                 &entity_yaml("Acme Newco"),
                 "Firm",
@@ -5691,11 +5916,12 @@ records:
     #[tokio::test]
     async fn scoped_entity_update_allowed_only_for_the_projects_own_entity() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            crate::test_support::seed_compiled_brands_postgres(&surreal).await;
-            let (entity_type, jurisdiction) = entity_type_and_jurisdiction(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            crate::test_support::seed_compiled_brands_postgres(&application_store).await;
+            let (entity_type, jurisdiction) =
+                entity_type_and_jurisdiction(&application_store).await;
             let acme_entity = entities::create(
-                &surreal,
+                &application_store,
                 &entities::NewEntity {
                     name: "Acme Holdco".into(),
                     entity_type_id: entity_type.id,
@@ -5709,7 +5935,7 @@ records:
             .await
             .unwrap();
             let other_entity = entities::create(
-                &surreal,
+                &application_store,
                 &entities::NewEntity {
                     name: "Widget Works".into(),
                     entity_type_id: entity_type.id,
@@ -5723,7 +5949,7 @@ records:
             .await
             .unwrap();
             projects::create(
-                &surreal,
+                &application_store,
                 &projects::NewProject {
                     code: "acme".into(),
                     name: "acme".into(),
@@ -5735,7 +5961,7 @@ records:
             .await
             .unwrap();
             projects::create(
-                &surreal,
+                &application_store,
                 &projects::NewProject {
                     code: "widget-works".into(),
                     name: "widget-works".into(),
@@ -5749,7 +5975,7 @@ records:
 
             // Updating the scoped project's own entity succeeds.
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Entity,
                 &entity_yaml("Acme Holdco"),
                 "Firm",
@@ -5765,7 +5991,7 @@ records:
 
             // Updating a different project's entity is refused.
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Entity,
                 &entity_yaml("Widget Works"),
                 "Firm",
@@ -5844,12 +6070,12 @@ records:
     #[tokio::test]
     async fn scoped_project_reference_creates_a_counterparty_entity_only_as_a_reference() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let (entity_type, _) = entity_type_and_jurisdiction(&surreal).await;
-            let project = project_fixture(&surreal, "acme").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let (entity_type, _) = entity_type_and_jurisdiction(&application_store).await;
+            let project = project_fixture(&application_store, "acme").await;
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::ProjectReference,
                 &reference_entity_yaml("Widget Works LLC", None),
                 "Firm",
@@ -5860,12 +6086,15 @@ records:
             .expect("a scoped session references a counterparty entity");
             assert_eq!((report.created, report.unchanged), (1, 0));
 
-            let counterparty =
-                entities::find_by_name_and_type(&surreal, "Widget Works LLC", entity_type.id)
-                    .await
-                    .unwrap()
-                    .expect("the referenced entity now exists");
-            let references = crate::project_references::for_project(&surreal, project.id)
+            let counterparty = entities::find_by_name_and_type(
+                &application_store,
+                "Widget Works LLC",
+                entity_type.id,
+            )
+            .await
+            .unwrap()
+            .expect("the referenced entity now exists");
+            let references = crate::project_references::for_project(&application_store, project.id)
                 .await
                 .unwrap();
             assert_eq!(references.len(), 1);
@@ -5875,7 +6104,7 @@ records:
             );
             assert_eq!(references[0].reason, "counterparty_entity");
             assert_eq!(
-                projects::find_by_id(&surreal, project.id)
+                projects::find_by_id(&application_store, project.id)
                     .await
                     .unwrap()
                     .unwrap()
@@ -5885,7 +6114,7 @@ records:
             );
 
             let again = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::ProjectReference,
                 &reference_entity_yaml("Widget Works LLC", None),
                 "Firm",
@@ -5899,7 +6128,7 @@ records:
             // The plain entity model still refuses the same create under scope:
             // the reference is the only door.
             let refused = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Entity,
                 &entity_yaml("Widget Works Holdings LLC"),
                 "Firm",
@@ -5919,10 +6148,10 @@ records:
     #[tokio::test]
     async fn scoped_project_reference_to_a_person_grants_no_participation() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let project = project_fixture(&surreal, "acme").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let project = project_fixture(&application_store, "acme").await;
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::ProjectReference,
                 &reference_person_yaml("agent@example.com", "registered_agent"),
                 "Firm",
@@ -5932,19 +6161,19 @@ records:
             .await
             .unwrap();
             assert_eq!(report.created, 1);
-            let agent = persons::find_by_email_ci(&surreal, "agent@example.com")
+            let agent = persons::find_by_email_ci(&application_store, "agent@example.com")
                 .await
                 .unwrap()
                 .expect("the referenced person now exists");
             assert!(
-                projects::participation_for_person(&surreal, agent.id, project.id)
+                projects::participation_for_person(&application_store, agent.id, project.id)
                     .await
                     .unwrap()
                     .is_none(),
                 "a reference writes no participation row"
             );
             assert!(crate::project_references::is_referenced(
-                &surreal,
+                &application_store,
                 project.id,
                 crate::project_references::Party::person(agent.id)
             )
@@ -5957,12 +6186,12 @@ records:
     #[tokio::test]
     async fn scoped_project_reference_naming_another_project_is_cross_project() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            entity_type_and_jurisdiction(&surreal).await;
-            project_fixture(&surreal, "acme").await;
-            project_fixture(&surreal, "other").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            entity_type_and_jurisdiction(&application_store).await;
+            project_fixture(&application_store, "acme").await;
+            project_fixture(&application_store, "other").await;
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::ProjectReference,
                 &reference_entity_yaml("Widget Works LLC", Some("other")),
                 "Firm",
@@ -5982,9 +6211,9 @@ records:
     #[tokio::test]
     async fn unscoped_project_reference_must_name_its_project() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            entity_type_and_jurisdiction(&surreal).await;
-            let project = project_fixture(&surreal, "acme").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            entity_type_and_jurisdiction(&application_store).await;
+            let project = project_fixture(&application_store, "acme").await;
             let actor = ReconcileActor {
                 bootstrap_owner_email: None,
                 actor_role: Role::Lawyer,
@@ -5994,7 +6223,7 @@ records:
                 actor_person_id: None,
             };
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::ProjectReference,
                 &reference_entity_yaml("Widget Works LLC", None),
                 "Firm",
@@ -6010,7 +6239,7 @@ records:
             );
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::ProjectReference,
                 &reference_entity_yaml("Widget Works LLC", Some("acme")),
                 "Firm",
@@ -6021,7 +6250,7 @@ records:
             .unwrap();
             assert_eq!(report.created, 1);
             assert_eq!(
-                crate::project_references::for_project(&surreal, project.id)
+                crate::project_references::for_project(&application_store, project.id)
                     .await
                     .unwrap()
                     .len(),
@@ -6034,15 +6263,15 @@ records:
     #[tokio::test]
     async fn project_reference_dry_run_plans_without_writing() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let (entity_type, _) = entity_type_and_jurisdiction(&surreal).await;
-            let project = project_fixture(&surreal, "acme").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let (entity_type, _) = entity_type_and_jurisdiction(&application_store).await;
+            let project = project_fixture(&application_store, "acme").await;
             let actor = ReconcileActor {
                 dry_run: true,
                 ..scoped_actor("acme")
             };
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::ProjectReference,
                 &reference_entity_yaml("Widget Works LLC", None),
                 "Firm",
@@ -6053,16 +6282,22 @@ records:
             .unwrap();
             assert_eq!(report.created, 1, "the plan reports the reference as new");
             assert!(
-                entities::find_by_name_and_type(&surreal, "Widget Works LLC", entity_type.id)
-                    .await
-                    .unwrap()
-                    .is_none(),
-                "a dry run creates nothing"
-            );
-            assert!(crate::project_references::for_project(&surreal, project.id)
+                entities::find_by_name_and_type(
+                    &application_store,
+                    "Widget Works LLC",
+                    entity_type.id
+                )
                 .await
                 .unwrap()
-                .is_empty());
+                .is_none(),
+                "a dry run creates nothing"
+            );
+            assert!(
+                crate::project_references::for_project(&application_store, project.id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
         })
         .await;
     }
@@ -6100,12 +6335,15 @@ records:
     #[tokio::test]
     async fn relationship_log_seed_appends_once_and_grants_nothing() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let person = persons::create(&surreal, &NewPerson::new("Gus Gavel", "gus@example.com"))
-                .await
-                .unwrap();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let person = persons::create(
+                &application_store,
+                &NewPerson::new("Gus Gavel", "gus@example.com"),
+            )
+            .await
+            .unwrap();
             let lawyer = persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Synthetic acting lawyer", "acting@example.com"),
             )
             .await
@@ -6121,7 +6359,7 @@ records:
             );
 
             let first = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::RelationshipLog,
                 &yaml,
                 "Firm",
@@ -6132,7 +6370,7 @@ records:
             .unwrap();
             assert_eq!((first.created, first.unchanged), (1, 0));
             let again = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::RelationshipLog,
                 &yaml,
                 "Firm",
@@ -6143,14 +6381,15 @@ records:
             .unwrap();
             assert_eq!((again.created, again.unchanged), (0, 1));
 
-            let rows = crate::relationship_logs::for_subject(&surreal, "person", person.id)
-                .await
-                .unwrap();
+            let rows =
+                crate::relationship_logs::for_subject(&application_store, "person", person.id)
+                    .await
+                    .unwrap();
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].action, "appears_for");
             assert_eq!(rows[0].actor_person_id, Some(lawyer));
             assert!(
-                crate::projects::participations_for_person(&surreal, person.id)
+                crate::projects::participations_for_person(&application_store, person.id)
                     .await
                     .unwrap()
                     .is_empty()
@@ -6162,16 +6401,19 @@ records:
     #[tokio::test]
     async fn relationship_log_seed_dry_run_writes_nothing_and_unknown_people_are_refused() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            persons::create(&surreal, &NewPerson::new("Gus Gavel", "gus@example.com"))
-                .await
-                .unwrap();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            persons::create(
+                &application_store,
+                &NewPerson::new("Gus Gavel", "gus@example.com"),
+            )
+            .await
+            .unwrap();
             let dry = ReconcileActor {
                 dry_run: true,
                 ..unrestricted_actor()
             };
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::RelationshipLog,
                 &relationship_log_yaml("gus@example.com", "on the service list"),
                 "Firm",
@@ -6181,13 +6423,13 @@ records:
             .await
             .unwrap();
             assert_eq!(report.created, 1);
-            assert!(crate::relationship_logs::all(&surreal)
+            assert!(crate::relationship_logs::all(&application_store)
                 .await
                 .unwrap()
                 .is_empty());
 
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::RelationshipLog,
                 &relationship_log_yaml("nobody@example.com", "on the service list"),
                 "Firm",
@@ -6216,17 +6458,20 @@ records:
     #[tokio::test]
     async fn relationship_log_seed_writes_the_scoped_project() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let project = project_fixture(&surreal, "acme").await;
-            let person = persons::create(&surreal, &NewPerson::new("Gus Gavel", "gus@example.com"))
-                .await
-                .unwrap();
-            projects::add_participation(&surreal, project.id, person.id, "client")
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let project = project_fixture(&application_store, "acme").await;
+            let person = persons::create(
+                &application_store,
+                &NewPerson::new("Gus Gavel", "gus@example.com"),
+            )
+            .await
+            .unwrap();
+            projects::add_participation(&application_store, project.id, person.id, "client")
                 .await
                 .unwrap();
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::RelationshipLog,
                 &relationship_log_yaml("gus@example.com", "on the service list in 26-10042"),
                 "Firm",
@@ -6237,7 +6482,7 @@ records:
             .unwrap();
             assert_eq!(report.created, 1);
 
-            let rows = crate::relationship_logs::for_project(&surreal, project.id)
+            let rows = crate::relationship_logs::for_project(&application_store, project.id)
                 .await
                 .unwrap();
             assert_eq!(rows.len(), 1);
@@ -6252,14 +6497,17 @@ records:
     #[tokio::test]
     async fn relationship_log_seed_records_a_named_project_for_an_unrestricted_session() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let project = project_fixture(&surreal, "acme").await;
-            let person = persons::create(&surreal, &NewPerson::new("Gus Gavel", "gus@example.com"))
-                .await
-                .unwrap();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let project = project_fixture(&application_store, "acme").await;
+            let person = persons::create(
+                &application_store,
+                &NewPerson::new("Gus Gavel", "gus@example.com"),
+            )
+            .await
+            .unwrap();
 
             reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::RelationshipLog,
                 &project_relationship_log_yaml("gus@example.com", "acme", "appears in 26-10042"),
                 "Firm",
@@ -6269,18 +6517,20 @@ records:
             .await
             .unwrap();
 
-            let rows = crate::relationship_logs::for_project(&surreal, project.id)
+            let rows = crate::relationship_logs::for_project(&application_store, project.id)
                 .await
                 .unwrap();
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].subject_id, person.id);
-            assert!(projects::participations_for_person(&surreal, person.id)
-                .await
-                .unwrap()
-                .is_empty());
+            assert!(
+                projects::participations_for_person(&application_store, person.id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
 
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::RelationshipLog,
                 &project_relationship_log_yaml("gus@example.com", "nope", "appears elsewhere"),
                 "Firm",
@@ -6302,18 +6552,21 @@ records:
     #[tokio::test]
     async fn relationship_log_seed_refuses_a_project_outside_the_session_scope() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let project = project_fixture(&surreal, "acme").await;
-            project_fixture(&surreal, "widget-works").await;
-            let person = persons::create(&surreal, &NewPerson::new("Gus Gavel", "gus@example.com"))
-                .await
-                .unwrap();
-            projects::add_participation(&surreal, project.id, person.id, "client")
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let project = project_fixture(&application_store, "acme").await;
+            project_fixture(&application_store, "widget-works").await;
+            let person = persons::create(
+                &application_store,
+                &NewPerson::new("Gus Gavel", "gus@example.com"),
+            )
+            .await
+            .unwrap();
+            projects::add_participation(&application_store, project.id, person.id, "client")
                 .await
                 .unwrap();
 
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::RelationshipLog,
                 &project_relationship_log_yaml("gus@example.com", "widget-works", "appears"),
                 "Firm",
@@ -6326,7 +6579,7 @@ records:
                 v,
                 ScopeViolation::CrossProject
             )));
-            assert!(crate::relationship_logs::all(&surreal)
+            assert!(crate::relationship_logs::all(&application_store)
                 .await
                 .unwrap()
                 .is_empty());
@@ -6337,18 +6590,18 @@ records:
     #[tokio::test]
     async fn entity_seed_imports_contact_details_and_entity_address() {
         crate::test_support::with_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
-        entity_type_and_jurisdiction(&surreal).await;
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
+        entity_type_and_jurisdiction(&application_store).await;
         let yaml = format!(
             "{}    phone: 'example-phone'\n    url: https://example.com\n    metadata: {{category: printing}}\n",
             entity_yaml("Example Vendor")
         );
         let actor = unrestricted_actor();
-        let imported = reconcile_yaml(&surreal, SeedModel::Entity, &yaml, "Firm", false, &actor)
+        let imported = reconcile_yaml(&application_store, SeedModel::Entity, &yaml, "Firm", false, &actor)
             .await
             .unwrap();
         assert_eq!(imported.created, 1);
-        let entity = crate::entities::find_by_name(&surreal, "Example Vendor")
+        let entity = crate::entities::find_by_name(&application_store, "Example Vendor")
             .await
             .unwrap()
             .unwrap();
@@ -6364,7 +6617,7 @@ records:
             entity_yaml("Example Vendor")
         );
         let updated = reconcile_yaml(
-            &surreal,
+            &application_store,
             SeedModel::Entity,
             &overwrite,
             "Firm",
@@ -6374,7 +6627,7 @@ records:
         .await
         .unwrap();
         assert_eq!(updated.records[0].changed_fields, ["phone", "metadata"]);
-        let entity = crate::entities::find_by_id(&surreal, entity.id)
+        let entity = crate::entities::find_by_id(&application_store, entity.id)
             .await
             .unwrap()
             .unwrap();
@@ -6394,15 +6647,15 @@ records:
     country: US
 ";
         validate_yaml(SeedModel::Address, address).unwrap();
-        let first = reconcile_yaml(&surreal, SeedModel::Address, address, "Firm", false, &actor)
+        let first = reconcile_yaml(&application_store, SeedModel::Address, address, "Firm", false, &actor)
             .await
             .unwrap();
-        let again = reconcile_yaml(&surreal, SeedModel::Address, address, "Firm", false, &actor)
+        let again = reconcile_yaml(&application_store, SeedModel::Address, address, "Firm", false, &actor)
             .await
             .unwrap();
         assert_eq!(first.created, 1);
         assert_eq!(again.unchanged, 1);
-        let saved = crate::addresses::for_entity(&surreal, entity.id)
+        let saved = crate::addresses::for_entity(&application_store, entity.id)
             .await
             .unwrap();
         assert_eq!(saved.len(), 1);
@@ -6415,16 +6668,16 @@ records:
     #[tokio::test]
     async fn address_seed_attaches_to_the_person() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Jane Example", "jane@example.com"),
             )
             .await
             .unwrap();
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Address,
                 &address_yaml("jane@example.com", "123 Main St", "89501"),
                 "Firm",
@@ -6435,11 +6688,11 @@ records:
             .expect("address seed reconciles");
             assert_eq!((report.created, report.unchanged), (1, 0));
 
-            let person = persons::find_by_email_ci(&surreal, "jane@example.com")
+            let person = persons::find_by_email_ci(&application_store, "jane@example.com")
                 .await
                 .unwrap()
                 .unwrap();
-            let addresses = crate::addresses::for_person(&surreal, person.id)
+            let addresses = crate::addresses::for_person(&application_store, person.id)
                 .await
                 .unwrap();
             assert_eq!(addresses.len(), 1, "the address attached to the person");
@@ -6448,7 +6701,7 @@ records:
 
             // Re-seeding the same (person, line1, postal_code) is a no-op.
             let again = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Address,
                 &address_yaml("jane@example.com", "123 Main St", "89501"),
                 "Firm",
@@ -6459,7 +6712,7 @@ records:
             .expect("re-seed is a no-op");
             assert_eq!((again.created, again.unchanged), (0, 1));
             assert_eq!(
-                crate::addresses::for_person(&surreal, person.id)
+                crate::addresses::for_person(&application_store, person.id)
                     .await
                     .unwrap()
                     .len(),
@@ -6473,10 +6726,10 @@ records:
     #[tokio::test]
     async fn address_seed_referencing_an_unknown_person_is_refused() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
 
             let refused = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Address,
                 &address_yaml("nobody@example.com", "123 Main St", "89501"),
                 "Firm",
@@ -6492,17 +6745,17 @@ records:
     #[tokio::test]
     async fn person_project_role_seed_resolves_email_and_code_lookups() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let project = project_fixture(&surreal, "acme").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let project = project_fixture(&application_store, "acme").await;
             persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Jane Example", "jane@example.com"),
             )
             .await
             .unwrap();
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::PersonProjectRole,
                 &person_project_role_yaml("jane@example.com", "acme"),
                 "Firm",
@@ -6513,18 +6766,18 @@ records:
             .expect("nested lookups resolve");
             assert_eq!((report.created, report.unchanged), (1, 0));
             assert!(report.records[0].warnings[0].contains("defaults to client"));
-            let person = persons::find_by_email_ci(&surreal, "jane@example.com")
+            let person = persons::find_by_email_ci(&application_store, "jane@example.com")
                 .await
                 .unwrap()
                 .unwrap();
-            let row = projects::participation_for_person(&surreal, person.id, project.id)
+            let row = projects::participation_for_person(&application_store, person.id, project.id)
                 .await
                 .unwrap()
                 .expect("participation written from nested keys");
             assert_eq!(row.participation, "client");
 
             let again = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::PersonProjectRole,
                 &person_project_role_yaml("jane@example.com", "acme"),
                 "Firm",
@@ -6542,18 +6795,18 @@ records:
     #[tokio::test]
     async fn scoped_person_project_role_refuses_a_different_project_code() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            project_fixture(&surreal, "acme").await;
-            project_fixture(&surreal, "widget-works").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            project_fixture(&application_store, "acme").await;
+            project_fixture(&application_store, "widget-works").await;
             persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Jane Example", "jane@example.com"),
             )
             .await
             .unwrap();
 
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::PersonProjectRole,
                 &person_project_role_yaml("jane@example.com", "widget-works"),
                 "Firm",
@@ -6573,21 +6826,21 @@ records:
     #[tokio::test]
     async fn person_entity_role_seed_resolves_email_and_name_lookups() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let project = project_fixture(&surreal, "acme").await;
-            let entity = entities::find_by_id(&surreal, project.entity_id)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let project = project_fixture(&application_store, "acme").await;
+            let entity = entities::find_by_id(&application_store, project.entity_id)
                 .await
                 .unwrap()
                 .unwrap();
             persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Jane Example", "jane@example.com"),
             )
             .await
             .unwrap();
 
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::PersonEntityRole,
                 &person_entity_role_yaml("jane@example.com", &entity.name, "manages"),
                 "Firm",
@@ -6597,12 +6850,12 @@ records:
             .await
             .expect("nested entity lookup resolves");
             assert_eq!(report.created, 1);
-            let person = persons::find_by_email_ci(&surreal, "jane@example.com")
+            let person = persons::find_by_email_ci(&application_store, "jane@example.com")
                 .await
                 .unwrap()
                 .unwrap();
             assert!(
-                crate::entity_roles::find(&surreal, person.id, entity.id, "manages")
+                crate::entity_roles::find(&application_store, person.id, entity.id, "manages")
                     .await
                     .unwrap()
                     .is_some()
@@ -6614,22 +6867,22 @@ records:
     #[tokio::test]
     async fn scoped_person_entity_role_refuses_an_entity_the_project_does_not_name() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let project = project_fixture(&surreal, "acme").await;
-            let other = crate::test_support::seed_entity(&surreal).await;
-            let other_entity = entities::find_by_id(&surreal, other)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let project = project_fixture(&application_store, "acme").await;
+            let other = crate::test_support::seed_entity(&application_store).await;
+            let other_entity = entities::find_by_id(&application_store, other)
                 .await
                 .unwrap()
                 .unwrap();
             persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Jane Example", "jane@example.com"),
             )
             .await
             .unwrap();
 
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::PersonEntityRole,
                 &person_entity_role_yaml("jane@example.com", &other_entity.name, "manages"),
                 "Firm",
@@ -6655,9 +6908,9 @@ records:
             // invariant: only the bootstrap Owner's email and role are pinned.
             // Its name is an ordinary field, editable through this path exactly
             // like every other seeded person's.
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::with_role("The Owner", "owner@example.com", Role::Owner),
             )
             .await
@@ -6676,7 +6929,7 @@ records:
                 actor_person_id: None,
             };
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("owner@example.com", "Renamed Owner"),
                 "Firm",
@@ -6686,7 +6939,7 @@ records:
             .await
             .expect("a seed document may rename the bootstrap Owner");
             assert_eq!(report.updated, 1);
-            let row = persons::find_by_email_ci(&surreal, "owner@example.com")
+            let row = persons::find_by_email_ci(&application_store, "owner@example.com")
                 .await
                 .unwrap()
                 .unwrap();
@@ -6703,9 +6956,9 @@ records:
     #[tokio::test]
     async fn person_seed_overwrite_writes_a_case_only_email_change() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let person = persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::new("Recased Client", "recased.client@example.com"),
             )
             .await
@@ -6720,19 +6973,33 @@ records:
             };
             let yaml = person_yaml("Recased.Client@Example.com", "Recased Client");
 
-            let skipped = reconcile_yaml(&surreal, SeedModel::Person, &yaml, "Firm", false, &actor)
-                .await
-                .unwrap();
+            let skipped = reconcile_yaml(
+                &application_store,
+                SeedModel::Person,
+                &yaml,
+                "Firm",
+                false,
+                &actor,
+            )
+            .await
+            .unwrap();
             assert_eq!((skipped.updated, skipped.unchanged), (0, 1));
 
-            let preview = reconcile_yaml(&surreal, SeedModel::Person, &yaml, "Firm", true, &actor)
-                .await
-                .unwrap();
+            let preview = reconcile_yaml(
+                &application_store,
+                SeedModel::Person,
+                &yaml,
+                "Firm",
+                true,
+                &actor,
+            )
+            .await
+            .unwrap();
             assert_eq!((preview.created, preview.updated), (0, 1));
             assert_eq!(preview.records[0].changed_fields, vec!["email".to_string()]);
 
             let applied = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &yaml,
                 "Firm",
@@ -6745,23 +7012,30 @@ records:
             .await
             .unwrap();
             assert_eq!(applied.updated, 1);
-            let row = persons::find_by_email_ci(&surreal, "RECASED.CLIENT@example.com")
+            let row = persons::find_by_email_ci(&application_store, "RECASED.CLIENT@example.com")
                 .await
                 .unwrap()
                 .expect("a differently-cased lookup finds the Person");
             assert_eq!(row.id, person.id);
             assert_eq!(row.email, "Recased.Client@Example.com");
             assert!(
-                persons::aliases(&surreal, person.id)
+                persons::aliases(&application_store, person.id)
                     .await
                     .unwrap()
                     .is_empty(),
                 "the old spelling is the same mailbox, not an alias"
             );
 
-            let again = reconcile_yaml(&surreal, SeedModel::Person, &yaml, "Firm", true, &actor)
-                .await
-                .unwrap();
+            let again = reconcile_yaml(
+                &application_store,
+                SeedModel::Person,
+                &yaml,
+                "Firm",
+                true,
+                &actor,
+            )
+            .await
+            .unwrap();
             assert_eq!((again.updated, again.unchanged), (0, 1));
         })
         .await;
@@ -6770,9 +7044,9 @@ records:
     #[tokio::test]
     async fn person_seed_cannot_edit_a_higher_ranked_person() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             persons::create(
-                &surreal,
+                &application_store,
                 &NewPerson::with_role("Ranking Owner", "ranking-owner@example.com", Role::Owner),
             )
             .await
@@ -6787,7 +7061,7 @@ records:
                 actor_person_id: None,
             };
             let error = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::Person,
                 &person_yaml("ranking-owner@example.com", "Hacked Name"),
                 "Firm",
@@ -6856,34 +7130,37 @@ records:
     #[tokio::test]
     async fn the_practice_firm_holds_mailbox_9002_at_ridgeview() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let storage = fs_storage().await;
 
-            seed_canonical(&surreal, &storage).await.expect("seed");
-            let firm = crate::entities::find_by_name(&surreal, super::FIRM_ENTITY_NAME)
+            seed_canonical(&application_store, &storage)
+                .await
+                .expect("seed");
+            let firm = crate::entities::find_by_name(&application_store, super::FIRM_ENTITY_NAME)
                 .await
                 .unwrap()
                 .expect("the firm anchor is canonical, so every deployment carries it");
 
             // Canonical alone carries no address: the mailbox is the Firm's.
             assert!(
-                crate::addresses::for_entity(&surreal, firm.id)
+                crate::addresses::for_entity(&application_store, firm.id)
                     .await
                     .unwrap()
                     .is_empty(),
                 "the Firm's own addresses must stay out of the canonical layer"
             );
 
-            super::seed_brand(&surreal, super::BrandSeed::Neon)
+            super::seed_brand(&application_store, super::BrandSeed::Neon)
                 .await
                 .expect("brand seed");
-            let at_ridgeview: Vec<String> = crate::addresses::for_entity(&surreal, firm.id)
-                .await
-                .unwrap()
-                .into_iter()
-                .map(|a| a.line1)
-                .filter(|line| line.starts_with("5150 Mae Anne Ave"))
-                .collect();
+            let at_ridgeview: Vec<String> =
+                crate::addresses::for_entity(&application_store, firm.id)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|a| a.line1)
+                    .filter(|line| line.starts_with("5150 Mae Anne Ave"))
+                    .collect();
             assert_eq!(
                 at_ridgeview,
                 vec!["5150 Mae Anne Ave Ste 405-9002".to_string()],
@@ -6892,7 +7169,7 @@ records:
 
             // The box is unique across the mail center: no other seeded entity
             // may answer to it, or mail routes to whichever row is read first.
-            let holders = crate::addresses::list_all(&surreal)
+            let holders = crate::addresses::list_all(&application_store)
                 .await
                 .unwrap()
                 .into_iter()
@@ -6909,16 +7186,16 @@ records:
     #[tokio::test]
     async fn only_the_firm_anchors_seed_as_entities() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
 
-            seed_canonical(&surreal, &fs_storage().await)
+            seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed");
-            super::seed_brand(&surreal, super::BrandSeed::Neon)
+            super::seed_brand(&application_store, super::BrandSeed::Neon)
                 .await
                 .expect("brand seed");
 
-            let mut names: Vec<String> = crate::entities::all(&surreal)
+            let mut names: Vec<String> = crate::entities::all(&application_store)
                 .await
                 .unwrap()
                 .into_iter()
@@ -6931,7 +7208,7 @@ records:
                 .collect::<Vec<_>>();
             expected.sort();
             assert_eq!(names, expected);
-            let firm = crate::entities::find_by_name(&surreal, super::FIRM_ENTITY_NAME)
+            let firm = crate::entities::find_by_name(&application_store, super::FIRM_ENTITY_NAME)
                 .await
                 .unwrap()
                 .unwrap();
@@ -6942,10 +7219,11 @@ records:
                     .and_then(serde_json::Value::as_str),
                 Some("81-3099614")
             );
-            let other = crate::entities::find_by_name(&surreal, super::LEX_FIRM_ENTITY_NAME)
-                .await
-                .unwrap()
-                .unwrap();
+            let other =
+                crate::entities::find_by_name(&application_store, super::LEX_FIRM_ENTITY_NAME)
+                    .await
+                    .unwrap()
+                    .unwrap();
             assert_eq!(other.metadata, None);
         })
         .await;
@@ -6954,7 +7232,7 @@ records:
     #[tokio::test]
     async fn firm_ein_seed_targets_the_anchor_even_when_an_unprotected_namesake_exists() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let mut report = super::SeedReport::default();
             super::seed_jurisdictions(&db, &mut report).await.unwrap();
             super::seed_entity_types(&db, &mut report).await.unwrap();
@@ -7020,21 +7298,23 @@ records:
     #[tokio::test]
     async fn professional_association_seeds_as_its_own_entity_type() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
 
-            seed_canonical(&surreal, &fs_storage().await)
+            seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed");
 
-            let pa = crate::entity_types::find_by_name(&surreal, "Professional Association")
-                .await
-                .unwrap()
-                .expect("the professional-association type seeds");
+            let pa =
+                crate::entity_types::find_by_name(&application_store, "Professional Association")
+                    .await
+                    .unwrap()
+                    .expect("the professional-association type seeds");
 
-            let pc = crate::entity_types::find_by_name(&surreal, "Professional Corporation")
-                .await
-                .unwrap()
-                .expect("the professional-corporation type seeds");
+            let pc =
+                crate::entity_types::find_by_name(&application_store, "Professional Corporation")
+                    .await
+                    .unwrap()
+                    .expect("the professional-corporation type seeds");
 
             assert_ne!(pa.id, pc.id, "a P.A. is not a P.C.");
         })
@@ -7049,21 +7329,21 @@ records:
     #[tokio::test]
     async fn a_seed_that_loses_the_firm_anchor_write_still_succeeds() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
 
             // An anchor the seed's own find cannot see: right name, a type it
             // will not look under.
-            let decoy_type = crate::entity_types::create(&surreal, "Decoy Type")
+            let decoy_type = crate::entity_types::create(&application_store, "Decoy Type")
                 .await
                 .unwrap();
             let decoy_jurisdiction = jurisdictions::create(
-                &surreal,
+                &application_store,
                 &NewJurisdiction::new("Decoy Jurisdiction", "DJ", "state"),
             )
             .await
             .unwrap();
             crate::entities::create(
-                &surreal,
+                &application_store,
                 &crate::entities::NewEntity {
                     name: super::FIRM_ENTITY_NAME.into(),
                     entity_type_id: decoy_type.id,
@@ -7077,11 +7357,11 @@ records:
             .await
             .unwrap();
 
-            seed_canonical(&surreal, &fs_storage().await)
+            seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("a seed that loses the anchor write must still succeed");
 
-            let anchors = crate::entities::all(&surreal)
+            let anchors = crate::entities::all(&application_store)
                 .await
                 .unwrap()
                 .into_iter()
@@ -7095,15 +7375,17 @@ records:
     #[tokio::test]
     async fn seeds_full_question_set() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let report = seed_canonical(&surreal, &fs_storage().await)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let report = seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed");
             // The canonical question catalog is the closed type registry.
             // Template-specific prompt keys live after the `__` discriminator
             // in state names rather than as seeded question rows.
             let expected = QuestionType::all_tokens().len();
-            let qs = crate::questions::list_all(&surreal).await.unwrap();
+            let qs = crate::questions::list_all(&application_store)
+                .await
+                .unwrap();
             assert_eq!(qs.len(), expected);
             assert!(qs.iter().any(|q| q.code == "person"));
             assert!(qs.iter().any(|q| q.code == "people"));
@@ -7118,11 +7400,11 @@ records:
     #[tokio::test]
     async fn seeds_full_jurisdiction_set() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            seed_canonical(&surreal, &fs_storage().await)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed");
-            let js = jurisdictions::list_all(&surreal).await.unwrap();
+            let js = jurisdictions::list_all(&application_store).await.unwrap();
             // 50 states + DC + the ISO 3166-1 country set (alpha-3 codes,
             // with United States and Germany on their pre-ISO codes) + Global.
             assert_eq!(js.len(), 249);
@@ -7348,8 +7630,8 @@ records:
     #[tokio::test]
     async fn seeds_the_bundled_template_catalog() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let report = seed_canonical(&surreal, &fs_storage().await)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let report = seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed");
             assert_eq!(
@@ -7368,14 +7650,14 @@ records:
                 "us__naturalization",
             ] {
                 assert!(
-                    crate::templates::resolve(&surreal, None, code)
+                    crate::templates::resolve(&application_store, None, code)
                         .await
                         .unwrap()
                         .is_some(),
                     "expected bundled template `{code}` to be seeded"
                 );
             }
-            let tmpl = crate::templates::resolve(&surreal, None, "onboarding__letter")
+            let tmpl = crate::templates::resolve(&application_store, None, "onboarding__letter")
                 .await
                 .unwrap()
                 .expect("template row");
@@ -7386,7 +7668,7 @@ records:
             // accessor. Just the markdown body, no frontmatter, so the
             // renderer's dotted glossary interpolation finds
             // its targets.
-            let body = crate::templates::body(&surreal, &fs_storage().await, &tmpl)
+            let body = crate::templates::body(&application_store, &fs_storage().await, &tmpl)
                 .await
                 .expect("template body in storage");
             assert!(
@@ -7405,15 +7687,19 @@ records:
     #[tokio::test]
     async fn template_seeder_is_idempotent_on_second_pass() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let first = seed_canonical(&surreal, &fs_storage().await).await.unwrap();
-            let second = seed_canonical(&surreal, &fs_storage().await).await.unwrap();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let first = seed_canonical(&application_store, &fs_storage().await)
+                .await
+                .unwrap();
+            let second = seed_canonical(&application_store, &fs_storage().await)
+                .await
+                .unwrap();
             assert_eq!(first.templates_inserted, SEEDED_TEMPLATES.len());
             assert_eq!(
                 second.templates_inserted, 0,
                 "second pass must skip every existing template"
             );
-            let count = crate::templates::list_current(&surreal)
+            let count = crate::templates::list_current(&application_store)
                 .await
                 .unwrap()
                 .into_iter()
@@ -7441,8 +7727,10 @@ records:
     #[tokio::test]
     async fn the_retainer_carries_arbitration_contact_and_the_clause_slot() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            seed_canonical(&surreal, &fs_storage().await).await.unwrap();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            seed_canonical(&application_store, &fs_storage().await)
+                .await
+                .unwrap();
             let storage = fs_storage().await;
 
             // Distinctive phrases from the three clauses. Checked against the
@@ -7460,11 +7748,11 @@ records:
             ];
 
             let code = "onboarding__letter";
-            let tmpl = crate::templates::resolve(&surreal, None, code)
+            let tmpl = crate::templates::resolve(&application_store, None, code)
                 .await
                 .unwrap()
                 .unwrap_or_else(|| panic!("{code} seeded"));
-            let body = crate::templates::body(&surreal, &storage, &tmpl)
+            let body = crate::templates::body(&application_store, &storage, &tmpl)
                 .await
                 .expect("retainer body");
             let flat = body
@@ -7534,30 +7822,33 @@ records:
     #[tokio::test]
     async fn no_charge_clause_clears_the_clauses_required_gate_and_renders_in_section_i() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            seed_canonical(&surreal, &fs_storage().await).await.unwrap();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            seed_canonical(&application_store, &fs_storage().await)
+                .await
+                .unwrap();
             let storage = fs_storage().await;
 
-            let tmpl = crate::templates::resolve(&surreal, None, "onboarding__letter")
+            let tmpl = crate::templates::resolve(&application_store, None, "onboarding__letter")
                 .await
                 .unwrap()
                 .unwrap_or_else(|| panic!("onboarding__letter seeded"));
-            let raw_body = crate::templates::body(&surreal, &storage, &tmpl)
+            let raw_body = crate::templates::body(&application_store, &storage, &tmpl)
                 .await
                 .expect("retainer body");
 
             let project_id =
-                crate::test_support::seed_project_surreal(&surreal, "No-Charge Onboarding").await;
-            let person_id = crate::test_support::dri_person(&surreal).await;
+                crate::test_support::seed_project_id(&application_store, "No-Charge Onboarding")
+                    .await;
+            let person_id = crate::test_support::dri_person(&application_store).await;
             let notation_id = crate::notations::create(
-                &surreal,
+                &application_store,
                 &crate::notations::NewNotation::new(tmpl.id, person_id, project_id, "BEGIN"),
             )
             .await
             .expect("open notation")
             .id;
 
-            let clauses = crate::notation_clauses::for_notation(&surreal, notation_id)
+            let clauses = crate::notation_clauses::for_notation(&application_store, notation_id)
                 .await
                 .unwrap();
             assert!(
@@ -7566,11 +7857,11 @@ records:
                 "the empty slot must fail the gate before the clause is seeded"
             );
 
-            seed_no_charge_fee_clause(&surreal, notation_id)
+            seed_no_charge_fee_clause(&application_store, notation_id)
                 .await
                 .unwrap();
 
-            let clauses = crate::notation_clauses::for_notation(&surreal, notation_id)
+            let clauses = crate::notation_clauses::for_notation(&application_store, notation_id)
                 .await
                 .unwrap();
             assert!(
@@ -7598,13 +7889,13 @@ records:
     #[tokio::test]
     async fn seed_no_charge_fee_clause_is_idempotent() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let notation_id = crate::test_support::seed_notation(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let notation_id = crate::test_support::seed_notation(&application_store).await;
 
-            let first = seed_no_charge_fee_clause(&surreal, notation_id)
+            let first = seed_no_charge_fee_clause(&application_store, notation_id)
                 .await
                 .unwrap();
-            let second = seed_no_charge_fee_clause(&surreal, notation_id)
+            let second = seed_no_charge_fee_clause(&application_store, notation_id)
                 .await
                 .unwrap();
             assert_eq!(
@@ -7612,7 +7903,7 @@ records:
                 "re-seeding must reuse the existing clause id"
             );
 
-            let clauses = crate::notation_clauses::for_notation(&surreal, notation_id)
+            let clauses = crate::notation_clauses::for_notation(&application_store, notation_id)
                 .await
                 .unwrap();
             assert_eq!(clauses.len(), 1, "re-seeding must not duplicate the row");
@@ -7624,24 +7915,24 @@ records:
     #[tokio::test]
     async fn seed_is_idempotent() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let first = seed_canonical(&surreal, &fs_storage().await)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let first = seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed 1");
-            let second = seed_canonical(&surreal, &fs_storage().await)
+            let second = seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed 2");
             assert_eq!(second.questions_inserted, 0);
             assert_eq!(second.jurisdictions_inserted, 0);
             assert_eq!(second.persons_inserted, 0);
             assert!(first.questions_inserted > 0);
-            let neon = crate::brands::find_by_key(&surreal, "neon")
+            let neon = crate::brands::find_by_key(&application_store, "neon")
                 .await
                 .unwrap()
                 .expect("neon brand");
             assert_eq!(neon.typeface.as_deref(), Some("gorp-serif"));
             assert_eq!(neon.primary_color.as_deref(), Some("#007c91"));
-            let dyd = crate::brands::find_by_key(&surreal, "delete-your-data")
+            let dyd = crate::brands::find_by_key(&application_store, "delete-your-data")
                 .await
                 .unwrap()
                 .expect("delete-your-data brand");
@@ -7655,15 +7946,15 @@ records:
     async fn seeds_two_firms_with_iep_defenders_at_lex() {
         crate::test_support::with_postgres(async {
             // A real fresh boot: no Brand row exists until the seed writes it.
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            seed_canonical(&surreal, &fs_storage().await)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed");
 
             // Two firm-anchor entities, each delete-guarded by its own
             // anchor key.
             for name in super::FIRM_ENTITY_NAMES {
-                let entity = crate::entities::find_by_name(&surreal, name)
+                let entity = crate::entities::find_by_name(&application_store, name)
                     .await
                     .unwrap()
                     .unwrap_or_else(|| panic!("canonical seed is missing entity {name}"));
@@ -7675,31 +7966,33 @@ records:
             }
 
             // Two firm rows, one per firm-anchor entity.
-            let firms = crate::firms::all(&surreal).await.unwrap();
+            let firms = crate::firms::all(&application_store).await.unwrap();
             assert_eq!(firms.len(), 2, "the seed ships exactly two firms");
-            let neon_entity = crate::entities::find_by_name(&surreal, super::FIRM_ENTITY_NAME)
-                .await
-                .unwrap()
-                .expect("practice entity");
-            let lex_entity = crate::entities::find_by_name(&surreal, super::LEX_FIRM_ENTITY_NAME)
-                .await
-                .unwrap()
-                .expect("lex entity");
-            let neon = crate::firms::find_by_entity_id(&surreal, neon_entity.id)
+            let neon_entity =
+                crate::entities::find_by_name(&application_store, super::FIRM_ENTITY_NAME)
+                    .await
+                    .unwrap()
+                    .expect("practice entity");
+            let lex_entity =
+                crate::entities::find_by_name(&application_store, super::LEX_FIRM_ENTITY_NAME)
+                    .await
+                    .unwrap()
+                    .expect("lex entity");
+            let neon = crate::firms::find_by_entity_id(&application_store, neon_entity.id)
                 .await
                 .unwrap()
                 .expect("practice firm");
-            let lex = crate::firms::find_by_entity_id(&surreal, lex_entity.id)
+            let lex = crate::firms::find_by_entity_id(&application_store, lex_entity.id)
                 .await
                 .unwrap()
                 .expect("lex firm");
             assert_ne!(neon.id, lex.id);
 
-            let neon_keys = crate::firms::brand_keys_for_firm(&surreal, neon.id)
+            let neon_keys = crate::firms::brand_keys_for_firm(&application_store, neon.id)
                 .await
                 .unwrap();
             assert_eq!(neon_keys, super::practice_worn_brand_keys());
-            let lex_keys = crate::firms::brand_keys_for_firm(&surreal, lex.id)
+            let lex_keys = crate::firms::brand_keys_for_firm(&application_store, lex.id)
                 .await
                 .unwrap();
             assert_eq!(
@@ -7709,12 +8002,12 @@ records:
 
             // The Lex key resolves to the Lex firm and to nothing else.
             assert_eq!(
-                crate::firms::firm_id_for_brand_key(&surreal, "iep-defenders")
+                crate::firms::firm_id_for_brand_key(&application_store, "iep-defenders")
                     .await
                     .unwrap(),
                 Some(lex.id)
             );
-            let iep = crate::brands::find_by_key(&surreal, "iep-defenders")
+            let iep = crate::brands::find_by_key(&application_store, "iep-defenders")
                 .await
                 .unwrap()
                 .expect("iep-defenders brand");
@@ -7729,14 +8022,14 @@ records:
 
             // A second pass changes nothing: the two firms and their brand
             // associations are already exactly as seeded.
-            let second = seed_canonical(&surreal, &fs_storage().await)
+            let second = seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("reseed");
             assert_eq!(second.entities_inserted, 0);
-            let firms_after = crate::firms::all(&surreal).await.unwrap();
+            let firms_after = crate::firms::all(&application_store).await.unwrap();
             assert_eq!(firms_after.len(), 2);
             assert_eq!(
-                crate::firms::firm_id_for_brand_key(&surreal, "iep-defenders")
+                crate::firms::firm_id_for_brand_key(&application_store, "iep-defenders")
                     .await
                     .unwrap(),
                 Some(lex.id)
@@ -7748,16 +8041,16 @@ records:
     #[tokio::test]
     async fn seed_is_idempotent_when_a_seeded_email_has_different_casing() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            seed_canonical(&surreal, &fs_storage().await)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("initial seed");
-            let nick = persons::find_by_email_ci(&surreal, "nick@neonlaw.com")
+            let nick = persons::find_by_email_ci(&application_store, "nick@neonlaw.com")
                 .await
                 .unwrap()
                 .expect("nick exists");
             persons::edit(
-                &surreal,
+                &application_store,
                 nick.id,
                 &crate::persons::PersonEdit {
                     email: Some("Nick@NeonLaw.com".into()),
@@ -7767,12 +8060,12 @@ records:
             .await
             .expect("re-case Nick's email");
 
-            let rerun = seed_canonical(&surreal, &fs_storage().await)
+            let rerun = seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("re-seeding must resolve case-insensitive email references");
             assert_eq!(rerun.persons_inserted, 0);
             assert_eq!(
-                persons::find_by_email_ci(&surreal, "nick@neonlaw.com")
+                persons::find_by_email_ci(&application_store, "nick@neonlaw.com")
                     .await
                     .unwrap()
                     .expect("case-insensitive lookup preserves Nick")
@@ -7786,15 +8079,15 @@ records:
     #[tokio::test]
     async fn seeds_attorney_credentials_with_correct_numbers() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let report = seed_canonical(&surreal, &fs_storage().await)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let report = seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed");
-            let nick = persons::find_by_email_ci(&surreal, "nick@neonlaw.com")
+            let nick = persons::find_by_email_ci(&application_store, "nick@neonlaw.com")
                 .await
                 .unwrap()
                 .expect("nick exists");
-            let creds = crate::credentials::for_person(&surreal, nick.id)
+            let creds = crate::credentials::for_person(&application_store, nick.id)
                 .await
                 .unwrap();
             assert_eq!(creds.len(), 4, "expected NV + CA + NY + WA admissions");
@@ -7804,7 +8097,7 @@ records:
             let mut by_juris: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
             for c in &creds {
-                let j = jurisdictions::find_by_id(&surreal, c.jurisdiction_id)
+                let j = jurisdictions::find_by_id(&application_store, c.jurisdiction_id)
                     .await
                     .unwrap()
                     .expect("the credential's jurisdiction is a seeded Surreal row");
@@ -7822,11 +8115,11 @@ records:
     #[tokio::test]
     async fn user_role_lifts_persons_to_admin() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            seed_canonical(&surreal, &fs_storage().await)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            seed_canonical(&application_store, &fs_storage().await)
                 .await
                 .expect("seed");
-            let nick = persons::find_by_email_ci(&surreal, "nick@neonlaw.com")
+            let nick = persons::find_by_email_ci(&application_store, "nick@neonlaw.com")
                 .await
                 .unwrap()
                 .expect("nick exists");
@@ -7960,7 +8253,7 @@ records:
     #[tokio::test]
     async fn full_canonical_reseeds_return_brands_to_their_canonical_firms() {
         crate::test_support::with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let storage: std::sync::Arc<dyn cloud::StorageService> =
                 std::sync::Arc::new(crate::test_support::MemoryStorage::default());
             super::seed_canonical(&db, &storage).await.unwrap();

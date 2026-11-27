@@ -26,7 +26,7 @@ pub struct BrandPresentationForm {
 }
 
 pub async fn post_brand_edit(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path(key): Path<String>,
     session: Option<Extension<SessionData>>,
     Form(form): Form<BrandPresentationForm>,
@@ -45,7 +45,7 @@ pub async fn post_brand_edit(
         .filter(|value| !value.is_empty());
     let typeface = chosen_family.map(|_| "uploaded");
     match apply_brand_presentation(
-        &surreal,
+        &application_store,
         session.role,
         session.person_id,
         &key,
@@ -92,7 +92,7 @@ pub struct BrandWebsiteForm {
 /// Brand's website URL. `store::brands::set_website_url` is the Owner gate;
 /// any other caller gets the same 404 an unknown Brand does.
 pub async fn post_brand_website(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path(key): Path<String>,
     session: Option<Extension<SessionData>>,
     Form(form): Form<BrandWebsiteForm>,
@@ -103,7 +103,7 @@ pub async fn post_brand_website(
     if session.role != store::persons::Role::Owner {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let brand = match store::brands::find_by_key(&surreal, &key).await {
+    let brand = match store::brands::find_by_key(&application_store, &key).await {
         Ok(Some(brand)) => brand,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(error) => {
@@ -112,7 +112,9 @@ pub async fn post_brand_website(
         }
     };
     let website_url = Some(form.website_url.trim()).filter(|value| !value.is_empty());
-    match store::brands::set_website_url(&surreal, session.role, brand.id, website_url).await {
+    match store::brands::set_website_url(&application_store, session.role, brand.id, website_url)
+        .await
+    {
         Ok(_) => back_to_edit(&key, Some(("website_saved", "true"))),
         Err(store::brands::BrandError::NotAuthorized) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => back_to_edit(&key, Some(("error", &error.user_message()))),
@@ -122,14 +124,16 @@ pub async fn post_brand_website(
 /// `POST /app/admin/brands/{key}/attach` — the Brand's own Firm starts
 /// wearing it. Owner, or that Firm's Admin; the Firm comes from the row.
 pub async fn post_brand_attach(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path(key): Path<String>,
     session: Option<Extension<SessionData>>,
 ) -> Response {
     let Some(Extension(session)) = session else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match store::firms::attach_own_brand(&surreal, session.role, session.person_id, &key).await {
+    match store::firms::attach_own_brand(&application_store, session.role, session.person_id, &key)
+        .await
+    {
         Ok(_) => back_to_edit(&key, Some(("attached", "true"))),
         Err(store::firms::FirmError::NotAuthorized | store::firms::FirmError::UnknownBrand(_)) => {
             StatusCode::NOT_FOUND.into_response()
@@ -181,7 +185,7 @@ impl BrandLetterheadForm {
 /// the Brand's own Firm, sets the Brand's Letterhead. Every other caller gets
 /// the same 404 an unknown Brand does.
 pub async fn post_brand_letterhead(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path(key): Path<String>,
     session: Option<Extension<SessionData>>,
     Form(form): Form<BrandLetterheadForm>,
@@ -192,8 +196,13 @@ pub async fn post_brand_letterhead(
     // Authorize before anything else is said, so a caller who may not edit
     // this Brand gets the non-disclosing 404 whatever the form or storage.
     // `save_for_actor` repeats the gate on the write itself.
-    match store::brands::find_by_key_for_actor(&surreal, session.role, session.person_id, &key)
-        .await
+    match store::brands::find_by_key_for_actor(
+        &application_store,
+        session.role,
+        session.person_id,
+        &key,
+    )
+    .await
     {
         Ok(_) => {}
         Err(
@@ -220,7 +229,7 @@ pub async fn post_brand_letterhead(
         );
     };
     match store::brand_letterheads::save_for_actor(
-        &surreal,
+        &application_store,
         &pg,
         session.role,
         session.person_id,

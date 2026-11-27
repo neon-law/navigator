@@ -122,7 +122,7 @@ pub struct ResolvedTwilioWebhook {
 /// [`crate::AppState`]; tests hand out the same seams.
 pub struct Spine<'a> {
     pub registry: &'a store::postgres::PostgresDb,
-    pub surreal: &'a store::surreal::SurrealDb,
+    pub application_store: &'a store::application_store::ApplicationStore,
     pub kms: &'a dyn cloud::RuntimeKms,
 }
 
@@ -156,7 +156,7 @@ impl Spine<'_> {
         // 2. The number's own credential. A missing, revoked, or wrong-kind
         //    secret stops here — never a shared token.
         let (auth_token, secret_firm) = store::firm_secrets::resolve_twilio_auth_token_by_ref(
-            self.surreal,
+            self.application_store,
             registration.auth_token_secret_ref,
             self.kms,
         )
@@ -176,10 +176,11 @@ impl Spine<'_> {
             return Err(ResolutionError::BadSignature);
         }
         // 5. Brand → Firm; a registration straddling Firms is torn config.
-        let firm_id = store::firms::firm_id_for_brand_key(self.surreal, &registration.brand_key)
-            .await
-            .map_err(|_| ResolutionError::NoOwningFirm)?
-            .ok_or(ResolutionError::NoOwningFirm)?;
+        let firm_id =
+            store::firms::firm_id_for_brand_key(self.application_store, &registration.brand_key)
+                .await
+                .map_err(|_| ResolutionError::NoOwningFirm)?
+                .ok_or(ResolutionError::NoOwningFirm)?;
         if firm_id != secret_firm {
             return Err(ResolutionError::TornRegistration);
         }
@@ -215,7 +216,7 @@ fn canonical_host(host_lookup: &impl Fn(&str) -> Option<String>) -> Option<Strin
 
 #[cfg(test)]
 pub(crate) async fn registry_state(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     pg: &store::postgres::PostgresDb,
     brand: &str,
     number: &str,
@@ -313,7 +314,7 @@ mod tests {
             let first_token = store::test_support::twilio::auth_token();
             let second_token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await
                 .0;
@@ -339,7 +340,7 @@ mod tests {
             let kms = FakeKms::new("spine-test");
             let spine = Spine {
                 registry: &pg,
-                surreal: &db,
+                application_store: &db,
                 kms: &kms,
             };
             for (number, token) in [
@@ -383,7 +384,7 @@ mod tests {
             let neon_token = store::test_support::twilio::auth_token();
             let vesta_token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             // The same key version the harness sealed the tokens under.
             let kms = FakeKms::new("spine-test");
             let neon_firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
@@ -417,7 +418,7 @@ mod tests {
 
             let spine = Spine {
                 registry: &pg,
-                surreal: &db,
+                application_store: &db,
                 kms: &kms,
             };
             let signed = |token: &str, number: &str| {

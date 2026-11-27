@@ -5,9 +5,7 @@ relational model in [`store/postgres/schema.sql`](../../store/postgres/schema.sq
 singular table names, such as `person.role` and `person_project_role.participation`; `store::persons` and
 `store::projects` name Rust modules.
 
-A schema link describes the model. The accessor and deployment configuration determine the active write path. Prefer
-PostgreSQL for new models and supported writes; see [Storage models and writes](../storage-models.md). Keep
-engine-specific mechanics in [SurrealDB compatibility](../surreal-compatibility.md).
+See [Storage models and writes](../storage-models.md) for PostgreSQL access and admission.
 
 ## Authoring
 
@@ -27,8 +25,7 @@ migrations that maintain it. Keep SQL and rollout instructions in the storage do
 
 Each table ownership attribution begins `The table is`, followed by its name in backticks and a period. Other entries
 may mention a table without claiming it. The PostgreSQL glossary coverage test requires exactly one owning definition
-for every table. Compatibility-only records use an explicit SurrealDB compatibility attribution; see [SurrealDB
-compatibility](../surreal-compatibility.md#model-references-and-coverage).
+for every table.
 
 Regenerate the linked SVG after changing `store/postgres/postgres-erd.mmd`. Start a local ChromeDriver, set
 `WEBDRIVER_URL` to its loopback URL and `CHROME_BINARY` to the pinned Chrome for Testing binary, then run:

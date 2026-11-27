@@ -40,7 +40,6 @@ const BUCKETS: &[(&str, &str)] = &[
     ),
     ("NAVIGATOR_TELEMETRY_BUCKET", gcp::TELEMETRY_BUCKET_SUFFIX),
     ("NAVIGATOR_ARCHIVES_BUCKET", ARCHIVES_BUCKET_SUFFIX),
-    ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", ARCHIVES_BUCKET_SUFFIX),
 ];
 
 const ARCHIVES_BUCKET_SUFFIX: &str = "-archives";
@@ -178,10 +177,6 @@ mod tests {
             ),
             ("NAVIGATOR_TELEMETRY_BUCKET", "example-project-telemetry"),
             ("NAVIGATOR_ARCHIVES_BUCKET", "example-project-archives"),
-            (
-                "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
-                "example-project-archives",
-            ),
         ] {
             assert_eq!(get(key), Some(bucket), "{key}");
         }

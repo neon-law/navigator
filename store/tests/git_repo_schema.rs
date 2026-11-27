@@ -31,16 +31,19 @@ async fn new_project_starts_with_uninitialized_repo() {
 #[tokio::test]
 async fn git_access_token_round_trips_scoped_to_a_project() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
 
-        let owner = persons::create(&surreal, &NewPerson::new("Libra", "libra@example.com"))
-            .await
-            .expect("insert person");
+        let owner = persons::create(
+            &application_store,
+            &NewPerson::new("Libra", "libra@example.com"),
+        )
+        .await
+        .expect("insert person");
 
         let proj = native_project::create("git-token-schema").await;
 
         let fetched = store::git_access_tokens::mint(
-            &surreal,
+            &application_store,
             owner.id,
             Some(proj.id),
             store::git_access_tokens::SCOPE_WRITE,

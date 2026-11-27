@@ -18,10 +18,10 @@ async fn absent_postgres_configuration_cannot_select_source() {
         return;
     }
     assert!(matches!(
-        PostgresDb::configured().await,
+        PostgresDb::application().await,
         Err(PostgresError::Configuration)
     ));
-    let source = crate::surreal::SurrealDb::uninitialized();
+    let source = crate::application_store::ApplicationStore::uninitialized();
     assert!(matches!(
         crate::persons::find_by_id(&source, uuid::Uuid::nil()).await,
         Err(crate::persons::PersonError::Postgres(_))
@@ -30,10 +30,10 @@ async fn absent_postgres_configuration_cannot_select_source() {
 
 #[tokio::test]
 async fn application_history_rejects_unenrolled_database() {
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+    let (options, database) = crate::postgres::fixtures::fresh_schema()
         .await
         .expect("required PostgreSQL application fixture");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     assert!(matches!(
         pg.require_application_history().await,
         Err(PostgresError::History)
@@ -44,7 +44,7 @@ async fn application_history_rejects_unenrolled_database() {
         pg.require_application_history().await,
         Err(PostgresError::History)
     ));
-    let families = crate::postgres_backfill::family::Family::all();
+    let families = crate::postgres::history::Family::all();
     for (index, family) in families.iter().enumerate() {
         super::fixtures::activate_family(&pg, *family).await;
         assert_eq!(
@@ -56,13 +56,13 @@ async fn application_history_rejects_unenrolled_database() {
 
 #[tokio::test]
 async fn people_create_alias_and_merge_do_not_require_source() {
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+    let (options, database) = crate::postgres::fixtures::fresh_schema()
         .await
         .expect("required PostgreSQL application fixture");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     super::fixtures::activate_application(&pg).await;
     PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let keep = crate::persons::create(
             &source,
             &crate::persons::NewPerson::new("Synthetic Keep", "keep@example.invalid"),
@@ -111,10 +111,10 @@ async fn people_create_alias_and_merge_do_not_require_source() {
 async fn deployment_change_retains_exact_authenticated_timestamp_bytes() {
     use base64::Engine as _;
     use cloud::RuntimeKms as _;
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+    let (options, database) = crate::postgres::fixtures::fresh_schema()
         .await
         .expect("required PostgreSQL fixture");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     super::fixtures::activate_application(&pg).await;
     let id = uuid::Uuid::new_v4();
     let actor = uuid::Uuid::new_v4().to_string().to_uppercase();
@@ -136,7 +136,7 @@ async fn deployment_change_retains_exact_authenticated_timestamp_bytes() {
         .bind(chrono::DateTime::parse_from_rfc3339(timestamp).unwrap()).bind(timestamp)
         .execute(pg.pool()).await.unwrap();
     PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let rows = crate::deployment_secret_changes::latest(
             &source,
             crate::persons::Role::Owner,
@@ -169,192 +169,11 @@ async fn deployment_change_retains_exact_authenticated_timestamp_bytes() {
     .await;
 }
 
-#[tokio::test]
-async fn completed_secret_import_replay_never_reads_source_or_changes_native_history() {
-    use crate::postgres_mirror::{during_initial_copy, firm_secrets, from_source, Mirrored};
-    let (pg, actor, _, _, firm) = application_fixture().await;
-    let id = uuid::Uuid::now_v7();
-    sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at) VALUES ($1,$2,'xero','xero_client_secret',1,'synthetic-native-ciphertext','synthetic-native-wrap','synthetic-key','synthetic-native-context','revoked',$3,now(),now())")
-        .bind(id).bind(firm).bind(actor).execute(pg.pool()).await.unwrap();
-    let before: serde_json::Value =
-        sqlx::query_scalar("SELECT to_jsonb(r) FROM firm_integration_secret r WHERE id=$1")
-            .bind(id)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-    let source = crate::surreal::SurrealDb::uninitialized();
-    assert_eq!(
-        from_source(during_initial_copy(firm_secrets::mirror(
-            &source, &pg, firm
-        )))
-        .await
-        .unwrap(),
-        Mirrored::Unchanged
-    );
-    assert!(firm_secrets::parity(&source, &pg)
-        .await
-        .unwrap()
-        .tables
-        .is_empty());
-    assert!(
-        from_source(during_initial_copy(firm_secrets::reconcile(&source, &pg)))
-            .await
-            .unwrap()
-            .tables
-            .is_empty()
-    );
-    let after: serde_json::Value =
-        sqlx::query_scalar("SELECT to_jsonb(r) FROM firm_integration_secret r WHERE id=$1")
-            .bind(id)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-    assert_eq!(after, before);
-}
-
-#[tokio::test]
-async fn deployment_context_transfer_only_fills_missing_original_bytes_on_identical_rows() {
-    use crate::postgres_mirror::{during_initial_copy, records, Mirrored};
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
-        .await
-        .expect("required PostgreSQL fixture");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
-    let id = uuid::Uuid::now_v7();
-    let timestamp = "2026-11-18T09:04:03.123456-05:00";
-    let captured = serde_json::json!({
-        "id": id, "request_id": id.to_string(), "actor_id": uuid::Uuid::now_v7().to_string().to_uppercase(),
-        "key": "NAVIGATOR_META_APP_SECRET", "ciphertext": "synthetic-authenticated-bytes",
-        "wrapped_key": "synthetic-wrapped-key", "kms_key_version": "synthetic-kms-version",
-        "inserted_at": timestamp, "inserted_at_text": timestamp, "updated_at": timestamp,
-    });
-    let (_, captured) = records::normalized_record("deployment_secret_change", captured).unwrap();
-    assert_eq!(
-        during_initial_copy(records::copy_record(
-            &pg,
-            "deployment_secret_change",
-            captured.clone()
-        ))
-        .await
-        .unwrap(),
-        Mirrored::Written
-    );
-    sqlx::query("UPDATE deployment_secret_change SET inserted_at_text=NULL WHERE id=$1")
-        .bind(id)
-        .execute(pg.pool())
-        .await
-        .unwrap();
-    let mut conflicting = captured.clone();
-    conflicting["ciphertext"] = serde_json::json!("synthetic-conflicting-bytes");
-    assert_eq!(
-        during_initial_copy(records::copy_record(
-            &pg,
-            "deployment_secret_change",
-            conflicting
-        ))
-        .await
-        .unwrap(),
-        Mirrored::Unchanged
-    );
-    let absent: Option<String> =
-        sqlx::query_scalar("SELECT inserted_at_text FROM deployment_secret_change WHERE id=$1")
-            .bind(id)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-    assert!(absent.is_none());
-    assert_eq!(
-        during_initial_copy(records::copy_record(
-            &pg,
-            "deployment_secret_change",
-            captured.clone()
-        ))
-        .await
-        .unwrap(),
-        Mirrored::Written
-    );
-    let before: serde_json::Value =
-        sqlx::query_scalar("SELECT to_jsonb(r) FROM deployment_secret_change r WHERE id=$1")
-            .bind(id)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-    assert_eq!(before["inserted_at_text"], timestamp);
-    let mut normalized = captured;
-    normalized["inserted_at_text"] = serde_json::json!("2026-11-18T14:04:03.123456Z");
-    assert_eq!(
-        during_initial_copy(records::copy_record(
-            &pg,
-            "deployment_secret_change",
-            normalized
-        ))
-        .await
-        .unwrap(),
-        Mirrored::Unchanged
-    );
-    let after: serde_json::Value =
-        sqlx::query_scalar("SELECT to_jsonb(r) FROM deployment_secret_change r WHERE id=$1")
-            .bind(id)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-    assert_eq!(after, before);
-}
-
-#[tokio::test]
-async fn completed_global_import_cannot_resurrect_catalog_parents_even_under_source_override() {
-    let (pg, _, _, _, _) = application_fixture().await;
-    let id: uuid::Uuid = sqlx::query_scalar("DELETE FROM question RETURNING id")
-        .fetch_one(pg.pool())
-        .await
-        .unwrap();
-    let source = crate::surreal::SurrealDb::uninitialized();
-    let result = crate::postgres_mirror::from_source(crate::postgres_mirror::during_initial_copy(
-        crate::postgres_mirror::mirror(
-            &source,
-            &pg,
-            &crate::postgres_mirror::MirrorKey::Question(id),
-        ),
-    ))
-    .await
-    .unwrap();
-    assert_eq!(result, crate::postgres_mirror::Mirrored::Unchanged);
-    let remains_absent: bool =
-        sqlx::query_scalar("SELECT NOT EXISTS (SELECT 1 FROM question WHERE id=$1)")
-            .bind(id)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-    assert!(remains_absent);
-}
-
-#[test]
-fn source_forbidden_boundary_rejects_sdk_access_before_any_engine() {
-    const CHILD: &str = "NAVIGATOR_TEST_FORBIDDEN_SOURCE_ACCESS";
-    if std::env::var_os(CHILD).is_none() {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "postgres::application_authority_tests::source_forbidden_boundary_rejects_sdk_access_before_any_engine", "--nocapture"])
-            .env(CHILD,"child").env("NAVIGATOR_FORBID_SURREAL","1").output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
-    }
-    let source = crate::surreal::SurrealDb::uninitialized();
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| &*source)).is_err());
-    assert_eq!(
-        crate::surreal::record_uuid(&crate::surreal::record_id("person", uuid::Uuid::nil())),
-        Some(uuid::Uuid::nil())
-    );
-}
-
 async fn application_fixture() -> (PostgresDb, uuid::Uuid, uuid::Uuid, uuid::Uuid, uuid::Uuid) {
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+    let (options, database) = crate::postgres::fixtures::fresh_schema()
         .await
         .expect("required PostgreSQL fixture");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     super::fixtures::activate_application(&pg).await;
     let (person, notation, _question) = super::fixtures::workflow_fixture(&pg).await;
     let (firm, project) = super::fixtures::firm_for_notation(&pg, notation).await;
@@ -398,7 +217,7 @@ async fn scheduled_completion_does_not_publish_other_states() {
         rows.push((id, status));
     }
     PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         crate::posts::publish_scheduled(&source, uuid::Uuid::nil())
             .await
             .unwrap();
@@ -429,7 +248,7 @@ async fn scheduled_completion_does_not_publish_other_states() {
 async fn physical_mail_replay_is_native_and_preserves_the_recorded_piece() {
     let (pg, person, _, project, _) = application_fixture().await;
     PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let address = crate::addresses::create(
             &source,
             &crate::addresses::NewAddress {
@@ -491,7 +310,7 @@ async fn physical_mail_replay_is_native_and_preserves_the_recorded_piece() {
 async fn concurrent_consent_preserves_one_lead_and_immutable_events() {
     let (pg, _, _, _, _) = application_fixture().await;
     Box::pin(PostgresDb::with_test_db(pg.clone(),async {
-        let source=crate::surreal::SurrealDb::uninitialized();
+        let source=crate::application_store::ApplicationStore::uninitialized();
         let now=chrono::Utc::now();
         let input=crate::leads::NewLead {email:"lead@example.invalid".into(),phone:None,
             brand_key:"synthetic".into(),source_path:"/synthetic".into(),consent_version:"synthetic-v1".into(),consented_at:now};
@@ -522,7 +341,7 @@ async fn person_merge_rechecks_locked_role_and_preserves_historical_primary_atom
     };
     let (pg, _, _, _, _) = application_fixture().await;
     PostgresDb::with_test_db(pg.clone(),async {
-        let source=crate::surreal::SurrealDb::uninitialized();
+        let source=crate::application_store::ApplicationStore::uninitialized();
         let keep=persons::create(&source,&NewPerson::new("Synthetic Keep","merge-keep@example.invalid")).await.unwrap();
         let dropped=persons::create(&source,&NewPerson::new("Synthetic Drop","merge-drop@example.invalid")).await.unwrap();
         persons::add_alias(&source,dropped.id,"merge-alias@example.invalid").await.unwrap();
@@ -568,7 +387,7 @@ async fn person_merge_rejects_foreign_primary_claim_and_handles_phone_only_peopl
     };
     let (pg, _, _, _, _) = application_fixture().await;
     PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let keep = persons::create(
             &source,
             &NewPerson::new("Synthetic Keep", "claim-keep@example.invalid"),
@@ -652,52 +471,6 @@ async fn person_merge_rejects_foreign_primary_claim_and_handles_phone_only_peopl
     .await;
 }
 
-#[tokio::test]
-async fn activated_identity_cannot_be_resurrected_by_global_source_import() {
-    let (pg, _, _, _, _) = application_fixture().await;
-    PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
-        let person = crate::persons::create(
-            &source,
-            &crate::persons::NewPerson::new("Synthetic Deleted", "deleted-import@example.invalid"),
-        )
-        .await
-        .unwrap();
-        sqlx::query("DELETE FROM person_mailbox WHERE person_id=$1")
-            .bind(person.id)
-            .execute(pg.pool())
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM person WHERE id=$1")
-            .bind(person.id)
-            .execute(pg.pool())
-            .await
-            .unwrap();
-        crate::postgres_mirror::from_source(crate::postgres_mirror::during_initial_copy(async {
-            assert!(crate::postgres_graph::holds("relationship"));
-            let outcome = crate::postgres_mirror::mirror(
-                &source,
-                &pg,
-                &crate::postgres_mirror::MirrorKey::Person(person.id),
-            )
-            .await
-            .unwrap();
-            assert!(matches!(
-                outcome,
-                crate::postgres_mirror::Mirrored::Unchanged
-            ));
-        }))
-        .await;
-        let present: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM person WHERE id=$1)")
-            .bind(person.id)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-        assert!(!present);
-    })
-    .await;
-}
-
 fn native_deadline(project_id: uuid::Uuid) -> crate::project_deadlines::NewDeadline {
     crate::project_deadlines::NewDeadline {
         project_id,
@@ -735,7 +508,7 @@ async fn deadline_civil_date_round_trips_and_reschedules_the_same_record() {
     use crate::project_deadlines as deadlines;
     let (pg, _, _, project, _) = application_fixture().await;
     PostgresDb::with_test_db(pg, async {
-        let db = crate::surreal::SurrealDb::uninitialized();
+        let db = crate::application_store::ApplicationStore::uninitialized();
         let mut input = native_deadline(project);
         let day: deadlines::DueOn = serde_json::from_value(serde_json::json!({"date":"2028-07-12","timezone":"America/Los_Angeles","cutoff":"23:59:00"})).unwrap();
         input.due_at = day.instant().unwrap().to_rfc3339();
@@ -783,8 +556,11 @@ async fn deadline_concurrent_identical_replay_keeps_calendar_revision() {
     let spawn = |input| {
         let pg = pg.clone();
         tokio::spawn(PostgresDb::with_test_db(pg, async move {
-            crate::project_deadlines::create(&crate::surreal::SurrealDb::uninitialized(), &input)
-                .await
+            crate::project_deadlines::create(
+                &crate::application_store::ApplicationStore::uninitialized(),
+                &input,
+            )
+            .await
         }))
     };
     let left = spawn(input.clone());
@@ -797,9 +573,12 @@ async fn deadline_concurrent_identical_replay_keeps_calendar_revision() {
     assert_eq!(left.calendar_sequence, Some(0));
     PostgresDb::with_test_db(pg, async {
         assert_eq!(
-            crate::project_deadlines::create(&crate::surreal::SurrealDb::uninitialized(), &input)
-                .await
-                .unwrap(),
+            crate::project_deadlines::create(
+                &crate::application_store::ApplicationStore::uninitialized(),
+                &input
+            )
+            .await
+            .unwrap(),
             left
         );
     })
@@ -824,7 +603,7 @@ async fn open_deadlines_batch_across_projects_in_postgres() {
         projects.push(id);
     }
     PostgresDb::with_test_db(pg, async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let open = deadlines::create(&source, &native_deadline(project))
             .await
             .unwrap();
@@ -857,7 +636,7 @@ async fn deadline_changed_replay_advances_revision_and_preserves_cancellation() 
     use crate::project_deadlines as deadlines;
     let (pg, _, _, project, _) = application_fixture().await;
     PostgresDb::with_test_db(pg, async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let mut input = native_deadline(project);
         let first = deadlines::create(&source, &input).await.unwrap();
         input.due_at = "2026-12-02T12:00:00Z".into();
@@ -883,7 +662,7 @@ async fn deadline_changed_replay_advances_revision_and_preserves_cancellation() 
 async fn deadline_cancellation_race_refuses_stale_write() {
     use crate::project_deadlines as deadlines;
     let (pg, _, _, project, _) = application_fixture().await;
-    let source = crate::surreal::SurrealDb::uninitialized();
+    let source = crate::application_store::ApplicationStore::uninitialized();
     let created = PostgresDb::with_test_db(
         pg.clone(),
         deadlines::create(&source, &native_deadline(project)),
@@ -898,12 +677,17 @@ async fn deadline_cancellation_race_refuses_stale_write() {
         .await
         .unwrap();
     let cancel = tokio::spawn(PostgresDb::with_test_db(pg.clone(), async move {
-        deadlines::cancel(&crate::surreal::SurrealDb::uninitialized(), project, id).await
+        deadlines::cancel(
+            &crate::application_store::ApplicationStore::uninitialized(),
+            project,
+            id,
+        )
+        .await
     }));
     wait_for_deadline_writers(&pg, project, 1).await;
     let update = tokio::spawn(PostgresDb::with_test_db(pg.clone(), async move {
         deadlines::update(
-            &crate::surreal::SurrealDb::uninitialized(),
+            &crate::application_store::ApplicationStore::uninitialized(),
             project,
             id,
             &deadlines::DeadlinePatch {
@@ -934,7 +718,7 @@ async fn deadline_identical_replay_compares_the_stored_instant_and_precision() {
     use crate::project_deadlines as deadlines;
     let (pg, _, _, project, _) = application_fixture().await;
     PostgresDb::with_test_db(pg, async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let mut input = native_deadline(project);
         input.due_at = "2026-12-01T04:00:00.123456789-08:00".into();
         let first = deadlines::create(&source, &input).await.unwrap();
@@ -955,7 +739,7 @@ async fn firm_directory_and_ownership_backfill_are_native_and_isolated() {
     use crate::{firms, persons, projects};
     let (pg, actor, _, project, firm) = application_fixture().await;
     Box::pin(PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let (outsider, other_note, _) = super::fixtures::workflow_fixture(&pg).await;
         let (other_firm, other_project) = super::fixtures::firm_for_notation(&pg, other_note).await;
         let brand: String = sqlx::query_scalar("SELECT brand FROM project WHERE id=$1")
@@ -991,7 +775,7 @@ async fn high_level_matter_open_requires_attestation_and_native_brand_ownership(
     use crate::{entities, firms, persons, projects};
     let (pg, actor, _, existing_project, firm) = application_fixture().await;
     Box::pin(PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let brand: String = sqlx::query_scalar("SELECT brand FROM project WHERE id=$1")
             .bind(existing_project).fetch_one(pg.pool()).await.unwrap();
         firms::ensure_brand(&source, firm, &brand).await.unwrap();
@@ -1035,10 +819,10 @@ async fn high_level_matter_open_requires_attestation_and_native_brand_ownership(
 
 #[tokio::test]
 async fn clause_catalog_requires_history_and_never_hides_custom_versions_on_failure() {
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+    let (options, database) = crate::postgres::fixtures::fresh_schema()
         .await
         .expect("required PostgreSQL fixture");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     PostgresDb::with_test_db(pg.clone(), async {
         assert!(matches!(
             crate::clauses::catalog().await,
@@ -1077,10 +861,10 @@ async fn clause_catalog_requires_history_and_never_hides_custom_versions_on_fail
 #[tokio::test]
 async fn notation_creation_history_never_skips_unconfigured_or_incomplete_application_admission() {
     use super::notation_creation_attempts as attempts;
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+    let (options, database) = crate::postgres::fixtures::fresh_schema()
         .await
         .expect("required PostgreSQL fixture");
-    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let pg = crate::postgres::fixtures::connect(&options, &database).await;
     PostgresDb::with_test_db(pg.clone(), async {
         assert!(matches!(
             attempts::database().await,
@@ -1128,7 +912,7 @@ async fn verified_plan_terms_follow_the_selected_benefit() {
 
     let (pg, _, _, project, firm) = application_fixture().await;
     PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let brand: String = sqlx::query_scalar("SELECT brand FROM project WHERE id=$1")
             .bind(project)
             .fetch_one(pg.pool())
@@ -1221,7 +1005,7 @@ async fn accepted_plan_notices_open_one_pitch_per_provider_case() {
 
     let (pg, _, _, existing_project, firm) = application_fixture().await;
     Box::pin(PostgresDb::with_test_db(pg.clone(), async {
-        let source = crate::surreal::SurrealDb::uninitialized();
+        let source = crate::application_store::ApplicationStore::uninitialized();
         let (brand, occupied_code): (String, String) =
             sqlx::query_as("SELECT brand,code FROM project WHERE id=$1")
                 .bind(existing_project).fetch_one(pg.pool()).await.unwrap();
@@ -1359,7 +1143,7 @@ async fn a_project_override_and_governing_jurisdiction_precede_the_venue() {
     use chrono_tz::America;
     let (pg, _, _, id, _) = application_fixture().await;
     PostgresDb::with_test_db(pg, async {
-        let db = crate::surreal::SurrealDb::uninitialized();
+        let db = crate::application_store::ApplicationStore::uninitialized();
         let row = projects::find_by_id(&db, id).await.unwrap().unwrap();
         assert_eq!(
             calendar_timezone(&db, &row).await.unwrap(),
@@ -1521,7 +1305,7 @@ async fn assert_direct_court_writes_require_review(
     target: uuid::Uuid,
 ) {
     PostgresDb::with_test_db(pg, async {
-        let src = crate::surreal::SurrealDb::uninitialized();
+        let src = crate::application_store::ApplicationStore::uninitialized();
         let mut input = native_deadline(project);
         input.category = Some("court".into());
         let provisional = crate::project_deadlines::create(&src, &input)
@@ -1554,7 +1338,7 @@ async fn assert_revision_timezones(
     let mut unzoned = serde_json::to_value(draft).unwrap();
     unzoned.as_object_mut().unwrap().remove("timezone");
     let unzoned: model::deadline_proposals::DraftInput = serde_json::from_value(unzoned).unwrap();
-    let source = crate::surreal::SurrealDb::uninitialized();
+    let source = crate::application_store::ApplicationStore::uninitialized();
     for (revision, expected) in [
         (None, chrono_tz::America::New_York),
         (Some(3), chrono_tz::America::Chicago),

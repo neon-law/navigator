@@ -12,8 +12,8 @@ that differ, or that only PostgreSQL holds, are left to the mirror's reconciliat
 unclean. Each invocation reports per-table drift counts and up to 50 divergent UUID keys; other key forms are counted
 only. The tables born in PostgreSQL have no write mirror; a separate arm of the run copies their earlier SurrealDB rows
 the same way. Run `hudson ops postgres backfill`; see
-[`docs/postgres-tooling.md`](../postgres-tooling.md#mirror-backfill) and
-[`store::postgres_backfill`](../../store/src/postgres_backfill.rs).
+[`docs/postgres-tooling.md`](../storage-models.md#historical-admission) and
+[`store::postgres_backfill`](../../store/src/postgres/history.rs).
 
 A run's `scope` is `global` for the existing complete inventory or an immutable registered family version such as
 `satellites:1`. A scoped run binds its exact table checkpoints to a verified operational export receipt. Pending scoped

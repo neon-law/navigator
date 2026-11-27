@@ -46,9 +46,8 @@ Notation previews and rendering. Lawyers can create contacts without a Project r
 administration; only an Owner creates Admin or Owner identities. Creation does not itself grant Project participation.
 
 `hudson` operates the installation through `ops` and `dev`: cloud access, deployments, infrastructure, migrations,
-backups, recovery, secrets provisioning and the remaining Restate operations. Application commands use Navigator's
-existing authenticated site session and key storage. Keep compatibility spellings during the release transition; do not
-add application commands to Hudson or link new SurrealDB or Restate clients into Navigator.
+backups, recovery, and secrets provisioning. Application commands use Navigator's existing authenticated site session
+and key storage. Keep compatibility spellings during the release transition; do not add application commands to Hudson.
 
 ## Find the term first
 
@@ -83,10 +82,9 @@ Keep email correspondence, including Gmail, draft-only. The lawyer reviews and s
 ## Least code, coverage never lower
 
 Write the least amount of code the behavior needs: delete dead code instead of annotating it, consolidate duplicated
-helpers into the sanctioned seams, and name a test before the change that satisfies it. CI holds the workspace at a
-92.0% line-coverage floor, measured without SurrealDB, and that floor only goes up — ENG-1375 raises it to 95.0% as
-domains leave SurrealDB. A subtraction lands only with coverage re-verified (`docs/agent-workflows.md` explains the
-measurement).
+helpers into the sanctioned seams, and name a test before the change that satisfies it. CI requires 92.0% line coverage
+on the existing measured scope and reports expanded workspace coverage. ENG-1375 raises the floor to 95.0%. Re-verify
+coverage when subtracting tests. See [`docs/agent-workflows.md`](docs/agent-workflows.md).
 
 ## Helpful commands
 
@@ -181,6 +179,5 @@ navigator validate
 
 When `navigator` is not on `PATH`, run the same check through the CLI crate: `cargo run -p cli --quiet -- validate`.
 
-SurrealDB is the legacy compatibility lane: PostgreSQL is the storage authority for every new model (see
-[`postgres`](.agents/skills/postgres/SKILL.md)). Start SurrealDB and set `NAVIGATOR_SURREAL_*` (root/root) only to run
-the compatibility lane's tests; without it those tests self-skip.
+PostgreSQL is the application storage authority. Use [`postgres`](.agents/skills/postgres/SKILL.md) and the [disposable
+test fixture](docs/test-database.md).

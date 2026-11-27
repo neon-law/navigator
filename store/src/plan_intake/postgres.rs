@@ -6,10 +6,8 @@
 use sqlx::{postgres::PgRow, Connection, PgConnection, Row};
 use uuid::Uuid;
 
-use super::{PlanIntakeError, StagedAssignment, StagedRow, Status, TABLE};
+use super::{PlanIntakeError, StagedAssignment, Status, TABLE};
 use crate::postgres::PostgresDb;
-use crate::postgres_backfill::Copied;
-use crate::surreal::SurrealDb;
 
 const SELECT: &str = concat!(
     "plan_case_number, notice_matter_type, take_started_at, ",
@@ -316,32 +314,4 @@ pub(super) async fn list_by_firm(
     .iter()
     .map(staged)
     .collect::<Result<_, _>>()?)
-}
-
-/// Copy every SurrealDB staged assignment PostgreSQL does not hold, keeping
-/// its id, decision, and timestamps.
-pub(crate) async fn copy_from_surreal(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-) -> Result<Copied, surrealdb::Error> {
-    let rows: Vec<StagedRow> = surreal
-        .query(format!(
-            "SELECT {select} FROM {TABLE}",
-            select = super::SELECT
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?
-        .take(0)?;
-    let mut copied = Copied::default();
-    for row in rows {
-        let Some(row) = row.into_staged() else {
-            copied.unrepresentable(TABLE);
-            continue;
-        };
-        let result = insert(pg, &row)
-            .await
-            .map(|inserted| u64::from(inserted.is_some()));
-        copied.record(TABLE, Some(row.id), result);
-    }
-    Ok(copied)
 }

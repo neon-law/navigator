@@ -95,14 +95,14 @@ pub async fn get_brand_new_form() -> Result<BrandNewView, ServerFnError> {
         site_name: crate::app_chrome::firm_name_from_context().await,
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let Some(person_id) = crate::admin_listing::injected_person_id().await else {
         return Ok(BrandNewView {
             admin_has_no_firm: true,
             ..base
         });
     };
-    let memberships = store::firms::memberships_for_person(&surreal, person_id)
+    let memberships = store::firms::memberships_for_person(&application_store, person_id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let dri_firm_id = memberships
@@ -115,7 +115,7 @@ pub async fn get_brand_new_form() -> Result<BrandNewView, ServerFnError> {
             ..base
         });
     };
-    let firm_name = store::firms::find_by_id(&surreal, firm_id)
+    let firm_name = store::firms::find_by_id(&application_store, firm_id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
         .map(|firm| firm.name);

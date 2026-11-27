@@ -42,8 +42,8 @@ cannot decay the way the old seven-line stub did.
 - [Project recovery archives](project-recovery-archives.md) — the archived-projects lane, verified generations,
   and restore.
 - [DBOS durability](dbos-durability.md) — DBOS system schema, the effect-key rule, and the Restate port order.
-- [DBOS cutover matrix](dbos-cutover-matrix.md) — which Restate services, CronJobs, and callers have switched to DBOS.
-- [Durable object handover](durable-object-handover.md) — capture, parity, import, and native object ownership.
+- [DBOS workflow entry points](dbos-cutover-matrix.md) — DBOS workflow inventory and entry points.
+- [Durable object handover](durable-object-handover.md) — PostgreSQL ownership for Notation and Project Slack workflows.
 - [Project Slack reconciliation](project-slack-reconciliation.md) — attributed decisions for unresolved delivery
   evidence.
 - [`forgejo-deployment.md`](forgejo-deployment.md) — the Forgejo deployment foundation and account-admission gates.
@@ -144,7 +144,6 @@ cannot decay the way the old seven-line stub did.
 ## Observability pipelines and data
 
 - [`cronjobs.md`](cronjobs.md) — scheduled jobs (CronJobs) and what runs on them.
-- [`surreal-archives.md`](surreal-archives.md) — SurrealDB operational archives.
 - [`iceberg-archive.md`](iceberg-archive.md) — the Iceberg archive design.
 - [`write-only-iceberg.md`](write-only-iceberg.md) — sealed local generations and create-only offsite copies.
 - [`email-summary.md`](email-summary.md) — the support-email summary lane and its end-to-end proof on KIND.
@@ -162,4 +161,3 @@ cannot decay the way the old seven-line stub did.
   Notation diagnostics.
 
 - [Storage models and writes](storage-models.md) — PostgreSQL models, domain authority, and supported write paths.
-- [SurrealDB compatibility](surreal-compatibility.md) — source-engine contracts and migration coverage.

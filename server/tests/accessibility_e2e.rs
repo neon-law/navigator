@@ -986,7 +986,7 @@ async fn the_inbox_reading_pane_passes_axe_wcag_a_and_aa() {
     store::postgres::PostgresDb::application()
         .await
         .expect("admitted browser PostgreSQL target");
-    let db = store::surreal::SurrealDb::uninitialized();
+    let db = store::application_store::ApplicationStore::uninitialized();
     let firm = store::firms::firm_id_for_brand_key(&db, "neon")
         .await
         .unwrap()

@@ -19,9 +19,9 @@ use uuid::Uuid;
 
 use crate::contract::Payload;
 use crate::validate::{canonical_url, validate, Diagnostic, Severity};
+use store::application_store::ApplicationStore;
 use store::entities::{self, NewEntity};
 use store::persons::{self, ContactUpdate, NewPerson};
-use store::surreal::SurrealDb;
 
 /// What happened to one row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -144,7 +144,10 @@ impl ImportReport {
 /// organization and person is find-or-created and a per-row report comes
 /// back. Each row's outcome is also emitted as an OTel/tracing event so
 /// the import history lands in telemetry.
-pub async fn apply(surreal: &SurrealDb, payload: &Payload) -> anyhow::Result<ImportReport> {
+pub async fn apply(
+    application_store: &ApplicationStore,
+    payload: &Payload,
+) -> anyhow::Result<ImportReport> {
     let diagnostics = validate(payload);
     if diagnostics.iter().any(|d| d.severity == Severity::Error) {
         tracing::warn!(
@@ -162,7 +165,7 @@ pub async fn apply(surreal: &SurrealDb, payload: &Payload) -> anyhow::Result<Imp
     let mut organizations = Vec::with_capacity(payload.organizations.len());
     let mut entity_by_key: HashMap<&str, Uuid> = HashMap::new();
     for org in &payload.organizations {
-        let outcome = match upsert_entity(surreal, org).await {
+        let outcome = match upsert_entity(application_store, org).await {
             Ok((id, status)) => {
                 entity_by_key.insert(org.key.as_str(), id);
                 RowOutcome {
@@ -192,15 +195,18 @@ pub async fn apply(surreal: &SurrealDb, payload: &Payload) -> anyhow::Result<Imp
 
     let mut people = Vec::with_capacity(payload.people.len());
     for record in &payload.people {
-        let outcome = match upsert_person(surreal, record).await {
+        let outcome = match upsert_person(application_store, record).await {
             Ok((person_id, status)) => {
                 let detail = match entity_by_key.get(record.organization.as_str()) {
-                    Some(&entity_id) => {
-                        link_person_entity(surreal, person_id, entity_id, &record.entity_role)
-                            .await
-                            .err()
-                            .map(|e| format!("link failed: {e}"))
-                    }
+                    Some(&entity_id) => link_person_entity(
+                        application_store,
+                        person_id,
+                        entity_id,
+                        &record.entity_role,
+                    )
+                    .await
+                    .err()
+                    .map(|e| format!("link failed: {e}")),
                     None => Some(format!(
                         "organization `{}` was not created; link skipped",
                         record.organization
@@ -250,15 +256,15 @@ pub async fn apply(surreal: &SurrealDb, payload: &Payload) -> anyhow::Result<Imp
 /// name and jurisdiction code to their ids; an unknown one is an error
 /// for this row.
 async fn upsert_entity(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     org: &crate::contract::OrgRecord,
 ) -> anyhow::Result<(Uuid, Outcome)> {
-    let entity_type = store::entity_types::find_by_name(surreal, org.entity_type.trim())
+    let entity_type = store::entity_types::find_by_name(application_store, org.entity_type.trim())
         .await?
         .ok_or_else(|| anyhow!("unknown entity_type `{}`", org.entity_type.trim()))?;
 
     let code = org.jurisdiction.trim().to_ascii_uppercase();
-    let jurisdiction = store::jurisdictions::find_by_code(surreal, &code)
+    let jurisdiction = store::jurisdictions::find_by_code(application_store, &code)
         .await?
         .ok_or_else(|| anyhow!("unknown jurisdiction code `{code}`"))?;
 
@@ -270,7 +276,8 @@ async fn upsert_entity(
     let name = org.name.trim();
 
     let existing =
-        entities::find_by_identity(surreal, name, entity_type.id, jurisdiction.id).await?;
+        entities::find_by_identity(application_store, name, entity_type.id, jurisdiction.id)
+            .await?;
 
     if let Some(row) = existing {
         // Payload wins when it carries a value; an absent field never
@@ -281,7 +288,7 @@ async fn upsert_entity(
             return Ok((row.id, Outcome::Unchanged));
         }
         let updated = entities::update(
-            surreal,
+            application_store,
             row.id,
             &NewEntity {
                 name: row.name.clone(),
@@ -303,7 +310,7 @@ async fn upsert_entity(
         Ok((updated.id, Outcome::Updated))
     } else {
         let inserted = entities::create(
-            surreal,
+            application_store,
             &NewEntity {
                 name: name.to_string(),
                 entity_type_id: entity_type.id,
@@ -332,7 +339,7 @@ async fn upsert_entity(
 /// but `role` is never touched — a person promoted to lawyer/admin stays
 /// promoted. New rows take the database default `role` (`client`).
 async fn upsert_person(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     record: &crate::contract::PersonRecord,
 ) -> anyhow::Result<(Uuid, Outcome)> {
     let email = record.email.trim();
@@ -344,7 +351,7 @@ async fn upsert_person(
     // lookup would miss a stored `Attorney@Example.com` for an incoming
     // `attorney@example.com` and then fail the insert on that index, so a
     // re-import with different casing must resolve to the same row.
-    let existing = persons::find_by_email_ci(surreal, email).await?;
+    let existing = persons::find_by_email_ci(application_store, email).await?;
 
     if let Some(row) = existing {
         // An absent value in the payload keeps what is already recorded:
@@ -357,11 +364,11 @@ async fn upsert_person(
         if row.name == update.name && row.title == update.title && row.phone == update.phone {
             return Ok((row.id, Outcome::Unchanged));
         }
-        persons::update_contact(surreal, row.id, &update).await?;
+        persons::update_contact(application_store, row.id, &update).await?;
         Ok((row.id, Outcome::Updated))
     } else {
         let inserted = persons::create(
-            surreal,
+            application_store,
             &NewPerson {
                 title,
                 phone,
@@ -380,12 +387,12 @@ async fn upsert_person(
 /// it; `store::entity_roles::grant` is the same contract with the
 /// UNIQUE `entity_role_tie` index closing the race (ENG-120).
 async fn link_person_entity(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Uuid,
     entity_id: Uuid,
     role: &str,
 ) -> anyhow::Result<()> {
-    store::entity_roles::grant(surreal, person_id, entity_id, role).await?;
+    store::entity_roles::grant(application_store, person_id, entity_id, role).await?;
     Ok(())
 }
 

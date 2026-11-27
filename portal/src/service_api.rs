@@ -50,9 +50,10 @@ async fn require_participant(
     role: Role,
     project_id: Uuid,
 ) -> Result<(), ApiError> {
-    let allowed = store::access::can_see_project(&state.surreal, person_id, role, project_id)
-        .await
-        .map_err(ApiError::Db)?;
+    let allowed =
+        store::access::can_see_project(&state.application_store, person_id, role, project_id)
+            .await
+            .map_err(ApiError::Db)?;
     if allowed {
         Ok(())
     } else {
@@ -64,7 +65,7 @@ fn map_service(error: store::project_service::ServiceError) -> ApiError {
     match error {
         store::project_service::ServiceError::Invalid(message) => ApiError::ServiceInvalid(message),
         store::project_service::ServiceError::NotFound => ApiError::NotFound,
-        other => ApiError::Db(other.to_string()),
+        store::project_service::ServiceError::Postgres(error) => ApiError::Db(error.to_string()),
     }
 }
 
@@ -75,7 +76,7 @@ async fn references(
     rows: &[ProjectService],
 ) -> Result<std::collections::HashMap<Uuid, String>, ApiError> {
     let mut out = std::collections::HashMap::new();
-    let entries = store::cases::docket_for_project(&state.surreal, project_id)
+    let entries = store::cases::docket_for_project(&state.application_store, project_id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     for entry in entries {
@@ -89,7 +90,7 @@ async fn references(
         .map(|row| row.document_id)
         .filter(|id| !out.contains_key(id))
         .collect();
-    for asset in store::assets::find_by_ids(&state.surreal, &unresolved)
+    for asset in store::assets::find_by_ids(&state.application_store, &unresolved)
         .await
         .map_err(ApiError::Asset)?
     {
@@ -128,7 +129,7 @@ pub(crate) async fn list_service(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
-    let rows = store::project_service::list(&state.surreal, id)
+    let rows = store::project_service::list(&state.application_store, id)
         .await
         .map_err(map_service)?;
     Ok(Json(views(&state, id, rows).await?).into_response())
@@ -141,7 +142,7 @@ pub(crate) async fn show_service(
     Path((id, service_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
-    let row = store::project_service::find(&state.surreal, id, service_id)
+    let row = store::project_service::find(&state.application_store, id, service_id)
         .await
         .map_err(map_service)?
         .ok_or(ApiError::NotFound)?;
@@ -159,15 +160,18 @@ pub(crate) async fn record_service(
     require_participant(&state, session.person_id, session.role, id).await?;
     let document_id = match (input.document_id, input.slug.as_deref()) {
         (Some(document_id), _) => document_id,
-        (None, Some(slug)) => {
-            store::assets::current(&state.surreal, id, slug.trim(), store::assets::Lens::Lawyer)
-                .await
-                .map_err(ApiError::Asset)?
-                .map(|asset| asset.id)
-                .ok_or_else(|| {
-                    ApiError::ServiceInvalid(format!("`{slug}` names no document on this Project"))
-                })?
-        }
+        (None, Some(slug)) => store::assets::current(
+            &state.application_store,
+            id,
+            slug.trim(),
+            store::assets::Lens::Lawyer,
+        )
+        .await
+        .map_err(ApiError::Asset)?
+        .map(|asset| asset.id)
+        .ok_or_else(|| {
+            ApiError::ServiceInvalid(format!("`{slug}` names no document on this Project"))
+        })?,
         (None, None) => {
             return Err(ApiError::ServiceInvalid(
                 "name the served document by document_id or slug".into(),
@@ -175,7 +179,7 @@ pub(crate) async fn record_service(
         }
     };
     let row = store::project_service::create(
-        &state.surreal,
+        &state.application_store,
         &store::project_service::NewService {
             project_id: id,
             document_id,

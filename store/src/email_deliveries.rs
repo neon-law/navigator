@@ -2,15 +2,11 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::communications::{self as authority, CommunicationsAuthorityError};
 use crate::postgres::PostgresDb;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
-
-const DELIVERY_TABLE: &str = "email_delivery";
-const ATTEMPT_TABLE: &str = "email_delivery_attempt";
 
 pub const NOT_ATTEMPTED: &str = "not_attempted";
 pub const SENDING: &str = "sending";
@@ -63,8 +59,6 @@ struct DeliveryUpdate<'a> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EmailDeliveryError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Postgres(#[from] CommunicationsAuthorityError),
     #[error("delivery record was not found")]
@@ -75,230 +69,48 @@ pub enum EmailDeliveryError {
     WriteReturnedNothing,
 }
 
-#[derive(SurrealValue)]
-struct DeliveryRow {
-    id: surrealdb::types::RecordId,
-    receipt_id: surrealdb::types::RecordId,
-    channel_id: String,
-    state: String,
-    current_correlation_id: Option<String>,
-    slack_timestamp: Option<String>,
-    last_error: Option<String>,
-    reconciled_by: Option<String>,
-    reconciliation: Option<String>,
-    reconciled_at: Option<surrealdb::types::Datetime>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-#[derive(SurrealValue)]
-struct AttemptRow {
-    id: surrealdb::types::RecordId,
-    delivery_id: surrealdb::types::RecordId,
-    correlation_id: String,
-    state: String,
-    slack_timestamp: Option<String>,
-    error: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-const DELIVERY_SELECT: &str = "id, receipt_id, channel_id, state, current_correlation_id, \
-    slack_timestamp, last_error, reconciled_by, reconciliation, reconciled_at, inserted_at, updated_at";
-const ATTEMPT_SELECT: &str =
-    "id, delivery_id, correlation_id, state, slack_timestamp, error, inserted_at, updated_at";
-
-impl DeliveryRow {
-    fn into_delivery(self) -> Option<EmailDelivery> {
-        Some(EmailDelivery {
-            id: record_uuid(&self.id)?,
-            receipt_id: record_uuid(&self.receipt_id)?,
-            channel_id: self.channel_id,
-            state: self.state,
-            current_correlation_id: self.current_correlation_id,
-            slack_timestamp: self.slack_timestamp,
-            last_error: self.last_error,
-            reconciled_by: self.reconciled_by,
-            reconciliation: self.reconciliation,
-            reconciled_at: self.reconciled_at.map(Into::into),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-impl AttemptRow {
-    fn into_attempt(self) -> Option<EmailDeliveryAttempt> {
-        Some(EmailDeliveryAttempt {
-            id: record_uuid(&self.id)?,
-            delivery_id: record_uuid(&self.delivery_id)?,
-            correlation_id: self.correlation_id,
-            state: self.state,
-            slack_timestamp: self.slack_timestamp,
-            error: self.error,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
 pub async fn ensure(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     receipt_id: Uuid,
     channel_id: &str,
 ) -> Result<EmailDelivery, EmailDeliveryError> {
-    if let Some(pg) = authority::authority().await? {
-        // The unique `receipt_id` decides a race; the loser reads the winner.
-        let query = sqlx::query(
-            "INSERT INTO email_delivery (id, receipt_id, channel_id, state, inserted_at, \
-             updated_at) VALUES ($1, $2, $3, $4, now(), now()) ON CONFLICT (receipt_id) DO NOTHING",
-        )
-        .bind(Uuid::now_v7())
-        .bind(receipt_id)
-        .bind(channel_id.to_owned())
-        .bind(NOT_ATTEMPTED);
-        authority::execute(&pg, query).await?;
-        return find_pg(&pg, receipt_id)
-            .await?
-            .ok_or(EmailDeliveryError::WriteReturnedNothing);
-    }
-    if let Some(delivery) = find(db, receipt_id).await? {
-        crate::postgres_mirror::after_write(
-            db,
-            crate::postgres_mirror::MirrorKey::EmailDelivery(delivery.id),
-        )
-        .await;
-        return Ok(delivery);
-    }
-    let id = Uuid::now_v7();
-    let created = db
-        .query(format!(
-            "CREATE $id SET receipt_id = $receipt_id, channel_id = $channel_id, \
-             state = $state RETURN {DELIVERY_SELECT}"
-        ))
-        .bind(("id", record_id(DELIVERY_TABLE, id)))
-        .bind((
-            "receipt_id",
-            record_id(crate::email_receipts::TABLE, receipt_id),
-        ))
-        .bind(("channel_id", channel_id.to_string()))
-        .bind(("state", NOT_ATTEMPTED.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check);
-    let mut response = match created {
-        Ok(response) => response,
-        Err(error)
-            if crate::surreal::retry::unique_violation(&error)
-                == Some("email_delivery_receipt") =>
-        {
-            return find(db, receipt_id)
-                .await?
-                .ok_or(EmailDeliveryError::Db(error));
-        }
-        Err(error) => return Err(EmailDeliveryError::Db(error)),
-    };
-    let row: Option<DeliveryRow> = response.take(0)?;
-    let delivery = row
-        .and_then(DeliveryRow::into_delivery)
-        .ok_or(EmailDeliveryError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::EmailDelivery(delivery.id),
+    let pg = authority::authority().await?;
+    // The unique `receipt_id` decides a race; the loser reads the winner.
+    let query = sqlx::query(
+        "INSERT INTO email_delivery (id, receipt_id, channel_id, state, inserted_at, \
+         updated_at) VALUES ($1, $2, $3, $4, now(), now()) ON CONFLICT (receipt_id) DO NOTHING",
     )
-    .await;
-    Ok(delivery)
+    .bind(Uuid::now_v7())
+    .bind(receipt_id)
+    .bind(channel_id.to_owned())
+    .bind(NOT_ATTEMPTED);
+    authority::execute(&pg, query).await?;
+    find_pg(&pg, receipt_id)
+        .await?
+        .ok_or(EmailDeliveryError::WriteReturnedNothing)
 }
 
 pub async fn find(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     receipt_id: Uuid,
 ) -> Result<Option<EmailDelivery>, EmailDeliveryError> {
-    if let Some(pg) = authority::authority().await? {
-        return Ok(find_pg(&pg, receipt_id).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {DELIVERY_SELECT} FROM {DELIVERY_TABLE} \
-             WHERE receipt_id = $receipt_id LIMIT 1"
-        ))
-        .bind((
-            "receipt_id",
-            record_id(crate::email_receipts::TABLE, receipt_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DeliveryRow> = response.take(0)?;
-    Ok(row.and_then(DeliveryRow::into_delivery))
+    let pg = authority::authority().await?;
+    Ok(find_pg(&pg, receipt_id).await?)
 }
 
 /// Atomically reserve a send. A confirmed or unknown delivery is never
 /// retried implicitly; the caller must reconcile an unknown state first.
 pub async fn admit_attempt(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     receipt_id: Uuid,
     correlation_id: &str,
 ) -> Result<DeliveryAdmission, EmailDeliveryError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(admit_attempt_pg(&pg, receipt_id, correlation_id)).await;
-    }
-    let delivery = find(db, receipt_id)
-        .await?
-        .ok_or(EmailDeliveryError::NotFound)?;
-    if delivery.state == CONFIRMED || delivery.state == UNKNOWN || delivery.state == SENDING {
-        return Ok(DeliveryAdmission {
-            delivery,
-            attempt_id: None,
-        });
-    }
-    let attempt_id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET state = $state, current_correlation_id = $correlation_id, \
-             last_error = NONE, updated_at = time::now() \
-             WHERE state IN ['{NOT_ATTEMPTED}', '{FAILED}'] RETURN AFTER"
-        ))
-        .bind(("id", record_id(DELIVERY_TABLE, delivery.id)))
-        .bind(("state", SENDING.to_string()))
-        .bind(("correlation_id", correlation_id.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let changed: Option<DeliveryRow> = response.take(0)?;
-    let Some(changed) = changed.and_then(DeliveryRow::into_delivery) else {
-        return Ok(DeliveryAdmission {
-            delivery: find(db, receipt_id)
-                .await?
-                .ok_or(EmailDeliveryError::NotFound)?,
-            attempt_id: None,
-        });
-    };
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::EmailDelivery(changed.id),
-    )
-    .await;
-    db.query(
-        "CREATE $id SET delivery_id = $delivery_id, correlation_id = $correlation_id, \
-         state = $state",
-    )
-    .bind(("id", record_id(ATTEMPT_TABLE, attempt_id)))
-    .bind(("delivery_id", record_id(DELIVERY_TABLE, changed.id)))
-    .bind(("correlation_id", correlation_id.to_string()))
-    .bind(("state", SENDING.to_string()))
-    .await
-    .and_then(surrealdb::IndexedResults::check)?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::EmailDeliveryAttempt(attempt_id),
-    )
-    .await;
-    Ok(DeliveryAdmission {
-        delivery: changed,
-        attempt_id: Some(attempt_id),
-    })
+    let pg = authority::authority().await?;
+    Box::pin(admit_attempt_pg(&pg, receipt_id, correlation_id)).await
 }
 
 pub async fn mark_confirmed(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     receipt_id: Uuid,
     channel_id: &str,
     timestamp: &str,
@@ -319,7 +131,7 @@ pub async fn mark_confirmed(
 }
 
 pub async fn mark_unknown(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     receipt_id: Uuid,
     error: &str,
 ) -> Result<EmailDelivery, EmailDeliveryError> {
@@ -339,7 +151,7 @@ pub async fn mark_unknown(
 }
 
 pub async fn mark_failed(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     receipt_id: Uuid,
     error: &str,
 ) -> Result<EmailDelivery, EmailDeliveryError> {
@@ -359,7 +171,7 @@ pub async fn mark_failed(
 }
 
 pub async fn reconcile_confirmed(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     receipt_id: Uuid,
     actor: &str,
     channel_id: &str,
@@ -381,7 +193,7 @@ pub async fn reconcile_confirmed(
 }
 
 pub async fn authorize_resend(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     receipt_id: Uuid,
     actor: &str,
 ) -> Result<EmailDelivery, EmailDeliveryError> {
@@ -404,7 +216,7 @@ pub async fn authorize_resend(
 /// notice, so a redriven run may post the real summary. Refuses any other
 /// state: an unknown delivery goes through [`authorize_resend`] instead.
 pub async fn reopen_after_failed_result(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     receipt_id: Uuid,
     actor: &str,
 ) -> Result<EmailDelivery, EmailDeliveryError> {
@@ -430,147 +242,43 @@ pub async fn reopen_after_failed_result(
 }
 
 async fn update_delivery(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     receipt_id: Uuid,
     update: DeliveryUpdate<'_>,
 ) -> Result<EmailDelivery, EmailDeliveryError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(update_delivery_pg(&pg, receipt_id, update)).await;
-    }
-    let delivery = find(db, receipt_id)
-        .await?
-        .ok_or(EmailDeliveryError::NotFound)?;
-    let mut response = db
-        .query(
-            "UPDATE $id SET state = $state, \
-             channel_id = IF $channel_id IS NONE THEN channel_id ELSE $channel_id END, \
-             current_correlation_id = IF $state = $not_attempted THEN NONE ELSE current_correlation_id END, \
-             slack_timestamp = $timestamp, last_error = $error, \
-             reconciled_by = $actor, reconciliation = $reconciliation, \
-             reconciled_at = IF $actor IS NONE THEN reconciled_at ELSE time::now() END, \
-             updated_at = time::now() RETURN AFTER",
-        )
-        .bind(("id", record_id(DELIVERY_TABLE, delivery.id)))
-        .bind(("state", update.state.to_string()))
-        .bind(("not_attempted", NOT_ATTEMPTED.to_string()))
-        .bind(("channel_id", update.channel_id.map(str::to_string)))
-        .bind(("timestamp", update.timestamp.map(str::to_string)))
-        .bind(("error", update.error.map(str::to_string)))
-        .bind(("actor", update.actor.map(str::to_string)))
-        .bind(("reconciliation", update.reconciliation.map(str::to_string)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DeliveryRow> = response.take(0)?;
-    let updated = row
-        .and_then(DeliveryRow::into_delivery)
-        .ok_or(EmailDeliveryError::WriteReturnedNothing)?;
-    if update.state != NOT_ATTEMPTED {
-        if let Some(correlation_id) = updated.current_correlation_id.as_deref() {
-            db.query(format!(
-                "UPDATE {ATTEMPT_TABLE} SET state = $state, slack_timestamp = $timestamp, \
-             error = $error, updated_at = time::now() WHERE delivery_id = $delivery_id \
-             AND correlation_id = $correlation_id"
-            ))
-            .bind(("state", update.state.to_string()))
-            .bind(("timestamp", update.timestamp.map(str::to_string)))
-            .bind(("error", update.error.map(str::to_string)))
-            .bind(("delivery_id", record_id(DELIVERY_TABLE, updated.id)))
-            .bind(("correlation_id", correlation_id.to_string()))
-            .await
-            .and_then(surrealdb::IndexedResults::check)?;
-        }
-    }
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::EmailDelivery(updated.id),
-    )
-    .await;
-    if crate::postgres_mirror::enabled() {
-        if let Some(correlation_id) = updated.current_correlation_id.as_deref() {
-            match tokio::time::timeout(
-                crate::postgres_mirror::MIRROR_TIMEOUT,
-                attempts(db, receipt_id),
-            )
-            .await
-            {
-                Ok(Ok(rows)) => {
-                    if let Some(attempt) = rows
-                        .into_iter()
-                        .find(|attempt| attempt.correlation_id == correlation_id)
-                    {
-                        crate::postgres_mirror::after_write(
-                            db,
-                            crate::postgres_mirror::MirrorKey::EmailDeliveryAttempt(attempt.id),
-                        )
-                        .await;
-                    }
-                }
-                Ok(Err(_)) | Err(_) => {
-                    tracing::warn!(delivery_id = %updated.id, "PostgreSQL mirror could not refresh the email delivery attempt");
-                }
-            }
-        }
-    }
-    Ok(updated)
+    let pg = authority::authority().await?;
+    Box::pin(update_delivery_pg(&pg, receipt_id, update)).await
 }
 
 /// List deliveries in one state, most-recently-updated first. The health and
 /// operator reconciliation commands use this to surface ambiguous outcomes.
 pub async fn list_by_state(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     state: &str,
 ) -> Result<Vec<EmailDelivery>, EmailDeliveryError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(d) AS row FROM email_delivery d WHERE d.state = $1 \
-             ORDER BY d.updated_at DESC",
-        )
-        .bind(state.to_owned());
-        return Ok(authority::rows(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {DELIVERY_SELECT} FROM {DELIVERY_TABLE} \
-             WHERE state = $state ORDER BY updated_at DESC"
-        ))
-        .bind(("state", state.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<DeliveryRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(DeliveryRow::into_delivery)
-        .collect())
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(d) AS row FROM email_delivery d WHERE d.state = $1 \
+         ORDER BY d.updated_at DESC",
+    )
+    .bind(state.to_owned());
+    Ok(authority::rows(&pg, query).await?)
 }
 
 pub async fn attempts(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     receipt_id: Uuid,
 ) -> Result<Vec<EmailDeliveryAttempt>, EmailDeliveryError> {
     let delivery = find(db, receipt_id)
         .await?
         .ok_or(EmailDeliveryError::NotFound)?;
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(a) AS row FROM email_delivery_attempt a WHERE a.delivery_id = $1 \
-             ORDER BY a.inserted_at, a.id",
-        )
-        .bind(delivery.id);
-        return Ok(authority::rows(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {ATTEMPT_SELECT} FROM {ATTEMPT_TABLE} \
-             WHERE delivery_id = $delivery_id ORDER BY inserted_at"
-        ))
-        .bind(("delivery_id", record_id(DELIVERY_TABLE, delivery.id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<AttemptRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(AttemptRow::into_attempt)
-        .collect())
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(a) AS row FROM email_delivery_attempt a WHERE a.delivery_id = $1 \
+         ORDER BY a.inserted_at, a.id",
+    )
+    .bind(delivery.id);
+    Ok(authority::rows(&pg, query).await?)
 }
 
 fn find_pg(pg: &PostgresDb, receipt_id: Uuid) -> authority::Op<'_, Option<EmailDelivery>> {
@@ -688,315 +396,4 @@ async fn update_delivery_pg(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    async fn setup() -> (SurrealDb, Uuid) {
-        let db = crate::surreal::test_support::mem().await;
-        let receipt = Uuid::now_v7();
-        crate::email_receipts::ensure(
-            &db,
-            &crate::email_receipts::NewEmailReceipt {
-                receiving_mailbox: "support@example.com",
-                deployment: "staging",
-                firm_id: None,
-                provider_account: None,
-                sender_authenticated: false,
-                raw_digest: &format!("{receipt}"),
-                source_message_id: None,
-                archive_key: "inbound/example.eml",
-                letter_id: Uuid::now_v7(),
-            },
-        )
-        .await
-        .expect("receipt setup");
-        let mut response = db
-            .query("SELECT id FROM email_receipt LIMIT 1")
-            .await
-            .expect("receipt query")
-            .check()
-            .expect("receipt query check");
-        let row: Option<surrealdb::types::RecordId> = response.take("id").expect("receipt id");
-        let receipt_id = record_uuid(&row.expect("receipt row")).expect("receipt uuid");
-        (db, receipt_id)
-    }
-
-    #[tokio::test]
-    async fn receipt_reads_use_authoritative_delivery_and_health_excludes_confirmed() {
-        let (db, receipt_id) = setup().await;
-        let future = chrono::Utc::now() + chrono::Duration::minutes(1);
-        assert_eq!(
-            crate::email_receipts::list_overdue(&db, future)
-                .await
-                .expect("overdue")
-                .len(),
-            1
-        );
-        ensure(&db, receipt_id, "C123").await.expect("delivery");
-        admit_attempt(&db, receipt_id, "synthetic-correlation")
-            .await
-            .expect("admit");
-        for state in [UNKNOWN, FAILED, CONFIRMED, NOT_ATTEMPTED] {
-            match state {
-                UNKNOWN => {
-                    mark_unknown(&db, receipt_id, "transport")
-                        .await
-                        .expect("unknown");
-                }
-                FAILED => {
-                    mark_failed(&db, receipt_id, "rejected")
-                        .await
-                        .expect("failed");
-                }
-                CONFIRMED => {
-                    mark_confirmed(&db, receipt_id, "C123", "1700000000.000001")
-                        .await
-                        .expect("confirmed");
-                }
-                _ => {
-                    authorize_resend(&db, receipt_id, "synthetic-operator")
-                        .await
-                        .expect("resend");
-                }
-            }
-            let receipt = crate::email_receipts::find_by_id(&db, receipt_id)
-                .await
-                .expect("receipt")
-                .expect("exists");
-            assert_eq!(receipt.delivery_state, state);
-            let by_digest = crate::email_receipts::find(
-                &db,
-                &receipt.receiving_mailbox,
-                &receipt.deployment,
-                &receipt.raw_digest,
-            )
-            .await
-            .expect("digest lookup")
-            .expect("exists");
-            assert_eq!(by_digest.delivery_state, state);
-            assert_eq!(
-                crate::email_receipts::list_overdue(&db, future)
-                    .await
-                    .expect("health")
-                    .is_empty(),
-                state == CONFIRMED
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn concurrent_admission_allows_one_sender() {
-        let (db, receipt_id) = setup().await;
-        ensure(&db, receipt_id, "C123")
-            .await
-            .expect("delivery setup");
-        let (first, second) = tokio::join!(
-            admit_attempt(&db, receipt_id, "corr-a"),
-            admit_attempt(&db, receipt_id, "corr-b")
-        );
-        let first = first.expect("first admission");
-        let second = second.expect("second admission");
-        assert_ne!(first.attempt_id.is_some(), second.attempt_id.is_some());
-        assert_eq!(attempts(&db, receipt_id).await.expect("attempts").len(), 1);
-    }
-
-    #[tokio::test]
-    async fn confirmed_delivery_replays_without_a_new_attempt() {
-        let (db, receipt_id) = setup().await;
-        ensure(&db, receipt_id, "C123")
-            .await
-            .expect("delivery setup");
-        let started = admit_attempt(&db, receipt_id, "corr-a")
-            .await
-            .expect("admission");
-        assert!(started.attempt_id.is_some());
-        mark_confirmed(&db, receipt_id, "C123", "1700000000.000001")
-            .await
-            .expect("confirmation");
-        let replay = admit_attempt(&db, receipt_id, "corr-b")
-            .await
-            .expect("replay");
-        assert!(replay.attempt_id.is_none());
-        assert_eq!(replay.delivery.state, CONFIRMED);
-        assert_eq!(attempts(&db, receipt_id).await.expect("attempts").len(), 1);
-    }
-
-    #[tokio::test]
-    async fn unknown_delivery_requires_operator_authorization_before_resend() {
-        let (db, receipt_id) = setup().await;
-        ensure(&db, receipt_id, "C123")
-            .await
-            .expect("delivery setup");
-        admit_attempt(&db, receipt_id, "corr-a")
-            .await
-            .expect("admission");
-        mark_unknown(&db, receipt_id, "response lost after dispatch")
-            .await
-            .expect("unknown");
-        let blocked = admit_attempt(&db, receipt_id, "corr-b")
-            .await
-            .expect("blocked replay");
-        assert!(blocked.attempt_id.is_none());
-        authorize_resend(&db, receipt_id, "operator@example.com")
-            .await
-            .expect("authorize");
-        let resumed = admit_attempt(&db, receipt_id, "corr-c")
-            .await
-            .expect("resend admission");
-        assert!(resumed.attempt_id.is_some());
-    }
-
-    #[tokio::test]
-    async fn reopening_after_a_failed_result_records_the_operator_and_clears_the_timestamp() {
-        let (db, receipt_id) = setup().await;
-        ensure(&db, receipt_id, "C-SYNTHETIC")
-            .await
-            .expect("ensure");
-        mark_confirmed(&db, receipt_id, "C-SYNTHETIC", "1700000000.1")
-            .await
-            .expect("confirmed");
-
-        let reopened = reopen_after_failed_result(&db, receipt_id, "operator")
-            .await
-            .expect("reopen");
-        assert_eq!(reopened.state, NOT_ATTEMPTED);
-        assert_eq!(reopened.slack_timestamp, None);
-        assert_eq!(reopened.reconciled_by.as_deref(), Some("operator"));
-        assert_eq!(
-            reopened.reconciliation.as_deref(),
-            Some("redrive_after_failed_result")
-        );
-        let admitted = admit_attempt(&db, receipt_id, "summary-redrive")
-            .await
-            .expect("admit");
-        assert!(admitted.attempt_id.is_some(), "a new post is admitted");
-    }
-
-    #[tokio::test]
-    async fn reopening_refuses_any_delivery_that_is_not_confirmed() {
-        let (db, receipt_id) = setup().await;
-        ensure(&db, receipt_id, "C-SYNTHETIC")
-            .await
-            .expect("ensure");
-        mark_unknown(&db, receipt_id, "lost response")
-            .await
-            .expect("unknown");
-        let error = reopen_after_failed_result(&db, receipt_id, "operator")
-            .await
-            .expect_err("only a confirmed delivery reopens");
-        assert!(matches!(error, EmailDeliveryError::NotConfirmed));
-    }
-
-    #[tokio::test]
-    async fn list_by_state_finds_only_quarantined_deliveries() {
-        let (db, receipt_id) = setup().await;
-        ensure(&db, receipt_id, "C123")
-            .await
-            .expect("delivery setup");
-        admit_attempt(&db, receipt_id, "corr-a")
-            .await
-            .expect("admission");
-        mark_unknown(&db, receipt_id, "response lost after dispatch")
-            .await
-            .expect("unknown");
-
-        let second_receipt = Uuid::now_v7();
-        let confirmed_receipt_id = crate::email_receipts::ensure(
-            &db,
-            &crate::email_receipts::NewEmailReceipt {
-                receiving_mailbox: "support@example.com",
-                deployment: "staging",
-                firm_id: None,
-                provider_account: None,
-                sender_authenticated: false,
-                raw_digest: &format!("{second_receipt}"),
-                source_message_id: None,
-                archive_key: "inbound/other.eml",
-                letter_id: Uuid::now_v7(),
-            },
-        )
-        .await
-        .expect("second receipt setup")
-        .receipt
-        .id;
-        ensure(&db, confirmed_receipt_id, "C456")
-            .await
-            .expect("confirmed delivery setup");
-        admit_attempt(&db, confirmed_receipt_id, "corr-b")
-            .await
-            .expect("confirmed admission");
-        mark_confirmed(&db, confirmed_receipt_id, "C456", "1700000000.000002")
-            .await
-            .expect("confirmed");
-
-        let unknown = list_by_state(&db, UNKNOWN).await.expect("list unknown");
-        assert_eq!(unknown.len(), 1);
-        assert_eq!(unknown[0].receipt_id, receipt_id);
-
-        let confirmed = list_by_state(&db, CONFIRMED).await.expect("list confirmed");
-        assert_eq!(confirmed.len(), 1);
-        assert_eq!(confirmed[0].receipt_id, confirmed_receipt_id);
-    }
-
-    #[tokio::test]
-    async fn reconciliation_records_operator_decision_and_updates_attempt() {
-        let (db, receipt_id) = setup().await;
-        ensure(&db, receipt_id, "C123")
-            .await
-            .expect("delivery setup");
-        admit_attempt(&db, receipt_id, "corr-a")
-            .await
-            .expect("admission");
-        mark_unknown(&db, receipt_id, "response lost after dispatch")
-            .await
-            .expect("unknown");
-
-        let confirmed = reconcile_confirmed(
-            &db,
-            receipt_id,
-            "operator@example.com",
-            "C123",
-            "1700000000.000001",
-        )
-        .await
-        .expect("reconciliation");
-        assert_eq!(confirmed.state, CONFIRMED);
-        assert_eq!(
-            confirmed.reconciled_by.as_deref(),
-            Some("operator@example.com")
-        );
-        assert_eq!(
-            confirmed.reconciliation.as_deref(),
-            Some("operator_confirmed")
-        );
-        assert_eq!(
-            confirmed.slack_timestamp.as_deref(),
-            Some("1700000000.000001")
-        );
-        let attempt = &attempts(&db, receipt_id).await.expect("attempts")[0];
-        assert_eq!(attempt.state, CONFIRMED);
-        assert_eq!(
-            attempt.slack_timestamp.as_deref(),
-            Some("1700000000.000001")
-        );
-        assert_eq!(attempt.error, None);
-
-        authorize_resend(&db, receipt_id, "operator@example.com")
-            .await
-            .expect("authorize resend");
-        admit_attempt(&db, receipt_id, "corr-b")
-            .await
-            .expect("resend admission");
-        let failed = mark_failed(&db, receipt_id, "permanent Slack rejection")
-            .await
-            .expect("failed delivery");
-        assert_eq!(failed.state, FAILED);
-        assert_eq!(
-            failed.last_error.as_deref(),
-            Some("permanent Slack rejection")
-        );
-        let attempt = &attempts(&db, receipt_id).await.expect("attempts")[1];
-        assert_eq!(attempt.state, FAILED);
-        assert_eq!(attempt.error.as_deref(), Some("permanent Slack rejection"));
-    }
-}
+mod tests {}

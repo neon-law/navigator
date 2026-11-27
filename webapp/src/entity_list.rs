@@ -91,11 +91,11 @@ pub async fn get_entity_list() -> Result<EntityListView, ServerFnError> {
     let parsed = parse_sort(&sort);
 
     // Both reference tables live in SurrealDB (ENG-20).
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let types = store::entity_types::list(&surreal, &[])
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let types = store::entity_types::list(&application_store, &[])
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let jurs = store::jurisdictions::list_all(&surreal)
+    let jurs = store::jurisdictions::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -104,7 +104,7 @@ pub async fn get_entity_list() -> Result<EntityListView, ServerFnError> {
     // than pushed into the store separately. A database sort followed by
     // per-field in-memory sorts would make the last field primary and reverse
     // the requested precedence.
-    let mut rows_raw = store::entities::all(&surreal)
+    let mut rows_raw = store::entities::all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 

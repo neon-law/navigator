@@ -35,12 +35,12 @@ use serde_json::json;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::assets::{self, Filed, RevisionError};
 use crate::document_pointers::MatterFolder;
 use crate::documents::{self, DocumentIdentity, IngestArgs};
 use crate::persons;
 use crate::projects;
-use crate::surreal::SurrealDb;
 
 /// Maximum number of Drive files one import pass may admit.
 pub const MAX_FILES: usize = 50;
@@ -162,7 +162,7 @@ pub struct DriveImportReport {
 /// screen cannot decide. Files filed before the error stay filed; a rerun
 /// converges.
 pub async fn import_project_files(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     drive: &dyn DriveService,
     screen: &dyn IngestScreen,
@@ -194,7 +194,7 @@ pub async fn import_project_files(
 // Keep admission, bounded enumeration, and per-file refusal ordering explicit.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn import_project_files_with_folders(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     pg: &crate::postgres::PostgresDb,
     storage: &Arc<dyn StorageService>,
     drive: &dyn DriveService,
@@ -456,7 +456,7 @@ enum Outcome {
 /// Check, screen, and file one downloaded Drive file.
 #[allow(clippy::too_many_arguments)]
 async fn ingest_one(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     screen: &dyn IngestScreen,
     project_id: Uuid,
@@ -572,7 +572,7 @@ async fn ingest_one(
 /// filed.
 #[allow(clippy::too_many_arguments)]
 async fn plan_one(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     args: &DriveImportArgs<'_>,
     file: cloud::DriveFile,

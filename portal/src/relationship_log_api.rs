@@ -52,7 +52,7 @@ pub(super) async fn record_relationship_observation(
             if !participates_as_firm(&state, &lawyer, project_id).await {
                 return Err(ApiError::NotFound);
             }
-            store::projects::find_by_id(&state.surreal, project_id)
+            store::projects::find_by_id(&state.application_store, project_id)
                 .await
                 .map_err(|e| ApiError::Db(e.to_string()))?
                 .and_then(|project| project.firm_id)
@@ -138,7 +138,12 @@ pub(super) async fn has_relationship_log_membership(
     firm_id: Uuid,
 ) -> bool {
     store::firm_capability::FirmCapability::AccessRelationshipObservations
-        .resolve(&state.surreal, lawyer.0.role, lawyer.0.person_id, firm_id)
+        .resolve(
+            &state.application_store,
+            lawyer.0.role,
+            lawyer.0.person_id,
+            firm_id,
+        )
         .await
         .is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed)
 }
@@ -149,7 +154,12 @@ pub(super) async fn may_view_firm_graph(
     firm_id: Uuid,
 ) -> bool {
     store::firm_capability::FirmCapability::ViewDirectory
-        .resolve(&state.surreal, lawyer.0.role, lawyer.0.person_id, firm_id)
+        .resolve(
+            &state.application_store,
+            lawyer.0.role,
+            lawyer.0.person_id,
+            firm_id,
+        )
         .await
         .is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed)
 }

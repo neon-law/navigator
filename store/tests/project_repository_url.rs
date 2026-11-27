@@ -31,7 +31,7 @@ async fn a_new_matter_records_no_repository() {
 #[tokio::test]
 async fn any_forge_and_organization_round_trips() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let row = native_project::create("repo-forges").await;
 
         for url in [
@@ -40,7 +40,7 @@ async fn any_forge_and_organization_round_trips() {
             "https://forge.example:8443/another-org/x",
             "http://forge.internal/an-org/y",
         ] {
-            let updated = set_repository_url(&surreal, row.id, Some(url))
+            let updated = set_repository_url(&application_store, row.id, Some(url))
                 .await
                 .expect("write")
                 .expect("the matter exists");
@@ -58,14 +58,18 @@ async fn any_forge_and_organization_round_trips() {
 #[tokio::test]
 async fn a_recorded_url_can_be_cleared() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let row = native_project::create("repo-clear").await;
-        set_repository_url(&surreal, row.id, Some("https://forge.example/o/r"))
-            .await
-            .expect("write")
-            .expect("the matter exists");
+        set_repository_url(
+            &application_store,
+            row.id,
+            Some("https://forge.example/o/r"),
+        )
+        .await
+        .expect("write")
+        .expect("the matter exists");
 
-        let cleared = set_repository_url(&surreal, row.id, None)
+        let cleared = set_repository_url(&application_store, row.id, None)
             .await
             .expect("clear")
             .expect("the matter exists");
@@ -74,11 +78,15 @@ async fn a_recorded_url_can_be_cleared() {
         // Blank and whitespace are the same instruction as `None`, because an HTML
         // form posts an empty field rather than omitting it.
         for blank in ["", "   "] {
-            set_repository_url(&surreal, row.id, Some("https://forge.example/o/r"))
-                .await
-                .expect("write")
-                .expect("the matter exists");
-            let cleared = set_repository_url(&surreal, row.id, Some(blank))
+            set_repository_url(
+                &application_store,
+                row.id,
+                Some("https://forge.example/o/r"),
+            )
+            .await
+            .expect("write")
+            .expect("the matter exists");
+            let cleared = set_repository_url(&application_store, row.id, Some(blank))
                 .await
                 .expect("clear")
                 .expect("the matter exists");
@@ -95,7 +103,7 @@ async fn a_recorded_url_can_be_cleared() {
 #[tokio::test]
 async fn an_unsafe_or_unclonable_url_is_refused_rather_than_stored() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let row = native_project::create("repo-refuse").await;
 
         for bad in [
@@ -105,7 +113,7 @@ async fn an_unsafe_or_unclonable_url_is_refused_rather_than_stored() {
             "https://forge.example",
             "https://user:token@forge.example/o/r",
         ] {
-            let error = set_repository_url(&surreal, row.id, Some(bad))
+            let error = set_repository_url(&application_store, row.id, Some(bad))
                 .await
                 .expect_err("must be refused");
             assert!(
@@ -115,7 +123,7 @@ async fn an_unsafe_or_unclonable_url_is_refused_rather_than_stored() {
         }
 
         // And nothing landed.
-        let reread = store::projects::find_by_id(&surreal, row.id)
+        let reread = store::projects::find_by_id(&application_store, row.id)
             .await
             .expect("read")
             .expect("the matter exists");
@@ -131,12 +139,16 @@ async fn an_unsafe_or_unclonable_url_is_refused_rather_than_stored() {
 #[tokio::test]
 async fn setting_the_url_on_a_missing_matter_is_not_an_error() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         assert!(
-            set_repository_url(&surreal, Uuid::now_v7(), Some("https://forge.example/o/r"))
-                .await
-                .expect("no error")
-                .is_none(),
+            set_repository_url(
+                &application_store,
+                Uuid::now_v7(),
+                Some("https://forge.example/o/r")
+            )
+            .await
+            .expect("no error")
+            .is_none(),
             "a vanished matter is reported as absent, not as a failure"
         );
     })
@@ -148,7 +160,7 @@ async fn setting_the_url_on_a_missing_matter_is_not_an_error() {
 #[tokio::test]
 async fn the_edit_command_validates_and_clears_the_repository_url() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let row = native_project::create("repo-command").await;
 
         let command = |url: Option<&str>| UpdateProjectCommand {
@@ -158,7 +170,7 @@ async fn the_edit_command_validates_and_clears_the_repository_url() {
         };
 
         let updated = update_project(
-            &surreal,
+            &application_store,
             row.id,
             &command(Some("https://forge.example/o/r")),
         )
@@ -169,26 +181,34 @@ async fn the_edit_command_validates_and_clears_the_repository_url() {
             Some("https://forge.example/o/r")
         );
 
-        let error = update_project(&surreal, row.id, &command(Some("file:///etc/passwd")))
-            .await
-            .expect_err("must be refused");
+        let error = update_project(
+            &application_store,
+            row.id,
+            &command(Some("file:///etc/passwd")),
+        )
+        .await
+        .expect_err("must be refused");
         assert!(
             matches!(error, ProjectCommandError::Invalid(_)),
             "{error:?}"
         );
 
-        let cleared = update_project(&surreal, row.id, &command(Some("")))
+        let cleared = update_project(&application_store, row.id, &command(Some("")))
             .await
             .expect("clear");
         assert_eq!(cleared.repository_url, None, "a blank field clears");
 
         // An omitted field leaves the column alone, which is what lets a caller
         // edit only the name.
-        set_repository_url(&surreal, row.id, Some("https://forge.example/o/r"))
-            .await
-            .expect("write")
-            .expect("the matter exists");
-        let untouched = update_project(&surreal, row.id, &command(None))
+        set_repository_url(
+            &application_store,
+            row.id,
+            Some("https://forge.example/o/r"),
+        )
+        .await
+        .expect("write")
+        .expect("the matter exists");
+        let untouched = update_project(&application_store, row.id, &command(None))
             .await
             .expect("write");
         assert_eq!(

@@ -28,7 +28,7 @@ fn app(secure_cookies: bool) -> Router {
         oauth_microsoft: None,
         oauth_apple: None,
         sessions: sessions(),
-        surreal: store::surreal::SurrealDb::uninitialized(),
+        application_store: store::application_store::ApplicationStore::uninitialized(),
         email: Arc::new(crate::email::CapturingEmail::new()),
         workflow_runtime: Arc::new(workflows::InMemoryRuntime::new()),
         bootstrap_owner_email: None,

@@ -4,7 +4,7 @@
 //! Estimate](crate::outcome_estimates) and [Matter
 //! Outcome](crate::matter_outcomes) are firm work product: only a
 //! firm-side participant reads or writes them. This is the PostgreSQL twin of
-//! [`crate::projects::can_access_as_lawyer_in_surreal`]: the actor must hold a
+//! [`crate::projects::can_access_as_lawyer`]: the actor must hold a
 //! lawyer-tier role, and either an admin-tier role or a firm-side
 //! participation row on the matter. A client-side participant, a client DRI
 //! and a clerk are refused whatever their participation.
@@ -178,7 +178,7 @@ pub(crate) mod tests {
 
     mod database {
         use super::super::is_firm_side;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
+        use crate::postgres::fixtures::{connect, fresh_schema};
 
         #[tokio::test]
         async fn only_a_firm_side_lawyer_or_an_admin_handles_work_product() {

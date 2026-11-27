@@ -25,16 +25,6 @@ use sqlx::Row;
 
 use crate::postgres::PostgresDb;
 
-/// The tables PostgreSQL holds authoritatively under this module. The mirror
-/// refuses to repair them from SurrealDB outside the first Mirror Backfill.
-pub(crate) const TABLES: &[&str] = &[
-    "finance_aggregate",
-    "iolta_account",
-    "iolta_allocation",
-    "iolta_withdrawal",
-    "xero_invoice",
-];
-
 #[cfg(test)]
 tokio::task_local! {
     static TEST_ACCOUNTING_DB: PostgresDb;
@@ -67,13 +57,13 @@ pub(crate) type Op<'a, T> =
 type Query<'q> = sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>;
 
 /// The pool to serve from, or `None` when no PostgreSQL host is configured.
-pub(crate) fn authority() -> Op<'static, Option<PostgresDb>> {
+pub(crate) fn authority() -> Op<'static, PostgresDb> {
     Box::pin(async {
         #[cfg(test)]
         if let Ok(pg) = TEST_ACCOUNTING_DB.try_with(Clone::clone) {
-            return Ok(Some(pg));
+            return Ok(pg);
         }
-        PostgresDb::configured()
+        PostgresDb::application()
             .await
             .map_err(|_| AccountingAuthorityError::Unavailable)
     })

@@ -10,10 +10,10 @@ use store::projects::{
 #[tokio::test]
 async fn a_slack_channel_id_is_written_for_the_project() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let project = native_project::create("slack-channel").await;
 
-        let updated = set_internal_slack_channel_id(&surreal, project.id, "C123456")
+        let updated = set_internal_slack_channel_id(&application_store, project.id, "C123456")
             .await
             .expect("set Slack channel")
             .expect("Project exists");
@@ -28,11 +28,11 @@ async fn a_slack_channel_id_is_written_for_the_project() {
 #[tokio::test]
 async fn an_invalid_slack_channel_id_is_refused() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let project = native_project::create("slack-invalid").await;
 
         assert!(matches!(
-            set_internal_slack_channel_id(&surreal, project.id, "C-123").await,
+            set_internal_slack_channel_id(&application_store, project.id, "C-123").await,
             Err(ProjectCommandError::Invalid(_))
         ));
     })
@@ -42,11 +42,11 @@ async fn an_invalid_slack_channel_id_is_refused() {
 #[tokio::test]
 async fn the_channel_id_and_url_are_persisted_as_one_coordinate() {
     store::test_support::with_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let project = native_project::create("slack-atomic").await;
 
         let updated = set_internal_slack_channel(
-            &surreal,
+            &application_store,
             project.id,
             "C123456",
             "https://app.slack.com/archives/C123456",

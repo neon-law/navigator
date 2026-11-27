@@ -6,9 +6,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Extension;
 use serde::Deserialize;
+use store::application_store::ApplicationStore;
 use store::plan_intake::{self, PlanIntakeError, PlanOnboarding};
 use store::postgres::PostgresDb;
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 use crate::admin::AdminState;
@@ -38,7 +38,7 @@ pub struct PlanDeclineForm {
 
 /// Confirm the member before displaying the conflict review and take form.
 pub async fn plan_resolve_member_post(
-    State(db): State<SurrealDb>,
+    State(db): State<ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(staged_id): Path<Uuid>,
     axum::Form(form): axum::Form<PlanMemberForm>,
@@ -95,7 +95,7 @@ pub async fn plan_accept_post(
             .and_then(nonblank)
             .map(|state| state.to_ascii_lowercase()),
     };
-    let db = &state.surreal;
+    let db = &state.application_store;
     let accepted = match plan_intake::accept_with_onboarding(db, &pg, staged_id, &input, |plan| {
         start_plan_onboarding(
             db,
@@ -131,7 +131,7 @@ fn plan_onboarding_code(provider: &str) -> Option<&'static str> {
 }
 
 async fn start_plan_onboarding(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     runtime: &dyn workflows::StateMachineRuntime,
     storage: &Arc<dyn cloud::StorageService>,
     plan: PlanOnboarding,
@@ -192,7 +192,7 @@ async fn start_plan_onboarding(
 }
 
 async fn prefill_arag_fee(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     runtime: &dyn workflows::StateMachineRuntime,
     storage: &Arc<dyn cloud::StorageService>,
     notation_id: Uuid,
@@ -223,7 +223,7 @@ async fn prefill_arag_fee(
 
 /// Record the lawyer's decision to pass on a staged referral.
 pub async fn plan_decline_post(
-    State(db): State<SurrealDb>,
+    State(db): State<ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(staged_id): Path<Uuid>,
     axum::Form(form): axum::Form<PlanDeclineForm>,
@@ -263,8 +263,7 @@ fn review_error(error: &PlanIntakeError) -> Response {
             "The conflict check could not finish. The referral is still staged for review."
                 .to_owned()
         }
-        PlanIntakeError::Db(_)
-        | PlanIntakeError::Postgres(_)
+        PlanIntakeError::Postgres(_)
         | PlanIntakeError::Sql(_)
         | PlanIntakeError::Open(OpenMatterError::Db(_) | OpenMatterError::Attestation(_))
         | PlanIntakeError::ProjectStore(_)
@@ -313,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn plan_onboarding_pins_provider_clauses_and_reuses_the_existing_notation() {
         store::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let app = crate::test_support::app_state(db.clone()).await;
             store::seed::seed_canonical(&db, &app.storage)
                 .await

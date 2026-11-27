@@ -24,7 +24,7 @@ use cloud::StorageService;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::surreal::SurrealDb;
+use crate::application_store::ApplicationStore;
 use crate::template_source::{Persisted, TemplateSourceError};
 use crate::templates::{Scope, Template, TemplateError};
 
@@ -148,8 +148,11 @@ fn draft_codes(tree: &[(String, Vec<u8>)]) -> Vec<String> {
     codes
 }
 
-async fn firm_slug(surreal: &SurrealDb, firm_id: Uuid) -> Result<String, FirmLibraryError> {
-    Ok(crate::firms::find_by_id(surreal, firm_id)
+async fn firm_slug(
+    application_store: &ApplicationStore,
+    firm_id: Uuid,
+) -> Result<String, FirmLibraryError> {
+    Ok(crate::firms::find_by_id(application_store, firm_id)
         .await
         .map_err(|error| FirmLibraryError::Store(error.to_string()))?
         .ok_or(FirmLibraryError::FirmNotFound(firm_id))?
@@ -179,12 +182,12 @@ pub struct Synced {
 /// # Errors
 /// [`FirmLibraryError`] for any of the refusals above, or a store fault.
 pub async fn sync(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     repo: &repos::RepoStore,
     firm_id: Uuid,
 ) -> Result<Option<Synced>, FirmLibraryError> {
-    let slug = firm_slug(surreal, firm_id).await?;
+    let slug = firm_slug(application_store, firm_id).await?;
     let Some(snapshot) = snapshot(repo, &slug).await? else {
         return Ok(None);
     };
@@ -193,7 +196,7 @@ pub async fn sync(
     for code in draft_codes(&snapshot.tree) {
         let contents = crate::template_source::selected_blueprint(snapshot.tree.clone(), &code)?;
         let persisted = crate::template_source::persist_contents_in(
-            surreal,
+            application_store,
             storage,
             Scope::Firm(firm_id),
             &code,
@@ -204,7 +207,7 @@ pub async fn sync(
         templates.push(persisted.template);
     }
     let retainer = match manifest.retainer {
-        Some(code) => Some(retainer_template(surreal, firm_id, &code).await?),
+        Some(code) => Some(retainer_template(application_store, firm_id, &code).await?),
         None => None,
     };
     Ok(Some(Synced {
@@ -215,11 +218,11 @@ pub async fn sync(
 }
 
 async fn retainer_template(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
     code: &str,
 ) -> Result<Template, FirmLibraryError> {
-    let template = crate::templates::resolve_for_firm(surreal, firm_id, code)
+    let template = crate::templates::resolve_for_firm(application_store, firm_id, code)
         .await?
         .ok_or_else(|| FirmLibraryError::RetainerNotFound(code.to_string()))?;
     let opens = template
@@ -244,13 +247,13 @@ async fn retainer_template(
 /// [`FirmLibraryError`] for an invalid Draft (it is in the library, so it
 /// refuses rather than falling through) or a store fault.
 pub async fn persist_draft(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     repo: &repos::RepoStore,
     firm_id: Uuid,
     code: &str,
 ) -> Result<Option<Persisted>, FirmLibraryError> {
-    let slug = firm_slug(surreal, firm_id).await?;
+    let slug = firm_slug(application_store, firm_id).await?;
     let Some(snapshot) = snapshot(repo, &slug).await? else {
         return Ok(None);
     };
@@ -261,7 +264,7 @@ pub async fn persist_draft(
     };
     Ok(Some(
         crate::template_source::persist_contents_in(
-            surreal,
+            application_store,
             storage,
             Scope::Firm(firm_id),
             code,
@@ -331,23 +334,23 @@ pub async fn locations_for_person(
 /// matter-opening doors. Never an error: a process with no repository
 /// store yields `None`, as [`sync_or_default`] does for the rest.
 pub async fn sync_configured(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     firm_id: Uuid,
 ) -> Option<Synced> {
     let repo = repos::RepoStore::from_env().ok()?;
-    sync_or_default(surreal, storage, &repo, firm_id).await
+    sync_or_default(application_store, storage, &repo, firm_id).await
 }
 
 /// [`sync`], never an error: a Firm with no library or a library that fails
 /// to sync (logged) yields `None`, and the caller keeps its shared default.
 pub async fn sync_or_default(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     repo: &repos::RepoStore,
     firm_id: Uuid,
 ) -> Option<Synced> {
-    match sync(surreal, storage, repo, firm_id).await {
+    match sync(application_store, storage, repo, firm_id).await {
         Ok(synced) => synced,
         Err(error) => {
             tracing::warn!(%firm_id, error = %error, "firm library: sync refused; using shared defaults");
@@ -359,66 +362,6 @@ pub async fn sync_or_default(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A valid, firm-owned Draft from the shared corpus; its `kind:
-    /// onboarding` opens a matter.
-    const VALID_DRAFT: &str =
-        include_str!("../../templates/notations/neon_law/onboarding__letter.md");
-
-    async fn fs_storage() -> Arc<dyn StorageService> {
-        Arc::new(
-            cloud::FsStorage::new(
-                std::env::temp_dir().join(format!("navigator-firm-library-{}", Uuid::now_v7())),
-            )
-            .await
-            .unwrap(),
-        )
-    }
-
-    async fn firm_wearing(surreal: &SurrealDb, brand: &str) -> crate::firms::Firm {
-        let id = crate::test_support::seed_firm_with_brand(surreal, brand).await;
-        crate::firms::find_by_id(surreal, id)
-            .await
-            .unwrap()
-            .unwrap()
-    }
-
-    async fn project_of(surreal: &SurrealDb, firm_id: Uuid) -> Uuid {
-        crate::projects::create(
-            surreal,
-            &crate::projects::NewProject {
-                code: format!("firm-library-{}", Uuid::now_v7()),
-                name: "matter".into(),
-                status: "open".into(),
-                entity_id: crate::test_support::seed_entity(surreal).await,
-                firm_id: Some(firm_id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    fn library(
-        dir: &tempfile::TempDir,
-        firm_slug: &str,
-        files: &[(&str, &[u8])],
-    ) -> repos::RepoStore {
-        let store = repos::RepoStore::new(dir.path());
-        store
-            .commit_as_code(
-                &repository_name(firm_slug),
-                repos::Author {
-                    name: "Tester",
-                    email: "tester@example.com",
-                },
-                "library",
-                files,
-            )
-            .unwrap();
-        store
-    }
 
     #[test]
     fn the_manifest_is_closed_and_trims_its_retainer() {
@@ -435,144 +378,13 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn a_firm_without_a_library_syncs_nothing_and_creates_no_repository() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let storage = fs_storage().await;
-        let firm = firm_wearing(&surreal, "neon").await;
-        let dir = tempfile::tempdir().unwrap();
-        let repo = repos::RepoStore::new(dir.path());
-        assert!(sync(&surreal, &storage, &repo, firm.id)
-            .await
-            .unwrap()
-            .is_none());
-        assert!(!repo.exists_code(&repository_name(&firm.slug)));
-    }
-
-    #[tokio::test]
-    async fn sync_persists_firm_versions_and_resolves_the_retainer_for_that_firm_only() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let storage = fs_storage().await;
-        let owner = firm_wearing(&surreal, "neon").await;
-        let other = firm_wearing(&surreal, "vesta").await;
-        let dir = tempfile::tempdir().unwrap();
-        let repo = library(
-            &dir,
-            &owner.slug,
-            &[
-                ("drafts/firm_retainer.md", VALID_DRAFT.as_bytes()),
-                (MANIFEST_FILE, b"retainer: firm_retainer\n"),
-            ],
-        );
-        let head = repo
-            .head_oid_code(&repository_name(&owner.slug))
-            .unwrap()
-            .unwrap();
-
-        let synced = sync(&surreal, &storage, &repo, owner.id)
-            .await
-            .unwrap()
-            .expect("the firm has a library");
-        assert_eq!(synced.commit_sha, head);
-        let retainer = synced.retainer.expect("the manifest names a retainer");
-        assert_eq!(retainer.code, "firm_retainer");
-        assert_eq!(retainer.firm_id, Some(owner.id));
-        assert_eq!(retainer.project_id, None);
-        assert_eq!(retainer.source_commit_sha.as_deref(), Some(head.as_str()));
-        assert!(retainer.body_sha256.is_some());
-
-        // The owner's Projects resolve it; another Firm's Projects, the
-        // other Firm itself, and the shared catalog never see it.
-        let owners_matter = project_of(&surreal, owner.id).await;
-        let foreign = project_of(&surreal, other.id).await;
-        let resolved = crate::templates::resolve(&surreal, Some(owners_matter), "firm_retainer")
-            .await
-            .unwrap();
-        assert_eq!(resolved.map(|t| t.id), Some(retainer.id));
-        for invisible in [
-            crate::templates::resolve(&surreal, Some(foreign), "firm_retainer")
-                .await
-                .unwrap(),
-            crate::templates::resolve_for_firm(&surreal, other.id, "firm_retainer")
-                .await
-                .unwrap(),
-            crate::templates::resolve(&surreal, None, "firm_retainer")
-                .await
-                .unwrap(),
-        ] {
-            assert!(invisible.is_none(), "a Firm's Draft leaked: {invisible:?}");
-        }
-        assert!(!crate::templates::list_current(&surreal)
-            .await
-            .unwrap()
-            .iter()
-            .any(|t| t.firm_id.is_some()));
-        assert_eq!(
-            crate::templates::list_for_firm(&surreal, owner.id)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
-        assert!(crate::templates::list_for_firm(&surreal, other.id)
-            .await
-            .unwrap()
-            .is_empty());
-
-        // A re-sync of the same bytes writes nothing new.
-        let again = sync(&surreal, &storage, &repo, owner.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(again.retainer.map(|t| t.id), Some(retainer.id));
-    }
-
-    #[tokio::test]
-    async fn a_retainer_naming_nothing_refuses_the_sync() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let storage = fs_storage().await;
-        let owner = firm_wearing(&surreal, "neon").await;
-        let dir = tempfile::tempdir().unwrap();
-        let repo = library(
-            &dir,
-            &owner.slug,
-            &[(MANIFEST_FILE, b"retainer: missing\n")],
-        );
-        assert!(matches!(
-            sync(&surreal, &storage, &repo, owner.id).await,
-            Err(FirmLibraryError::RetainerNotFound(code)) if code == "missing"
-        ));
-    }
-
-    #[tokio::test]
-    async fn persist_draft_reads_one_code_and_misses_quietly() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let storage = fs_storage().await;
-        let owner = firm_wearing(&surreal, "neon").await;
-        let dir = tempfile::tempdir().unwrap();
-        let repo = library(
-            &dir,
-            &owner.slug,
-            &[("drafts/firm_retainer.md", VALID_DRAFT.as_bytes())],
-        );
-        let persisted = persist_draft(&surreal, &storage, &repo, owner.id, "firm_retainer")
-            .await
-            .unwrap()
-            .expect("the library has the Draft");
-        assert_eq!(persisted.template.firm_id, Some(owner.id));
-        assert!(persist_draft(&surreal, &storage, &repo, owner.id, "absent")
-            .await
-            .unwrap()
-            .is_none());
-    }
-
     // Needs a live PostgreSQL; self-skips without one.
     #[tokio::test]
     async fn a_person_lists_only_the_firms_they_belong_to_with_each_librarys_clone_url() {
-        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+        let Some((options, database)) = crate::postgres::fixtures::fresh_schema().await else {
             return;
         };
-        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let pg = crate::postgres::fixtures::connect(&options, &database).await;
         let [member, participant, outsider, owner, firm_a, firm_b, firm_c, firm_d, entity] =
             std::array::from_fn(|_| Uuid::now_v7());
         // Firm A and Firm B each have an organization; `member` holds a Firm

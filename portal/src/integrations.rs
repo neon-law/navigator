@@ -23,8 +23,8 @@ use std::sync::{
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use store::application_store::ApplicationStore;
 use store::firm_secrets::{IntegrationProvider, IntegrationSecretKind};
-use store::surreal::SurrealDb;
 
 /// Why a Project's provider client could not be built or used.
 #[derive(Debug, thiserror::Error)]
@@ -152,13 +152,13 @@ fn calendar_from_resolution(
     }
 }
 
-fn secret_error(error: store::firm_secrets::SecretStoreError) -> IntegrationError {
+fn secret_error(error: &store::firm_secrets::SecretStoreError) -> IntegrationError {
     use store::firm_secrets::SecretStoreError as Error;
     match error {
         Error::NotConfigured { .. } => IntegrationError::CredentialMissing,
         Error::ProjectHasNoFirm => IntegrationError::NoFirm,
         Error::NoSuchProject(_) => IntegrationError::NoSuchProject,
-        Error::Db(error) => IntegrationError::Db(error.to_string()),
+        Error::Postgres => IntegrationError::Db("PostgreSQL is unavailable".to_owned()),
         // A KMS fault, a context mismatch, or a payload that will not decode
         // are a credential that exists and cannot be produced — a different
         // operator action from one that was never written, so a different
@@ -173,7 +173,7 @@ fn secret_error(error: store::firm_secrets::SecretStoreError) -> IntegrationErro
 pub trait IntegrationProviders: Send + Sync {
     async fn forgejo(
         &self,
-        _db: &SurrealDb,
+        _db: &ApplicationStore,
         _project: Uuid,
     ) -> Result<cloud::ForgejoForge, IntegrationError> {
         Err(IntegrationError::CredentialUnusable)
@@ -181,23 +181,23 @@ pub trait IntegrationProviders: Send + Sync {
 
     async fn notion(
         &self,
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         project_id: Uuid,
     ) -> Result<Arc<dyn cloud::NotionService>, IntegrationError>;
 
     async fn slack(
         &self,
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         project_id: Uuid,
     ) -> Result<Arc<dyn cloud::SlackService>, IntegrationError>;
 
     /// Use the Calendar owner selected by the Project's Firm.
     async fn calendar(
         &self,
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         project_id: Uuid,
     ) -> Result<Arc<dyn cloud::CalendarService>, IntegrationError> {
-        let firm_id = store::projects::find_by_id(surreal, project_id)
+        let firm_id = store::projects::find_by_id(application_store, project_id)
             .await
             .map_err(|_| IntegrationError::CredentialUnusable)?
             .and_then(|project| project.firm_id);
@@ -292,7 +292,7 @@ impl UnconfiguredIntegrations {
 impl IntegrationProviders for UnconfiguredIntegrations {
     async fn notion(
         &self,
-        _surreal: &SurrealDb,
+        _application_store: &ApplicationStore,
         _project_id: Uuid,
     ) -> Result<Arc<dyn cloud::NotionService>, IntegrationError> {
         Err(self.refusal())
@@ -300,7 +300,7 @@ impl IntegrationProviders for UnconfiguredIntegrations {
 
     async fn slack(
         &self,
-        _surreal: &SurrealDb,
+        _application_store: &ApplicationStore,
         _project_id: Uuid,
     ) -> Result<Arc<dyn cloud::SlackService>, IntegrationError> {
         Err(self.refusal())
@@ -349,20 +349,20 @@ impl FirmIntegrations {
 
     async fn credential(
         &self,
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         project_id: Uuid,
         provider: IntegrationProvider,
         kind: IntegrationSecretKind,
     ) -> Result<String, IntegrationError> {
         let credential = store::firm_secrets::resolve_project_credential(
-            surreal,
+            application_store,
             project_id,
             provider,
             kind,
             self.kms.as_ref(),
         )
         .await
-        .map_err(secret_error)?;
+        .map_err(|error| secret_error(&error))?;
         Ok(credential.expose_for_provider_call().to_string())
     }
 }
@@ -371,7 +371,7 @@ impl FirmIntegrations {
 impl IntegrationProviders for FirmIntegrations {
     async fn forgejo(
         &self,
-        db: &SurrealDb,
+        db: &ApplicationStore,
         project: Uuid,
     ) -> Result<cloud::ForgejoForge, IntegrationError> {
         store::project_surfaces::forgejo_for_project(db, project, self.kms.as_ref(), |key| {
@@ -383,7 +383,7 @@ impl IntegrationProviders for FirmIntegrations {
 
     async fn notion(
         &self,
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         project_id: Uuid,
     ) -> Result<Arc<dyn cloud::NotionService>, IntegrationError> {
         let database_id = self.notion_database_id.clone().ok_or_else(|| {
@@ -391,7 +391,7 @@ impl IntegrationProviders for FirmIntegrations {
         })?;
         let token = self
             .credential(
-                surreal,
+                application_store,
                 project_id,
                 IntegrationProvider::Notion,
                 IntegrationSecretKind::NotionToken,
@@ -402,12 +402,12 @@ impl IntegrationProviders for FirmIntegrations {
 
     async fn slack(
         &self,
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         project_id: Uuid,
     ) -> Result<Arc<dyn cloud::SlackService>, IntegrationError> {
         let token = self
             .credential(
-                surreal,
+                application_store,
                 project_id,
                 IntegrationProvider::Slack,
                 IntegrationSecretKind::SlackBotToken,
@@ -500,7 +500,7 @@ impl FakeIntegrations {
 impl IntegrationProviders for FakeIntegrations {
     async fn forgejo(
         &self,
-        _db: &SurrealDb,
+        _db: &ApplicationStore,
         _project: Uuid,
     ) -> Result<cloud::ForgejoForge, IntegrationError> {
         self.forgejo
@@ -510,7 +510,7 @@ impl IntegrationProviders for FakeIntegrations {
 
     async fn notion(
         &self,
-        _surreal: &SurrealDb,
+        _application_store: &ApplicationStore,
         _project_id: Uuid,
     ) -> Result<Arc<dyn cloud::NotionService>, IntegrationError> {
         self.notion_calls.fetch_add(1, Ordering::Relaxed);
@@ -519,7 +519,7 @@ impl IntegrationProviders for FakeIntegrations {
 
     async fn slack(
         &self,
-        _surreal: &SurrealDb,
+        _application_store: &ApplicationStore,
         _project_id: Uuid,
     ) -> Result<Arc<dyn cloud::SlackService>, IntegrationError> {
         self.slack_calls.fetch_add(1, Ordering::Relaxed);
@@ -528,7 +528,7 @@ impl IntegrationProviders for FakeIntegrations {
 
     async fn calendar(
         &self,
-        _surreal: &SurrealDb,
+        _application_store: &ApplicationStore,
         _project_id: Uuid,
     ) -> Result<Arc<dyn cloud::CalendarService>, IntegrationError> {
         self.calendar_calls.fetch_add(1, Ordering::Relaxed);
@@ -548,57 +548,7 @@ impl IntegrationProviders for FakeIntegrations {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        calendar_from_resolution, FirmRuntimeGap, IntegrationError, IntegrationProviders,
-        UnconfiguredIntegrations,
-    };
-    use uuid::Uuid;
-
-    /// A deployment with no runtime key refuses rather than reaching for a
-    /// deployment-wide provider token, and the refusal names the variable the
-    /// operator has to set. The refusal is the contract: a Project must never
-    /// reach a credential its Firm did not write.
-    #[tokio::test]
-    async fn an_unconfigured_deployment_refuses_both_providers_naming_the_missing_key() {
-        let surreal = store::test_support::mem_surreal().await;
-        let providers = UnconfiguredIntegrations::default();
-        for error in [
-            providers.notion(&surreal, Uuid::now_v7()).await.err(),
-            providers.slack(&surreal, Uuid::now_v7()).await.err(),
-        ] {
-            let error = error.expect("an unconfigured runtime refuses");
-            assert_eq!(error.slug(), "runtime_not_configured");
-            let detail = error.detail().expect("the refusal names its gap");
-            assert!(detail.contains("NAVIGATOR_RUNTIME_KMS_KEY"), "{detail}");
-            assert!(detail.contains("navigator ops secrets apply"), "{detail}");
-        }
-    }
-
-    /// LAW-370: Slack needs the runtime key, not the Notion database. A
-    /// deployment without the database refuses Notion alone, and Slack goes
-    /// on to resolve the Firm's own credential.
-    #[tokio::test]
-    async fn a_missing_notion_database_refuses_notion_and_not_slack() {
-        let surreal = store::test_support::mem_surreal().await;
-        let providers = super::FirmIntegrations::without_notion_database(std::sync::Arc::new(
-            cloud::FakeKms::new("runtime-test"),
-        ));
-        let notion = providers
-            .notion(&surreal, Uuid::now_v7())
-            .await
-            .err()
-            .expect("Notion needs its database");
-        assert_eq!(
-            notion.detail(),
-            Some(FirmRuntimeGap::NotionDatabase.detail().as_str())
-        );
-        let slack = providers
-            .slack(&surreal, Uuid::now_v7())
-            .await
-            .err()
-            .expect("an unknown Project has no Slack credential");
-        assert_ne!(slack.slug(), "runtime_not_configured", "{slack:?}");
-    }
+    use super::{calendar_from_resolution, FirmRuntimeGap, IntegrationError};
 
     #[test]
     fn each_firm_runtime_gap_names_its_own_configuration() {

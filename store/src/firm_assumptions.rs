@@ -315,8 +315,8 @@ pub async fn set(
 #[cfg(test)]
 mod tests {
     use super::{catalog, validate, AssumptionType, FirmAssumptionError};
+    use crate::postgres::fixtures::{connect, fresh_schema};
     use crate::postgres::PostgresDb;
-    use crate::postgres_mirror::tests::{connect, fresh_schema};
     use serde_json::json;
     use sqlx::Row;
     use uuid::Uuid;

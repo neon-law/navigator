@@ -1,7 +1,7 @@
 //! Native live-party references serialize with Person merge.
 use serde_json::Value;
 use std::time::Duration;
-use store::{postgres::PostgresDb, project_references::Party, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, postgres::PostgresDb, project_references::Party};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -26,7 +26,7 @@ impl Kind {
 }
 
 async fn write(kind: Kind, project: Uuid, person: Uuid) -> Result<Value, (bool, String)> {
-    let db = SurrealDb::uninitialized();
+    let db = ApplicationStore::uninitialized();
     match kind {
         Kind::Holding => store::cap_table_holdings::insert(
             &db,
@@ -147,7 +147,7 @@ async fn race(pg: PostgresDb, kind: Kind, project: Uuid, kept: Uuid, dropped: Uu
     let merge_pg = pg.clone();
     jobs.spawn(async move {
         PostgresDb::with_application_db(merge_pg, async move {
-            store::person_merge::merge(&SurrealDb::uninitialized(), kept, dropped)
+            store::person_merge::merge(&ApplicationStore::uninitialized(), kept, dropped)
                 .await
                 .unwrap();
             Event::Merged
@@ -210,7 +210,7 @@ async fn concurrent(pg: &PostgresDb, kind: Kind, project: Uuid, kept: Uuid, drop
 }
 
 async fn merge_first(pg: &PostgresDb, kind: Kind, project: Uuid, kept: Uuid, dropped: Uuid) {
-    store::person_merge::merge(&SurrealDb::uninitialized(), kept, dropped)
+    store::person_merge::merge(&ApplicationStore::uninitialized(), kept, dropped)
         .await
         .unwrap();
     let (invalid, message) = write(kind, project, dropped).await.unwrap_err();
@@ -236,7 +236,7 @@ async fn merge_first(pg: &PostgresDb, kind: Kind, project: Uuid, kept: Uuid, dro
 async fn run(kind: Kind, raced: bool) {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let parent = super::native_project::create("synthetic-live-party-boundary").await;
         let mut ids = Vec::new();
         for name in ["Synthetic retained party", "Synthetic merged party"] {
@@ -288,7 +288,7 @@ async fn completed_merge_refuses_a_new_fiduciary_for_the_missing_person() {
 async fn duplicate_lines_and_slots_remain_invalid_without_changing_existing_rows() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let project = super::native_project::create("synthetic-party-duplicate-controls").await;
         let person = store::persons::create(
             &db,

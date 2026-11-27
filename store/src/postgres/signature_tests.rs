@@ -1,14 +1,14 @@
 //! The provider-envelope authority's tests, against the PostgreSQL fixture.
 //! Each test fails when `NAVIGATOR_TEST_POSTGRES_PORT` is unset.
 use super::*;
+use crate::application_store::ApplicationStore;
 use crate::notarizations;
-use crate::postgres_mirror::tests::{connect, fresh_schema, notation_fixture};
+use crate::postgres::fixtures::{connect, fresh_schema, notation_fixture};
 use crate::signatures::{
     by_provider, completed_for_notation, completed_for_notations, for_notation,
     latest_for_notation, record_request, record_signer_completion, stamp_declined, stamp_expired,
     stamp_signed, stamp_voided, SignatureError, SignatureProvider, SignatureState,
 };
-use crate::surreal::SurrealDb;
 use crate::verifications::{self, axis_status, stale_after_revision};
 use rules::citation::{Axis, AxisStatus};
 use uuid::Uuid;
@@ -21,8 +21,8 @@ async fn database() -> Option<PostgresDb> {
 /// The engine the SurrealDB fallback would need. Every dispatched path in
 /// this family reads and writes PostgreSQL only, so the handle stays
 /// uninitialized: touching it would panic, which is the point.
-fn surreal() -> SurrealDb {
-    SurrealDb::uninitialized()
+fn application_store() -> ApplicationStore {
+    ApplicationStore::uninitialized()
 }
 
 #[tokio::test]
@@ -30,7 +30,7 @@ async fn signature_record_request_is_idempotent_in_postgres() {
     let Some((pg, _, notation_id)) = notation_fixture().await else {
         return;
     };
-    let db = surreal();
+    let db = application_store();
 
     with_test_db(pg, async {
         let first = record_request(&db, notation_id, SignatureProvider::DocuSign, "env-1")
@@ -67,7 +67,7 @@ async fn signature_stamp_signed_marks_completion_and_is_a_no_op_for_unknown_enve
     let Some((pg, _, notation_id)) = notation_fixture().await else {
         return;
     };
-    let db = surreal();
+    let db = application_store();
 
     with_test_db(pg, async {
         record_request(&db, notation_id, SignatureProvider::DocuSign, "env-1")
@@ -112,7 +112,7 @@ async fn signer_completion_records_each_role_once_while_the_envelope_is_live() {
     let Some((pg, _, notation_id)) = notation_fixture().await else {
         return;
     };
-    let db = surreal();
+    let db = application_store();
 
     with_test_db(pg, async {
         assert!(
@@ -162,7 +162,7 @@ async fn terminal_stamps_are_readable_but_not_completed_and_monotonic() {
     let Some((pg, _, notation_id)) = notation_fixture().await else {
         return;
     };
-    let db = surreal();
+    let db = application_store();
 
     with_test_db(pg, async {
         for (provider_id, state) in [
@@ -222,7 +222,7 @@ async fn a_provider_timestamp_that_does_not_parse_is_refused() {
     let Some((pg, _, notation_id)) = notation_fixture().await else {
         return;
     };
-    let db = surreal();
+    let db = application_store();
 
     with_test_db(pg, async {
         record_request(&db, notation_id, SignatureProvider::DocuSign, "env-1")
@@ -242,7 +242,7 @@ async fn a_provider_timestamp_that_does_not_parse_is_refused() {
 #[tokio::test]
 async fn verification_records_unverified_axes_and_transitions_stale_in_postgres() {
     let Some(pg) = database().await else { return };
-    let db = surreal();
+    let db = application_store();
 
     with_test_db(pg, async {
         let citation_id = Uuid::new_v4();
@@ -304,7 +304,7 @@ async fn notarization_records_idempotently_stamps_and_names_its_asset_in_postgre
     let Some((pg, _, notation_id)) = notation_fixture().await else {
         return;
     };
-    let db = surreal();
+    let db = application_store();
 
     with_test_db(pg, async {
         let first =
@@ -352,7 +352,7 @@ async fn a_notarization_timestamp_that_does_not_parse_is_refused() {
     let Some((pg, _, notation_id)) = notation_fixture().await else {
         return;
     };
-    let db = surreal();
+    let db = application_store();
 
     with_test_db(pg, async {
         notarizations::record_request(&db, notation_id, SignatureProvider::DocuSign, "nz-1")
@@ -379,7 +379,7 @@ async fn provider_envelope_replay_cannot_cross_project_notations() {
     let Some((pg, original_project, original)) = notation_fixture().await else {
         return;
     };
-    let db = surreal();
+    let db = application_store();
     let other_project = Uuid::new_v4();
     let other_project_notation = Uuid::new_v4();
     sqlx::query("INSERT INTO project(id,code,name,status,entity_id) SELECT $1,$2,'Synthetic Other','open',entity_id FROM project WHERE id=$3")

@@ -27,10 +27,10 @@ async fn fixture() -> Fixture {
     fixture_with_integrations(None).await
 }
 async fn fixture_with_integrations(mock: Option<&wiremock::MockServer>) -> Fixture {
-    let surreal = store::surreal::SurrealDb::uninitialized();
+    let application_store = store::application_store::ApplicationStore::uninitialized();
     let firm = if mock.is_some() {
-        store::test_support::seed_compiled_brands_postgres(&surreal).await;
-        store::brands::find_by_key(&surreal, "neon")
+        store::test_support::seed_compiled_brands_postgres(&application_store).await;
+        store::brands::find_by_key(&application_store, "neon")
             .await
             .unwrap()
             .unwrap()
@@ -38,11 +38,12 @@ async fn fixture_with_integrations(mock: Option<&wiremock::MockServer>) -> Fixtu
     } else {
         None
     };
-    let project_id = store::test_support::seed_project_on_firm(&surreal, firm, "Deadline matter")
-        .await
-        .id;
+    let project_id =
+        store::test_support::seed_project_on_firm(&application_store, firm, "Deadline matter")
+            .await
+            .id;
     let participant = store::persons::create(
-        &surreal,
+        &application_store,
         &NewPerson::with_role(
             "Synthetic Lawyer",
             "deadline-lawyer@example.com",
@@ -52,7 +53,7 @@ async fn fixture_with_integrations(mock: Option<&wiremock::MockServer>) -> Fixtu
     .await
     .unwrap();
     let other_project_id = store::test_support::seed_project_on_firm(
-        &surreal,
+        &application_store,
         None,
         "Other synthetic deadline matter",
     )
@@ -60,7 +61,7 @@ async fn fixture_with_integrations(mock: Option<&wiremock::MockServer>) -> Fixtu
     .id;
     for id in [project_id, other_project_id] {
         store::participation::add_participant(
-            &surreal,
+            &application_store,
             &store::participation::AddParticipantCommand {
                 project_id: id,
                 person_id: participant.id,
@@ -72,7 +73,7 @@ async fn fixture_with_integrations(mock: Option<&wiremock::MockServer>) -> Fixtu
         .unwrap();
     }
     let outsider = store::persons::create(
-        &surreal,
+        &application_store,
         &NewPerson::with_role(
             "Other Lawyer",
             "deadline-outsider@example.com",
@@ -81,10 +82,10 @@ async fn fixture_with_integrations(mock: Option<&wiremock::MockServer>) -> Fixtu
     )
     .await
     .unwrap();
-    let state = portal::test_support::app_state(surreal).await;
+    let state = portal::test_support::app_state(application_store).await;
     let mut providers = state.integration_providers.clone();
     if let Some(mock) = mock {
-        let firm = store::firms::find_by_id(&state.surreal, firm.unwrap())
+        let firm = store::firms::find_by_id(&state.application_store, firm.unwrap())
             .await
             .unwrap()
             .unwrap();
@@ -95,7 +96,7 @@ async fn fixture_with_integrations(mock: Option<&wiremock::MockServer>) -> Fixtu
     }
     let app = portal::api::routes().with_state(ApiState {
         jev: None,
-        surreal: state.surreal.clone(),
+        application_store: state.application_store.clone(),
         email: state.email.clone(),
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),
         bootstrap_company: "Synthetic Firm".into(),

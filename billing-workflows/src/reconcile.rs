@@ -21,7 +21,7 @@ use std::fmt::Write as _;
 use billing::BillingProvider;
 
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use workflows::SlackBot;
 
 /// Request body for `ReconcileInvoices::run`. Empty — the trigger only
@@ -95,10 +95,10 @@ pub struct TrustLine {
 /// Propagates any database or billing-provider error.
 pub async fn reconcile_once(
     provider: &dyn BillingProvider,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
 ) -> anyhow::Result<ReconcileReport> {
-    let (ingested, unscoped) = ingest_listed(provider, surreal).await?;
-    let rows = store::xero_invoices::needing_reconcile(surreal).await?;
+    let (ingested, unscoped) = ingest_listed(provider, application_store).await?;
+    let rows = store::xero_invoices::needing_reconcile(application_store).await?;
     let mut updated = 0;
     for row in &rows {
         let latest = provider.get_invoice(&row.xero_invoice_id).await?;
@@ -106,15 +106,16 @@ pub async fn reconcile_once(
             updated += 1;
         }
         store::xero_invoices::record_reconcile(
-            surreal,
+            application_store,
             &row.xero_invoice_id,
             &latest.status,
             latest.amount_paid_cents,
         )
         .await?;
     }
-    let (iolta_accounts, iolta_unscoped) = mirror_iolta_accounts(provider, surreal).await?;
-    let trust = mirror_trust_movements(provider, surreal).await?;
+    let (iolta_accounts, iolta_unscoped) =
+        mirror_iolta_accounts(provider, application_store).await?;
+    let trust = mirror_trust_movements(provider, application_store).await?;
     Ok(ReconcileReport {
         ingested,
         unscoped,
@@ -158,7 +159,7 @@ enum WithdrawalOutcome {
 /// night: one bookkeeping mistake in one transfer must not stop the rest of
 /// the run. Only a database or ledger failure propagates.
 async fn apply_withdrawal(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     transaction: &billing::TrustBankTransaction,
 ) -> anyhow::Result<WithdrawalOutcome> {
     let input = store::iolta_withdrawals::WithdrawalInput {
@@ -180,11 +181,11 @@ async fn apply_withdrawal(
             })
             .collect(),
     };
-    match store::iolta_withdrawals::apply(surreal, &input).await {
+    match store::iolta_withdrawals::apply(application_store, &input).await {
         Ok(store::iolta_withdrawals::Applied::Posted { projects }) => {
             let mut drawn = Vec::with_capacity(projects.len());
             for project_id in projects {
-                let cents = store::iolta_withdrawals::for_project(surreal, project_id)
+                let cents = store::iolta_withdrawals::for_project(application_store, project_id)
                     .await?
                     .into_iter()
                     .filter(|line| line.withdrawal_id == transaction.transaction_id)
@@ -197,7 +198,6 @@ async fn apply_withdrawal(
         Ok(store::iolta_withdrawals::Applied::AlreadyApplied) => {
             Ok(WithdrawalOutcome::AlreadyApplied)
         }
-        Err(store::iolta_withdrawals::IoltaWithdrawalError::Db(error)) => Err(error.into()),
         Err(refusal) => Ok(WithdrawalOutcome::Refused(refusal.to_string())),
     }
 }
@@ -226,7 +226,7 @@ fn settles_invoices(transaction: &billing::TrustBankTransaction) -> bool {
 /// posts nothing.
 async fn mirror_trust_movements(
     provider: &dyn BillingProvider,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
 ) -> anyhow::Result<TrustMirrorTally> {
     let listed = provider.list_trust_transactions().await?;
     let mut tally = TrustMirrorTally::default();
@@ -234,13 +234,13 @@ async fn mirror_trust_movements(
         if matches!(transaction.kind, billing::TrustTransactionKind::Spend)
             && settles_invoices(&transaction)
         {
-            match apply_withdrawal(surreal, &transaction).await? {
+            match apply_withdrawal(application_store, &transaction).await? {
                 WithdrawalOutcome::Applied { drawn } => {
                     tally.withdrawals += 1;
                     for (project_id, cents) in drawn {
                         tally
                             .lines
-                            .push(trust_line(surreal, project_id, "draw", cents).await?);
+                            .push(trust_line(application_store, project_id, "draw", cents).await?);
                     }
                 }
                 WithdrawalOutcome::Refused(reason) => {
@@ -256,12 +256,15 @@ async fn mirror_trust_movements(
             continue;
         }
         let Some(project_id) =
-            store::xero_invoices::resolve_project_scope(surreal, &transaction.reference).await?
+            store::xero_invoices::resolve_project_scope(application_store, &transaction.reference)
+                .await?
         else {
             tally.unscoped += 1;
             continue;
         };
-        let Some(account) = store::iolta_accounts::for_project(surreal, project_id).await? else {
+        let Some(account) =
+            store::iolta_accounts::for_project(application_store, project_id).await?
+        else {
             tally.unscoped += 1;
             continue;
         };
@@ -285,7 +288,7 @@ async fn mirror_trust_movements(
         }
         .with_external_ref(transaction.transaction_id.clone());
 
-        match store::trust::record_project_movement(surreal, project_id, &movement)
+        match store::trust::record_project_movement(application_store, project_id, &movement)
             .await
             .map_err(anyhow::Error::msg)?
         {
@@ -300,9 +303,15 @@ async fn mirror_trust_movements(
                         "refund"
                     }
                 };
-                tally
-                    .lines
-                    .push(trust_line(surreal, project_id, kind, transaction.amount_cents).await?);
+                tally.lines.push(
+                    trust_line(
+                        application_store,
+                        project_id,
+                        kind,
+                        transaction.amount_cents,
+                    )
+                    .await?,
+                );
             }
             // Already on the ledger from an earlier night, or the matter has
             // no notation to anchor a posting to. Neither is a new fact.
@@ -320,12 +329,12 @@ async fn mirror_trust_movements(
 /// matter whose row has gone reads as `unknown`, so a report line is never
 /// dropped silently.
 async fn trust_line(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: uuid::Uuid,
     kind: &str,
     cents: i64,
 ) -> anyhow::Result<TrustLine> {
-    let project_code = store::projects::find_by_id(surreal, project_id)
+    let project_code = store::projects::find_by_id(application_store, project_id)
         .await?
         .map_or_else(|| "unknown".to_string(), |project| project.code);
     Ok(TrustLine {
@@ -357,7 +366,7 @@ fn format_cents(cents: i64) -> String {
 /// every other state's balance from refreshing.
 async fn mirror_iolta_accounts(
     provider: &dyn BillingProvider,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
 ) -> anyhow::Result<(usize, usize)> {
     let listed = provider.list_bank_accounts().await?;
     let mirrored_at = chrono::Utc::now();
@@ -365,7 +374,8 @@ async fn mirror_iolta_accounts(
     let mut unscoped = 0;
     for account in listed {
         let Some(jurisdiction_id) =
-            store::iolta_accounts::resolve_jurisdiction_scope(surreal, &account.name).await?
+            store::iolta_accounts::resolve_jurisdiction_scope(application_store, &account.name)
+                .await?
         else {
             unscoped += 1;
             continue;
@@ -379,7 +389,7 @@ async fn mirror_iolta_accounts(
             balance_cents: account.balance_cents,
             mirrored_at,
         };
-        match store::iolta_accounts::upsert(surreal, &upsert).await {
+        match store::iolta_accounts::upsert(application_store, &upsert).await {
             Ok(_) => mirrored += 1,
             Err(store::iolta_accounts::IoltaAccountError::JurisdictionTaken { .. }) => {
                 unscoped += 1;
@@ -484,7 +494,7 @@ fn skip_listed_status(status: &str) -> bool {
 
 async fn ingest_listed(
     provider: &dyn BillingProvider,
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
 ) -> anyhow::Result<(usize, usize)> {
     let listed = provider.list_receivable_invoices().await?;
     let mut ingested = 0;
@@ -494,13 +504,14 @@ async fn ingest_listed(
             continue;
         }
         let Some(project_id) =
-            store::xero_invoices::resolve_project_scope(surreal, &invoice.reference).await?
+            store::xero_invoices::resolve_project_scope(application_store, &invoice.reference)
+                .await?
         else {
             unscoped += 1;
             continue;
         };
         store::xero_invoices::upsert(
-            surreal,
+            application_store,
             &store::xero_invoices::UpsertXeroInvoice {
                 project_id,
                 xero_invoice_id: invoice.invoice_id.clone(),
@@ -514,7 +525,7 @@ async fn ingest_listed(
         )
         .await?;
         store::xero_invoices::record_reconcile(
-            surreal,
+            application_store,
             &invoice.invoice_id,
             &invoice.status,
             invoice.amount_paid_cents,
@@ -527,274 +538,6 @@ async fn ingest_listed(
 
 #[cfg(test)]
 mod tests {
-    use super::reconcile_once;
-    use billing::{
-        InvoiceStatus, ReceivableInvoice, StubBillingProvider, TrustBankAccount,
-        TrustBankTransaction,
-    };
-    use chrono::{TimeZone, Utc};
-
-    async fn seed_mirror(
-        surreal: &store::surreal::SurrealDb,
-        project_id: uuid::Uuid,
-        name: &str,
-        xero_id: &str,
-    ) {
-        store::xero_invoices::upsert(
-            surreal,
-            &store::xero_invoices::UpsertXeroInvoice {
-                project_id,
-                xero_invoice_id: xero_id.into(),
-                reference: format!("Matter {name}"),
-                status: "AUTHORISED".into(),
-                amount_cents: 333_300,
-                currency: "USD".into(),
-                issued_at: chrono::Utc::now(),
-                due_at: None,
-            },
-        )
-        .await
-        .unwrap();
-    }
-
-    async fn seed_project_with_code(surreal: &store::surreal::SurrealDb, code: &str) -> uuid::Uuid {
-        let entity_id = store::test_support::seed_entity(surreal).await;
-        store::projects::create(
-            surreal,
-            &store::projects::NewProject {
-                code: code.to_string(),
-                name: code.to_string(),
-                status: "open".to_string(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    fn listed(
-        invoice_id: &str,
-        reference: String,
-        status: &str,
-        amount_cents: i64,
-        amount_paid_cents: i64,
-    ) -> ReceivableInvoice {
-        ReceivableInvoice {
-            invoice_id: invoice_id.into(),
-            reference,
-            status: status.into(),
-            amount_cents,
-            amount_paid_cents,
-            currency: "USD".into(),
-            issued_at: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
-            due_at: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn reconcile_marks_paid_invoices_and_counts_changes() {
-        let surreal = store::surreal::test_support::mem().await;
-        let project_id = uuid::Uuid::now_v7();
-        seed_mirror(&surreal, project_id, "sample-matter", "inv-1").await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_invoice_status(
-            "inv-1",
-            InvoiceStatus {
-                status: "PAID".into(),
-                amount_paid_cents: 333_300,
-                amount_cents: None,
-                currency: None,
-                issued_at: None,
-                due_at: None,
-            },
-        );
-
-        let report = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(report.checked, 1);
-        assert_eq!(report.updated, 1);
-
-        let rows = store::xero_invoices::for_projects(&surreal, &[project_id])
-            .await
-            .unwrap();
-        assert_eq!(rows[0].status, "PAID");
-        assert_eq!(rows[0].amount_paid_cents, 333_300);
-    }
-
-    #[tokio::test]
-    async fn reconcile_is_a_noop_when_nothing_changed() {
-        let surreal = store::surreal::test_support::mem().await;
-        seed_mirror(&surreal, uuid::Uuid::now_v7(), "still-open", "inv-2").await;
-        // Stub default for an unknown id is AUTHORISED / 0 — same as seeded.
-        let stub = StubBillingProvider::new();
-        let report = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(report.checked, 1);
-        assert_eq!(
-            report.updated, 0,
-            "no status/paid change → no update counted"
-        );
-    }
-
-    /// ENG-588: a matter can carry more than one invoice, and reconcile must
-    /// re-check and fold a result onto each independently — settling one
-    /// must not touch the other.
-    #[tokio::test]
-    async fn reconcile_updates_both_invoices_on_a_two_invoice_matter() {
-        let surreal = store::surreal::test_support::mem().await;
-        let project_id = uuid::Uuid::now_v7();
-        seed_mirror(&surreal, project_id, "two-invoice-matter", "inv-a").await;
-        seed_mirror(&surreal, project_id, "two-invoice-matter", "inv-b").await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_invoice_status(
-            "inv-a",
-            InvoiceStatus {
-                status: "PAID".into(),
-                amount_paid_cents: 333_300,
-                amount_cents: None,
-                currency: None,
-                issued_at: None,
-                due_at: None,
-            },
-        );
-        stub.set_invoice_status(
-            "inv-b",
-            InvoiceStatus {
-                status: "VOIDED".into(),
-                amount_paid_cents: 0,
-                amount_cents: None,
-                currency: None,
-                issued_at: None,
-                due_at: None,
-            },
-        );
-
-        let report = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(report.checked, 2, "both invoices on the matter are checked");
-        assert_eq!(report.updated, 2, "both invoices changed");
-
-        let rows = store::xero_invoices::for_projects(&surreal, &[project_id])
-            .await
-            .unwrap();
-        assert_eq!(rows.len(), 2);
-        let a = rows.iter().find(|r| r.xero_invoice_id == "inv-a").unwrap();
-        let b = rows.iter().find(|r| r.xero_invoice_id == "inv-b").unwrap();
-        assert_eq!(a.status, "PAID");
-        assert_eq!(a.amount_paid_cents, 333_300);
-        assert_eq!(b.status, "VOIDED");
-        assert_eq!(b.amount_paid_cents, 0);
-    }
-
-    #[tokio::test]
-    async fn ingest_mirrors_by_project_uuid_and_code() {
-        let surreal = store::surreal::test_support::mem().await;
-        let by_uuid = seed_project_with_code(&surreal, "ingest-by-uuid").await;
-        let by_code = seed_project_with_code(&surreal, "ingest-by-code").await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_listed_invoices(vec![
-            listed(
-                "inv-uuid",
-                format!("Matter {by_uuid}"),
-                "AUTHORISED",
-                10_000,
-                0,
-            ),
-            listed(
-                "inv-code",
-                "Matter ingest-by-code".into(),
-                "PAID",
-                20_000,
-                20_000,
-            ),
-        ]);
-
-        let report = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(report.ingested, 2);
-        assert_eq!(report.unscoped, 0);
-
-        let uuid_rows = store::xero_invoices::for_projects(&surreal, &[by_uuid])
-            .await
-            .unwrap();
-        assert_eq!(uuid_rows.len(), 1);
-        assert_eq!(uuid_rows[0].xero_invoice_id, "inv-uuid");
-
-        let code_rows = store::xero_invoices::for_projects(&surreal, &[by_code])
-            .await
-            .unwrap();
-        assert_eq!(code_rows.len(), 1);
-        assert_eq!(code_rows[0].status, "PAID");
-        assert_eq!(code_rows[0].amount_paid_cents, 20_000);
-    }
-
-    #[tokio::test]
-    async fn ingest_skips_unscoped_and_draft_and_is_idempotent() {
-        let surreal = store::surreal::test_support::mem().await;
-        let project_id = seed_project_with_code(&surreal, "ingest-scoped").await;
-        let other = seed_project_with_code(&surreal, "ingest-other").await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_listed_invoices(vec![
-            listed(
-                "inv-ok",
-                format!("Matter {project_id}"),
-                "AUTHORISED",
-                10_000,
-                0,
-            ),
-            listed(
-                "inv-second",
-                format!("Matter {project_id}"),
-                "AUTHORISED",
-                15_000,
-                0,
-            ),
-            listed(
-                "inv-missing",
-                "Matter no-such-matter".into(),
-                "AUTHORISED",
-                1,
-                0,
-            ),
-            listed("inv-blank", "Invoice 99".into(), "AUTHORISED", 1, 0),
-            listed(
-                "inv-draft",
-                format!("Matter {project_id}"),
-                "DRAFT",
-                9_000,
-                0,
-            ),
-            listed(
-                "inv-deleted",
-                format!("Matter {project_id}"),
-                "DELETED",
-                9_000,
-                0,
-            ),
-        ]);
-
-        let first = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(first.ingested, 2);
-        assert_eq!(first.unscoped, 2);
-
-        let second = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(second.ingested, 2, "a repeat updates in place");
-        assert_eq!(second.unscoped, 2);
-
-        let rows = store::xero_invoices::for_projects(&surreal, &[project_id])
-            .await
-            .unwrap();
-        assert_eq!(rows.len(), 2);
-        let ids: std::collections::BTreeSet<&str> =
-            rows.iter().map(|r| r.xero_invoice_id.as_str()).collect();
-        assert_eq!(ids, ["inv-ok", "inv-second"].into_iter().collect());
-        assert!(store::xero_invoices::for_projects(&surreal, &[other])
-            .await
-            .unwrap()
-            .is_empty());
-    }
 
     /// The report a nightly run hands `finance_message`, with only the
     /// fields a given assertion cares about set.
@@ -908,315 +651,5 @@ mod tests {
             !production.contains("staging"),
             "the body must not carry a staging parenthetical; the adapter marks staging"
         );
-    }
-
-    async fn seed_state(surreal: &store::surreal::SurrealDb, name: &str, code: &str) -> uuid::Uuid {
-        store::jurisdictions::create(
-            surreal,
-            &store::jurisdictions::NewJurisdiction::new(name, code, "state"),
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    fn bank(account_id: &str, name: &str, balance_cents: i64) -> TrustBankAccount {
-        TrustBankAccount {
-            account_id: account_id.into(),
-            code: Some("090".into()),
-            name: name.into(),
-            currency: "USD".into(),
-            balance_cents,
-        }
-    }
-
-    /// ENG-801: two states are two mirrored pooled accounts, and the firm's
-    /// own accounts — listed by the same Xero read — are counted as unscoped
-    /// rather than turned into a trust pool.
-    #[tokio::test]
-    async fn the_nightly_run_mirrors_one_pooled_account_per_state() {
-        let surreal = store::surreal::test_support::mem().await;
-        let nevada = seed_state(&surreal, "Nevada", "NV").await;
-        let california = seed_state(&surreal, "California", "CA").await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_listed_bank_accounts(vec![
-            bank("xero-nv", "IOLTA NV — Trust", 1_250_000),
-            bank("xero-ca", "IOLTA CA — Trust", 400_000),
-            bank("xero-op", "Business Checking", 9_000_000),
-        ]);
-
-        let report = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(report.iolta_accounts, 2);
-        assert_eq!(report.iolta_unscoped, 1, "the operating account is skipped");
-
-        let nv = store::iolta_accounts::for_jurisdiction(&surreal, nevada)
-            .await
-            .unwrap()
-            .expect("Nevada is mirrored");
-        assert_eq!(nv.xero_account_id, "xero-nv");
-        assert_eq!(nv.balance_cents, 1_250_000);
-        assert!(nv.mirrored_at.is_some(), "the read stamps when it happened");
-        assert_eq!(
-            store::iolta_accounts::for_jurisdiction(&surreal, california)
-                .await
-                .unwrap()
-                .map(|a| a.balance_cents),
-            Some(400_000)
-        );
-    }
-
-    /// A second Xero account claiming a state that already has one is
-    /// reported, not applied — and it does not stop the other states in the
-    /// same run from refreshing.
-    #[tokio::test]
-    async fn a_duplicate_state_account_is_counted_and_the_run_continues() {
-        let surreal = store::surreal::test_support::mem().await;
-        let nevada = seed_state(&surreal, "Nevada", "NV").await;
-        seed_state(&surreal, "California", "CA").await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_listed_bank_accounts(vec![
-            bank("xero-nv", "IOLTA NV — Trust", 1_000_000),
-            bank("xero-nv-2", "IOLTA NV — Second", 7),
-            bank("xero-ca", "IOLTA CA — Trust", 500_000),
-        ]);
-
-        let report = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(report.iolta_accounts, 2, "NV once, CA once");
-        assert_eq!(report.iolta_unscoped, 1, "the second NV account is refused");
-        assert_eq!(
-            store::iolta_accounts::for_jurisdiction(&surreal, nevada)
-                .await
-                .unwrap()
-                .map(|a| a.xero_account_id),
-            Some("xero-nv".to_string()),
-            "the incumbent is not replaced"
-        );
-    }
-
-    /// A matter seeded with a notation (so trust postings have an anchor)
-    /// and a governing jurisdiction (so they have a pooled account).
-    async fn seed_matter_in(
-        surreal: &store::surreal::SurrealDb,
-        jurisdiction_id: uuid::Uuid,
-    ) -> uuid::Uuid {
-        let notation_id = store::test_support::seed_notation(surreal).await;
-        let project_id = store::notations::find_by_id(surreal, notation_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .project_id;
-        store::projects::set_jurisdiction(surreal, project_id, Some(jurisdiction_id))
-            .await
-            .unwrap();
-        project_id
-    }
-
-    fn receipt(
-        transaction_id: &str,
-        account_id: &str,
-        reference: String,
-        amount_cents: i64,
-    ) -> TrustBankTransaction {
-        TrustBankTransaction {
-            transaction_id: transaction_id.into(),
-            kind: billing::TrustTransactionKind::Receive,
-            account_id: account_id.into(),
-            reference,
-            amount_cents,
-            currency: "USD".into(),
-            occurred_at: Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap(),
-            line_items: Vec::new(),
-        }
-    }
-
-    /// ENG-802: a Xero deposit tagged to a matter raises that matter's
-    /// deposited and held balance, and leaves every other matter alone.
-    #[tokio::test]
-    async fn a_mirrored_deposit_raises_one_matters_held_balance() {
-        let surreal = store::surreal::test_support::mem().await;
-        let nevada = seed_state(&surreal, "Nevada", "NV").await;
-        let first = seed_matter_in(&surreal, nevada).await;
-        let second = seed_matter_in(&surreal, nevada).await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_listed_bank_accounts(vec![bank("xero-nv", "IOLTA NV — Trust", 900_000)]);
-        stub.set_listed_trust_transactions(vec![receipt(
-            "bt-1",
-            "xero-nv",
-            format!("Matter {first}"),
-            500_000,
-        )]);
-
-        let report = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(report.trust_deposits, 1);
-        assert_eq!(report.trust_unscoped, 0);
-
-        let held = store::trust::position_for_project(&surreal, first)
-            .await
-            .unwrap();
-        assert_eq!(held.deposited_cents, 500_000);
-        assert_eq!(held.held_cents(), 500_000);
-        assert_eq!(
-            store::trust::position_for_project(&surreal, second)
-                .await
-                .unwrap(),
-            store::trust::Position::default(),
-            "the other matter on the same pooled account is untouched"
-        );
-    }
-
-    /// The same night, re-run, posts nothing: the Xero transaction id is the
-    /// idempotency key.
-    #[tokio::test]
-    async fn re_running_the_trust_mirror_does_not_double_count() {
-        let surreal = store::surreal::test_support::mem().await;
-        let nevada = seed_state(&surreal, "Nevada", "NV").await;
-        let project_id = seed_matter_in(&surreal, nevada).await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_listed_bank_accounts(vec![bank("xero-nv", "IOLTA NV — Trust", 900_000)]);
-        stub.set_listed_trust_transactions(vec![receipt(
-            "bt-1",
-            "xero-nv",
-            format!("Matter {project_id}"),
-            250_000,
-        )]);
-
-        reconcile_once(&stub, &surreal).await.unwrap();
-        let second = reconcile_once(&stub, &surreal).await.unwrap();
-
-        assert_eq!(second.trust_deposits, 0, "already mirrored, nothing new");
-        assert_eq!(
-            store::trust::position_for_project(&surreal, project_id)
-                .await
-                .unwrap()
-                .deposited_cents,
-            250_000
-        );
-    }
-
-    /// Three ways a deposit fails to hold together, each counted rather than
-    /// posted somewhere plausible: no matter reference, a matter with no
-    /// pooled account, and money that moved through another state's account.
-    #[tokio::test]
-    async fn a_deposit_that_does_not_hold_together_is_counted_not_posted() {
-        let surreal = store::surreal::test_support::mem().await;
-        let nevada = seed_state(&surreal, "Nevada", "NV").await;
-        let california = seed_state(&surreal, "California", "CA").await;
-        let nv_matter = seed_matter_in(&surreal, nevada).await;
-        let ca_matter = seed_matter_in(&surreal, california).await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_listed_bank_accounts(vec![bank("xero-nv", "IOLTA NV — Trust", 900_000)]);
-        stub.set_listed_trust_transactions(vec![
-            receipt("bt-1", "xero-nv", "Deposit, thanks".into(), 100_000),
-            receipt("bt-2", "xero-nv", format!("Matter {ca_matter}"), 100_000),
-            receipt("bt-3", "xero-ca", format!("Matter {nv_matter}"), 100_000),
-        ]);
-
-        let report = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(report.trust_deposits, 0);
-        assert_eq!(report.trust_unscoped, 3);
-        assert_eq!(
-            store::trust::position_for_project(&surreal, nv_matter)
-                .await
-                .unwrap(),
-            store::trust::Position::default(),
-            "a Nevada matter is not credited from the California account"
-        );
-        assert_eq!(
-            store::trust::position_for_project(&surreal, ca_matter)
-                .await
-                .unwrap(),
-            store::trust::Position::default(),
-            "California has no mirrored pooled account, so nothing posts"
-        );
-    }
-
-    /// Money out of the pooled account that names no invoice is a refund of
-    /// unearned funds; one that settles invoices is the pooled withdrawal,
-    /// and a withdrawal naming an invoice the mirror does not carry is
-    /// refused whole rather than posted against a guessed matter.
-    #[tokio::test]
-    async fn a_refund_posts_and_an_unmirrored_withdrawal_is_refused() {
-        let surreal = store::surreal::test_support::mem().await;
-        let nevada = seed_state(&surreal, "Nevada", "NV").await;
-        let project_id = seed_matter_in(&surreal, nevada).await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_listed_bank_accounts(vec![bank("xero-nv", "IOLTA NV — Trust", 900_000)]);
-        stub.set_listed_trust_transactions(vec![
-            receipt("bt-1", "xero-nv", format!("Matter {project_id}"), 500_000),
-            TrustBankTransaction {
-                transaction_id: "bt-2".into(),
-                kind: billing::TrustTransactionKind::Spend,
-                account_id: "xero-nv".into(),
-                reference: format!("Matter {project_id}"),
-                amount_cents: 120_000,
-                currency: "USD".into(),
-                occurred_at: Utc.with_ymd_and_hms(2026, 9, 10, 0, 0, 0).unwrap(),
-                line_items: vec![billing::TrustTransactionLine {
-                    description: "Unearned balance returned".into(),
-                    amount_cents: 120_000,
-                    invoice_reference: None,
-                }],
-            },
-            TrustBankTransaction {
-                transaction_id: "bt-3".into(),
-                kind: billing::TrustTransactionKind::Spend,
-                account_id: "xero-nv".into(),
-                reference: "Fees earned, September".into(),
-                amount_cents: 80_000,
-                currency: "USD".into(),
-                occurred_at: Utc.with_ymd_and_hms(2026, 9, 30, 0, 0, 0).unwrap(),
-                line_items: vec![billing::TrustTransactionLine {
-                    description: "September fees".into(),
-                    amount_cents: 80_000,
-                    invoice_reference: Some("INV-001".into()),
-                }],
-            },
-        ]);
-
-        let report = reconcile_once(&stub, &surreal).await.unwrap();
-        assert_eq!(report.trust_deposits, 1);
-        assert_eq!(report.trust_refunds, 1);
-        assert_eq!(
-            report.iolta_withdrawals_refused, 1,
-            "INV-001 is not mirrored, so the withdrawal explains nothing"
-        );
-        assert_eq!(report.iolta_withdrawals, 0);
-
-        let position = store::trust::position_for_project(&surreal, project_id)
-            .await
-            .unwrap();
-        assert_eq!(position.deposited_cents, 500_000);
-        assert_eq!(position.refunded_cents, 120_000);
-        assert_eq!(
-            position.earned_cents, 0,
-            "a refused withdrawal posts no draw"
-        );
-        assert_eq!(position.held_cents(), 380_000);
-    }
-
-    /// A second night refreshes the balance in place rather than adding a
-    /// second master balance for the same state.
-    #[tokio::test]
-    async fn re_running_the_mirror_refreshes_rather_than_duplicates() {
-        let surreal = store::surreal::test_support::mem().await;
-        seed_state(&surreal, "Nevada", "NV").await;
-
-        let stub = StubBillingProvider::new();
-        stub.set_listed_bank_accounts(vec![bank("xero-nv", "IOLTA NV — Trust", 100_000)]);
-        reconcile_once(&stub, &surreal).await.unwrap();
-
-        stub.set_listed_bank_accounts(vec![bank("xero-nv", "IOLTA NV — Trust", 250_000)]);
-        let second = reconcile_once(&stub, &surreal).await.unwrap();
-
-        assert_eq!(second.iolta_accounts, 1);
-        let accounts = store::iolta_accounts::all(&surreal).await.unwrap();
-        assert_eq!(accounts.len(), 1);
-        assert_eq!(accounts[0].balance_cents, 250_000);
     }
 }

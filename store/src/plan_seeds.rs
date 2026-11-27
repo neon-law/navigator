@@ -14,10 +14,9 @@ use chrono::NaiveDate;
 use serde_yaml::Value;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::firms::FirmError;
 use crate::postgres::PostgresDb;
-use crate::postgres_mirror::{self, MirrorError, MirrorKey};
-use crate::surreal::SurrealDb;
 
 const LEGAL_PLAN_YAML: &str = include_str!("../seeds/LegalPlan.yaml");
 const PLAN_FEE_SCHEDULE_YAML: &str = include_str!("../seeds/PlanFeeSchedule.yaml");
@@ -32,8 +31,6 @@ pub enum PlanSeedError {
     Firm(#[from] FirmError),
     #[error("PostgreSQL is unavailable for the Plan-panel seed")]
     PostgresUnavailable,
-    #[error("the anchor Firm row could not be mirrored into PostgreSQL")]
-    Mirror(#[from] MirrorError),
     #[error("PostgreSQL refused the seed row")]
     Postgres(#[from] sqlx::Error),
 }
@@ -51,17 +48,13 @@ pub enum PlanSeedError {
 ///
 /// [`PlanSeedError`] when the seed YAML is malformed, the anchor Firm
 /// cannot be read, or PostgreSQL refuses a seed row.
-pub async fn seed_quickstart(surreal: &SurrealDb) -> Result<(), PlanSeedError> {
-    if !postgres_mirror::enabled() {
-        return Ok(());
-    }
-    let Some(firm) = crate::firms::anchor_firm(surreal).await? else {
+pub async fn seed_quickstart(application_store: &ApplicationStore) -> Result<(), PlanSeedError> {
+    let Some(firm) = crate::firms::anchor_firm(application_store).await? else {
         return Ok(());
     };
     let pg = PostgresDb::application()
         .await
         .map_err(|_| PlanSeedError::PostgresUnavailable)?;
-    postgres_mirror::mirror(surreal, &pg, &MirrorKey::Firm(firm.id)).await?;
     seed_stage_definitions(&pg, firm.id).await?;
     let plans = seed_legal_plans(&pg, firm.id).await?;
     seed_fee_schedules(&pg, firm.id, &plans).await?;
@@ -215,7 +208,7 @@ async fn seed_fee_schedules(
 #[cfg(test)]
 mod tests {
     use super::{seed_fee_schedules, seed_legal_plans, seed_stage_definitions};
-    use crate::postgres_mirror::tests::{connect, fresh_schema};
+    use crate::postgres::fixtures::{connect, fresh_schema};
     use sqlx::Row;
     use uuid::Uuid;
 

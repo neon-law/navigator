@@ -394,9 +394,9 @@ For a prefix `<name>`, set `NAVIGATOR_GKE_CLUSTER_NAME=<name>`, `NAVIGATOR_GKE_C
 `NAVIGATOR_WEB_SECRET_NAME=<name>-web-secrets`. Bucket names are global; choose an available name under your
 organization's naming convention.
 
-Also set `NAVIGATOR_GCP_PROJECT_ID`, `NAVIGATOR_GCP_LOCATION`, `NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_HOST`,
-`NAV_BASE_URL=https://$NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_URL=https://$NAVIGATOR_WORKFLOWS_HOST/`,
-`NAVIGATOR_WEB_IMAGE`, and `NAVIGATOR_ASSET_BASE_URL=$NAV_BASE_URL/assets` in that row's
+Also set `NAVIGATOR_GCP_PROJECT_ID`, `NAVIGATOR_GCP_LOCATION`, `NAVIGATOR_PUBLIC_HOST`,
+`NAV_BASE_URL=https://$NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WEB_IMAGE`, and
+`NAVIGATOR_ASSET_BASE_URL=$NAV_BASE_URL/assets` in that row's
 `$NAVIGATOR_DEPLOYMENTS_DIR/deployments/<row>/config.toml`. Set that row's own `NAVIGATOR_POSTGRES_*` and
 `NAVIGATOR_DBOS_*` coordinates and credentials in its encrypted `secrets.enc.yaml`.
 
@@ -1067,55 +1067,33 @@ Before shipping, read the selected row's config and inspect the rendered environ
 Check the staging hostname with a synthetic account, then confirm the regular homepage on the other row. Keep sample
 data, credentials, and release automation separate when reasoning about a deployment.
 
-### Workflow host and routing switches
+### Optional DBOS workflows
+
+The web application hosts DBOS and its authenticated ingress. These switches enable optional capabilities.
 
 | Switch | What the operator controls |
 | --- | --- |
-| `NAVIGATOR_WORKFLOW_ENGINE` | Set `dbos` for the workflow host. |
-| `NAVIGATOR_WORKFLOWS_IN_WEB` | Set `true` to host application and workflow listeners in one container. |
-| `NAVIGATOR_DBOS_ENABLED` | Hosts the DBOS executor in web. Requires a separate DBOS database login. |
-| `NAVIGATOR_DBOS_ARCHIVES_ENABLED` | Selects DBOS for the archive schedule. |
-| `NAVIGATOR_DBOS_BILLING_CANARY_ENABLED` | Registers the weekly billing canary in the enabled DBOS host. |
-| `NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED` | Runs the billing digest through DBOS. |
 | `NAVIGATOR_DBOS_DEADLINE_MIRROR_ENABLED` | Registers the DBOS deadline mirror in web. |
-| `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED` | Moves the DRI digest schedule to DBOS. |
-| `NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED` | Selects DBOS for the durable email summary workflow. |
-| `NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED` | Routes finance aggregate work to the DBOS worker. |
-| `NAVIGATOR_DBOS_GENERAL_NAG_ENABLED` | Moves the General Nag schedule to DBOS. |
-| `NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED` | Selects DBOS for inbound message alerts. |
-| `NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED` | Selects DBOS for nightly project updates. |
-| `NAVIGATOR_DBOS_NOTATION_ENABLED` | Routes notation work to the DBOS worker. |
-| `NAVIGATOR_DBOS_NOTATION_RESET_ENABLED` | Moves the notation reset schedule to DBOS. |
 | `NAVIGATOR_DBOS_PROJECT_RECOVERY_ENABLED` | Registers project recovery in web. |
-| `NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED` | Selects DBOS for Project Slack work. Requires the Slack bot. |
 | `NAVIGATOR_DBOS_PURCHASE_ACTIVATION_ENABLED` | Registers purchase activation in web. |
-| `NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED` | Selects DBOS for invoice reconciliation. |
 | `NAVIGATOR_DBOS_RETENTION_PURGE_ENABLED` | Registers the retention purge in web. Requires Firm authority config. |
-| `NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED` | Routes the sandbox credit reset trigger to DBOS ingress. |
 | `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED` | Registers the sent email export in web. |
-| `NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED` | Registers the publisher in the DBOS worker. |
-| `NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED` | Registers the reconciler. Enable the publisher first. |
 | `NAVIGATOR_DBOS_SOURCE_IMPORT_ENABLED` | Registers source import in web. |
 
-DBOS switches opt in with `true` and default off. Use `false` to turn them off. Set the executor or worker selector and
-the workflow switch together with the credentials its host needs.
-
-Project Calendar membership runs on the DBOS web host for Firms with a Google Workspace calendar owner in Firm Settings.
-
-See the [DBOS runbook](../../../../docs/dbos-durability.md) for schedule ownership, prerequisites, and rollback.
+Project Calendar membership runs for Firms with a Google Workspace calendar owner in Firm Settings. See the [DBOS
+runbook](../../../../docs/dbos-durability.md) for schedule ownership and recovery.
 
 ---
 
-A trigger and an executor can read the same switch in different processes. Compare their rendered settings before
-rolling a workflow over. Verify that one scheduler owns each job and inspect the next expected run in that engine. For a
-rollback, follow the workflow's runbook so the old scheduler resumes without a duplicate run.
+Verify each enabled capability's credentials and schedule before rollout. For example, Sent Email Export needs a
+writable export bucket, and Project Calendar membership needs a configured calendar owner.
 
 ### Capability and storage switches
 
 | Switch | What the operator controls |
 | --- | --- |
 | `OIDC_DISABLED` | `true` or `1` bypasses bearer verification. Deployment validation rejects both values. |
-| `NAVIGATOR_SUMMARY_ENABLED` | Enables the durable summary lane independently of its engine. |
+| `NAVIGATOR_SUMMARY_ENABLED` | Enables durable email summaries. |
 | `NAVIGATOR_TRIAGE_ENABLED` | Enables configured inbound triage providers. Unset leaves rules-only triage. |
 | `NAVIGATOR_GITHUB_AUTOMATION_HOME` | Grants the deployment the GitHub automation receiver and worker bindings. |
 
@@ -1156,6 +1134,7 @@ development with no `.env`; add only the sandbox values you actually intend to o
 | Identity port | `NAVIGATOR_KIND_RAUTHY_PORT` | `30080` |
 | Storage port | `NAVIGATOR_KIND_SEAWEEDFS_S3_PORT` | `30900` |
 | Web port | `NAVIGATOR_KIND_WEB_PORT` | `3001` |
+| PostgreSQL host port | `NAVIGATOR_KIND_POSTGRES_PORT` | `15432` |
 | `delete-your-data` web port | `NAVIGATOR_LOCAL_DELETE_YOUR_DATA_PORT` | `3011`; bound alongside `PORT` |
 | Observability | `NAVIGATOR_KIND_OPENOBSERVE_PORT`, `NAVIGATOR_KIND_OPENOBSERVE_OTLP_PORT` | `5080`, `5081` |
 | Documents key | `NAVIGATOR_SEAWEEDFS_ACCESS_KEY` | runtime-generated lane key |
@@ -1200,7 +1179,6 @@ overrides. Keep generated credentials out of source control.
 | Storage buckets | `NAVIGATOR_STORAGE_BUCKET`, `NAVIGATOR_ASSETS_BUCKET`, `NAVIGATOR_LFS_BUCKET` |
 | Applications bucket | `NAVIGATOR_APPLICATIONS_BUCKET` |
 | Iceberg-archive bucket | `NAVIGATOR_ARCHIVES_BUCKET` |
-| Archive source (`postgres` by default) | `NAVIGATOR_ARCHIVE_SOURCE` |
 | Cloud-only archive buckets (`ops gcp setup`, not locally generated) | `NAVIGATOR_TELEMETRY_BUCKET` |
 | Storage region | `NAVIGATOR_STORAGE_REGION` |
 | Documents credentials | `NAVIGATOR_STORAGE_ACCESS_KEY`, `NAVIGATOR_STORAGE_SECRET_KEY` |
@@ -1289,7 +1267,6 @@ checks through their authorized accessor without widening the caller's ordinary 
 | Iceberg-archive bucket | `NAVIGATOR_ARCHIVES_BUCKET` |
 | Iceberg-archive S3 key | `NAVIGATOR_ARCHIVES_ACCESS_KEY`, `NAVIGATOR_ARCHIVES_SECRET_KEY` |
 | Sessions | `SESSION_SECRET` |
-| Worker listener | `WORKFLOWS_SERVICE_LISTEN` |
 | Telemetry and log filtering | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `RUST_LOG` |
 | Image-baked release identity | `NAVIGATOR_RELEASE_TAG`, `NAVIGATOR_GIT_SHA`, `NAVIGATOR_BUILD_TIME` |
 
@@ -1515,9 +1492,8 @@ concurrency and token budgets bounded, and keep credentials and matter content o
 | Manifest source | `NAVIGATOR_GKE_OVERLAY` |
 | Public OAuth clients | `NAVIGATOR_OAUTH_CLIENT_ID_BROWSER` (required) |
 | Brand and base URL | `NAVIGATOR_CUSTOM_BRANDING`, `NAVIGATOR_PRIMARY_DOMAIN`, `NAV_BASE_URL` |
-| Public hosts | `NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_HOST`, `GOOGLE_OAUTH_REQUIRED_HD` |
+| Public hosts | `NAVIGATOR_PUBLIC_HOST`, `GOOGLE_OAUTH_REQUIRED_HD` |
 | Runtime Secret | `NAVIGATOR_WEB_SECRET_NAME` |
-| Worker registration | `NAVIGATOR_WORKFLOWS_URL` |
 
 ---
 
@@ -1812,21 +1788,13 @@ before generating a bill, and verify the provider's actual result rather than in
 
 ### One application container with DBOS
 
-The application container serves the portal and the authenticated DBOS workflow listener. PostgreSQL with AGE and
-private object storage remain independent services.
-
-```text
-NAVIGATOR_WORKFLOWS_IN_WEB=true
-NAVIGATOR_DBOS_ENABLED=true
-NAVIGATOR_WORKFLOW_ENGINE=dbos
-```
+The application container serves the portal and the authenticated DBOS listener. PostgreSQL with AGE and private object
+storage remain independent services.
 
 ---
 
-Enable each workflow's DBOS switch and required credentials explicitly. Use a unique executor identity per concurrent
-pod. Register workflows before accepting starts, verify application-version compatibility, and reconcile pending runs
-before changing executor identities. Cohosting does not transfer ownership of work from another executor. Verify the
-selected release's combined-host cutover prerequisites before changing a live deployment; see `docs/dbos-durability.md`.
+Use a unique DBOS executor identity per concurrent pod. Verify application-version compatibility and finish or recover
+pending runs before changing executor identities. See the [DBOS runbook](../../../../docs/dbos-durability.md).
 
 ### Security architecture
 

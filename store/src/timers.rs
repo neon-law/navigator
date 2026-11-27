@@ -247,8 +247,8 @@ mod tests {
         use super::super::{
             discard_timer, running_for_person, start_timer, stop_timer, TimerError,
         };
+        use crate::postgres::fixtures::{connect, fresh_schema};
         use crate::postgres::PostgresDb;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
         use chrono::Utc;
         use sqlx::Row;
         use uuid::Uuid;

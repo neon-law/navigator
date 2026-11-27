@@ -52,13 +52,15 @@ pub fn quarantined() -> Result<()> {
 }
 
 async fn quarantined_async() -> Result<()> {
-    let surreal = crate::application_store()
+    let application_store = crate::application_store()
         .await
         .context("verify PostgreSQL application authority")?;
-    let deliveries =
-        store::email_deliveries::list_by_state(&surreal, store::email_deliveries::UNKNOWN)
-            .await
-            .context("list quarantined deliveries")?;
+    let deliveries = store::email_deliveries::list_by_state(
+        &application_store,
+        store::email_deliveries::UNKNOWN,
+    )
+    .await
+    .context("list quarantined deliveries")?;
     if deliveries.is_empty() {
         println!("no quarantined deliveries");
         return Ok(());
@@ -99,11 +101,11 @@ async fn reconcile_confirmed_async(
     channel_id: String,
     timestamp: String,
 ) -> Result<()> {
-    let surreal = crate::application_store()
+    let application_store = crate::application_store()
         .await
         .context("verify PostgreSQL application authority")?;
     let delivery = store::email_deliveries::reconcile_confirmed(
-        &surreal,
+        &application_store,
         receipt_id,
         &actor,
         &channel_id,
@@ -128,12 +130,13 @@ pub fn authorize_resend(receipt: Uuid, actor: String) -> Result<()> {
 }
 
 async fn authorize_resend_async(receipt_id: Uuid, actor: String) -> Result<()> {
-    let surreal = crate::application_store()
+    let application_store = crate::application_store()
         .await
         .context("verify PostgreSQL application authority")?;
-    let delivery = store::email_deliveries::authorize_resend(&surreal, receipt_id, &actor)
-        .await
-        .context("authorize the resend")?;
+    let delivery =
+        store::email_deliveries::authorize_resend(&application_store, receipt_id, &actor)
+            .await
+            .context("authorize the resend")?;
     println!("receipt={} state={}", delivery.receipt_id, delivery.state);
     Ok(())
 }

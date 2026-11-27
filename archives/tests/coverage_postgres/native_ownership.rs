@@ -178,10 +178,10 @@ async fn seed(pg: &PostgresDb) -> Domain {
         .await
         .unwrap();
     }
-    let source = store::surreal::SurrealDb::uninitialized();
+    let source = store::application_store::ApplicationStore::uninitialized();
     let receipt = PostgresDb::with_test_db(pg.clone(), async {
         let mailbox = format!("archive-{firm}@example.test");
-        store::projects::delete_project_with_surreal(&source, projects[0])
+        store::projects::delete_project(&source, projects[0])
             .await
             .unwrap();
         let receipt = store::email_receipts::ensure(

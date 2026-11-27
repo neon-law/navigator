@@ -18,7 +18,7 @@ use crate::session::SessionData;
 /// template Axum stores in request extensions for middleware and extractors:
 /// <https://docs.rs/axum/latest/axum/extract/struct.MatchedPath.html>.
 pub(crate) async fn log_project_visit(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -47,7 +47,8 @@ pub(crate) async fn log_project_visit(
     let Some(person_id) = session.person_id else {
         return response;
     };
-    let Ok(Some(project)) = store::projects::find_by_code(&surreal, &project_code).await else {
+    let Ok(Some(project)) = store::projects::find_by_code(&application_store, &project_code).await
+    else {
         return response;
     };
 

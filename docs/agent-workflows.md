@@ -1,7 +1,8 @@
 # Agent workflows
 
 Codebase work has five actions: **create an issue**, **triage an issue**, **create a PR**, **address a PR comment**, or
-**address a failed GitHub Action**. GitOps, validation, Restate authoring, and council review support those actions.
+**address a failed GitHub Action**. GitOps, validation, DBOS workflow authoring, and council review support those
+actions.
 
 Every action starts from the same evidence: [`glossary/`](glossary/README.md), the narrowest docs from
 [`index.md`](index.md), the current source and tests, and the complete issue or PR conversation. Choose the smallest
@@ -243,9 +244,8 @@ cargo run -p hudson -- dev worktree-env up --branch pr-<N>
 ```
 
 Continue in the printed checkout. Source its `.devx/env`, boot `web` as in
-[`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md), and restart the compiled process after a fix. Host `web`
-and the in-cluster worker share that worktree's database and Restate journal; use `--demo` only when published images
-are the subject.
+[`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md), and restart the compiled process after a fix. DBOS runs
+inside `web` and uses the worktree's PostgreSQL database. Use `--demo` only when published images are the subject.
 
 ### Read the requested thread in context
 
@@ -346,9 +346,9 @@ Treat a failed Action as a narrow task and start from its first actionable failu
    formatting, or unrelated warnings.
 5. When the failure exposes a behavior gap, add the non-gated covering test that would have caught it. Do not add a test
    merely to restate an infrastructure outage.
-6. Re-run the failed command and the directly affected gate. For a coverage failure, run `cargo llvm-cov --workspace
-   --fail-under-lines 92.0` and read its per-file table for the file that regressed; CI's `cargo test (workspace)` job
-   prints the same table, leaving out files that name SurrealDB. Opening a new PR does not re-run that suite.
+6. Re-run the failed command and the directly affected gate. The workspace job prints an expanded line coverage
+   report and enforces the 92.0% floor on its established scope. The surviving paths outside the required scope are in
+   `.github/coverage-baseline-exclusions.txt`. Both reports use the same completed test runs.
 7. Commit, push, and report the root cause, minimum fix, local proof, and any unrelated failing checks left untouched.
 
 `.github/workflows/ci.yml` owns PR commands; [`gitops.md`](gitops.md) maps release and integration workflows. Propose,
@@ -401,28 +401,19 @@ For a new matter type or workflow extension, prefer a template + questionnaire +
 3. Add new questions to `store/seeds/Question.yaml`.
 4. Compose the workflow from documented step prefixes in [`notation-authoring.md`](notation-authoring.md).
 5. Add reusable `StepKind` and dispatch code only when the existing step registry cannot express the work.
-6. Put every external or non-deterministic side effect behind Restate durability.
+6. Checkpoint external effects in DBOS and give each effect its existing delivery identity.
 7. Add tests in the same commit as the implementation.
 
-The Template declares; Restate runs.
+### DBOS workflow authoring
 
-### Restate handler authoring
-
-See [`durable-workflows.md`](durable-workflows.md). The replay-safety rule is:
-
-> Every non-deterministic act belongs inside `ctx.run(...).name("stable-name")`.
-
-This includes clocks, randomness, UUIDs, database writes, storage, network calls, and third-party APIs.
-
-Use terminal errors for invalid input that can never succeed later. Use retryable errors for infrastructure failures. Do
-not use native `tokio::spawn`, `join_all`, or channels for journaled steps inside a Restate handler; use Restate SDK
-sequencing/combinators or keep the steps sequential.
+Use DBOS steps for clocks, database operations, and external effects. Keep checkpoint IDs stable and use native delivery
+receipts when an external effect can repeat. See [DBOS durability](dbos-durability.md).
 
 ### GitOps and deploy
 
 Read [`gitops.md`](gitops.md), [`gke-prod.md`](gke-prod.md), and [`cloud-operations.md`](cloud-operations.md) before
-changing CI, releases, deploys, clusters, or production secrets. Roll `navigator-web` and `workflows-service` together;
-version skew is a production risk.
+changing CI, releases, deploys, clusters, or production secrets. Verify pending DBOS runs before replacing their
+application version.
 
 ### Resource cleanup
 

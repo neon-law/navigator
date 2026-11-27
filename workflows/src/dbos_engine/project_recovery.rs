@@ -81,7 +81,7 @@ pub trait RecoverySource: Send + Sync {
 /// The production source: SurrealDB, PostgreSQL, the documents lane, the
 /// private archived-projects lane, and the optional Git bundle lane.
 pub struct StoreRecoverySource {
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     pg: store::postgres::PostgresDb,
     documents: Arc<dyn cloud::StorageService>,
     archive: Arc<dyn cloud::StorageService>,
@@ -91,14 +91,14 @@ pub struct StoreRecoverySource {
 impl StoreRecoverySource {
     #[must_use]
     pub fn new(
-        surreal: store::surreal::SurrealDb,
+        application_store: store::application_store::ApplicationStore,
         pg: store::postgres::PostgresDb,
         documents: Arc<dyn cloud::StorageService>,
         archive: Arc<dyn cloud::StorageService>,
         source_backups: Option<Arc<dyn cloud::StorageService>>,
     ) -> Self {
         Self {
-            surreal,
+            application_store,
             pg,
             documents,
             archive,
@@ -120,7 +120,7 @@ impl RecoverySource for StoreRecoverySource {
 
     async fn advance(&self, generation_id: Uuid) -> Result<(), String> {
         let stores = store::project_archives::ArchiveStores {
-            surreal: &self.surreal,
+            application_store: &self.application_store,
             pg: &self.pg,
             documents: &self.documents,
             archive: &self.archive,
@@ -134,7 +134,7 @@ impl RecoverySource for StoreRecoverySource {
 
     async fn archive_soft_deleted(&self) -> Result<String, String> {
         let stores = store::document_retention::RetentionStores {
-            surreal: &self.surreal,
+            application_store: &self.application_store,
             pg: &self.pg,
             documents: &self.documents,
             archive: &self.archive,
@@ -156,7 +156,7 @@ impl RecoverySource for StoreRecoverySource {
     }
 
     async fn coverage(&self) -> Result<Option<CoverageSummary>, String> {
-        store::project_archives::coverage::report(&self.surreal, &self.pg, Utc::now())
+        store::project_archives::coverage::report(&self.application_store, &self.pg, Utc::now())
             .await
             .map(|report| Some(report.summary()))
             .map_err(|error| error.to_string())

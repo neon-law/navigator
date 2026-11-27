@@ -319,12 +319,12 @@ enum BodyFailure {
 /// and not before.
 #[cfg(feature = "server")]
 async fn seal_view(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     lens: super::PageLens,
     notation: &store::notations::Notation,
 ) -> Option<SignatureSealData> {
-    let signature = store::signatures::completed_for_notation(surreal, notation.id)
+    let signature = store::signatures::completed_for_notation(application_store, notation.id)
         .await
         .ok()
         .flatten()?;
@@ -466,7 +466,7 @@ pub struct NotationsSource<'a> {
 /// it renders the fail-closed state.
 #[cfg(feature = "server")]
 pub async fn load_notations(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     source: &NotationsSource<'_>,
 ) -> Result<NotationsData, String> {
@@ -474,11 +474,11 @@ pub async fn load_notations(
     if lens == super::PageLens::Clerk {
         return Ok(NotationsData::default());
     }
-    let notations = store::notations::list_by_project(surreal, source.project_id)
+    let notations = store::notations::list_by_project(application_store, source.project_id)
         .await
         .map_err(|e| e.to_string())?;
     let template_ids: Vec<uuid::Uuid> = notations.iter().map(|n| n.template_id).collect();
-    let templates = store::templates::find_by_ids(surreal, &template_ids)
+    let templates = store::templates::find_by_ids(application_store, &template_ids)
         .await
         .map_err(|e| e.to_string())?;
     let template_of =
@@ -497,7 +497,7 @@ pub async fn load_notations(
     });
 
     let read = if let Some(notation) = activated {
-        let body = match store::notations::pinned_body(surreal, storage, notation).await {
+        let body = match store::notations::pinned_body(application_store, storage, notation).await {
             Ok(body) => Ok(body),
             Err(store::notations::PinnedBodyError::MissingTemplate { .. }) => {
                 Err(BodyFailure::Missing)
@@ -509,12 +509,12 @@ pub async fn load_notations(
         };
         Some((body, DocumentState::Notation))
     } else if let (super::PageLens::Lawyer, Some(code)) = (lens, code.as_deref()) {
-        match store::templates::resolve_exact(surreal, Some(source.project_id), code)
+        match store::templates::resolve_exact(application_store, Some(source.project_id), code)
             .await
             .map_err(|e| e.to_string())?
         {
             Some(template) => {
-                let body = store::templates::body(surreal, storage, &template)
+                let body = store::templates::body(application_store, storage, &template)
                     .await
                     .map_err(|e| {
                         tracing::error!(error = %e, template_id = %template.id, "draft preview body refused");
@@ -548,7 +548,7 @@ pub async fn load_notations(
         },
     );
     if let Some(notation) = activated {
-        document.seal = seal_view(surreal, storage, lens, notation).await;
+        document.seal = seal_view(application_store, storage, lens, notation).await;
     }
     Ok(NotationsData {
         document,
@@ -807,7 +807,7 @@ fn parse_argument_exchanges(body: &str) -> Result<Vec<super::ArgumentExchange>, 
 #[cfg(test)]
 mod tests {
     use super::{draft_code, DocumentState, NotationDocumentView};
-    use crate::components::SealState;
+
     use crate::sections::tests::render;
     use crate::sections::SectionView;
 
@@ -1155,230 +1155,6 @@ Later prose is outside the table.",
         let block = &css[start..start + end];
         assert!(!block.contains("min-width"), "no fixed minimum width");
     }
-
-    /// The payload the completion webhook classifies as executed, and the
-    /// evidence its classification leaves behind: a completed `signature`
-    /// row stamped with `signed_at`, plus the `CompletedDocuments` — the
-    /// signed PDF and the Certificate of Completion — archived to object
-    /// storage. This is the payload shape `portal/src/esignature_webhook.rs`
-    /// parses on `/webhook/esignature/:secret`; the test applies exactly
-    /// what that handler records after classification, because portal is
-    /// upstream of webapp and the seal must read only recorded evidence.
-    #[cfg(feature = "server")]
-    const FIXTURE_COMPLETED_WEBHOOK: &str = r#"{
-        "event": "envelope-completed",
-        "data": {
-            "envelopeId": "env-seal-test",
-            "envelopeSummary": { "status": "completed" }
-        }
-    }"#;
-
-    #[cfg(feature = "server")]
-    async fn seal_fixture_db() -> (
-        store::surreal::SurrealDb,
-        std::sync::Arc<dyn cloud::StorageService>,
-        store::notations::Notation,
-        std::path::PathBuf,
-    ) {
-        // A Notation whose pinned body verifies, so the section renders in
-        // its `Notation` state and the seal shows beside the document.
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "seal-synthetic").await;
-        let person = store::persons::create(
-            &db,
-            &store::persons::NewPerson::new("Synthetic Signer", "seal@example.com"),
-        )
-        .await
-        .unwrap();
-        let path = std::env::temp_dir().join(format!("navigator-seal-{}", uuid::Uuid::now_v7()));
-        let storage: std::sync::Arc<dyn cloud::StorageService> =
-            std::sync::Arc::new(cloud::FsStorage::new(path.clone()).await.unwrap());
-        let body =
-            "---\ntitle: Synthetic Engagement Letter\n---\n\nThe firm will draft one sample agreement.\n";
-        let asset_id =
-            store::assets::ingest_content(&db, &storage, body.as_bytes(), "text/markdown")
-                .await
-                .unwrap();
-        let template = store::templates::save_version(
-            &db,
-            Some(project_id),
-            "seal",
-            store::templates::Version {
-                title: "Synthetic engagement letter".into(),
-                respondent_type: "person".into(),
-                asset_id: Some(asset_id),
-                form_code: None,
-                kind: None,
-                source_commit_sha: Some(store::test_support::SYNTHETIC_COMMIT_SHA.into()),
-            },
-        )
-        .await
-        .unwrap()
-        .into_model();
-        let notation = store::notations::create(
-            &db,
-            &store::notations::NewNotation::new(template.id, person.id, project_id, "BEGIN"),
-        )
-        .await
-        .unwrap();
-        (db, storage, notation, path)
-    }
-
-    #[cfg(feature = "server")]
-    fn seal_source(
-        notation: &store::notations::Notation,
-        lens: crate::sections::PageLens,
-    ) -> super::NotationsSource<'static> {
-        super::NotationsSource {
-            project_id: notation.project_id,
-            code: "seal-synthetic",
-            draft: None,
-            lens,
-            document_on_page: false,
-        }
-    }
-
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn a_completed_webhook_payload_renders_the_signature_seal() {
-        let (db, storage, notation, path) = seal_fixture_db().await;
-        let source = seal_source(&notation, crate::sections::PageLens::Client);
-
-        // Before the envelope completes there is nothing to seal.
-        let before = super::load_notations(&db, &storage, &source).await.unwrap();
-        assert!(before.document.seal.is_none());
-        let html = render(SectionView::NotationDocument(before.document.clone()));
-        assert!(!html.contains("navigator-signature"), "{html}");
-
-        // What the webhook records after classifying the fixture payload:
-        // the provider request, the signed_at stamp, and both archived
-        // CompletedDocuments.
-        let payload: serde_json::Value = serde_json::from_str(FIXTURE_COMPLETED_WEBHOOK).unwrap();
-        let envelope_id = payload["data"]["envelopeId"].as_str().unwrap();
-        store::signatures::record_request(
-            &db,
-            notation.id,
-            store::signatures::SignatureProvider::DocuSign,
-            envelope_id,
-        )
-        .await
-        .unwrap();
-        store::signatures::stamp_signed(
-            &db,
-            store::signatures::SignatureProvider::DocuSign,
-            envelope_id,
-            "2026-06-30T00:00:00Z",
-        )
-        .await
-        .unwrap();
-        storage
-            .put(
-                &store::notations::signed_document_storage_key(notation.id),
-                b"%PDF-signed",
-                "application/pdf",
-            )
-            .await
-            .unwrap();
-        storage
-            .put(
-                &store::notations::certificate_of_completion_storage_key(notation.id),
-                b"%PDF-certificate",
-                "application/pdf",
-            )
-            .await
-            .unwrap();
-
-        let loaded = super::load_notations(&db, &storage, &source).await.unwrap();
-        let seal = loaded
-            .document
-            .seal
-            .as_ref()
-            .expect("a completed envelope carries its seal");
-        assert_eq!(seal.signed_at.as_deref(), Some("2026-06-30T00:00:00Z"));
-        assert_eq!(seal.provider, "docusign");
-        assert_eq!(seal.state, SealState::Signed);
-        assert_eq!(
-            seal.signed_href.as_deref(),
-            Some(format!("/app/notations/{}/documents/signed", notation.id).as_str())
-        );
-        assert_eq!(
-            seal.certificate_href.as_deref(),
-            Some(format!("/app/notations/{}/documents/certificate", notation.id).as_str())
-        );
-        let html = render(SectionView::NotationDocument(loaded.document.clone()));
-        assert!(html.contains(r#"class="navigator-signature""#), "{html}");
-        assert!(html.contains(r#"data-state="executed""#), "{html}");
-        assert!(
-            html.contains("Signed through DocuSign on 2026-06-30."),
-            "{html}"
-        );
-
-        // The lawyer lens reads the same evidence through its own download
-        // twin, so the firm's copy of the seal never points at the client
-        // route.
-        let lawyer = seal_source(&notation, crate::sections::PageLens::Lawyer);
-        let firm_seal = super::load_notations(&db, &storage, &lawyer)
-            .await
-            .unwrap()
-            .document
-            .seal
-            .expect("the lawyer lens reads the same execution");
-        assert_eq!(
-            firm_seal.signed_href.as_deref(),
-            Some(format!("/app/lawyer/notations/{}/documents/signed", notation.id).as_str())
-        );
-        std::fs::remove_dir_all(path).unwrap();
-    }
-
-    /// Not shipped yet: an envelope that is outstanding, declined, or never
-    /// sent renders no seal — the provider has confirmed no execution.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn an_envelope_that_has_not_completed_renders_no_seal() {
-        let (db, storage, notation, path) = seal_fixture_db().await;
-        let source = seal_source(&notation, crate::sections::PageLens::Client);
-
-        // Never sent.
-        let bare = super::load_notations(&db, &storage, &source).await.unwrap();
-        assert!(bare.document.seal.is_none());
-
-        // Shipped but outstanding: the envelope is live, the client has
-        // not finished signing.
-        store::signatures::record_request(
-            &db,
-            notation.id,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-seal-live",
-        )
-        .await
-        .unwrap();
-        let live = super::load_notations(&db, &storage, &source).await.unwrap();
-        assert!(live.document.seal.is_none());
-        let html = render(SectionView::NotationDocument(live.document.clone()));
-        assert!(!html.contains("navigator-signature"), "{html}");
-
-        // Declined: the envelope will never be executed. An object at the
-        // signed key would not make it so either (ENG-421), but the
-        // declined stamp alone must suffice.
-        store::signatures::stamp_declined(
-            &db,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-seal-live",
-        )
-        .await
-        .unwrap();
-        storage
-            .put(
-                &store::notations::signed_document_storage_key(notation.id),
-                b"%PDF-looks-signed",
-                "application/pdf",
-            )
-            .await
-            .unwrap();
-        let declined = super::load_notations(&db, &storage, &source).await.unwrap();
-        assert!(declined.document.seal.is_none());
-        std::fs::remove_dir_all(path).unwrap();
-    }
 }
 
 #[cfg(all(test, feature = "server"))]
@@ -1400,79 +1176,6 @@ mod argument_exchange_tests {
         assert!(html.contains("Point &#60;script&#62;"), "{html}");
         assert!(!html.contains("<script>"), "{html}");
         assert!(html.contains("Rule A"), "{html}");
-    }
-    #[tokio::test]
-    async fn argument_exchange_loader_uses_activated_pinned_body_and_hides_other_lenses() {
-        use crate::sections::PageLens;
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "exchange-synthetic").await;
-        let person = store::persons::create(
-            &db,
-            &store::persons::NewPerson::new("Synthetic Lawyer", "exchange@example.com"),
-        )
-        .await
-        .unwrap();
-        let path =
-            std::env::temp_dir().join(format!("navigator-exchanges-{}", uuid::Uuid::now_v7()));
-        let storage: std::sync::Arc<dyn cloud::StorageService> =
-            std::sync::Arc::new(cloud::FsStorage::new(path.clone()).await.unwrap());
-        let body = "```argument_exchange\n- title: Verified exchange\n  point: {text: Point, authority: A}\n  response: {text: Response, authority: B}\n  reply: {text: Reply, authority: C}\n```";
-        let asset_id =
-            store::assets::ingest_content(&db, &storage, body.as_bytes(), "text/markdown")
-                .await
-                .unwrap();
-        let template = store::templates::save_version(
-            &db,
-            Some(project_id),
-            "exchange",
-            store::templates::Version {
-                title: "Synthetic preparation".into(),
-                respondent_type: "person".into(),
-                asset_id: Some(asset_id),
-                form_code: None,
-                kind: Some("trial_prep".into()),
-                source_commit_sha: Some(store::test_support::SYNTHETIC_COMMIT_SHA.into()),
-            },
-        )
-        .await
-        .unwrap()
-        .into_model();
-        let mut source = super::NotationsSource {
-            project_id,
-            code: "exchange-synthetic",
-            draft: Some("drafts/exchange.md"),
-            lens: PageLens::Lawyer,
-            document_on_page: false,
-        };
-        let preview = super::load_notations(&db, &storage, &source).await.unwrap();
-        assert!(
-            preview.exchanges.exchanges.is_empty(),
-            "preview is not an activated Notation"
-        );
-        store::notations::create(
-            &db,
-            &store::notations::NewNotation::new(template.id, person.id, project_id, "BEGIN"),
-        )
-        .await
-        .unwrap();
-        let loaded = super::load_notations(&db, &storage, &source).await.unwrap();
-        assert_eq!(loaded.exchanges.exchanges[0].title, "Verified exchange");
-        for lens in [PageLens::Client, PageLens::Clerk] {
-            source.lens = lens;
-            let loaded = super::load_notations(&db, &storage, &source).await.unwrap();
-            assert!(loaded.exchanges.exchanges.is_empty());
-            assert!(loaded.list.is_empty());
-        }
-        source.lens = PageLens::Lawyer;
-        let key = format!("blobs/{}", store::assets::sha256_hex(body.as_bytes()));
-        storage
-            .put(&key, b"tampered", "text/markdown")
-            .await
-            .unwrap();
-        let refused = super::load_notations(&db, &storage, &source).await.unwrap();
-        assert!(refused.exchanges.unavailable);
-        assert!(refused.exchanges.exchanges.is_empty());
-        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

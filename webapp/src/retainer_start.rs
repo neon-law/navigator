@@ -122,19 +122,20 @@ pub async fn get_retainer_start_form() -> Result<RetainerStartView, ServerFnErro
     >()
     .await?;
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let shared = store::templates::list_current(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let shared = store::templates::list_current(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     // The Firm wearing this brand: the one `POST` opens the matter under.
-    let firm_id = store::firms::firm_id_for_brand_key(&surreal, views::brand::brand_key().as_str())
-        .await
-        .ok()
-        .flatten();
+    let firm_id =
+        store::firms::firm_id_for_brand_key(&application_store, views::brand::brand_key().as_str())
+            .await
+            .ok()
+            .flatten();
     let storage = try_consume_context::<std::sync::Arc<dyn cloud::StorageService>>();
     let library = match (firm_id, storage) {
         (Some(firm_id), Some(storage)) => {
-            store::firm_library::sync_configured(&surreal, &storage, firm_id).await
+            store::firm_library::sync_configured(&application_store, &storage, firm_id).await
         }
         _ => None,
     };

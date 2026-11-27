@@ -173,6 +173,36 @@ fn ci_yml_runs_no_windows_check() {
     );
 }
 
+#[test]
+fn rust_scope_detects_a_match_before_a_large_diff() {
+    let workflow: serde_yaml::Value = serde_yaml::from_str(&ci_workflow()).unwrap();
+    let script = workflow["jobs"]["changes"]["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "scope")
+        .and_then(|step| step["run"].as_str())
+        .unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let paths = scratch.path().join("paths");
+    let output = scratch.path().join("output");
+    let documentation = "docs/example-with-a-long-path.md\n".repeat(10_000);
+    let script = format!("git() {{ cat \"$SYNTHETIC_DIFF\"; }}\n{script}");
+    for (prefix, expected) in [("store/src/lib.rs\n", "rust=true\n"), ("", "rust=false\n")] {
+        fs::write(&paths, format!("{prefix}{documentation}")).unwrap();
+        fs::write(&output, "").unwrap();
+        let status = std::process::Command::new("bash")
+            .args(["-c", &script])
+            .env("SYNTHETIC_DIFF", &paths)
+            .env("GITHUB_OUTPUT", &output)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(fs::read_to_string(&output).unwrap(), expected);
+    }
+}
+
 /// A green instrumented workspace job now finishes at 100% disk (run
 /// 38068387566: 142 GB used, 244 MB free). The image sweep is what leaves
 /// room for one more crate; without it the runner dies mid-nextest.

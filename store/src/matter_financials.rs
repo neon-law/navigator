@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::{postgres::PostgresDb, surreal::SurrealDb};
+use crate::{application_store::ApplicationStore, postgres::PostgresDb};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MatterFinancialsError {
@@ -127,13 +127,13 @@ pub fn outstanding_cents(invoices: &[crate::xero_invoices::XeroInvoice]) -> i64 
 ///
 /// [`MatterFinancialsError`] when any of the three underlying reads fails.
 pub async fn for_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     project_id: Uuid,
 ) -> Result<MatterFinancials, MatterFinancialsError> {
     let mut entries = crate::time_entries::wip_billable(pg, project_id).await?;
     let mut costs = crate::project_costs::list_for_project(pg, project_id).await?;
-    let invoices = crate::xero_invoices::for_projects(surreal, &[project_id])
+    let invoices = crate::xero_invoices::for_projects(application_store, &[project_id])
         .await
         .map_err(Box::new)?;
     // A partially settled batch can already have a mirrored invoice while

@@ -4,8 +4,7 @@
 //! can read the deployment profile without pulling in the rest of the
 //! HTTP server. `AppConfig` lives in `web`.
 //!
-//! The store's own connection contract is `NAVIGATOR_SURREAL_ENDPOINT` /
-//! `_NAMESPACE` / `_DATABASE`, and it lives in [`crate::surreal`].
+//! [`crate::postgres`] owns the PostgreSQL connection settings.
 
 use thiserror::Error;
 

@@ -25,7 +25,6 @@ coord() { sed -n "s/^$1 = \"\(.*\)\"\$/\1/p" "$CFG"; }
 CTX=$(coord NAVIGATOR_GKE_CONTEXT)
 NS=$(coord NAVIGATOR_K8S_NAMESPACE)
 HOST=$(coord NAVIGATOR_PUBLIC_HOST)
-WF=$(coord NAVIGATOR_WORKFLOWS_HOST)
 # Read the registry from the row rather than hardcoding it, so this check grades exactly the images
 # `ops ship` renders. An image on any other registry host is reported below, never skipped.
 REGISTRY=$(coord NAVIGATOR_IMAGE_REGISTRY)
@@ -91,12 +90,6 @@ done <<< "$pods"
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 --location "https://$HOST/")
 [ "$code" = 200 ] && note OK "https://$HOST/ → 200" || note FAIL "https://$HOST/ → $code"
 
-# The workflows root is a Restate protocol endpoint; it answers 400 to a plain GET. TLS and
-# reachability are the check, so any HTTP response passes and only a connection failure fails.
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://$WF/")
-[ "$code" != 000 ] && note OK "https://$WF/ → $code (protocol endpoint; TLS reachable)" \
-                   || note FAIL "https://$WF/ unreachable"
-
 # GORP Serif. Checked explicitly because `ops ship`'s asset preflight covers the img/ objects and
 # not these, so a missing font would otherwise serve a fallback face with nothing reporting it.
 for f in GORPSerif-Regular.woff2 GORPSerif-Bold.woff2; do
@@ -110,21 +103,16 @@ done
 # holds `Heartbeat-<date>T<slot hour>`. Read as the bootstrap superuser inside the pod, under a
 # read-only transaction, exactly as docs/dbos-durability.md inspects pending ownership. A run
 # still PENDING is reported but does not fail the row: it may be seconds past a slot boundary.
-if [ "$(coord NAVIGATOR_DBOS_ENABLED)" = true ]; then
-  slot=$(printf '%02d' $(( 10#$(date -u +%H) / 6 * 6 )))
-  wf="Heartbeat-$(date -u +%Y-%m-%d)T$slot"
-  status=$(kubectl --context "$CTX" -n "$NS" exec navigator-postgres-0 -c postgres -- \
-    env PGOPTIONS='-c default_transaction_read_only=on' psql -U postgres -d navigator -Atc \
-    "SELECT status FROM dbos.workflow_status WHERE workflow_uuid = '$wf'" 2>/dev/null)
-  case "$status" in
-    SUCCESS) note OK "DBOS $wf → SUCCESS" ;;
-    PENDING|ENQUEUED) note WAIT "DBOS $wf → $status (re-run in a few minutes)" ;;
-    *) note FAIL "DBOS $wf → ${status:-no run recorded}" ;;
-  esac
-else
-  note SKIP "DBOS Heartbeat (NAVIGATOR_DBOS_ENABLED is not \"true\")"
-fi
-
+slot=$(printf '%02d' $(( 10#$(date -u +%H) / 6 * 6 )))
+wf="Heartbeat-$(date -u +%Y-%m-%d)T$slot"
+status=$(kubectl --context "$CTX" -n "$NS" exec navigator-postgres-0 -c postgres -- \
+  env PGOPTIONS='-c default_transaction_read_only=on' psql -U postgres -d navigator -Atc \
+  "SELECT status FROM dbos.workflow_status WHERE workflow_uuid = '$wf'" 2>/dev/null)
+case "$status" in
+  SUCCESS) note OK "DBOS $wf → SUCCESS" ;;
+  PENDING|ENQUEUED) note WAIT "DBOS $wf → $status (re-run in a few minutes)" ;;
+  *) note FAIL "DBOS $wf → ${status:-no run recorded}" ;;
+esac
 echo
 [ "$fail" = 0 ] && echo "$ROW verified on $TAG" || echo "$ROW NOT fully verified — see FAIL above"
 exit "$fail"

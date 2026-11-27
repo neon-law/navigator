@@ -6,8 +6,8 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::access::MatterViewer;
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 use crate::tasks::{self, NewProjectTask, ProjectTask, ProjectTaskError};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ pub struct PendingHandoff {
 }
 
 pub async fn create(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     project_id: Uuid,
     actor_id: Uuid,
@@ -48,7 +48,7 @@ pub async fn create(
 ) -> Result<ProjectTask, ProjectTaskError> {
     validate(handoff)?;
     if let Some(id) = handoff.communication_id {
-        if crate::communications::find(surreal, project_id, id)
+        if crate::communications::find(application_store, project_id, id)
             .await
             .map_or(true, |row| {
                 row.is_none_or(|row| {
@@ -62,7 +62,7 @@ pub async fn create(
     }
     if let Some(id) = handoff.deadline_id {
         if !matches!(
-            crate::project_deadlines::find(surreal, project_id, id).await,
+            crate::project_deadlines::find(application_store, project_id, id).await,
             Ok(Some(_))
         ) {
             return Err(ProjectTaskError::Invalid("Deadline source"));

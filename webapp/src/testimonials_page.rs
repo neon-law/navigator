@@ -25,9 +25,9 @@ pub async fn testimonials_page_view() -> Result<TestimonialsPageView, ServerFnEr
     let injected =
         crate::public_chrome::copy_from_request_or_context(consume_context::<InjectedTestimonials>)
             .await;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let testimonials = store::testimonials::published_for_brand(
-        &surreal,
+        &application_store,
         &injected.brand_key,
         if injected.brand_key == "vesta" {
             None

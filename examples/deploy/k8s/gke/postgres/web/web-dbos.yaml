@@ -22,7 +22,6 @@ spec:
       containers:
         - name: web
           env:
-            # NAVIGATOR_DBOS_TIMER_ENV
             # NAVIGATOR_DBOS_SCHEDULE_ENV
             - name: NAVIGATOR_DBOS_EXECUTOR_ID
               valueFrom:

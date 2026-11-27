@@ -20,6 +20,7 @@
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::inbox::{
     self, channel, delivery, direction, purpose, Assignment, ContactLink, Conversation,
     DispatchReport, InboxError, IngestInbound, IngestedInbound, IntakeDetail, IntakeRow, Message,
@@ -27,7 +28,6 @@ use crate::inbox::{
 };
 use crate::persons::Role;
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum InboxAuthorityError {
@@ -36,8 +36,8 @@ pub(crate) enum InboxAuthorityError {
 }
 
 /// The pool to dispatch to, or `None` when no PostgreSQL host is configured.
-pub(crate) async fn authority() -> Result<Option<PostgresDb>, InboxAuthorityError> {
-    PostgresDb::configured()
+pub(crate) async fn authority() -> Result<PostgresDb, InboxAuthorityError> {
+    PostgresDb::application()
         .await
         .map_err(|_| InboxAuthorityError::Unavailable)
 }
@@ -222,29 +222,18 @@ async fn insert_message(
 /// here too: a lawyer- or clerk-tier sender never links.
 pub(crate) async fn inbound_counterparty_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     inbound: &IngestInbound<'_>,
 ) -> Result<Option<Uuid>, InboxError> {
     resolve_or_create_sender_on(pg, db, inbound.external_address, inbound.external_name).await
 }
 
-/// The shared resolve-or-create behind ingest and the backfill, in the
-/// PostgreSQL People mirror: primary first, then any `person_mailbox`
-/// alias claim — the same exact, case-insensitive resolution
-/// `persons::find_by_any_email` serves on the Surreal lane. When the
-/// People authority is off, that Surreal directory is the people
-/// authority: a sender it claims is resolved there and mirrored into
-/// PostgreSQL rather than re-created (a second Person for the same
-/// mailbox would violate the Surreal `person_email_lower` unique index
-/// on projection). The [`crate::inbox::counterparty_decision`] guard
-/// applies here too: a lawyer- or clerk-tier sender never links. A
-/// sender no lane claims becomes a new client-tier Person in the same
-/// engine — `find_or_create` re-checks under the unique `email_lower`
-/// backstop, so a concurrent create collapses — and the Surreal
-/// projection stays fresh for alias-aware reads.
+/// Resolve a sender through primary email and mailbox claims. Only client-tier
+/// counterparties link to the inbox. The unique primary address keeps concurrent
+/// creation of the same unknown sender idempotent.
 pub(crate) async fn resolve_or_create_sender_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     external_address: &str,
     display_name: Option<&str>,
 ) -> Result<Option<Uuid>, InboxError> {
@@ -265,43 +254,6 @@ pub(crate) async fn resolve_or_create_sender_on(
         // None, and certainly no second Person for the same address.
         return Ok(crate::inbox::counterparty_decision(&person));
     }
-    // Boxed: the fallback's combined future is large, and this resolver's
-    // future is embedded in every ingest caller's future — without the box
-    // each inbox test's future crosses the large-futures lint.
-    let fallback = async {
-        if let Some(existing) = crate::persons::find_by_any_email(db, address)
-            .await
-            .map_err(|error| InboxError::Db(error.to_string()))?
-        {
-            // The Surreal directory claims this mailbox and PostgreSQL
-            // does not — the People authority is off, so Surreal is the
-            // source of truth. Project the Person into PostgreSQL through
-            // the standard mirror and resolve exactly as a
-            // PostgreSQL-native Person.
-            crate::postgres_mirror::mirror(
-                db,
-                pg,
-                &crate::postgres_mirror::MirrorKey::Person(existing.id),
-            )
-            .await
-            .map_err(|error| InboxError::Db(error.to_string()))?;
-            let row = crate::postgres::people::by_email(pg, address)
-                .await?
-                .ok_or_else(|| {
-                    InboxError::Db(format!(
-                        "Surreal Person {} did not project to PostgreSQL for {address}",
-                        existing.id
-                    ))
-                })?;
-            return Ok(Some(crate::inbox::counterparty_decision(&row)));
-        }
-        Ok(None)
-    };
-    match Box::pin(fallback).await {
-        Ok(Some(decision)) => return Ok(decision),
-        Err(error) => return Err(error),
-        Ok(None) => {}
-    }
     let created = crate::postgres::people::find_or_create(
         pg,
         db,
@@ -321,7 +273,7 @@ pub(crate) async fn resolve_or_create_sender_on(
 /// NULL` are selected, so a re-run finds nothing and writes nothing.
 pub(crate) async fn backfill_person_links_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
 ) -> Result<u64, InboxError> {
     let unassociated: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT id, external_address, external_name FROM inbox_conversation \
@@ -371,7 +323,7 @@ pub(crate) async fn backfill_person_links_on(
 #[cfg(test)]
 pub(crate) async fn ingest_inbound_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
     ingest_threaded_on(pg, db, inbound, None).await
@@ -382,7 +334,7 @@ pub(crate) async fn ingest_inbound_on(
 /// reference chain, nearest ancestor first).
 pub(crate) async fn ingest_threaded_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     inbound: &IngestInbound<'_>,
     thread: Option<&[String]>,
 ) -> Result<IngestedInbound, InboxError> {
@@ -979,7 +931,7 @@ async fn create_conversation_on(
 async fn project_message_on(
     // Communication accessors use the shared application authority context.
     _pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     conversation: &crate::inbox::Conversation,
     message: &Message,
 ) -> Result<(), InboxError> {
@@ -1044,7 +996,7 @@ async fn project_message_on(
 
 async fn project_all_messages_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     conversation: &crate::inbox::Conversation,
 ) -> Result<(), InboxError> {
     for message in messages_for_on(pg, conversation.id).await? {
@@ -1058,7 +1010,7 @@ async fn project_all_messages_on(
 /// immutable audit row are postgres writes.
 pub(crate) async fn assign_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
@@ -1075,7 +1027,7 @@ pub(crate) async fn assign_on(
 /// before writing its assignment to the selected Inbox store.
 pub(crate) async fn assign_for_triage_review_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
@@ -1127,7 +1079,7 @@ async fn fi_assignment_guard_on(
 
 async fn assign_write_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation: &crate::inbox::Conversation,
     project_id: Uuid,
@@ -1235,7 +1187,7 @@ async fn create_message_on(
 
 pub(crate) async fn post_note_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     body: &str,
@@ -1281,7 +1233,7 @@ pub(crate) async fn post_note_on(
 
 pub(crate) async fn queue_reply_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     body: &str,
@@ -1329,7 +1281,7 @@ pub(crate) async fn queue_reply_on(
 
 pub(crate) async fn queue_social_reply_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     body: &str,
@@ -1396,7 +1348,7 @@ pub(crate) async fn queue_social_reply_on(
 
 pub(crate) async fn link_contact_phone_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     email: &str,
@@ -1477,7 +1429,7 @@ pub(crate) async fn link_contact_phone_on(
 
 pub(crate) async fn queue_sms_reply_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     body: &str,
@@ -1501,7 +1453,7 @@ pub(crate) async fn queue_sms_reply_on(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_sms_conversation_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     firm_id: Uuid,
     brand_key: Option<&str>,
@@ -1556,7 +1508,7 @@ pub(crate) async fn open_sms_conversation_on(
 
 async fn queue_sms_message_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     conversation: &crate::inbox::Conversation,
     actor_id: Uuid,
     body: &str,
@@ -1599,7 +1551,7 @@ async fn queue_sms_message_on(
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn dispatch_queued_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     transport: &dyn inbox::OutboundTransport,
     message_id: Option<Uuid>,
 ) -> Result<DispatchReport, InboxError> {
@@ -1804,7 +1756,7 @@ async fn find_by_provider_ref_on(
 /// advance to `delivered`.
 pub(crate) async fn apply_delivery_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     firm_id: Uuid,
     channel_name: &str,
     provider_account: &str,
@@ -2034,7 +1986,7 @@ pub(crate) async fn set_trashed_on(
 
 pub(crate) async fn list_intake_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
 ) -> Result<Vec<IntakeRow>, InboxError> {
     let actor = inbox::load_person(db, actor_id).await?;
@@ -2071,7 +2023,7 @@ pub(crate) async fn list_intake_on(
 
 pub(crate) async fn intake_detail_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<IntakeDetail, InboxError> {
@@ -2137,7 +2089,7 @@ pub(crate) async fn intake_detail_on(
 /// and the latest-message preview.
 async fn intake_rows(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     role: Role,
     conversations: Vec<crate::inbox::Conversation>,
     assigned: bool,
@@ -2243,7 +2195,7 @@ async fn latest_row_facts_on(
 
 pub(crate) async fn list_project_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Vec<IntakeRow>, InboxError> {
@@ -2291,7 +2243,7 @@ pub(crate) async fn unread_count_for_project_on(
 
 pub(crate) async fn project_thread_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     project_id: Uuid,
     conversation_id: Uuid,
@@ -2328,7 +2280,7 @@ pub(crate) async fn project_thread_on(
 
 pub(crate) async fn clerk_may_relay_email_thread_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     email_conversation_id: Uuid,
 ) -> Result<bool, InboxError> {
@@ -2364,7 +2316,7 @@ pub(crate) async fn assignments_on(
 
 pub(crate) async fn readable_attachment_on(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    db: &ApplicationStore,
     actor_id: Uuid,
     message_id: Uuid,
 ) -> Result<Option<Uuid>, InboxError> {

@@ -21,10 +21,9 @@ use crate::postgres::matter;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::surreal::{record_id, record_uuid, SurrealDb};
+use crate::application_store::ApplicationStore;
 
 /// The table these rows live in.
 pub(crate) const TABLE: &str = "notation_event";
@@ -65,49 +64,6 @@ pub struct NotationEvent {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it.
-#[derive(SurrealValue)]
-struct NotationEventRow {
-    id: surrealdb::types::RecordId,
-    notation_id: surrealdb::types::RecordId,
-    acting_person_id: surrealdb::types::RecordId,
-    template_version_id: surrealdb::types::RecordId,
-    machine_kind: String,
-    from_state: String,
-    to_state: String,
-    condition: String,
-    payload: Option<String>,
-    recorded_at: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl NotationEventRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_event(self) -> Option<NotationEvent> {
-        Some(NotationEvent {
-            id: record_uuid(&self.id)?,
-            notation_id: record_uuid(&self.notation_id)?,
-            acting_person_id: record_uuid(&self.acting_person_id)?,
-            template_version_id: record_uuid(&self.template_version_id)?,
-            machine_kind: self.machine_kind,
-            from_state: self.from_state,
-            to_state: self.to_state,
-            condition: self.condition,
-            payload: self.payload,
-            recorded_at: self.recorded_at,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`NotationEventRow`] from only one query.
-const SELECT: &str = "id, notation_id, acting_person_id, template_version_id, machine_kind, \
-     from_state, to_state, condition, payload, recorded_at, inserted_at, updated_at";
-
 /// One transition's worth of data to journal. Carries everything the row
 /// needs in a single struct so [`append_event`] stays under clippy's
 /// argument budget and reads as one logical record at the call site.
@@ -133,18 +89,8 @@ pub struct TransitionRecord<'a> {
 pub enum NotationEventError {
     #[error(transparent)]
     Postgres(#[from] matter::MatterAuthorityError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error("notation: {0}")]
     Notation(#[from] crate::notations::NotationError),
-}
-
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<NotationEvent>, NotationEventError> {
-    let rows: Vec<NotationEventRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(NotationEventRow::into_event)
-        .collect())
 }
 
 fn native_event(
@@ -208,12 +154,10 @@ pub(crate) async fn append_on(
 /// [`NotationEventError::Notation`] if the referenced notation does not
 /// exist, or a PostgreSQL error if its authority or write is unavailable.
 pub async fn append_event(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     record: TransitionRecord<'_>,
 ) -> Result<NotationEvent, NotationEventError> {
-    let pg = matter::authority_for(TABLE)
-        .await?
-        .ok_or(matter::MatterAuthorityError::Unavailable)?;
+    let pg = matter::authority_for(TABLE).await?;
     let (respondent, template_id) =
         crate::postgres::notations::notation_context(&pg, record.notation_id)
             .await?
@@ -234,33 +178,20 @@ pub async fn append_event(
 ///
 /// [`NotationEventError::Db`] if the lookup fails.
 pub async fn latest_for_kind(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
     machine_kind: &str,
 ) -> Result<Option<NotationEvent>, NotationEventError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::select(
-            &pg,
-            TABLE,
-            json!({"notation_id": notation_id, "machine_kind": machine_kind}),
-            &["id DESC"],
-        )
-        .await?
-        .into_iter()
-        .next());
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE notation_id = $notation AND machine_kind = $machine_kind \
-             ORDER BY id DESC LIMIT 1"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .bind(("machine_kind", machine_kind.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    Ok(many(response)?.into_iter().next())
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::select(
+        &pg,
+        TABLE,
+        json!({"notation_id": notation_id, "machine_kind": machine_kind}),
+        &["id DESC"],
+    )
+    .await?
+    .into_iter()
+    .next())
 }
 
 /// Whether the `(notation_id, machine_kind)` machine has reached `END`.
@@ -270,7 +201,7 @@ pub async fn latest_for_kind(
 ///
 /// [`NotationEventError::Db`] if the lookup fails.
 pub async fn is_complete(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     notation_id: Uuid,
     machine_kind: &str,
 ) -> Result<bool, NotationEventError> {
@@ -286,21 +217,11 @@ pub async fn is_complete(
 ///
 /// [`NotationEventError::Db`] if the lookup fails.
 pub async fn for_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Vec<NotationEvent>, NotationEventError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::select(&pg, TABLE, json!({"notation_id": notation_id}), &["id"]).await?);
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation ORDER BY id ASC"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = matter::authority_for(TABLE).await?;
+    Ok(matter::select(&pg, TABLE, json!({"notation_id": notation_id}), &["id"]).await?)
 }
 
 /// Read the canonical event ordering from the native runtime's explicit pool.
@@ -382,11 +303,13 @@ mod tests {
     use crate::test_support;
     use uuid::Uuid;
 
-    async fn seed_notation(surreal: &crate::surreal::SurrealDb) -> (Uuid, Uuid, Uuid) {
-        test_support::seed_compiled_brands_postgres(surreal).await;
-        let project = crate::test_support::seed_project_surreal(surreal, "matter").await;
+    async fn seed_notation(
+        application_store: &crate::application_store::ApplicationStore,
+    ) -> (Uuid, Uuid, Uuid) {
+        test_support::seed_compiled_brands_postgres(application_store).await;
+        let project = crate::test_support::seed_project_id(application_store, "matter").await;
         let tmpl = crate::templates::save_version(
-            surreal,
+            application_store,
             None,
             &format!("onboarding__letter-{}", Uuid::now_v7()),
             crate::templates::Version {
@@ -402,13 +325,13 @@ mod tests {
         .unwrap()
         .into_model();
         let person = crate::persons::create(
-            surreal,
+            application_store,
             &crate::persons::NewPerson::new("Libra", "libra@example.com"),
         )
         .await
         .unwrap();
         let notation = crate::notations::create(
-            surreal,
+            application_store,
             &crate::notations::NewNotation::new(tmpl.id, person.id, project, "BEGIN"),
         )
         .await
@@ -419,10 +342,10 @@ mod tests {
     #[tokio::test]
     async fn append_event_inserts_one_row_with_the_expected_columns() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let (nid, person_id, template_id) = seed_notation(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let (nid, person_id, template_id) = seed_notation(&application_store).await;
             let row = append_event(
-                &surreal,
+                &application_store,
                 TransitionRecord {
                     notation_id: nid,
                     acting_person_id: Some(person_id),
@@ -447,15 +370,15 @@ mod tests {
     #[tokio::test]
     async fn append_event_preserves_insert_order_across_repeated_calls() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let (nid, person_id, _) = seed_notation(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let (nid, person_id, _) = seed_notation(&application_store).await;
             for (from, to) in [
                 ("BEGIN", "client_name"),
                 ("client_name", "client_email"),
                 ("client_email", "project_name"),
             ] {
                 append_event(
-                    &surreal,
+                    &application_store,
                     TransitionRecord {
                         notation_id: nid,
                         acting_person_id: Some(person_id),
@@ -470,7 +393,7 @@ mod tests {
                 .await
                 .unwrap();
             }
-            let rows = for_notation(&surreal, nid).await.unwrap();
+            let rows = for_notation(&application_store, nid).await.unwrap();
             assert_eq!(rows.len(), 3);
             assert_eq!(rows[2].to_state, "project_name");
         })
@@ -480,10 +403,10 @@ mod tests {
     #[tokio::test]
     async fn workflow_event_payload_records_actor_and_pinned_template_version() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let (nid, person_id, template_id) = seed_notation(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let (nid, person_id, template_id) = seed_notation(&application_store).await;
             let row = append_event(
-                &surreal,
+                &application_store,
                 TransitionRecord {
                     notation_id: nid,
                     acting_person_id: Some(person_id),
@@ -518,10 +441,10 @@ mod tests {
     #[tokio::test]
     async fn a_questionnaire_event_without_an_actor_falls_back_to_the_respondent() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let (nid, person_id, _) = seed_notation(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let (nid, person_id, _) = seed_notation(&application_store).await;
             let row = append_event(
-                &surreal,
+                &application_store,
                 TransitionRecord {
                     notation_id: nid,
                     acting_person_id: None,
@@ -543,10 +466,10 @@ mod tests {
     #[tokio::test]
     async fn a_workflow_event_without_an_actor_still_falls_back_but_is_recorded() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let (nid, person_id, _) = seed_notation(&surreal).await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let (nid, person_id, _) = seed_notation(&application_store).await;
             let row = append_event(
-                &surreal,
+                &application_store,
                 TransitionRecord {
                     notation_id: nid,
                     acting_person_id: None,
@@ -571,19 +494,21 @@ mod tests {
     #[tokio::test]
     async fn latest_for_kind_reads_the_newest_row_and_is_complete_reflects_end() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let (nid, person_id, _) = seed_notation(&surreal).await;
-            assert!(latest_for_kind(&surreal, nid, MACHINE_QUESTIONNAIRE)
-                .await
-                .unwrap()
-                .is_none());
-            assert!(!is_complete(&surreal, nid, MACHINE_QUESTIONNAIRE)
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let (nid, person_id, _) = seed_notation(&application_store).await;
+            assert!(
+                latest_for_kind(&application_store, nid, MACHINE_QUESTIONNAIRE)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(!is_complete(&application_store, nid, MACHINE_QUESTIONNAIRE)
                 .await
                 .unwrap());
 
             for (from, to) in [("BEGIN", "client_name"), ("client_name", "END")] {
                 append_event(
-                    &surreal,
+                    &application_store,
                     TransitionRecord {
                         notation_id: nid,
                         acting_person_id: Some(person_id),
@@ -599,14 +524,14 @@ mod tests {
                 .unwrap();
             }
             assert_eq!(
-                latest_for_kind(&surreal, nid, MACHINE_QUESTIONNAIRE)
+                latest_for_kind(&application_store, nid, MACHINE_QUESTIONNAIRE)
                     .await
                     .unwrap()
                     .unwrap()
                     .to_state,
                 "END"
             );
-            assert!(is_complete(&surreal, nid, MACHINE_QUESTIONNAIRE)
+            assert!(is_complete(&application_store, nid, MACHINE_QUESTIONNAIRE)
                 .await
                 .unwrap());
         })
@@ -616,11 +541,11 @@ mod tests {
     #[tokio::test]
     async fn notation_events_are_isolated_across_notations() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let (a, person_id, template_id) = seed_notation(&surreal).await;
-            let project = crate::test_support::seed_project_surreal(&surreal, "second").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let (a, person_id, template_id) = seed_notation(&application_store).await;
+            let project = crate::test_support::seed_project_id(&application_store, "second").await;
             let b = crate::notations::create(
-                &surreal,
+                &application_store,
                 &crate::notations::NewNotation::new(template_id, person_id, project, "BEGIN"),
             )
             .await
@@ -629,7 +554,7 @@ mod tests {
 
             for (nid, to) in [(a, "client_name"), (b, "client_email")] {
                 append_event(
-                    &surreal,
+                    &application_store,
                     TransitionRecord {
                         notation_id: nid,
                         acting_person_id: Some(person_id),
@@ -645,7 +570,7 @@ mod tests {
                 .unwrap();
             }
             assert_eq!(
-                latest_for_kind(&surreal, a, MACHINE_QUESTIONNAIRE)
+                latest_for_kind(&application_store, a, MACHINE_QUESTIONNAIRE)
                     .await
                     .unwrap()
                     .unwrap()
@@ -653,7 +578,7 @@ mod tests {
                 "client_name"
             );
             assert_eq!(
-                latest_for_kind(&surreal, b, MACHINE_QUESTIONNAIRE)
+                latest_for_kind(&application_store, b, MACHINE_QUESTIONNAIRE)
                     .await
                     .unwrap()
                     .unwrap()
@@ -667,9 +592,9 @@ mod tests {
     #[tokio::test]
     async fn appending_for_an_unknown_notation_reports_not_found() {
         test_support::with_required_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let err = append_event(
-                &surreal,
+                &application_store,
                 TransitionRecord {
                     notation_id: Uuid::now_v7(),
                     acting_person_id: Some(Uuid::now_v7()),

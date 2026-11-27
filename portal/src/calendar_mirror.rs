@@ -14,7 +14,7 @@ use uuid::Uuid;
 use workflows::dbos_engine::deadline_mirror::{MirrorQueueError, MirrorSource};
 
 pub(crate) struct ScheduledMirror {
-    pub surreal: store::surreal::SurrealDb,
+    pub application_store: store::application_store::ApplicationStore,
     pub providers: Arc<dyn crate::integrations::IntegrationProviders>,
     /// The canonical host the matter-page link names, when configured.
     pub base_url: Option<String>,
@@ -39,14 +39,14 @@ impl MirrorSource for ScheduledMirror {
     ) -> Result<store::deadline_calendar::MirrorReport, String> {
         let calendar = self
             .providers
-            .calendar(&self.surreal, project_id)
+            .calendar(&self.application_store, project_id)
             .await
             .map_err(|error| error.to_string())?;
         let _guard = crate::integrations_api::calendar_lock(project_id)
             .await
             .map_err(|()| "Calendar reconcile lock unavailable")?;
         store::deadline_calendar::reconcile(
-            &self.surreal,
+            &self.application_store,
             calendar.as_ref(),
             project_id,
             self.base_url.as_deref(),
@@ -60,7 +60,7 @@ impl MirrorSource for ScheduledMirror {
 use workflows::dbos_engine::project_calendar::{Source, SyncError};
 
 pub(crate) struct MembershipSource {
-    pub surreal: store::surreal::SurrealDb,
+    pub application_store: store::application_store::ApplicationStore,
     pub providers: Arc<dyn crate::integrations::IntegrationProviders>,
 }
 
@@ -94,7 +94,7 @@ impl Source for MembershipSource {
         else {
             return Ok(0);
         };
-        let person = store::persons::find_by_id(&self.surreal, person_id)
+        let person = store::persons::find_by_id(&self.application_store, person_id)
             .await
             .map_err(|_| sync_error("reading the booking calendar owner"))?
             .filter(|person| person.email_confirmed)
@@ -107,7 +107,7 @@ impl Source for MembershipSource {
             .await
             .map_err(provider_error)?;
 
-        let memberships = store::firms::memberships_for_person(&self.surreal, person_id)
+        let memberships = store::firms::memberships_for_person(&self.application_store, person_id)
             .await
             .map_err(|_| sync_error("reading the attorney's Firm memberships"))?;
         let firms: Vec<_> = memberships
@@ -128,7 +128,7 @@ impl Source for MembershipSource {
             };
             let reader = match self
                 .providers
-                .calendar(&self.surreal, first.project_id)
+                .calendar(&self.application_store, first.project_id)
                 .await
             {
                 Ok(reader) => reader,
@@ -181,25 +181,24 @@ impl Source for MembershipSource {
             .map_err(|()| sync_error("locking Project Calendar"))?;
         let calendar = self
             .providers
-            .calendar(&self.surreal, project_id)
+            .calendar(&self.application_store, project_id)
             .await
             .map_err(|error| sync_error(error.slug()))?;
-        store::project_calendar::sync_membership(&self.surreal, project_id, calendar.as_ref())
-            .await
-            .map_err(|error| match error {
-                store::project_calendar::ProjectCalendarError::Participant {
-                    person_id,
-                    source,
-                } => {
-                    let mut error = provider_error(source);
-                    error.person_id = Some(person_id);
-                    error
-                }
-                store::project_calendar::ProjectCalendarError::Calendar(error) => {
-                    provider_error(error)
-                }
-                _ => sync_error("reading calendar assignment or grant records"),
-            })
+        store::project_calendar::sync_membership(
+            &self.application_store,
+            project_id,
+            calendar.as_ref(),
+        )
+        .await
+        .map_err(|error| match error {
+            store::project_calendar::ProjectCalendarError::Participant { person_id, source } => {
+                let mut error = provider_error(source);
+                error.person_id = Some(person_id);
+                error
+            }
+            store::project_calendar::ProjectCalendarError::Calendar(error) => provider_error(error),
+            _ => sync_error("reading calendar assignment or grant records"),
+        })
     }
 
     async fn backup(&self, project_id: Uuid) -> Result<u64, SyncError> {
@@ -208,17 +207,21 @@ impl Source for MembershipSource {
             .map_err(|()| sync_error("locking Project Calendar"))?;
         let calendar = self
             .providers
-            .calendar(&self.surreal, project_id)
+            .calendar(&self.application_store, project_id)
             .await
             .map_err(|error| sync_error(error.slug()))?;
-        store::project_calendar::backup_events(&self.surreal, project_id, calendar.as_ref())
-            .await
-            .map_err(|error| match error {
-                store::project_calendar::ProjectCalendarError::Calendar(source) => {
-                    provider_error(source)
-                }
-                _ => sync_error("saving Project Calendar event backups"),
-            })
+        store::project_calendar::backup_events(
+            &self.application_store,
+            project_id,
+            calendar.as_ref(),
+        )
+        .await
+        .map_err(|error| match error {
+            store::project_calendar::ProjectCalendarError::Calendar(source) => {
+                provider_error(source)
+            }
+            _ => sync_error("saving Project Calendar event backups"),
+        })
     }
 }
 

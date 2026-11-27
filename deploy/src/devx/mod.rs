@@ -1,12 +1,12 @@
 // devx — developer-experience tool that brings up Neon Law Navigator
-// dependency stack (SeaweedFS, Rauthy, Restate, SurrealDB, OpenObserve, and
+// dependency stack (SeaweedFS, Rauthy, PostgreSQL, OpenObserve, and
 // ClamAV) inside a KIND cluster while leaving the `web` binary on the host so
 // it can be restarted in-process during a Rust edit-compile
 // loop.
 //
 // The KIND cluster + manifests are also what `devx deploy` uses.
 // Both flows drive Kustomize overlays under `k8s/overlays/`:
-//   - `kind-deps` — base + deps + workflows-service (no `web`),
+//   - `kind-deps` — base + dependencies (no `web`),
 //                   used by `devx up` for host-side iteration
 //   - `kind`      — full local stack including `web`,
 //                   used by `devx deploy`
@@ -96,28 +96,6 @@ const INGRESS_MANIFEST: &str = "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml
 const INGRESS_MANIFEST_SHA256: &str =
     "dc850e38ca4abcb08625f1601f0656c81b6b5e34cc23d5458c332060732c14e0";
 
-// Restate Operator — same chart drives KIND and GKE. Release notes:
-// https://github.com/restatedev/restate-operator/releases. Kept aligned
-// with the server image in `k8s/staging/restate.yaml` and
-// `RESTATE_CLI_VERSION` below (2.8.1 / 1.7.2), and with the chart
-// version in `.github/workflows/deploy.yml`. NOTE: the local "restate
-// won't provision" wedge was NOT a version skew — it was the operator's
-// own `deny-all` NetworkPolicy being enforced by recent kindnet, which
-// blocked the operator→node `:5122` provisioning dial. The fix lives in
-// `restate.yaml` (`security.disableNetworkPolicies: true`), not here.
-
-// The Operator's CRDs, applied explicitly by `install_restate_operator`.
-//
-// Chart 2.8.1 moved these into a native Helm `crds/` directory (gated by
-// the chart's `installCrds`, default on). Helm installs a native CRD once
-// and never touches it again on `helm upgrade` — a deliberately
-// conservative lifecycle — so the chart alone would freeze a long-lived
-// cluster's CRD schema at whatever version first created it while a fresh
-// cluster got the current one. That silent split is exactly the drift the
-// pinned constants exist to prevent, so apply the release's CRD artifacts
-// on every `up` and let both converge.
-// Exact v2.8.1 release artifact SHA-256 digests.
-#[cfg(test)]
 #[cfg(test)]
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::Digest;
@@ -160,26 +138,6 @@ mod ingress_manifest_tests {
     }
 }
 
-// Restate CLI — pinned so operator-laptop and CI-runner versions
-// don't drift. The CLI talks to Restate Cloud's admin API; a
-// mismatch silently desyncs `deployments register`. 1.6.x renamed
-// `deployment` to `deployments` and `--env` to `--environment`.
-// Tracks the server line (see `RESTATE_OPERATOR_VERSION` above and
-// the server image in `restate.yaml`) — keep all three on 1.7.x.
-// Only `check_restate_cli_version` reads this: it warns when the CLI
-// on PATH drifts. There is no CI env to keep in step.
-
-// Last-resort public HTTPS endpoint Restate Cloud uses to reach the
-// `workflows-service` worker. Backed by the ingress + managed cert
-// under `examples/deploy/k8s/gke/ingress/workflows-*.yaml`. This is a
-// placeholder of *last* resort: the URL is resolved by
-// [`resolve_workflows_url`], which prefers an explicit `--url` /
-// `NAVIGATOR_WORKFLOWS_URL`, then derives `https://workflows.<domain>/`
-// from the resolved `brand.primary_domain` (Neon Law by default, or a custom
-// bundle's), and only falls back to this constant when none of those are set.
-// Hitting this constant in prod means the
-// re-register silently no-ops (the 2026-06-10 ship symptom).
-
 // Local `:dev` image tags KIND loads. CI publishes the real images to
 // the private Artifact Registry (`YY.M.D`); `pull_retag_load` pulls one
 // and retags it to the `:dev` name the manifests reference, so the
@@ -201,12 +159,8 @@ const DEFAULT_KUSTOMIZE_KIND: &str = "k8s/overlays/kind";
 const DEFAULT_KUSTOMIZE_GKE: &str = "examples/deploy/k8s/gke";
 
 // Host-side ports the locally-run `web` binary connects to.
-// Restate's ingress port (8080 in-cluster) is remapped to host 9080
-// because KIND already binds host 8080 to its nginx ingress.
 const DEFAULT_INGRESS_HTTP_HOST_PORT: u16 = 8080;
 const DEFAULT_INGRESS_HTTPS_HOST_PORT: u16 = 8443;
-const DEFAULT_RESTATE_INGRESS_HOST_PORT: u16 = 9080;
-const DEFAULT_RESTATE_ADMIN_HOST_PORT: u16 = 9070;
 const DEFAULT_CLAMAV_HOST_PORT: u16 = 13310;
 // Rauthy is exposed through KIND's fixed NodePort mapping. SeaweedFS S3
 // uses a normal `kubectl port-forward`, so existing clusters pick up a
@@ -215,13 +169,6 @@ const DEFAULT_RAUTHY_HOST_PORT: u16 = 30080;
 const LOCAL_RAUTHY_CLIENT_SECRET: &str =
     "navigatorwebsecretnavigatorwebsecretnavigatorwebsecretnavigatorw";
 const DEFAULT_SEAWEEDFS_S3_HOST_PORT: u16 = 30900;
-// SurrealDB (the `surreal` Service in `navigator`), the store the
-// workspace is porting onto (#1093). Its own port 8000 is a crowded
-// default on a developer's machine, and 8080 is already KIND's ingress,
-// so the host mapping is 18000 — clear of every other port this module
-// binds.
-const DEFAULT_SURREAL_HOST_PORT: u16 = 18000;
-
 // Local `web` defaults — matches `cargo run -p neon` defaults.
 const DEFAULT_LOCAL_WEB_PORT: u16 = 3001;
 // The shared `dev up` tier's fixed second port: DeleteYourData.com,
@@ -267,12 +214,9 @@ struct KindConfig {
     gke_overlay: String,
     ingress_http_port: u16,
     ingress_https_port: u16,
-    restate_ingress_port: u16,
-    restate_admin_port: u16,
     clamav_port: u16,
     rauthy_port: u16,
     seaweedfs_s3_port: u16,
-    surreal_port: u16,
     web_port: u16,
     delete_your_data_web_port: u16,
     openobserve_port: u16,
@@ -307,21 +251,12 @@ impl KindConfig {
                 "NAVIGATOR_KIND_INGRESS_HTTPS_PORT",
                 DEFAULT_INGRESS_HTTPS_HOST_PORT,
             ),
-            restate_ingress_port: env_port(
-                "NAVIGATOR_KIND_RESTATE_INGRESS_PORT",
-                DEFAULT_RESTATE_INGRESS_HOST_PORT,
-            ),
-            restate_admin_port: env_port(
-                "NAVIGATOR_KIND_RESTATE_ADMIN_PORT",
-                DEFAULT_RESTATE_ADMIN_HOST_PORT,
-            ),
             clamav_port: env_port("NAVIGATOR_KIND_CLAMAV_PORT", DEFAULT_CLAMAV_HOST_PORT),
             rauthy_port: env_port("NAVIGATOR_KIND_RAUTHY_PORT", DEFAULT_RAUTHY_HOST_PORT),
             seaweedfs_s3_port: env_port(
                 "NAVIGATOR_KIND_SEAWEEDFS_S3_PORT",
                 DEFAULT_SEAWEEDFS_S3_HOST_PORT,
             ),
-            surreal_port: env_port("NAVIGATOR_KIND_SURREAL_PORT", DEFAULT_SURREAL_HOST_PORT),
             web_port: env_port("NAVIGATOR_KIND_WEB_PORT", DEFAULT_LOCAL_WEB_PORT),
             delete_your_data_web_port: env_port(
                 delete_your_data_port_env_var(),
@@ -658,7 +593,7 @@ pub enum GcpCmd {
         /// `NAVIGATOR_GITHUB_ORG`.
         #[arg(long, env = "NAVIGATOR_GITHUB_ORG")]
         applications_publisher_org: Option<String>,
-        /// Long-term Iceberg archive of this deployment's Surreal store
+        /// Long-term Iceberg archive for this deployment
         /// (`<archives-prefix><deployment>`). No lifecycle rule: this is where
         /// long-term storage lives. Omit to skip the lane entirely — there is
         /// no derived default, because the name is prefix-shaped rather than
@@ -2586,7 +2521,7 @@ mod tests {
                 }
                 let body = std::fs::read_to_string(&path).expect("read overlay manifest");
                 // Only the navigator-web Deployment patch matters; the
-                // dependency manifests (SeaweedFS, Rauthy, Surreal) legitimately
+                // dependency manifests (SeaweedFS, Rauthy, PostgreSQL) legitimately
                 // pin their own upstream images.
                 if !body.contains("name: navigator-web") {
                     continue;
@@ -2743,8 +2678,6 @@ mod tests {
         "NAVIGATOR_GKE_OVERLAY",
         "NAVIGATOR_KIND_INGRESS_HTTP_PORT",
         "NAVIGATOR_KIND_INGRESS_HTTPS_PORT",
-        "NAVIGATOR_KIND_RESTATE_INGRESS_PORT",
-        "NAVIGATOR_KIND_RESTATE_ADMIN_PORT",
         "NAVIGATOR_KIND_CLAMAV_PORT",
         "NAVIGATOR_KIND_RAUTHY_PORT",
         "NAVIGATOR_KIND_SEAWEEDFS_S3_PORT",
@@ -2781,12 +2714,9 @@ mod tests {
             gke_overlay: DEFAULT_KUSTOMIZE_GKE.into(),
             ingress_http_port: DEFAULT_INGRESS_HTTP_HOST_PORT,
             ingress_https_port: DEFAULT_INGRESS_HTTPS_HOST_PORT,
-            restate_ingress_port: DEFAULT_RESTATE_INGRESS_HOST_PORT,
-            restate_admin_port: DEFAULT_RESTATE_ADMIN_HOST_PORT,
             clamav_port: DEFAULT_CLAMAV_HOST_PORT,
             rauthy_port: DEFAULT_RAUTHY_HOST_PORT,
             seaweedfs_s3_port: DEFAULT_SEAWEEDFS_S3_HOST_PORT,
-            surreal_port: DEFAULT_SURREAL_HOST_PORT,
             web_port: DEFAULT_LOCAL_WEB_PORT,
             delete_your_data_web_port: DEFAULT_LOCAL_DELETE_YOUR_DATA_WEB_PORT,
             openobserve_port: DEFAULT_OPENOBSERVE_HOST_PORT,
@@ -2920,8 +2850,6 @@ mod tests {
         clear_kind_env();
         env::set_var("NAVIGATOR_KIND_INGRESS_HTTP_PORT", "18080");
         env::set_var("NAVIGATOR_KIND_INGRESS_HTTPS_PORT", "18443");
-        env::set_var("NAVIGATOR_KIND_RESTATE_INGRESS_PORT", "19080");
-        env::set_var("NAVIGATOR_KIND_RESTATE_ADMIN_PORT", "19070");
         env::set_var("NAVIGATOR_KIND_CLAMAV_PORT", "23310");
         env::set_var("NAVIGATOR_KIND_RAUTHY_PORT", "31080");
         env::set_var("NAVIGATOR_KIND_SEAWEEDFS_S3_PORT", "31900");
@@ -2931,8 +2859,6 @@ mod tests {
         clear_kind_env();
         assert_eq!(cfg.ingress_http_port, 18080);
         assert_eq!(cfg.ingress_https_port, 18443);
-        assert_eq!(cfg.restate_ingress_port, 19080);
-        assert_eq!(cfg.restate_admin_port, 19070);
         assert_eq!(cfg.clamav_port, 23310);
         assert_eq!(cfg.rauthy_port, 31080);
         assert_eq!(cfg.seaweedfs_s3_port, 31900);

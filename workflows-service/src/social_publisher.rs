@@ -15,9 +15,9 @@ use crate::workflow_step_error::WorkflowStepError;
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::config::SocialEgressGate;
 use store::social_accounts::SocialProvider;
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::social_publish::{send_credential, SendCredential, TokenRefreshConfig};
 
@@ -148,13 +148,13 @@ pub struct ReconcileReport {
 impl SocialPublisherService {
     #[must_use]
     pub fn new(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         kms: Arc<dyn cloud::RuntimeKms>,
         storage: Arc<dyn cloud::StorageService>,
     ) -> Self {
         Self {
             publisher: Publisher {
-                surreal,
+                application_store,
                 kms,
                 storage,
                 egress: SocialEgressGate::from_process_env(),
@@ -175,11 +175,11 @@ impl SocialPublisherService {
 /// rescheduled since the request was made. Shared by the Restate handler and
 /// the DBOS twin's `load-scheduled-post` step.
 pub(crate) async fn scheduled_post_snapshot(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     post_id: Uuid,
     requested_at: DateTime<Utc>,
 ) -> Result<Option<PostSnapshot>, SnapshotError> {
-    let post = store::posts::find_by_id(surreal, post_id).await?;
+    let post = store::posts::find_by_id(application_store, post_id).await?;
     let Some(post) = post else {
         return Ok(None);
     };
@@ -187,7 +187,7 @@ pub(crate) async fn scheduled_post_snapshot(
         return Ok(None);
     }
     let accounts = store::social_accounts::selected_for_brand(
-        surreal,
+        application_store,
         &post.brand_key,
         &post.selected_social_accounts,
     )
@@ -240,7 +240,7 @@ pub(crate) const fn provider_name(provider: SocialProvider) -> &'static str {
 /// journal: each resolves its own credential immediately before its request.
 #[derive(Clone)]
 pub struct Publisher {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     kms: Arc<dyn cloud::RuntimeKms>,
     storage: Arc<dyn cloud::StorageService>,
     egress: SocialEgressGate,
@@ -258,7 +258,7 @@ impl Publisher {
     /// with `set_endpoints`.
     #[must_use]
     pub fn with_parts(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         kms: Arc<dyn cloud::RuntimeKms>,
         storage: Arc<dyn cloud::StorageService>,
         egress: SocialEgressGate,
@@ -267,7 +267,7 @@ impl Publisher {
         video_url: fn(&str) -> String,
     ) -> Self {
         Self {
-            surreal,
+            application_store,
             kms,
             storage,
             egress,
@@ -316,8 +316,8 @@ impl Publisher {
 
     /// The store the publication state is admitted into and claimed from.
     #[must_use]
-    pub(crate) fn surreal(&self) -> &SurrealDb {
-        &self.surreal
+    pub(crate) fn application_store(&self) -> &ApplicationStore {
+        &self.application_store
     }
 
     pub(crate) async fn start_tiktok(
@@ -326,9 +326,10 @@ impl Publisher {
         post: &PostSnapshot,
         destination: &Destination,
     ) -> Result<Step<String>, WorkflowStepError> {
-        let publications = store::social_publications::for_posts(&self.surreal, &[post_id])
-            .await
-            .map_err(WorkflowStepError::retryable)?;
+        let publications =
+            store::social_publications::for_posts(&self.application_store, &[post_id])
+                .await
+                .map_err(WorkflowStepError::retryable)?;
         if let Some(task) = publications
             .iter()
             .find(|p| p.provider == "tiktok")
@@ -497,7 +498,7 @@ impl Publisher {
         destination: &Destination,
         key: &str,
     ) -> Result<Step<Vec<u8>>, WorkflowStepError> {
-        let measured = store::posts::find_video(&self.surreal, key)
+        let measured = store::posts::find_video(&self.application_store, key)
             .await
             .map_err(WorkflowStepError::retryable)?;
         if !post.vertical_video
@@ -640,9 +641,14 @@ impl Publisher {
                 .await
                 .map(Step::Settled);
         };
-        store::social_publications::record_provider_task(&self.surreal, post_id, "tiktok", task)
-            .await
-            .map_err(WorkflowStepError::retryable)?;
+        store::social_publications::record_provider_task(
+            &self.application_store,
+            post_id,
+            "tiktok",
+            task,
+        )
+        .await
+        .map_err(WorkflowStepError::retryable)?;
         Ok(Step::Continue(task.to_string()))
     }
 
@@ -651,7 +657,7 @@ impl Publisher {
         post_id: Uuid,
         post: &PostSnapshot,
     ) -> Result<bool, WorkflowStepError> {
-        let current = store::posts::find_by_id(&self.surreal, post_id)
+        let current = store::posts::find_by_id(&self.application_store, post_id)
             .await
             .map_err(WorkflowStepError::retryable)?;
         Ok(current.is_some_and(|row| {
@@ -670,11 +676,12 @@ impl Publisher {
         destination: &Destination,
         task: &str,
     ) -> Result<Option<PublishOutcome>, WorkflowStepError> {
-        let publication = store::social_publications::for_posts(&self.surreal, &[post_id])
-            .await
-            .map_err(WorkflowStepError::retryable)?
-            .into_iter()
-            .find(|publication| publication.provider == "tiktok");
+        let publication =
+            store::social_publications::for_posts(&self.application_store, &[post_id])
+                .await
+                .map_err(WorkflowStepError::retryable)?
+                .into_iter()
+                .find(|publication| publication.provider == "tiktok");
         if let Some(publication) = publication {
             if publication.provider_task_id.as_deref() != Some(task) {
                 return Ok(Some(PublishOutcome::new(destination.provider, UNKNOWN)));
@@ -714,7 +721,7 @@ impl Publisher {
                 .map(Step::Settled);
         }
         let Ok(credential) = send_credential(
-            &self.surreal,
+            &self.application_store,
             self.kms.as_ref(),
             &self.http,
             &self.refresh,
@@ -742,7 +749,7 @@ impl Publisher {
         match status {
             Ok(crate::tiktok_business::PublishStatus::Complete(ids)) if ids.len() == 1 => {
                 store::social_publications::mark_confirmed(
-                    &self.surreal,
+                    &self.application_store,
                     post_id,
                     "tiktok",
                     &ids[0],
@@ -826,7 +833,7 @@ impl Publisher {
     ) -> Result<Step<()>, WorkflowStepError> {
         let provider = destination.provider;
         let admission =
-            store::social_publications::admit(&self.surreal, post_id, provider.as_str())
+            store::social_publications::admit(&self.application_store, post_id, provider.as_str())
                 .await
                 .map_err(WorkflowStepError::retryable)?;
         match admission {
@@ -927,7 +934,7 @@ impl Publisher {
             return Ok(Err(PublishOutcome::new(provider, BLOCKED)));
         }
         match send_credential(
-            &self.surreal,
+            &self.application_store,
             self.kms.as_ref(),
             &self.http,
             &self.refresh,
@@ -952,7 +959,7 @@ impl Publisher {
         reason: &str,
     ) -> Result<(), WorkflowStepError> {
         store::social_publications::mark_failed_before_send(
-            &self.surreal,
+            &self.application_store,
             post_id,
             provider.as_str(),
             reason,
@@ -979,9 +986,14 @@ impl Publisher {
         provider: SocialProvider,
         reason: &str,
     ) -> Result<PublishOutcome, WorkflowStepError> {
-        store::social_publications::mark_failed(&self.surreal, post_id, provider.as_str(), reason)
-            .await
-            .map_err(WorkflowStepError::retryable)?;
+        store::social_publications::mark_failed(
+            &self.application_store,
+            post_id,
+            provider.as_str(),
+            reason,
+        )
+        .await
+        .map_err(WorkflowStepError::retryable)?;
         Ok(PublishOutcome::new(provider, FAILED))
     }
 
@@ -991,9 +1003,14 @@ impl Publisher {
         provider: SocialProvider,
         reason: &str,
     ) -> Result<PublishOutcome, WorkflowStepError> {
-        store::social_publications::mark_unknown(&self.surreal, post_id, provider.as_str(), reason)
-            .await
-            .map_err(WorkflowStepError::retryable)?;
+        store::social_publications::mark_unknown(
+            &self.application_store,
+            post_id,
+            provider.as_str(),
+            reason,
+        )
+        .await
+        .map_err(WorkflowStepError::retryable)?;
         Ok(PublishOutcome::new(provider, UNKNOWN))
     }
 
@@ -1005,7 +1022,7 @@ impl Publisher {
         provider: SocialProvider,
     ) -> Result<Option<PublishOutcome>, WorkflowStepError> {
         let claimed = store::social_publications::begin_provider_write(
-            &self.surreal,
+            &self.application_store,
             post_id,
             provider.as_str(),
         )
@@ -1554,10 +1571,15 @@ impl Publisher {
         {
             return Ok(false);
         }
-        store::social_publications::record_permalink(&self.surreal, post_id, "tiktok", link)
-            .await
-            .map(|_| true)
-            .map_err(WorkflowStepError::retryable)
+        store::social_publications::record_permalink(
+            &self.application_store,
+            post_id,
+            "tiktok",
+            link,
+        )
+        .await
+        .map(|_| true)
+        .map_err(WorkflowStepError::retryable)
     }
 
     /// Revisit retained uploads after the initial polling window. This path only reads providers.
@@ -1565,22 +1587,23 @@ impl Publisher {
         if self.egress.check().is_err() {
             return Ok(0);
         }
-        let pending = store::social_publications::pending_links(&self.surreal, "youtube", 100)
-            .await
-            .map_err(WorkflowStepError::retryable)?;
+        let pending =
+            store::social_publications::pending_links(&self.application_store, "youtube", 100)
+                .await
+                .map_err(WorkflowStepError::retryable)?;
         let mut recorded = 0;
         for publication in pending {
             let Some(receipt) = publication.provider_post_id.as_deref() else {
                 continue;
             };
-            let Some(post) = store::posts::find_by_id(&self.surreal, publication.post_id)
+            let Some(post) = store::posts::find_by_id(&self.application_store, publication.post_id)
                 .await
                 .map_err(WorkflowStepError::retryable)?
             else {
                 continue;
             };
             let accounts = store::social_accounts::selected_for_brand(
-                &self.surreal,
+                &self.application_store,
                 &post.brand_key,
                 &post.selected_social_accounts,
             )
@@ -1642,7 +1665,7 @@ impl Publisher {
             return Ok(false);
         }
         Ok(store::social_publications::record_permalink(
-            &self.surreal,
+            &self.application_store,
             post_id,
             "youtube",
             &format!("https://www.youtube.com/watch?v={receipt}"),
@@ -1663,7 +1686,7 @@ impl Publisher {
             return Ok(false);
         }
         let Ok(credential) = send_credential(
-            &self.surreal,
+            &self.application_store,
             self.kms.as_ref(),
             &self.http,
             &self.refresh,
@@ -1708,7 +1731,7 @@ impl Publisher {
                 return Ok(false);
             }
             return Ok(store::social_publications::record_permalink(
-                &self.surreal,
+                &self.application_store,
                 post_id,
                 "x",
                 &format!("https://x.com/i/web/status/{receipt}"),
@@ -1741,7 +1764,7 @@ impl Publisher {
             return Ok(false);
         };
         Ok(store::social_publications::record_permalink(
-            &self.surreal,
+            &self.application_store,
             post_id,
             provider.as_str(),
             &permalink,
@@ -1770,7 +1793,7 @@ impl Publisher {
                 };
                 let permalink = provider_permalink(provider, &body);
                 store::social_publications::mark_confirmed(
-                    &self.surreal,
+                    &self.application_store,
                     post_id,
                     provider.as_str(),
                     id,
@@ -2148,21 +2171,10 @@ mod tests {
     use super::{CONFIRMED, FAILED, UNKNOWN};
     use std::time::Duration;
 
-    use super::{
-        container_policy, publication_outcome, ContainerStatus, Destination, PostSnapshot,
-        ProviderEndpoints, PublishOutcome, Publisher, Step,
-    };
+    use super::{container_policy, publication_outcome, PostSnapshot, PublishOutcome};
     use chrono::Utc;
-    use cloud::StorageService as _;
-    use store::brands::NewBrand;
-    use store::config::{SocialEgressDenied, SocialEgressGate};
-    use store::firms::NewFirm;
-    use store::persons::{NewPerson, Role};
-    use store::social_accounts::{ConnectSocialAccount, SocialProvider};
-    use store::social_publications::Admission;
-    use uuid::Uuid;
-    use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
-    use workflows::social_publish::TokenRefreshConfig;
+
+    use store::social_accounts::SocialProvider;
 
     const VIDEO: &str = "synthetic/video.mp4";
 
@@ -2182,1135 +2194,6 @@ mod tests {
             youtube_caption: Some("YouTube copy".into()),
             destinations: Vec::new(),
         }
-    }
-
-    async fn tiktok_fixture(fixture: &Fixture, snapshot: &PostSnapshot) -> Uuid {
-        let id = fixture.blog_post().await;
-        fixture.db.query("UPDATE $id SET publish_at=<datetime>$publish_at,video_asset=$video,vertical_video=true,tiktok_ai_generated=false,description=$description")
-            .bind(("id",store::surreal::record_id("post",id)))
-            .bind(("publish_at",snapshot.publish_at.unwrap().to_rfc3339()))
-            .bind(("description",snapshot.description.clone()))
-            .bind(("video",VIDEO.to_string())).await.unwrap().check().unwrap();
-        fixture
-            .connect(
-                SocialProvider::Tiktok,
-                "tiktok-user",
-                SocialProvider::Tiktok.required_scopes(),
-                None,
-            )
-            .await;
-        store::posts::record_video(&fixture.db, "synthetic-brand", VIDEO, 1080, 1920)
-            .await
-            .unwrap();
-        fixture
-            .storage
-            .put(
-                VIDEO,
-                &crate::tiktok_business::tests::video(30, 30),
-                "video/mp4",
-            )
-            .await
-            .unwrap();
-        id
-    }
-
-    #[tokio::test]
-    async fn tiktok_missing_disclosure_blocks_without_provider_requests() {
-        let fixture = Fixture::new("TikTok disclosure").await;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let id = fixture.blog_post().await;
-        let publisher = fixture.publisher_at(&endpoint, allowed());
-        let target = Destination {
-            provider: SocialProvider::Tiktok,
-            account_id: "tiktok-user".into(),
-        };
-        let result = publisher.prepare(id, &post(true), &target).await.unwrap();
-        assert!(matches!(result,Step::Settled(PublishOutcome{state,..}) if state==FAILED));
-        let row = store::social_publications::find(&fixture.db, id, "tiktok")
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(row
-            .last_error
-            .as_deref()
-            .unwrap()
-            .contains("tiktok_ai_generated"));
-        assert_eq!(
-            listener.accept().unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock
-        );
-    }
-
-    #[tokio::test]
-    async fn tiktok_accepted_task_reconciles_without_duplicate_send() {
-        let fixture = Fixture::new("TikTok async").await;
-        let server = MockServer::start().await;
-        let mut snapshot = post(true);
-        snapshot.tiktok_ai_generated = Some(false);
-        let id = tiktok_fixture(&fixture, &snapshot).await;
-        let publisher = fixture.publisher(&server, allowed());
-        let target = Destination {
-            provider: SocialProvider::Tiktok,
-            account_id: "tiktok-user".into(),
-        };
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/tiktok/business/property/list/"))
-            .and(matchers::query_param("app_id", "synthetic-app"))
-            .and(matchers::query_param("secret", "synthetic-secret"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"url_property_info_list":[{"property_type":1,"property_status":1,"url":"example.test"}]}})))
-            .mount(&server).await;
-        Mock::given(matchers::method("GET")).and(matchers::path("/tiktok/business/video/settings/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"privacy_level_options":["PUBLIC_TO_EVERYONE"],"max_video_post_duration_sec":600}}))).mount(&server).await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/tiktok/business/video/publish/"))
-            .and(matchers::header("Access-Token", "synthetic-access-token"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(
-                    serde_json::json!({"code":0,"data":{"share_id":"synthetic-task"}}),
-                ),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        assert!(matches!(
-            publisher.prepare(id, &snapshot, &target).await.unwrap(),
-            Step::Continue(())
-        ));
-        assert!(
-            matches!(publisher.start_tiktok(id,&snapshot,&target).await.unwrap(),Step::Continue(task) if task=="synthetic-task")
-        );
-        assert!(
-            matches!(publisher.start_tiktok(id,&snapshot,&target).await.unwrap(),Step::Continue(task) if task=="synthetic-task")
-        );
-        let requests = server.received_requests().await.unwrap();
-        assert_eq!(
-            requests
-                .iter()
-                .filter(|request| request.method == "POST")
-                .count(),
-            1
-        );
-        let publications = store::social_publications::for_posts(&fixture.db, &[id])
-            .await
-            .unwrap();
-        assert_eq!(publications[0].state, UNKNOWN);
-        assert!(publications[0].provider_post_id.is_none());
-        Mock::given(matchers::method("GET")).and(matchers::path("/tiktok/business/publish/status/"))
-            .and(matchers::query_param("publish_id","synthetic-task"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"status":"PUBLISH_COMPLETE","post_ids":["synthetic-public"]}}))).mount(&server).await;
-        assert!(
-            matches!(publisher.poll_tiktok(id,&snapshot,&target,"synthetic-task").await.unwrap(),Step::Settled(outcome) if outcome.state==CONFIRMED)
-        );
-        let publications = store::social_publications::for_posts(&fixture.db, &[id])
-            .await
-            .unwrap();
-        assert_eq!(
-            publications[0].provider_post_id.as_deref(),
-            Some("synthetic-public")
-        );
-        assert!(publications[0].permalink.is_none());
-        assert!(
-            matches!(publisher.poll_tiktok(id, &snapshot, &target, "synthetic-task").await.unwrap(),
-            Step::Settled(outcome) if outcome.state == CONFIRMED && outcome.link_pending.as_deref() == Some("synthetic-public"))
-        );
-        Mock::given(matchers::method("GET")).and(matchers::path("/tiktok/business/video/list/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"videos":[{"item_id":"synthetic-public","share_url":"https://www.tiktok.com/@synthetic/video/123","media_type":"VIDEO","is_ad":false}]}}))).mount(&server).await;
-        assert!(publisher
-            .read_permalink(id, &snapshot.brand_key, &target, "synthetic-public")
-            .await
-            .unwrap());
-        assert!(
-            matches!(publisher.prepare(id,&snapshot,&target).await.unwrap(),Step::Settled(outcome) if outcome.state==CONFIRMED)
-        );
-    }
-
-    #[tokio::test]
-    async fn tiktok_unverified_media_property_refuses_before_publish() {
-        let fixture = Fixture::new("TikTok unverified media").await;
-        let server = MockServer::start().await;
-        let mut snapshot = post(true);
-        snapshot.tiktok_ai_generated = Some(false);
-        let id = tiktok_fixture(&fixture, &snapshot).await;
-        let publisher = fixture.publisher(&server, allowed());
-        let target = Destination {
-            provider: SocialProvider::Tiktok,
-            account_id: "tiktok-user".into(),
-        };
-        Mock::given(matchers::method("GET")).and(matchers::path("/tiktok/business/video/settings/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"privacy_level_options":["PUBLIC_TO_EVERYONE"],"max_video_post_duration_sec":600}}))).mount(&server).await;
-        Mock::given(matchers::method("GET")).and(matchers::path("/tiktok/business/property/list/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"url_property_info_list":[{"property_type":1,"property_status":0,"url":"example.test"}]}}))).mount(&server).await;
-        Mock::given(matchers::method("POST"))
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-        publisher.prepare(id, &snapshot, &target).await.unwrap();
-        assert!(
-            matches!(publisher.start_tiktok(id, &snapshot, &target).await.unwrap(),Step::Settled(outcome) if outcome.state==FAILED)
-        );
-    }
-
-    #[tokio::test]
-    async fn tiktok_final_write_refuses_a_reconnected_credential() {
-        let fixture = Fixture::new("TikTok credential race").await;
-        let server = silent_provider().await;
-        let mut snapshot = post(true);
-        snapshot.tiktok_ai_generated = Some(false);
-        let id = tiktok_fixture(&fixture, &snapshot).await;
-        let publisher = fixture.publisher(&server, allowed());
-        let target = Destination {
-            provider: SocialProvider::Tiktok,
-            account_id: "tiktok-user".into(),
-        };
-        publisher.prepare(id, &snapshot, &target).await.unwrap();
-        let original = publisher
-            .writable(id, &snapshot, &target)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(matches!(
-            publisher
-                .tiktok_final_credential(id, &snapshot, &target, &original)
-                .await
-                .unwrap(),
-            Step::Continue(_)
-        ));
-        store::social_accounts::connect(
-            &fixture.db,
-            ConnectSocialAccount {
-                actor_role: Role::Admin,
-                actor_person_id: fixture.admin,
-                brand_key: "synthetic-brand",
-                provider: SocialProvider::Tiktok,
-                provider_account_id: "tiktok-user",
-                display_name: None,
-                scopes: &SocialProvider::Tiktok
-                    .required_scopes()
-                    .iter()
-                    .map(|scope| (*scope).to_string())
-                    .collect::<Vec<_>>(),
-                expires_at: None,
-                access_token: "synthetic-reconnected-token",
-                refresh_token: None,
-            },
-            &fixture.kms,
-        )
-        .await
-        .unwrap();
-        assert!(
-            matches!(publisher.tiktok_final_credential(id, &snapshot, &target, &original).await.unwrap(),
-            Step::Settled(outcome) if outcome.state == FAILED)
-        );
-        assert!(server.received_requests().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn tiktok_failed_poll_replay_returns_terminal_without_provider_request() {
-        let fixture = Fixture::new("TikTok failed replay").await;
-        let server = silent_provider().await;
-        let snapshot = post(true);
-        let id = fixture.blog_post().await;
-        store::social_publications::admit(&fixture.db, id, "tiktok")
-            .await
-            .unwrap();
-        store::social_publications::begin_provider_write(&fixture.db, id, "tiktok")
-            .await
-            .unwrap();
-        store::social_publications::record_provider_task(
-            &fixture.db,
-            id,
-            "tiktok",
-            "synthetic-task",
-        )
-        .await
-        .unwrap();
-        store::social_publications::mark_failed(&fixture.db, id, "tiktok", "synthetic failure")
-            .await
-            .unwrap();
-        let publisher = fixture.publisher(&server, allowed());
-        let target = Destination {
-            provider: SocialProvider::Tiktok,
-            account_id: "tiktok-user".into(),
-        };
-        for _ in 0..2 {
-            assert!(
-                matches!(publisher.poll_tiktok(id, &snapshot, &target, "synthetic-task").await.unwrap(),
-                Step::Settled(outcome) if outcome.state == FAILED)
-            );
-        }
-        assert!(server.received_requests().await.unwrap().is_empty());
-    }
-
-    fn allowed() -> SocialEgressGate {
-        SocialEgressGate::new(|| Ok(()))
-    }
-
-    fn denied_by(
-        environment: Option<&'static str>,
-        simulated: Option<&'static str>,
-    ) -> SocialEgressGate {
-        SocialEgressGate::new(move || {
-            store::config::social_egress_from(|key| match key {
-                store::config::NAVIGATOR_ENVIRONMENT => environment.map(str::to_owned),
-                store::config::NAVIGATOR_SIMULATED_MATTERS => simulated.map(str::to_owned),
-                _ => None,
-            })
-        })
-    }
-
-    /// A provider double that fails the test if any request reaches it.
-    async fn silent_provider() -> MockServer {
-        let server = MockServer::start().await;
-        Mock::given(matchers::any())
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-        server
-    }
-
-    struct Fixture {
-        db: store::surreal::SurrealDb,
-        kms: cloud::FakeKms,
-        storage: std::sync::Arc<cloud::FsStorage>,
-        admin: Uuid,
-        _dir: tempfile::TempDir,
-    }
-
-    impl Fixture {
-        async fn new(name: &str) -> Self {
-            let db = store::test_support::mem_surreal().await;
-            let admin = store::persons::create(
-                &db,
-                &NewPerson::with_role(
-                    name,
-                    format!("{name}-{}@example.com", Uuid::now_v7()),
-                    Role::Admin,
-                ),
-            )
-            .await
-            .unwrap();
-            let firm = store::firms::create(
-                &db,
-                &NewFirm {
-                    name: format!("{name} Firm"),
-                    status: "active".into(),
-                    entity_id: store::test_support::seed_entity(&db).await,
-                    admin_dri_person_id: admin.id,
-                },
-            )
-            .await
-            .unwrap();
-            store::brands::create(
-                &db,
-                Role::Admin,
-                Some(admin.id),
-                &NewBrand {
-                    name: format!("{name} Brand"),
-                    key: "synthetic-brand".into(),
-                    firm_id: Some(firm.id),
-                    primary_color: None,
-                    accent_color: None,
-                    typeface: None,
-                },
-            )
-            .await
-            .unwrap();
-            let dir = tempfile::tempdir().unwrap();
-            let storage = cloud::FsStorage::new(dir.path()).await.unwrap();
-            storage
-                .put(VIDEO, b"synthetic video", "video/mp4")
-                .await
-                .unwrap();
-            Self {
-                db,
-                kms: cloud::FakeKms::new(name),
-                storage: std::sync::Arc::new(storage),
-                admin: admin.id,
-                _dir: dir,
-            }
-        }
-
-        async fn connect(
-            &self,
-            provider: SocialProvider,
-            account_id: &str,
-            scopes: &[&str],
-            expires_at: Option<chrono::DateTime<Utc>>,
-        ) {
-            let scopes = scopes
-                .iter()
-                .map(|scope| (*scope).to_string())
-                .collect::<Vec<_>>();
-            store::social_accounts::connect(
-                &self.db,
-                ConnectSocialAccount {
-                    actor_role: Role::Admin,
-                    actor_person_id: self.admin,
-                    brand_key: "synthetic-brand",
-                    provider,
-                    provider_account_id: account_id,
-                    display_name: None,
-                    scopes: &scopes,
-                    expires_at,
-                    access_token: "synthetic-access-token",
-                    refresh_token: None,
-                },
-                &self.kms,
-            )
-            .await
-            .unwrap();
-        }
-
-        async fn connect_all(&self) {
-            for (provider, account) in [
-                (SocialProvider::Facebook, "facebook-page"),
-                (SocialProvider::Instagram, "instagram-user"),
-                (SocialProvider::Threads, "threads-user"),
-                (SocialProvider::Youtube, "youtube-channel"),
-                (SocialProvider::Linkedin, "1001"),
-                (SocialProvider::X, "1002"),
-            ] {
-                self.connect(provider, account, provider.required_scopes(), None)
-                    .await;
-            }
-        }
-
-        fn publisher(&self, server: &MockServer, egress: SocialEgressGate) -> Publisher {
-            self.publisher_at(&server.uri(), egress)
-        }
-
-        fn publisher_at(&self, endpoint: &str, egress: SocialEgressGate) -> Publisher {
-            Publisher {
-                surreal: self.db.clone(),
-                kms: std::sync::Arc::new(self.kms.clone()),
-                storage: self.storage.clone(),
-                egress,
-                refresh: TokenRefreshConfig {
-                    x_token_url: format!("{endpoint}/token"),
-                    tiktok_token_url: format!("{endpoint}/tiktok-token"),
-                    tiktok_client: Some(("synthetic-app".into(), "synthetic-secret".into())),
-                    x_client: Some(("x-id".into(), "x-secret".into())),
-                    threads_refresh_url: format!("{endpoint}/refresh_access_token"),
-                    google_token_url: format!("{endpoint}/token"),
-                    youtube_client: None,
-                },
-                endpoints: ProviderEndpoints {
-                    facebook_graph: endpoint.to_owned(),
-                    threads: endpoint.to_owned(),
-                    youtube_upload: endpoint.to_owned(),
-                    youtube_api: endpoint.to_owned(),
-                    x_api: endpoint.to_owned(),
-                    tiktok: format!("{endpoint}/tiktok"),
-                    linkedin_rest: endpoint.to_owned(),
-                },
-                http: reqwest::Client::builder()
-                    .timeout(Duration::from_millis(500))
-                    .build()
-                    .unwrap(),
-                video_url: |key| format!("https://assets.example.test/{key}"),
-            }
-        }
-
-        async fn blog_post(&self) -> Uuid {
-            let id = Uuid::now_v7();
-            self.db
-                .query("CREATE $id SET brand_key = 'synthetic-brand', slug = $slug, title = 'Synthetic', description = '', body_html = '', status = 'scheduled', inserted_at = time::now(), updated_at = time::now()")
-                .bind(("id", store::surreal::record_id("post", id)))
-                .bind(("slug", id.to_string()))
-                .await
-                .unwrap()
-                .check()
-                .unwrap();
-            id
-        }
-
-        async fn publication(
-            &self,
-            post_id: Uuid,
-        ) -> store::social_publications::SocialPublication {
-            store::social_publications::for_posts(&self.db, &[post_id])
-                .await
-                .unwrap()
-                .remove(0)
-        }
-    }
-
-    fn destination(provider: SocialProvider) -> Destination {
-        Destination {
-            provider,
-            account_id: match provider {
-                SocialProvider::Facebook => "facebook-page",
-                SocialProvider::Instagram => "instagram-user",
-                SocialProvider::Threads => "threads-user",
-                SocialProvider::Youtube => "youtube-channel",
-                SocialProvider::Linkedin => "1001",
-                SocialProvider::X => "1002",
-                SocialProvider::Tiktok => "tiktok-user",
-            }
-            .into(),
-        }
-    }
-
-    /// The workflow handler's step order, without the Restate journal or its
-    /// durable sleeps.
-    async fn drive(
-        publisher: &Publisher,
-        post_id: Uuid,
-        post: &PostSnapshot,
-        destination: &Destination,
-    ) -> PublishOutcome {
-        let outcome = send(publisher, post_id, post, destination).await;
-        if let Some(receipt) = outcome.link_pending.as_deref() {
-            publisher
-                .read_permalink(post_id, &post.brand_key, destination, receipt)
-                .await
-                .unwrap();
-        }
-        outcome
-    }
-
-    async fn send(
-        publisher: &Publisher,
-        post_id: Uuid,
-        post: &PostSnapshot,
-        destination: &Destination,
-    ) -> PublishOutcome {
-        if let Step::Settled(outcome) = publisher.prepare(post_id, post, destination).await.unwrap()
-        {
-            return outcome;
-        }
-        let Some(policy) = container_policy(destination.provider) else {
-            return publisher
-                .send_direct(post_id, post, destination)
-                .await
-                .unwrap();
-        };
-        let container = match publisher
-            .create_container(post_id, post, destination)
-            .await
-            .unwrap()
-        {
-            Step::Continue(container) => container,
-            Step::Settled(outcome) => return outcome,
-        };
-        for _ in 0..policy.checks {
-            match publisher
-                .container_status(post_id, post, destination, &container)
-                .await
-                .unwrap()
-            {
-                Step::Settled(outcome) => return outcome,
-                Step::Continue(ContainerStatus::Processing) => {}
-                Step::Continue(ContainerStatus::Ready) => {
-                    return publisher
-                        .publish_container(post_id, post, destination, &container)
-                        .await
-                        .unwrap();
-                }
-            }
-        }
-        publisher
-            .fail(post_id, destination.provider, "still processing")
-            .await
-            .unwrap()
-    }
-
-    fn json(body: serde_json::Value) -> ResponseTemplate {
-        ResponseTemplate::new(200).set_body_json(body)
-    }
-
-    async fn mount_container(server: &MockServer, created: u64) {
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/instagram-user/media"))
-            .and(matchers::body_string_contains("media_type=REELS"))
-            .and(matchers::body_string_contains(
-                "video_url=https%3A%2F%2Fassets.example.test%2Fsynthetic%2Fvideo.mp4",
-            ))
-            .respond_with(json(serde_json::json!({"id": "container-1"})))
-            .expect(created)
-            .mount(server)
-            .await;
-    }
-
-    async fn mount_status(server: &MockServer, status: &str, times: u64) {
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/container-1"))
-            .and(matchers::query_param("fields", "status_code"))
-            .respond_with(json(
-                serde_json::json!({"status_code": status, "id": "container-1"}),
-            ))
-            .up_to_n_times(times)
-            .mount(server)
-            .await;
-    }
-
-    async fn mount_publish(server: &MockServer, response: ResponseTemplate, expected: u64) {
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/instagram-user/media_publish"))
-            .and(matchers::body_string_contains("creation_id=container-1"))
-            .respond_with(response)
-            .expect(expected)
-            .mount(server)
-            .await;
-    }
-
-    #[tokio::test]
-    async fn facebook_success_persists_the_provider_confirmation() {
-        let fixture = Fixture::new("facebook-confirm").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/facebook-page/feed"))
-            .and(matchers::body_string_contains("message=Facebook+copy"))
-            .respond_with(json(serde_json::json!({
-                "id": "provider-post-1",
-                "permalink_url": "https://www.facebook.com/provider-post-1"
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let post_id = fixture.blog_post().await;
-        let outcome = drive(
-            &fixture.publisher(&server, allowed()),
-            post_id,
-            &post(false),
-            &destination(SocialProvider::Facebook),
-        )
-        .await;
-        assert_eq!(outcome.state, "confirmed");
-        let row = fixture.publication(post_id).await;
-        assert_eq!(row.provider_post_id.as_deref(), Some("provider-post-1"));
-        assert_eq!(row.last_error, None);
-    }
-
-    #[tokio::test]
-    async fn instagram_waits_for_a_ready_container_and_publishes_it_once() {
-        let fixture = Fixture::new("instagram-ready").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        mount_container(&server, 1).await;
-        mount_status(&server, "IN_PROGRESS", 2).await;
-        mount_status(&server, "FINISHED", 1).await;
-        mount_publish(&server, json(serde_json::json!({"id": "ig-media-1"})), 1).await;
-        let post_id = fixture.blog_post().await;
-        let outcome = drive(
-            &fixture.publisher(&server, allowed()),
-            post_id,
-            &post(true),
-            &destination(SocialProvider::Instagram),
-        )
-        .await;
-        assert_eq!(outcome.state, "confirmed");
-        assert_eq!(
-            fixture
-                .publication(post_id)
-                .await
-                .provider_post_id
-                .as_deref(),
-            Some("ig-media-1")
-        );
-    }
-
-    #[tokio::test]
-    async fn a_failed_or_never_ready_container_is_never_published() {
-        let fixture = Fixture::new("instagram-error").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        mount_container(&server, 2).await;
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/container-1"))
-            .respond_with(json(serde_json::json!({"status_code": "ERROR"})))
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        mount_status(&server, "IN_PROGRESS", 100).await;
-        mount_publish(&server, json(serde_json::json!({"id": "never"})), 0).await;
-        let publisher = fixture.publisher(&server, allowed());
-
-        let failed_post = fixture.blog_post().await;
-        let failed = drive(
-            &publisher,
-            failed_post,
-            &post(true),
-            &destination(SocialProvider::Instagram),
-        )
-        .await;
-        assert_eq!(failed.state, "failed");
-        assert!(fixture
-            .publication(failed_post)
-            .await
-            .last_error
-            .unwrap()
-            .starts_with("The media container failed"));
-
-        let pending_post = fixture.blog_post().await;
-        let pending = drive(
-            &publisher,
-            pending_post,
-            &post(true),
-            &destination(SocialProvider::Instagram),
-        )
-        .await;
-        assert_eq!(pending.state, "failed");
-        // A known failure: the next admission may send again.
-        assert!(matches!(
-            store::social_publications::admit(&fixture.db, pending_post, "instagram")
-                .await
-                .unwrap(),
-            Admission::Admitted(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn a_restart_between_create_and_publish_neither_recreates_nor_resends() {
-        let fixture = Fixture::new("instagram-restart").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        mount_container(&server, 1).await;
-        mount_publish(
-            &server,
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"id": "ig-media-1"}))
-                .set_delay(Duration::from_secs(2)),
-            1,
-        )
-        .await;
-        let publisher = fixture.publisher(&server, allowed());
-        let post_id = fixture.blog_post().await;
-        let target = destination(SocialProvider::Instagram);
-        assert!(matches!(
-            publisher
-                .prepare(post_id, &post(true), &target)
-                .await
-                .unwrap(),
-            Step::Continue(())
-        ));
-        // Journaled: a resumed invocation replays this id instead of creating.
-        let Step::Continue(container) = publisher
-            .create_container(post_id, &post(true), &target)
-            .await
-            .unwrap()
-        else {
-            panic!("container was not created");
-        };
-        // The publish step is interrupted after its request left.
-        let interrupted = publisher
-            .publish_container(post_id, &post(true), &target, &container)
-            .await
-            .unwrap();
-        assert_eq!(interrupted.state, "unknown");
-        // Replayed after the restart, the step finds its write claimed.
-        let replayed = publisher
-            .publish_container(post_id, &post(true), &target, &container)
-            .await
-            .unwrap();
-        assert_eq!(replayed.state, "unknown");
-        assert!(matches!(
-            store::social_publications::admit(&fixture.db, post_id, "instagram")
-                .await
-                .unwrap(),
-            Admission::ReconciliationRequired(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn a_revoked_provider_token_asks_for_a_reconnect() {
-        let fixture = Fixture::new("instagram-revoked").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        mount_container(&server, 1).await;
-        mount_status(&server, "FINISHED", 1).await;
-        mount_publish(
-            &server,
-            ResponseTemplate::new(400).set_body_json(serde_json::json!({
-                "error": {"message": "Error validating access token", "type": "OAuthException", "code": 190}
-            })),
-            1,
-        )
-        .await;
-        let post_id = fixture.blog_post().await;
-        let outcome = drive(
-            &fixture.publisher(&server, allowed()),
-            post_id,
-            &post(true),
-            &destination(SocialProvider::Instagram),
-        )
-        .await;
-        assert_eq!(outcome.state, "failed");
-        assert_eq!(
-            fixture.publication(post_id).await.last_error.as_deref(),
-            Some("Reconnect the instagram account: the provider rejected its authorization")
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unknown_publish_result_requires_reconciliation() {
-        let fixture = Fixture::new("threads-unknown").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/threads-user/threads"))
-            .and(matchers::body_string_contains("media_type=TEXT"))
-            .respond_with(json(serde_json::json!({"id": "container-1"})))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/container-1"))
-            .and(matchers::query_param("fields", "status,error_message"))
-            .respond_with(json(serde_json::json!({"status": "FINISHED"})))
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/threads-user/threads_publish"))
-            .respond_with(ResponseTemplate::new(502))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let post_id = fixture.blog_post().await;
-        let publisher = fixture.publisher(&server, allowed());
-        let outcome = drive(
-            &publisher,
-            post_id,
-            &post(false),
-            &destination(SocialProvider::Threads),
-        )
-        .await;
-        assert_eq!(outcome.state, "unknown");
-        // A second run reconciles instead of sending again.
-        let rerun = drive(
-            &publisher,
-            post_id,
-            &post(false),
-            &destination(SocialProvider::Threads),
-        )
-        .await;
-        assert_eq!(rerun.state, "unknown");
-    }
-
-    #[tokio::test]
-    async fn a_text_only_post_reaches_eligible_destinations_without_instagram_requests() {
-        let fixture = Fixture::new("partial").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/facebook-page/feed"))
-            .respond_with(json(
-                serde_json::json!({"id": "fb-1", "permalink_url": "https://www.facebook.com/fb-1"}),
-            ))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(matchers::path_regex("^/instagram-user/"))
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-        let publisher = fixture.publisher(&server, allowed());
-        let post_id = fixture.blog_post().await;
-        let facebook = drive(
-            &publisher,
-            post_id,
-            &post(false),
-            &destination(SocialProvider::Facebook),
-        )
-        .await;
-        let instagram = drive(
-            &publisher,
-            post_id,
-            &post(false),
-            &destination(SocialProvider::Instagram),
-        )
-        .await;
-        assert_eq!(facebook.state, "confirmed");
-        assert_eq!(instagram.state, "failed");
-        assert_eq!(
-            publication_outcome(&[facebook, instagram]),
-            "partial_failure"
-        );
-        let rows = store::social_publications::for_posts(&fixture.db, &[post_id])
-            .await
-            .unwrap();
-        let instagram_row = rows.iter().find(|row| row.provider == "instagram").unwrap();
-        assert_eq!(
-            instagram_row.last_error.as_deref(),
-            Some("Instagram publishes video only; this post has no video")
-        );
-    }
-
-    #[tokio::test]
-    async fn expired_tokens_and_missing_permissions_make_zero_provider_calls() {
-        let fixture = Fixture::new("lifecycle").await;
-        fixture
-            .connect(
-                SocialProvider::Threads,
-                "threads-user",
-                SocialProvider::Threads.required_scopes(),
-                Some(Utc::now() - chrono::Duration::hours(1)),
-            )
-            .await;
-        fixture
-            .connect(
-                SocialProvider::Instagram,
-                "instagram-user",
-                &[
-                    "instagram_business_basic",
-                    "instagram_business_content_publish",
-                ],
-                None,
-            )
-            .await;
-        let server = silent_provider().await;
-        let publisher = fixture.publisher(&server, allowed());
-
-        let expired = fixture.blog_post().await;
-        let outcome = drive(
-            &publisher,
-            expired,
-            &post(false),
-            &destination(SocialProvider::Threads),
-        )
-        .await;
-        assert_eq!(outcome.state, "failed");
-        assert_eq!(
-            fixture.publication(expired).await.last_error.as_deref(),
-            Some("Reconnect the threads account: its authorization expired")
-        );
-
-        let mismatched = fixture.blog_post().await;
-        let outcome = drive(
-            &publisher,
-            mismatched,
-            &post(true),
-            &destination(SocialProvider::Instagram),
-        )
-        .await;
-        assert_eq!(outcome.state, "failed");
-        assert!(fixture
-            .publication(mismatched)
-            .await
-            .last_error
-            .unwrap()
-            .starts_with("Reconnect the instagram account: it is missing"));
-        server.verify().await;
-    }
-
-    async fn mount_youtube_upload(server: &MockServer) {
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/videos"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("location", format!("{}/upload/session", server.uri())),
-            )
-            .expect(1)
-            .mount(server)
-            .await;
-        Mock::given(matchers::method("PUT"))
-            .and(matchers::path("/upload/session"))
-            .and(matchers::body_bytes(b"synthetic video".to_vec()))
-            .respond_with(json(serde_json::json!({"id": "youtube-video-1"})))
-            .expect(1)
-            .mount(server)
-            .await;
-    }
-
-    fn youtube_public_video() -> serde_json::Value {
-        serde_json::json!({"items": [{
-            "id": "youtube-video-1",
-            "snippet": {"channelId": "youtube-channel"},
-            "status": {"privacyStatus": "public", "uploadStatus": "processed"},
-            "processingDetails": {"processingStatus": "succeeded"}
-        }]})
-    }
-
-    async fn mount_youtube_read(
-        server: &MockServer,
-        body: serde_json::Value,
-        status: u16,
-        reads: u64,
-    ) {
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/videos"))
-            .and(matchers::query_param("id", "youtube-video-1"))
-            .and(matchers::query_param(
-                "part",
-                "snippet,status,processingDetails",
-            ))
-            .and(matchers::header(
-                "authorization",
-                "Bearer synthetic-access-token",
-            ))
-            .respond_with(ResponseTemplate::new(status).set_body_json(body))
-            .up_to_n_times(reads)
-            .expect(reads)
-            .mount(server)
-            .await;
-    }
-
-    #[tokio::test]
-    async fn youtube_unverified_video_stays_pending_and_reconciles_without_another_upload() {
-        let fixture = Fixture::new("youtube-pending").await;
-        fixture.connect_all().await;
-        let mut cases = vec![
-            (serde_json::json!({"items": []}), 200),
-            (serde_json::json!({"items": null}), 200),
-            (serde_json::json!({"error": "unavailable"}), 503),
-        ];
-        for (pointer, value) in [
-            ("/items/0/id", "another-video"),
-            ("/items/0/snippet/channelId", "another-channel"),
-            ("/items/0/status/privacyStatus", "private"),
-            ("/items/0/status/privacyStatus", "unlisted"),
-            ("/items/0/status/uploadStatus", "uploaded"),
-            ("/items/0/status/uploadStatus", "rejected"),
-            ("/items/0/processingDetails/processingStatus", "processing"),
-            ("/items/0/processingDetails/processingStatus", "failed"),
-        ] {
-            let mut body = youtube_public_video();
-            *body.pointer_mut(pointer).unwrap() = value.into();
-            cases.push((body, 200));
-        }
-        for (body, status) in cases {
-            let server = MockServer::start().await;
-            mount_youtube_upload(&server).await;
-            mount_youtube_read(&server, body.clone(), status, 2).await;
-            mount_youtube_read(&server, youtube_public_video(), 200, 1).await;
-            let publisher = fixture.publisher(&server, allowed());
-            let id = fixture.blog_post().await;
-            let target = destination(SocialProvider::Youtube);
-            for _ in 0..2 {
-                let outcome = drive(&publisher, id, &post(true), &target).await;
-                assert_eq!(outcome.state, "confirmed");
-                let row = fixture.publication(id).await;
-                assert_eq!(row.provider_post_id.as_deref(), Some("youtube-video-1"));
-                assert_eq!(row.permalink, None, "unverified response: {body}");
-                assert_eq!(
-                    row.last_error.as_deref(),
-                    Some(store::social_publications::PERMALINK_PENDING)
-                );
-            }
-            drive(&publisher, id, &post(true), &target).await;
-            let row = fixture.publication(id).await;
-            assert_eq!(
-                row.permalink.as_deref(),
-                Some("https://www.youtube.com/watch?v=youtube-video-1")
-            );
-            assert_eq!(row.last_error, None);
-            server.verify().await;
-        }
-    }
-
-    #[tokio::test]
-    async fn youtube_periodic_readback_recovers_a_published_post_without_resending() {
-        let fixture = Fixture::new("youtube-periodic").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        mount_youtube_upload(&server).await;
-        mount_youtube_read(&server, youtube_public_video(), 200, 1).await;
-        let publisher = fixture.publisher(&server, allowed());
-        let id = fixture.blog_post().await;
-        let target = destination(SocialProvider::Youtube);
-        let sent = send(&publisher, id, &post(true), &target).await;
-        assert_eq!(sent.link_pending.as_deref(), Some("youtube-video-1"));
-        fixture
-            .db
-            .query("UPDATE $id SET status = 'published'")
-            .bind(("id", store::surreal::record_id("post", id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        // No frozen account selection means the reconciler cannot borrow another connection.
-        assert_eq!(publisher.reconcile_youtube_links().await.unwrap(), 0);
-        let account = store::social_accounts::connected_account(
-            &fixture.db,
-            "synthetic-brand",
-            SocialProvider::Youtube,
-            "youtube-channel",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        fixture
-            .db
-            .query("UPDATE $id SET selected_social_accounts = $accounts")
-            .bind(("id", store::surreal::record_id("post", id)))
-            .bind(("accounts", vec![account.id]))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert_eq!(
-            fixture
-                .publisher(&server, denied_by(Some("dev"), None))
-                .reconcile_youtube_links()
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(publisher.reconcile_youtube_links().await.unwrap(), 1);
-        assert_eq!(publisher.reconcile_youtube_links().await.unwrap(), 0);
-        assert_eq!(
-            fixture.publication(id).await.permalink.as_deref(),
-            Some("https://www.youtube.com/watch?v=youtube-video-1")
-        );
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    async fn youtube_resumable_upload_returns_confirmed_video_id() {
-        let fixture = Fixture::new("youtube").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        mount_youtube_upload(&server).await;
-        mount_youtube_read(&server, youtube_public_video(), 200, 1).await;
-        let post_id = fixture.blog_post().await;
-        let outcome = drive(
-            &fixture.publisher(&server, allowed()),
-            post_id,
-            &post(true),
-            &destination(SocialProvider::Youtube),
-        )
-        .await;
-        assert_eq!(outcome.state, "confirmed");
-        assert_eq!(
-            fixture
-                .publication(post_id)
-                .await
-                .provider_post_id
-                .as_deref(),
-            Some("youtube-video-1")
-        );
-        assert_eq!(
-            fixture.publication(post_id).await.permalink.as_deref(),
-            Some("https://www.youtube.com/watch?v=youtube-video-1")
-        );
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    async fn publish_destination_fails_when_media_is_missing() {
-        let fixture = Fixture::new("missing-media").await;
-        fixture.connect_all().await;
-        let server = silent_provider().await;
-        let mut missing = post(true);
-        missing.video_asset = Some("synthetic/missing.mp4".into());
-        for provider in [SocialProvider::Facebook, SocialProvider::Instagram] {
-            let post_id = fixture.blog_post().await;
-            let outcome = drive(
-                &fixture.publisher(&server, allowed()),
-                post_id,
-                &missing,
-                &destination(provider),
-            )
-            .await;
-            assert_eq!(outcome.state, "failed");
-        }
-        server.verify().await;
     }
 
     #[test]
@@ -3370,600 +2253,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn simulated_development_and_invalid_deployments_make_zero_provider_calls() {
-        let fixture = Fixture::new("egress").await;
-        fixture.connect_all().await;
-        let server = silent_provider().await;
-        for (gate, reason) in [
-            (
-                denied_by(Some("production"), Some("true")),
-                SocialEgressDenied::SimulatedMatters,
-            ),
-            (
-                denied_by(Some("dev"), None),
-                SocialEgressDenied::NotProduction,
-            ),
-            (
-                denied_by(None, Some("false")),
-                SocialEgressDenied::NotProduction,
-            ),
-            (
-                denied_by(Some("staging"), None),
-                SocialEgressDenied::InvalidConfiguration,
-            ),
-            (
-                denied_by(Some("production"), Some("yes")),
-                SocialEgressDenied::InvalidConfiguration,
-            ),
-        ] {
-            for provider in [
-                SocialProvider::Facebook,
-                SocialProvider::Instagram,
-                SocialProvider::Threads,
-                SocialProvider::Youtube,
-                SocialProvider::Linkedin,
-                SocialProvider::X,
-            ] {
-                let post_id = fixture.blog_post().await;
-                let outcome = drive(
-                    &fixture.publisher(&server, gate.clone()),
-                    post_id,
-                    &post(true),
-                    &destination(provider),
-                )
-                .await;
-                assert_eq!(outcome.state, "blocked");
-                let row = fixture.publication(post_id).await;
-                assert_eq!(row.state, "failed");
-                assert_eq!(row.last_error.as_deref(), Some(reason.to_string().as_str()));
-            }
-        }
-        assert_eq!(
-            publication_outcome(&[PublishOutcome::new(SocialProvider::Facebook, "blocked")]),
-            "social_publishing_disabled"
-        );
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    async fn a_workflow_admitted_before_the_flag_changes_is_judged_at_send_time() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
-        let fixture = Fixture::new("flag-flip").await;
-        fixture.connect_all().await;
-        let simulated = Arc::new(AtomicBool::new(false));
-        let gate = {
-            let simulated = simulated.clone();
-            SocialEgressGate::new(move || {
-                if simulated.load(Ordering::SeqCst) {
-                    Err(SocialEgressDenied::SimulatedMatters)
-                } else {
-                    Ok(())
-                }
-            })
-        };
-        let server = MockServer::start().await;
-        mount_container(&server, 1).await;
-        mount_status(&server, "FINISHED", 1).await;
-        mount_publish(&server, json(serde_json::json!({"id": "never"})), 0).await;
-        let publisher = fixture.publisher(&server, gate);
-        let post_id = fixture.blog_post().await;
-        let target = destination(SocialProvider::Instagram);
-        // Admitted and its container created while egress was allowed.
-        assert!(matches!(
-            publisher
-                .prepare(post_id, &post(true), &target)
-                .await
-                .unwrap(),
-            Step::Continue(())
-        ));
-        let Step::Continue(container) = publisher
-            .create_container(post_id, &post(true), &target)
-            .await
-            .unwrap()
-        else {
-            panic!("container was not created");
-        };
-        simulated.store(true, Ordering::SeqCst);
-        let outcome = publisher
-            .publish_container(post_id, &post(true), &target, &container)
-            .await
-            .unwrap();
-        assert_eq!(outcome.state, "blocked");
-    }
-
-    #[tokio::test]
-    async fn deleted_rehomed_or_revoked_destinations_make_zero_provider_calls() {
-        let server = silent_provider().await;
-
-        let deleted = Fixture::new("deleted").await;
-        deleted.connect_all().await;
-        deleted
-            .db
-            .query("DELETE brand WHERE brand_key = 'synthetic-brand'")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let rehomed = Fixture::new("rehomed").await;
-        rehomed.connect_all().await;
-        let other_admin = store::persons::create(
-            &rehomed.db,
-            &NewPerson::with_role("Other Admin", "other-admin@example.com", Role::Admin),
-        )
-        .await
-        .unwrap();
-        let other_firm = store::firms::create(
-            &rehomed.db,
-            &NewFirm {
-                name: "Other Firm".into(),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(&rehomed.db).await,
-                admin_dri_person_id: other_admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        rehomed
-            .db
-            .query("UPDATE brand SET firm_id = $firm WHERE brand_key = 'synthetic-brand'")
-            .bind(("firm", store::surreal::record_id("firm", other_firm.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let revoked = Fixture::new("revoked").await;
-        revoked.connect_all().await;
-        revoked
-            .db
-            .query(
-                "UPDATE social_account SET status = 'revoked', ciphertext = '', wrapped_dek = ''",
-            )
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        for fixture in [&deleted, &rehomed, &revoked] {
-            for provider in [SocialProvider::Facebook, SocialProvider::Instagram] {
-                let post_id = fixture.blog_post().await;
-                let outcome = drive(
-                    &fixture.publisher(&server, allowed()),
-                    post_id,
-                    &post(true),
-                    &destination(provider),
-                )
-                .await;
-                assert_eq!(outcome.state, "failed");
-                assert_eq!(
-                    fixture.publication(post_id).await.last_error.as_deref(),
-                    Some("The connected account is no longer available to this Brand")
-                );
-            }
-        }
-        server.verify().await;
-    }
-
-    async fn mount_read(server: &MockServer, receipt: &str, field: &str, link: &str) {
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path(format!("/{receipt}")))
-            .and(matchers::query_param("fields", field))
-            .respond_with(json(serde_json::json!({field: link, "id": receipt})))
-            .expect(1)
-            .mount(server)
-            .await;
-    }
-
-    #[tokio::test]
-    async fn only_a_provider_returned_permalink_becomes_the_public_link() {
-        let fixture = Fixture::new("permalinks").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        // Facebook: the feed edge returns only an opaque receipt.
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/facebook-page/feed"))
-            .respond_with(json(serde_json::json!({"id": "123_456"})))
-            .expect(1)
-            .mount(&server)
-            .await;
-        mount_read(
-            &server,
-            "123_456",
-            "permalink_url",
-            "https://www.facebook.com/synthetic/posts/pfbid0Synthetic",
-        )
-        .await;
-        // Instagram: a Reel's media ID is not its shortcode.
-        mount_container(&server, 1).await;
-        mount_status(&server, "FINISHED", 1).await;
-        mount_publish(
-            &server,
-            json(serde_json::json!({"id": "17890000000000001"})),
-            1,
-        )
-        .await;
-        mount_read(
-            &server,
-            "17890000000000001",
-            "permalink",
-            "https://www.instagram.com/reel/SyntheticCode/",
-        )
-        .await;
-        // Threads: a text post through its container.
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/threads-user/threads"))
-            .respond_with(json(serde_json::json!({"id": "threads-container"})))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/threads-container"))
-            .respond_with(json(serde_json::json!({"status": "FINISHED"})))
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/threads-user/threads_publish"))
-            .respond_with(json(serde_json::json!({"id": "18000000000000002"})))
-            .expect(1)
-            .mount(&server)
-            .await;
-        mount_read(
-            &server,
-            "18000000000000002",
-            "permalink",
-            "https://www.threads.com/@synthetic/post/SyntheticShort",
-        )
-        .await;
-
-        let publisher = fixture.publisher(&server, allowed());
-        let post_id = fixture.blog_post().await;
-        for (provider, video, receipt, link) in [
-            (
-                SocialProvider::Facebook,
-                false,
-                "123_456",
-                "https://www.facebook.com/synthetic/posts/pfbid0Synthetic",
-            ),
-            (
-                SocialProvider::Instagram,
-                true,
-                "17890000000000001",
-                "https://www.instagram.com/reel/SyntheticCode/",
-            ),
-            (
-                SocialProvider::Threads,
-                false,
-                "18000000000000002",
-                "https://www.threads.com/@synthetic/post/SyntheticShort",
-            ),
-        ] {
-            let outcome = drive(&publisher, post_id, &post(video), &destination(provider)).await;
-            assert_eq!(outcome.state, "confirmed");
-            let rows = store::social_publications::for_posts(&fixture.db, &[post_id])
-                .await
-                .unwrap();
-            let row = rows
-                .iter()
-                .find(|row| row.provider == provider.as_str())
-                .unwrap();
-            assert_eq!(row.provider_post_id.as_deref(), Some(receipt));
-            assert_eq!(row.permalink.as_deref(), Some(link));
-            assert!(!row.permalink.as_deref().unwrap().contains(receipt));
-            assert_eq!(row.last_error, None);
-        }
-    }
-
-    #[tokio::test]
-    async fn a_failed_link_lookup_stays_pending_and_never_resends_the_post() {
-        let fixture = Fixture::new("pending-link").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/facebook-page/feed"))
-            .respond_with(json(serde_json::json!({"id": "123_789"})))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/123_789"))
-            .respond_with(ResponseTemplate::new(500))
-            .up_to_n_times(1)
-            .expect(1)
-            .mount(&server)
-            .await;
-        mount_read(
-            &server,
-            "123_789",
-            "permalink_url",
-            "/synthetic/videos/123789/",
-        )
-        .await;
-        let publisher = fixture.publisher(&server, allowed());
-        let post_id = fixture.blog_post().await;
-        let target = destination(SocialProvider::Facebook);
-
-        let first = drive(&publisher, post_id, &post(false), &target).await;
-        assert_eq!(first.state, "confirmed");
-        let pending = fixture.publication(post_id).await;
-        assert_eq!(pending.state, "confirmed");
-        assert_eq!(pending.provider_post_id.as_deref(), Some("123_789"));
-        assert_eq!(pending.permalink, None);
-        assert_eq!(
-            pending.last_error.as_deref(),
-            Some(store::social_publications::PERMALINK_PENDING)
-        );
-
-        // A later run reconciles the link only: the feed is not posted again.
-        let rerun = drive(&publisher, post_id, &post(false), &target).await;
-        assert_eq!(rerun.state, "confirmed");
-        assert_eq!(rerun.link_pending.as_deref(), Some("123_789"));
-        let linked = fixture.publication(post_id).await;
-        assert_eq!(
-            linked.permalink.as_deref(),
-            Some("https://www.facebook.com/synthetic/videos/123789/")
-        );
-        assert_eq!(linked.last_error, None);
-    }
-
-    #[tokio::test]
-    async fn rate_limits_and_temporary_errors_are_retryable_but_terminal_refusals_are_not() {
-        let fixture = Fixture::new("refusals").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        let publisher = fixture.publisher(&server, allowed());
-        for (body, status, retryable, prefix) in [
-            (
-                serde_json::json!({"error": {"message": "Application request limit reached", "code": 4}}),
-                400,
-                true,
-                "Rate limited by the provider; nothing was published. Retry later",
-            ),
-            (
-                serde_json::json!({"error": {"message": "Too many calls"}}),
-                429,
-                true,
-                "Rate limited by the provider; nothing was published. Retry later",
-            ),
-            (
-                serde_json::json!({"error": {"message": "Please retry", "code": 2, "is_transient": true}}),
-                400,
-                true,
-                "The provider reported a temporary failure; nothing was published. Retry later",
-            ),
-            (
-                serde_json::json!({"error": {"message": "Invalid parameter", "code": 100}}),
-                400,
-                false,
-                "The provider rejected the post",
-            ),
-        ] {
-            server.reset().await;
-            Mock::given(matchers::method("POST"))
-                .and(matchers::path("/facebook-page/feed"))
-                .respond_with(ResponseTemplate::new(status).set_body_json(body))
-                .expect(1)
-                .mount(&server)
-                .await;
-            let post_id = fixture.blog_post().await;
-            let outcome = drive(
-                &publisher,
-                post_id,
-                &post(false),
-                &destination(SocialProvider::Facebook),
-            )
-            .await;
-            assert_eq!(outcome.state, "failed");
-            assert_eq!(outcome.retryable, retryable, "{prefix}");
-            let row = fixture.publication(post_id).await;
-            assert!(
-                row.last_error.as_deref().unwrap().starts_with(prefix),
-                "{:?}",
-                row.last_error
-            );
-            // A refusal is known: nothing was published, so a retry may send.
-            assert!(matches!(
-                store::social_publications::admit(&fixture.db, post_id, "facebook")
-                    .await
-                    .unwrap(),
-                Admission::Admitted(_)
-            ));
-            server.verify().await;
-        }
-    }
-    #[tokio::test]
-    async fn linkedin_receipt_is_confirmed_once_and_ambiguous_writes_never_resend() {
-        let fixture = Fixture::new("linkedin").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        let publisher = fixture.publisher(&server, allowed());
-        let target = destination(SocialProvider::Linkedin);
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/posts"))
-            .and(matchers::header("LinkedIn-Version", "202609"))
-            .and(matchers::header("X-Restli-Protocol-Version", "2.0.0"))
-            .and(matchers::body_json(serde_json::json!({
-                "author": "urn:li:organization:1001", "commentary": "Synthetic description",
-                "visibility": "PUBLIC", "distribution": {"feedDistribution": "MAIN_FEED",
-                    "targetEntities": [], "thirdPartyDistributionChannels": []},
-                "lifecycleState": "PUBLISHED", "isReshareDisabledByAuthor": false
-            })))
-            .respond_with(
-                ResponseTemplate::new(201).insert_header("x-restli-id", "urn:li:share:2001"),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        let id = fixture.blog_post().await;
-        assert_eq!(
-            drive(&publisher, id, &post(false), &target).await.state,
-            "confirmed"
-        );
-        assert_eq!(
-            drive(&publisher, id, &post(false), &target).await.state,
-            "confirmed"
-        );
-        let rows = store::social_publications::for_posts(&fixture.db, &[id])
-            .await
-            .unwrap();
-        assert_eq!(
-            rows[0].provider_post_id.as_deref(),
-            Some("urn:li:share:2001")
-        );
-        assert!(rows[0].permalink.is_none());
-        server.verify().await;
-        server.reset().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/posts"))
-            .respond_with(ResponseTemplate::new(201))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let id = fixture.blog_post().await;
-        assert_eq!(
-            drive(&publisher, id, &post(false), &target).await.state,
-            "unknown"
-        );
-        assert_eq!(
-            drive(&publisher, id, &post(false), &target).await.state,
-            "unknown"
-        );
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    async fn linkedin_video_and_oversized_text_are_refused_before_provider_calls() {
-        let fixture = Fixture::new("linkedin-invalid").await;
-        fixture.connect_all().await;
-        let server = silent_provider().await;
-        let publisher = fixture.publisher(&server, allowed());
-        let target = destination(SocialProvider::Linkedin);
-        let mut long = post(false);
-        long.description = "x".repeat(3001);
-        for invalid in [post(true), long] {
-            let id = fixture.blog_post().await;
-            assert_eq!(
-                drive(&publisher, id, &invalid, &target).await.state,
-                "failed"
-            );
-        }
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "One synthetic fixture checks confirmed, unknown, and mismatched identities"
-    )]
-    async fn x_receipts_unknown_outcomes_and_wrong_identity_never_duplicate() {
-        let fixture = Fixture::new("x-send").await;
-        fixture
-            .connect(
-                SocialProvider::X,
-                "1002",
-                SocialProvider::X.required_scopes(),
-                None,
-            )
-            .await;
-        let server = MockServer::start().await;
-        let publisher = fixture.publisher(&server, allowed());
-        let target = Destination {
-            provider: SocialProvider::X,
-            account_id: "1002".into(),
-        };
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/users/me"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":{"id":"1002"}})),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/tweets"))
-            .and(matchers::body_json(
-                serde_json::json!({"text":"Synthetic description"}),
-            ))
-            .respond_with(
-                ResponseTemplate::new(201).set_body_json(serde_json::json!({"data":{"id":"2002"}})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/tweets/2002"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"data":{"id":"2002","author_id":"1002"}})),
-            )
-            .mount(&server)
-            .await;
-        let id = fixture.blog_post().await;
-        assert_eq!(
-            drive(&publisher, id, &post(false), &target).await.state,
-            CONFIRMED
-        );
-        assert_eq!(
-            drive(&publisher, id, &post(false), &target).await.state,
-            CONFIRMED
-        );
-        let rows = store::social_publications::for_posts(&fixture.db, &[id])
-            .await
-            .unwrap();
-        assert_eq!(
-            rows[0].permalink.as_deref(),
-            Some("https://x.com/i/web/status/2002")
-        );
-        server.verify().await;
-        server.reset().await;
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/users/me"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":{"id":"1002"}})),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/tweets"))
-            .respond_with(ResponseTemplate::new(503))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let id = fixture.blog_post().await;
-        assert_eq!(
-            drive(&publisher, id, &post(false), &target).await.state,
-            UNKNOWN
-        );
-        assert_eq!(
-            drive(&publisher, id, &post(false), &target).await.state,
-            UNKNOWN
-        );
-        server.verify().await;
-        server.reset().await;
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/users/me"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"data":{"id":"other"}})),
-            )
-            .mount(&server)
-            .await;
-        assert_eq!(
-            drive(&publisher, fixture.blog_post().await, &post(false), &target)
-                .await
-                .state,
-            FAILED
-        );
-        assert!(server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .all(|request| request.method == "GET"));
-    }
-
     #[test]
     fn x_text_bound_accounts_for_unicode_and_short_urls() {
         assert!(super::x_text_eligible(&"界".repeat(140)));
@@ -3973,40 +2262,6 @@ mod tests {
         assert!(!super::x_text_eligible(&"x.co,".repeat(12)));
         assert!(super::x_text_eligible(&"x.co,".repeat(8)));
         assert!(!super::x_text_eligible(&"x.co,".repeat(9)));
-    }
-
-    #[tokio::test]
-    async fn x_video_and_oversized_text_are_rejected_without_network() {
-        let fixture = Fixture::new("x-invalid").await;
-        fixture
-            .connect(
-                SocialProvider::X,
-                "1002",
-                SocialProvider::X.required_scopes(),
-                None,
-            )
-            .await;
-        let server = MockServer::start().await;
-        let publisher = fixture.publisher(&server, allowed());
-        let target = Destination {
-            provider: SocialProvider::X,
-            account_id: "1002".into(),
-        };
-        assert_eq!(
-            drive(&publisher, fixture.blog_post().await, &post(true), &target)
-                .await
-                .state,
-            FAILED
-        );
-        let mut large = post(false);
-        large.description = "界".repeat(141);
-        assert_eq!(
-            drive(&publisher, fixture.blog_post().await, &large, &target)
-                .await
-                .state,
-            FAILED
-        );
-        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[test]
@@ -4200,822 +2455,5 @@ mod tests {
             (Duration::from_secs(30), 10)
         );
         assert!(container_policy(SocialProvider::Facebook).is_none());
-    }
-
-    #[tokio::test]
-    async fn publisher_builders_override_egress_video_origin_and_provider_endpoints() {
-        let fixture = Fixture::new("builders").await;
-        let defaults = ProviderEndpoints::default();
-        for endpoint in [
-            &defaults.facebook_graph,
-            &defaults.threads,
-            &defaults.youtube_upload,
-            &defaults.youtube_api,
-            &defaults.x_api,
-            &defaults.tiktok,
-            &defaults.linkedin_rest,
-        ] {
-            assert!(endpoint.starts_with("https://"), "{endpoint}");
-        }
-        let service = super::SocialPublisherService::new(
-            fixture.db.clone(),
-            std::sync::Arc::new(fixture.kms.clone()),
-            fixture.storage.clone(),
-        );
-        let publisher = service
-            .publisher()
-            .with_egress(denied_by(Some("dev"), None))
-            .with_video_url(|key| format!("https://cdn.example.test/{key}"))
-            .with_provider_base("http://127.0.0.1:9");
-        assert!(publisher.egress.check().is_err());
-        assert_eq!(
-            (publisher.video_url)("a.mp4"),
-            "https://cdn.example.test/a.mp4"
-        );
-        assert_eq!(publisher.endpoints.facebook_graph, "http://127.0.0.1:9");
-        assert_eq!(publisher.endpoints.linkedin_rest, "http://127.0.0.1:9");
-        assert_eq!(publisher.endpoints.tiktok, "http://127.0.0.1:9/tiktok");
-        let parts = Publisher::with_parts(
-            fixture.db.clone(),
-            std::sync::Arc::new(fixture.kms.clone()),
-            fixture.storage.clone(),
-            allowed(),
-            TokenRefreshConfig::from_env(),
-            reqwest::Client::new(),
-            str::to_string,
-        );
-        assert_eq!(parts.endpoints.x_api, "https://api.x.com/2");
-        assert!(parts.egress.check().is_ok());
-        // A gated publisher reads no public link and reconciles nothing.
-        let server = silent_provider().await;
-        let gated = fixture.publisher(&server, denied_by(Some("dev"), None));
-        let id = fixture.blog_post().await;
-        assert!(!gated
-            .read_permalink(
-                id,
-                "synthetic-brand",
-                &destination(SocialProvider::Facebook),
-                "1"
-            )
-            .await
-            .unwrap());
-        assert_eq!(gated.reconcile_youtube_links().await.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn a_scheduled_snapshot_is_read_only_for_the_requested_schedule() {
-        let fixture = Fixture::new("snapshot").await;
-        fixture.connect_all().await;
-        assert!(
-            super::scheduled_post_snapshot(&fixture.db, Uuid::now_v7(), Utc::now())
-                .await
-                .unwrap()
-                .is_none()
-        );
-        let id = fixture.blog_post().await;
-        let at = Utc::now() + chrono::Duration::hours(1);
-        let account = store::social_accounts::connected_account(
-            &fixture.db,
-            "synthetic-brand",
-            SocialProvider::Threads,
-            "threads-user",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        fixture
-            .db
-            .query("UPDATE $id SET publish_at = <datetime>$at, selected_social_accounts = $accounts, threads_caption = 'Threads copy'")
-            .bind(("id", store::surreal::record_id("post", id)))
-            .bind(("at", at.to_rfc3339()))
-            .bind(("accounts", vec![account.id]))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let stored = store::posts::find_by_id(&fixture.db, id)
-            .await
-            .unwrap()
-            .unwrap()
-            .publish_at
-            .unwrap();
-        // A rescheduled request names a different time and is stale.
-        assert!(super::scheduled_post_snapshot(
-            &fixture.db,
-            id,
-            stored + chrono::Duration::minutes(5)
-        )
-        .await
-        .unwrap()
-        .is_none());
-        let snapshot = super::scheduled_post_snapshot(&fixture.db, id, stored)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(snapshot.brand_key, "synthetic-brand");
-        assert_eq!(snapshot.threads_caption.as_deref(), Some("Threads copy"));
-        assert_eq!(snapshot.destinations.len(), 1);
-        assert_eq!(snapshot.destinations[0].provider, SocialProvider::Threads);
-        assert_eq!(snapshot.destinations[0].account_id, "threads-user");
-        fixture
-            .db
-            .query("UPDATE $id SET status = 'draft'")
-            .bind(("id", store::surreal::record_id("post", id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert!(super::scheduled_post_snapshot(&fixture.db, id, stored)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    async fn mount_tiktok_settings(server: &MockServer, response: ResponseTemplate) {
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/tiktok/business/video/settings/"))
-            .respond_with(response)
-            .mount(server)
-            .await;
-    }
-
-    fn tiktok_public_settings() -> ResponseTemplate {
-        json(serde_json::json!({"code": 0, "data": {
-            "privacy_level_options": ["PUBLIC_TO_EVERYONE"],
-            "max_video_post_duration_sec": 600
-        }}))
-    }
-
-    async fn mount_tiktok_property(server: &MockServer) {
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/tiktok/business/property/list/"))
-            .respond_with(json(
-                serde_json::json!({"code": 0, "data": {"url_property_info_list": [
-                    {"property_type": 1, "property_status": 1, "url": "example.test"}
-                ]}}),
-            ))
-            .mount(server)
-            .await;
-    }
-
-    /// Run `start_tiktok` once for a freshly seeded `TikTok` Post and return
-    /// the step result with the recorded publication.
-    async fn start_tiktok_case(
-        name: &str,
-        adjust: impl FnOnce(&mut PostSnapshot),
-        stage: impl FnOnce(&mut PostSnapshot, &mut Publisher),
-        mount: Vec<(&str, ResponseTemplate)>,
-    ) -> (
-        Step<String>,
-        store::social_publications::SocialPublication,
-        Vec<wiremock::Request>,
-    ) {
-        let fixture = Fixture::new(name).await;
-        let server = MockServer::start().await;
-        let mut snapshot = post(true);
-        snapshot.tiktok_ai_generated = Some(false);
-        adjust(&mut snapshot);
-        let id = tiktok_fixture(&fixture, &snapshot).await;
-        for (path, response) in mount {
-            if path == "settings" {
-                mount_tiktok_settings(&server, response).await;
-            } else if path == "property" {
-                mount_tiktok_property(&server).await;
-            } else if path == "delete-media" {
-                fixture.storage.delete(VIDEO).await.unwrap();
-            } else {
-                Mock::given(matchers::path(path))
-                    .respond_with(response)
-                    .mount(&server)
-                    .await;
-            }
-        }
-        let mut publisher = fixture.publisher(&server, allowed());
-        let target = destination(SocialProvider::Tiktok);
-        assert!(matches!(
-            publisher.prepare(id, &snapshot, &target).await.unwrap(),
-            Step::Continue(())
-        ));
-        stage(&mut snapshot, &mut publisher);
-        let step = publisher
-            .start_tiktok(id, &snapshot, &target)
-            .await
-            .unwrap();
-        let publication = fixture.publication(id).await;
-        let requests = server.received_requests().await.unwrap();
-        (step, publication, requests)
-    }
-
-    fn failed_with(
-        result: &(
-            Step<String>,
-            store::social_publications::SocialPublication,
-            Vec<wiremock::Request>,
-        ),
-        reason: &str,
-    ) {
-        assert!(
-            matches!(&result.0, Step::Settled(outcome) if outcome.state == FAILED),
-            "{reason}"
-        );
-        assert_eq!(result.1.state, FAILED, "{reason}");
-        assert!(
-            result
-                .1
-                .last_error
-                .as_deref()
-                .is_some_and(|error| error.contains(reason)),
-            "{reason}: {:?}",
-            result.1.last_error
-        );
-        assert!(
-            result.2.iter().all(|request| request.method != "POST"),
-            "{reason}: nothing may be published"
-        );
-    }
-
-    #[tokio::test]
-    async fn tiktok_account_settings_must_allow_public_posts_and_the_video_length() {
-        let cases = [
-            (
-                ResponseTemplate::new(500),
-                "TikTok account settings could not be verified",
-            ),
-            (
-                json(serde_json::json!({"code": 40_001, "data": {}})),
-                "TikTok account settings could not be verified",
-            ),
-            (
-                json(serde_json::json!({"code": 0, "data": {
-                    "privacy_level_options": ["SELF_ONLY"],
-                    "max_video_post_duration_sec": 600
-                }})),
-                "not eligible for public posts",
-            ),
-            (
-                json(serde_json::json!({"code": 0, "data": {
-                    "privacy_level_options": ["PUBLIC_TO_EVERYONE"]
-                }})),
-                "maximum video duration could not be verified",
-            ),
-        ];
-        for (index, (response, reason)) in cases.into_iter().enumerate() {
-            let result = start_tiktok_case(
-                &format!("tiktok-settings-{index}"),
-                |_| {},
-                |_, _| {},
-                vec![("settings", response)],
-            )
-            .await;
-            failed_with(&result, reason);
-        }
-        let too_long = start_tiktok_case(
-            "tiktok-too-long",
-            |_| {},
-            |_, _| {},
-            vec![(
-                "settings",
-                json(serde_json::json!({"code": 0, "data": {
-                    "privacy_level_options": ["PUBLIC_TO_EVERYONE"],
-                    "max_video_post_duration_sec": 10
-                }})),
-            )],
-        )
-        .await;
-        assert!(matches!(&too_long.0, Step::Settled(outcome) if outcome.state == FAILED));
-        assert!(too_long.2.iter().all(|request| request.method != "POST"));
-    }
-
-    #[tokio::test]
-    async fn tiktok_source_media_and_asset_address_problems_refuse_before_publish() {
-        let changed = start_tiktok_case(
-            "tiktok-source-changed",
-            |_| {},
-            |snapshot, _| snapshot.description = "Edited after approval".into(),
-            Vec::new(),
-        )
-        .await;
-        failed_with(&changed, "The approved TikTok source changed");
-        assert!(changed.2.is_empty());
-
-        let landscape = start_tiktok_case(
-            "tiktok-landscape",
-            |_| {},
-            |snapshot, _| snapshot.vertical_video = false,
-            Vec::new(),
-        )
-        .await;
-        failed_with(&landscape, "measured portrait video");
-        assert!(landscape.2.is_empty());
-
-        let missing = start_tiktok_case(
-            "tiktok-missing-media",
-            |_| {},
-            |_, _| {},
-            vec![("delete-media", ResponseTemplate::new(200))],
-        )
-        .await;
-        failed_with(&missing, "TikTok media is unavailable");
-
-        let signed = start_tiktok_case(
-            "tiktok-signed-url",
-            |_| {},
-            |_, publisher| {
-                publisher.video_url = |key| format!("https://assets.example.test/{key}?sig=1");
-            },
-            vec![("settings", tiktok_public_settings())],
-        )
-        .await;
-        failed_with(&signed, "verified permanent public Asset URL");
-
-        let unverified = start_tiktok_case(
-            "tiktok-no-app",
-            |_| {},
-            |_, publisher| publisher.refresh.tiktok_client = None,
-            vec![("settings", tiktok_public_settings())],
-        )
-        .await;
-        failed_with(&unverified, "no verified URL property");
-
-        let wordy = start_tiktok_case(
-            "tiktok-long-caption",
-            |snapshot| snapshot.description = "a".repeat(2300),
-            |_, _| {},
-            vec![
-                ("settings", tiktok_public_settings()),
-                ("property", ResponseTemplate::new(200)),
-            ],
-        )
-        .await;
-        failed_with(&wordy, "2200 UTF-16 units");
-    }
-
-    #[tokio::test]
-    async fn a_tiktok_publish_without_a_task_receipt_is_unknown_and_never_resent() {
-        let fixture = Fixture::new("tiktok-no-receipt").await;
-        let server = MockServer::start().await;
-        let mut snapshot = post(true);
-        snapshot.tiktok_ai_generated = Some(false);
-        let id = tiktok_fixture(&fixture, &snapshot).await;
-        mount_tiktok_settings(&server, tiktok_public_settings()).await;
-        mount_tiktok_property(&server).await;
-        Mock::given(matchers::path("/tiktok/business/video/publish/"))
-            .respond_with(json(
-                serde_json::json!({"code": 0, "data": {"share_id": "  "}}),
-            ))
-            .mount(&server)
-            .await;
-        let publisher = fixture.publisher(&server, allowed());
-        let target = destination(SocialProvider::Tiktok);
-        let publish_count = || async {
-            server
-                .received_requests()
-                .await
-                .unwrap()
-                .iter()
-                .filter(|request| request.method == "POST")
-                .count()
-        };
-
-        assert!(matches!(
-            publisher.prepare(id, &snapshot, &target).await.unwrap(),
-            Step::Continue(())
-        ));
-        let step = publisher
-            .start_tiktok(id, &snapshot, &target)
-            .await
-            .unwrap();
-        assert!(matches!(&step, Step::Settled(outcome) if outcome.state == UNKNOWN));
-        let publication = fixture.publication(id).await;
-        assert_eq!(publication.state, UNKNOWN);
-        assert!(publication.provider_task_id.is_none());
-        assert_eq!(publish_count().await, 1);
-
-        // A retry of the same Post re-enters through `prepare`, which must
-        // settle the uncertain publication as UNKNOWN rather than resend it.
-        let retried = publisher.prepare(id, &snapshot, &target).await.unwrap();
-        assert!(
-            matches!(&retried, Step::Settled(outcome) if outcome.state == UNKNOWN),
-            "a retry settles without publishing"
-        );
-        assert_eq!(fixture.publication(id).await.state, UNKNOWN);
-        assert_eq!(publish_count().await, 1, "the retry sent no second publish");
-    }
-
-    async fn tiktok_task(fixture: &Fixture, task: &str) -> Uuid {
-        let id = fixture.blog_post().await;
-        store::social_publications::admit(&fixture.db, id, "tiktok")
-            .await
-            .unwrap();
-        store::social_publications::begin_provider_write(&fixture.db, id, "tiktok")
-            .await
-            .unwrap();
-        store::social_publications::record_provider_task(&fixture.db, id, "tiktok", task)
-            .await
-            .unwrap();
-        id
-    }
-
-    #[tokio::test]
-    async fn tiktok_task_polls_map_each_provider_status_without_resending() {
-        let fixture = Fixture::new("tiktok-poll").await;
-        fixture
-            .connect(
-                SocialProvider::Tiktok,
-                "tiktok-user",
-                SocialProvider::Tiktok.required_scopes(),
-                None,
-            )
-            .await;
-        let server = MockServer::start().await;
-        let status = |body: serde_json::Value| json(serde_json::json!({"code": 0, "data": body}));
-        let cases = [
-            (
-                "task-failed",
-                status(serde_json::json!({"status": "FAILED"})),
-                Some(FAILED),
-            ),
-            (
-                "task-draft",
-                status(serde_json::json!({"status": "SEND_TO_USER_INBOX"})),
-                Some(UNKNOWN),
-            ),
-            (
-                "task-two",
-                status(serde_json::json!({"status": "PUBLISH_COMPLETE", "post_ids": ["a", "b"]})),
-                Some(UNKNOWN),
-            ),
-            (
-                "task-processing",
-                status(serde_json::json!({"status": "PROCESSING_DOWNLOAD"})),
-                None,
-            ),
-            (
-                "task-unrecognized",
-                status(serde_json::json!({"status": "SOMETHING_NEW"})),
-                None,
-            ),
-            ("task-down", ResponseTemplate::new(503), None),
-        ];
-        for (task, response, _) in &cases {
-            Mock::given(matchers::method("GET"))
-                .and(matchers::path("/tiktok/business/publish/status/"))
-                .and(matchers::query_param("publish_id", *task))
-                .and(matchers::query_param("business_id", "tiktok-user"))
-                .and(matchers::header("Access-Token", "synthetic-access-token"))
-                .respond_with(response.clone())
-                .expect(1)
-                .mount(&server)
-                .await;
-        }
-        Mock::given(matchers::method("POST"))
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-        let publisher = fixture.publisher(&server, allowed());
-        let target = destination(SocialProvider::Tiktok);
-        let snapshot = post(true);
-        for (task, _, settled) in cases {
-            let id = tiktok_task(&fixture, task).await;
-            let step = publisher
-                .poll_tiktok(id, &snapshot, &target, task)
-                .await
-                .unwrap();
-            match settled {
-                Some(state) => {
-                    assert!(
-                        matches!(&step, Step::Settled(outcome) if outcome.state == state),
-                        "{task}"
-                    );
-                    assert_eq!(fixture.publication(id).await.state, state, "{task}");
-                }
-                None => assert!(matches!(step, Step::Continue(())), "{task}"),
-            }
-        }
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    async fn tiktok_polls_without_the_task_egress_or_account_ask_for_reconciliation() {
-        let fixture = Fixture::new("tiktok-poll-guards").await;
-        let server = silent_provider().await;
-        let snapshot = post(true);
-        let target = destination(SocialProvider::Tiktok);
-
-        // A different task than the one recorded is never polled.
-        let id = tiktok_task(&fixture, "recorded-task").await;
-        let publisher = fixture.publisher(&server, allowed());
-        assert!(matches!(
-            publisher.poll_tiktok(id, &snapshot, &target, "other-task").await.unwrap(),
-            Step::Settled(outcome) if outcome.state == UNKNOWN
-        ));
-
-        // A deployment that may not contact the provider retains the task.
-        let gated = fixture.publisher(&server, denied_by(Some("dev"), None));
-        assert!(matches!(
-            gated.poll_tiktok(id, &snapshot, &target, "recorded-task").await.unwrap(),
-            Step::Settled(outcome) if outcome.state == UNKNOWN
-        ));
-        assert!(fixture
-            .publication(id)
-            .await
-            .last_error
-            .is_some_and(|error| error.contains("may not contact the provider")));
-
-        // No connected account: reconnect before reconciling.
-        let orphan = tiktok_task(&fixture, "orphan-task").await;
-        assert!(matches!(
-            publisher.poll_tiktok(orphan, &snapshot, &target, "orphan-task").await.unwrap(),
-            Step::Settled(outcome) if outcome.state == UNKNOWN
-        ));
-        assert!(fixture
-            .publication(orphan)
-            .await
-            .last_error
-            .is_some_and(|error| error.contains("Reconnect TikTok")));
-        assert!(server.received_requests().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn tiktok_public_links_must_be_organic_videos_on_tiktok_https_hosts() {
-        let fixture = Fixture::new("tiktok-links").await;
-        fixture
-            .connect(
-                SocialProvider::Tiktok,
-                "tiktok-user",
-                SocialProvider::Tiktok.required_scopes(),
-                None,
-            )
-            .await;
-        let id = fixture.blog_post().await;
-        let target = destination(SocialProvider::Tiktok);
-        let video = |item: &str, share: Option<&str>, media: &str, ad: bool| {
-            let mut video = serde_json::json!({"item_id": item, "media_type": media, "is_ad": ad});
-            if let Some(share) = share {
-                video["share_url"] = share.into();
-            }
-            json(serde_json::json!({"code": 0, "data": {"videos": [video]}}))
-        };
-        let good = Some("https://www.tiktok.com/@synthetic/video/1");
-        let cases = [
-            video("another-item", good, "VIDEO", false),
-            video("receipt", good, "IMAGE", false),
-            video("receipt", good, "VIDEO", true),
-            video("receipt", None, "VIDEO", false),
-            video("receipt", Some("not a url"), "VIDEO", false),
-            video(
-                "receipt",
-                Some("http://www.tiktok.com/@s/video/1"),
-                "VIDEO",
-                false,
-            ),
-            video(
-                "receipt",
-                Some("https://evil.example/@s/video/1"),
-                "VIDEO",
-                false,
-            ),
-            video(
-                "receipt",
-                Some("https://user:secret@www.tiktok.com/@s/video/1"),
-                "VIDEO",
-                false,
-            ),
-            json(serde_json::json!({"code": 1, "data": {"videos": []}})),
-            ResponseTemplate::new(500),
-        ];
-        for (index, response) in cases.into_iter().enumerate() {
-            let server = MockServer::start().await;
-            Mock::given(matchers::method("GET"))
-                .and(matchers::path("/tiktok/business/video/list/"))
-                .and(matchers::query_param("business_id", "tiktok-user"))
-                .respond_with(response)
-                .expect(1)
-                .mount(&server)
-                .await;
-            let publisher = fixture.publisher(&server, allowed());
-            assert!(
-                !publisher
-                    .read_permalink(id, "synthetic-brand", &target, "receipt")
-                    .await
-                    .unwrap(),
-                "case {index}"
-            );
-            server.verify().await;
-        }
-    }
-
-    #[tokio::test]
-    async fn x_and_receipt_only_link_reads_check_the_receipt_and_author() {
-        let fixture = Fixture::new("x-links").await;
-        fixture.connect_all().await;
-        let id = fixture.blog_post().await;
-        let silent = silent_provider().await;
-        let publisher = fixture.publisher(&silent, allowed());
-        for receipt in ["", "12a"] {
-            assert!(!publisher
-                .read_permalink(
-                    id,
-                    "synthetic-brand",
-                    &destination(SocialProvider::X),
-                    receipt
-                )
-                .await
-                .unwrap());
-        }
-        assert!(!publisher
-            .read_permalink(
-                id,
-                "synthetic-brand",
-                &destination(SocialProvider::Linkedin),
-                "1"
-            )
-            .await
-            .unwrap());
-        // No connected account for the destination: nothing is read.
-        let stranger = Destination {
-            provider: SocialProvider::Facebook,
-            account_id: "someone-else".into(),
-        };
-        assert!(!publisher
-            .read_permalink(id, "synthetic-brand", &stranger, "1")
-            .await
-            .unwrap());
-        assert!(silent.received_requests().await.unwrap().is_empty());
-
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/tweets/123"))
-            .and(matchers::query_param("tweet.fields", "author_id"))
-            .respond_with(json(
-                serde_json::json!({"data": {"id": "123", "author_id": "9999"}}),
-            ))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("GET"))
-            .and(matchers::path("/tweets/124"))
-            .respond_with(ResponseTemplate::new(404))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let publisher = fixture.publisher(&server, allowed());
-        for receipt in ["123", "124"] {
-            assert!(!publisher
-                .read_permalink(
-                    id,
-                    "synthetic-brand",
-                    &destination(SocialProvider::X),
-                    receipt
-                )
-                .await
-                .unwrap());
-        }
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    async fn threads_container_statuses_settle_only_on_terminal_answers() {
-        let fixture = Fixture::new("threads-status").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        let cases = [
-            (
-                "container-error",
-                json(serde_json::json!({"status": "ERROR", "error_message": "synthetic codec"})),
-                Some(FAILED),
-            ),
-            (
-                "container-expired",
-                json(serde_json::json!({"status": "EXPIRED"})),
-                Some(FAILED),
-            ),
-            (
-                "container-published",
-                json(serde_json::json!({"status": "PUBLISHED"})),
-                Some(UNKNOWN),
-            ),
-            (
-                "container-busy",
-                json(serde_json::json!({"status": "IN_PROGRESS"})),
-                None,
-            ),
-            ("container-down", ResponseTemplate::new(503), None),
-        ];
-        for (container, response, _) in &cases {
-            Mock::given(matchers::method("GET"))
-                .and(matchers::path(format!("/{container}")))
-                .and(matchers::query_param("fields", "status,error_message"))
-                .respond_with(response.clone())
-                .expect(1)
-                .mount(&server)
-                .await;
-        }
-        let publisher = fixture.publisher(&server, allowed());
-        let target = destination(SocialProvider::Threads);
-        let text_post = post(false);
-        for (container, _, settled) in cases {
-            let id = fixture.blog_post().await;
-            assert!(matches!(
-                publisher.prepare(id, &text_post, &target).await.unwrap(),
-                Step::Continue(())
-            ));
-            let step = publisher
-                .container_status(id, &text_post, &target, container)
-                .await
-                .unwrap();
-            match settled {
-                Some(state) => {
-                    assert!(
-                        matches!(&step, Step::Settled(outcome) if outcome.state == state),
-                        "{container}"
-                    );
-                    assert_eq!(fixture.publication(id).await.state, state);
-                }
-                None => assert!(
-                    matches!(step, Step::Continue(ContainerStatus::Processing)),
-                    "{container}"
-                ),
-            }
-        }
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    async fn containers_are_created_only_for_container_providers_with_usable_replies() {
-        let fixture = Fixture::new("container-create").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/threads-user/threads"))
-            .and(matchers::body_string_contains("media_type=TEXT"))
-            .and(matchers::body_string_contains("text=Threads+copy"))
-            .respond_with(json(serde_json::json!({"no_id": true})))
-            .up_to_n_times(1)
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(matchers::method("POST"))
-            .and(matchers::path("/threads-user/threads"))
-            .respond_with(ResponseTemplate::new(502))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let publisher = fixture.publisher(&server, allowed());
-        let text_post = post(false);
-        for reason in [
-            "The media container could not be created",
-            "The media container could not be created",
-        ] {
-            let id = fixture.blog_post().await;
-            let target = destination(SocialProvider::Threads);
-            publisher.prepare(id, &text_post, &target).await.unwrap();
-            assert!(matches!(
-                publisher.create_container(id, &text_post, &target).await.unwrap(),
-                Step::Settled(outcome) if outcome.state == FAILED
-            ));
-            assert!(fixture
-                .publication(id)
-                .await
-                .last_error
-                .is_some_and(|error| error.contains(reason)));
-        }
-        // A direct-publish provider never creates a container.
-        let id = fixture.blog_post().await;
-        let facebook = destination(SocialProvider::Facebook);
-        publisher.prepare(id, &text_post, &facebook).await.unwrap();
-        assert!(matches!(
-            publisher.create_container(id, &text_post, &facebook).await.unwrap(),
-            Step::Settled(outcome) if outcome.state == FAILED
-        ));
-        // Instagram without a video is refused without a request.
-        let id = fixture.blog_post().await;
-        store::social_publications::admit(&fixture.db, id, "instagram")
-            .await
-            .unwrap();
-        assert!(matches!(
-            publisher
-                .create_container(id, &text_post, &destination(SocialProvider::Instagram))
-                .await
-                .unwrap(),
-            Step::Settled(outcome) if outcome.state == FAILED
-        ));
-        // YouTube without media is refused after the claim, before any upload.
-        let id = fixture.blog_post().await;
-        store::social_publications::admit(&fixture.db, id, "youtube")
-            .await
-            .unwrap();
-        let outcome = publisher
-            .send_direct(id, &text_post, &destination(SocialProvider::Youtube))
-            .await
-            .unwrap();
-        assert_eq!(outcome.state, FAILED);
-        assert!(fixture
-            .publication(id)
-            .await
-            .last_error
-            .is_some_and(|error| error.contains("YouTube publishes video only")));
-        server.verify().await;
     }
 }

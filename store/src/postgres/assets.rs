@@ -556,11 +556,8 @@ pub(crate) async fn file_revision(
 }
 
 async fn require_ready(pg: &PostgresDb) -> Result<(), AssetError> {
-    crate::postgres_backfill::family::require_scope(
-        pg,
-        crate::postgres_backfill::family::Family::Notation,
-    )
-    .await
-    .map_err(matter::MatterAuthorityError::from)?;
+    crate::postgres::history::require_scope(pg, crate::postgres::history::Family::Notation)
+        .await
+        .map_err(matter::MatterAuthorityError::from)?;
     Ok(())
 }

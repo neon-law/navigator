@@ -89,13 +89,13 @@ pub struct DeletionRequestOutcome {
 /// project (checked against the document's real matter); the REST door, keyed
 /// on the document alone, passes `None`.
 pub async fn request_document_deletion(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     session: &SessionData,
     doc_id: Uuid,
     expected_project_id: Option<Uuid>,
 ) -> Result<DeletionRequestOutcome, RequestDeletionError> {
     let person_id = session.person_id;
-    let doc = store::assets::find_by_id(surreal, doc_id)
+    let doc = store::assets::find_by_id(application_store, doc_id)
         .await
         .map_err(RequestDeletionError::Asset)?
         .ok_or(RequestDeletionError::NotFound)?;
@@ -108,7 +108,7 @@ pub async fn request_document_deletion(
         }
     }
     match crate::client_portal::access()
-        .can_see_project_as_client(surreal, person_id, session.role, project_id)
+        .can_see_project_as_client(application_store, person_id, session.role, project_id)
         .await
     {
         Ok(true) => {}
@@ -120,7 +120,7 @@ pub async fn request_document_deletion(
     };
 
     // Idempotent: don't stack duplicate pending requests for one document.
-    if let Some(existing) = store::expunge_requests::pending_for_document(surreal, doc_id)
+    if let Some(existing) = store::expunge_requests::pending_for_document(application_store, doc_id)
         .await
         .map_err(RequestDeletionError::Request)?
     {
@@ -130,7 +130,7 @@ pub async fn request_document_deletion(
         });
     }
     let request_id = store::expunge_requests::create(
-        surreal,
+        application_store,
         &store::expunge_requests::NewExpungeRequest {
             project_id,
             asset_id: doc_id,
@@ -155,17 +155,21 @@ pub async fn client_request(
     Path((project_code, doc_id)): Path<(String, Uuid)>,
     session: Option<Extension<SessionData>>,
 ) -> Response {
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
+    let Some(project_id) =
+        store::projects::id_for_code(&state.application_store, &project_code).await
+    else {
         return not_found();
     };
     let Some(Extension(session)) = session else {
         return not_found();
     };
-    match request_document_deletion(&state.surreal, &session, doc_id, Some(project_id)).await {
-        Ok(_) => {
-            Redirect::to(&crate::dioxus_app::project_show_path(&state.surreal, project_id).await)
-                .into_response()
-        }
+    match request_document_deletion(&state.application_store, &session, doc_id, Some(project_id))
+        .await
+    {
+        Ok(_) => Redirect::to(
+            &crate::dioxus_app::project_show_path(&state.application_store, project_id).await,
+        )
+        .into_response(),
         Err(RequestDeletionError::NotFound) => not_found(),
         Err(RequestDeletionError::NoRequester) => {
             (StatusCode::FORBIDDEN, "No linked person on the session.").into_response()
@@ -217,12 +221,12 @@ impl std::error::Error for ExpungeRequestActionError {}
 /// REST door. The caller (`authorizer`) is the admin resolving it; tier
 /// authorization is the adapter's job.
 pub async fn authorize_expunge_request(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     request_id: Uuid,
     authorizer: Uuid,
 ) -> Result<(), ExpungeRequestActionError> {
-    let req = store::expunge_requests::by_id(surreal, request_id)
+    let req = store::expunge_requests::by_id(application_store, request_id)
         .await
         .map_err(|e| ExpungeRequestActionError::Db(e.to_string()))?
         .ok_or(ExpungeRequestActionError::NotFound)?;
@@ -230,7 +234,7 @@ pub async fn authorize_expunge_request(
         return Err(ExpungeRequestActionError::AlreadyResolved);
     }
     // Resolve the document asset → repo path (filename) + storage keys.
-    let doc = store::assets::find_by_id(surreal, req.asset_id)
+    let doc = store::assets::find_by_id(application_store, req.asset_id)
         .await
         .map_err(|e| ExpungeRequestActionError::Db(e.to_string()))?
         .ok_or(ExpungeRequestActionError::NotFound)?;
@@ -239,7 +243,7 @@ pub async fn authorize_expunge_request(
         .as_deref()
         .ok_or(ExpungeRequestActionError::NotFound)?;
     let record_id = crate::expunge::expunge(
-        surreal,
+        application_store,
         storage,
         crate::expunge::ExpungeRequest {
             project_id: req.project_id,
@@ -252,7 +256,7 @@ pub async fn authorize_expunge_request(
     )
     .await
     .map_err(|e| ExpungeRequestActionError::Db(e.to_string()))?;
-    store::expunge_requests::authorize(surreal, request_id, authorizer, record_id)
+    store::expunge_requests::authorize(application_store, request_id, authorizer, record_id)
         .await
         .map_err(|e| ExpungeRequestActionError::Db(e.to_string()))?;
     Ok(())
@@ -261,11 +265,11 @@ pub async fn authorize_expunge_request(
 /// Deny a pending client expunge request without deleting anything. The one
 /// command behind both the lawyer queue's deny form and the REST door.
 pub async fn deny_expunge_request(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     request_id: Uuid,
     resolver: Uuid,
 ) -> Result<(), ExpungeRequestActionError> {
-    match store::expunge_requests::deny(surreal, request_id, resolver).await {
+    match store::expunge_requests::deny(application_store, request_id, resolver).await {
         Ok(Some(_)) => Ok(()),
         Ok(None) => Err(ExpungeRequestActionError::NotFound),
         Err(e) => Err(ExpungeRequestActionError::Db(e.to_string())),
@@ -283,7 +287,14 @@ pub async fn admin_authorize(
     let Some(authorizer) = session.as_deref().and_then(|s| s.person_id) else {
         return (StatusCode::FORBIDDEN, "No linked person on the session.").into_response();
     };
-    match authorize_expunge_request(&state.surreal, &state.storage, request_id, authorizer).await {
+    match authorize_expunge_request(
+        &state.application_store,
+        &state.storage,
+        request_id,
+        authorizer,
+    )
+    .await
+    {
         // Already resolved — back to the queue rather than re-running.
         Ok(()) | Err(ExpungeRequestActionError::AlreadyResolved) => {
             Redirect::to("/app/lawyer/expunge-requests").into_response()
@@ -309,7 +320,7 @@ pub async fn admin_deny(
     let Some(resolver) = session.as_deref().and_then(|s| s.person_id) else {
         return (StatusCode::FORBIDDEN, "No linked person on the session.").into_response();
     };
-    match deny_expunge_request(&state.surreal, request_id, resolver).await {
+    match deny_expunge_request(&state.application_store, request_id, resolver).await {
         Ok(()) => Redirect::to("/app/lawyer/expunge-requests").into_response(),
         Err(ExpungeRequestActionError::NotFound) => not_found(),
         Err(e) => {

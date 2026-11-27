@@ -13,21 +13,9 @@ use workflows::{InboundMessageAlertReport, InboundMessageAlertRequest};
 use crate::inbound_message_alert::{alert_context, AlertContextError, InboundMessageAlertService};
 
 pub const WORKFLOW: &str = "InboundMessageAlert";
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED";
 
 pub type InboundMessageAlertWorkflow =
     WorkflowRef<InboundMessageAlertRequest, InboundMessageAlertReport, InboundMessageAlertError>;
-
-/// Whether the `InboundMessageAlert` twin is enabled in the DBOS host.
-/// Disabled unless explicitly set, so enabling the executor alone cannot
-/// duplicate the live Restate lane.
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED must be true or false"),
-    }
-}
 
 /// The workflow id every delivery of one inbound message joins. The Restate
 /// invocation key is the message id; preserving it as the DBOS id keeps
@@ -90,11 +78,11 @@ async fn run_alert(
 ) -> dbos::Result<InboundMessageAlertReport, InboundMessageAlertError> {
     let message_id = request.message_id;
     let loaded = {
-        let surreal = context.service.surreal().clone();
+        let application_store = context.service.application_store().clone();
         dbos::step("load-inbound-message-context", move || {
-            let surreal = surreal.clone();
+            let application_store = application_store.clone();
             async move {
-                alert_context(&surreal, message_id)
+                alert_context(&application_store, message_id)
                     .await
                     .map_err(|error| match error {
                         AlertContextError::MessageNotFound => {
@@ -140,11 +128,11 @@ async fn run_alert(
     }
 
     let state = {
-        let surreal = context.service.surreal().clone();
+        let application_store = context.service.application_store().clone();
         dbos::step("read-inbound-message-alert-receipt", move || {
-            let surreal = surreal.clone();
+            let application_store = application_store.clone();
             async move {
-                let receipt = store::inbox_alerts::receipt(&surreal, message_id)
+                let receipt = store::inbox_alerts::receipt(&application_store, message_id)
                     .await
                     .map_err(|error| {
                         dbos::Error::Application(InboundMessageAlertError::Store(error.to_string()))
@@ -162,15 +150,7 @@ async fn run_alert(
 
 #[cfg(test)]
 mod tests {
-    use super::{enabled, workflow_id, ENABLED_ENV, WORKFLOW};
-
-    #[test]
-    fn registration_is_opt_in_and_rejects_invalid_values() {
-        assert!(!enabled(|_| None).unwrap());
-        assert!(!enabled(|key| (key == ENABLED_ENV).then(|| "false".to_owned())).unwrap());
-        assert!(enabled(|key| (key == ENABLED_ENV).then(|| "true".to_owned())).unwrap());
-        assert!(enabled(|key| (key == ENABLED_ENV).then(|| "yes".to_owned())).is_err());
-    }
+    use super::{workflow_id, WORKFLOW};
 
     #[test]
     fn every_delivery_of_one_message_joins_one_workflow_id() {

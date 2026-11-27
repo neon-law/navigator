@@ -58,7 +58,7 @@ pub(crate) struct TaskCreateForm {
 /// An empty assignee or due date means "none"; a malformed date or a title
 /// that is only whitespace comes back as a flash, not a 500.
 pub(crate) async fn create(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(code): Path<String>,
     Form(input): Form<TaskCreateForm>,
@@ -72,7 +72,7 @@ pub(crate) async fn create(
     let Some(person_id) = session.person_id else {
         return not_found_response();
     };
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .ok()
         .flatten()
@@ -84,11 +84,15 @@ pub(crate) async fn create(
     }
     // The JSON door's own admission, verbatim: a firm-side viewer of this
     // matter or the non-disclosing 404.
-    let viewer =
-        store::access::matter_viewer(&surreal, session.person_id, session.role, project.id)
-            .await
-            .ok()
-            .flatten();
+    let viewer = store::access::matter_viewer(
+        &application_store,
+        session.person_id,
+        session.role,
+        project.id,
+    )
+    .await
+    .ok()
+    .flatten();
     match viewer {
         Some(viewer) if viewer.is_firm_side() => {}
         _ => return not_found_response(),
@@ -111,7 +115,8 @@ pub(crate) async fn create(
     }
 
     let Ok(pg) =
-        crate::project_tasks_api::prepared_store(&surreal, "create", project.id, None).await
+        crate::project_tasks_api::prepared_store(&application_store, "create", project.id, None)
+            .await
     else {
         return back_to_tasks(
             &code,
@@ -129,8 +134,15 @@ pub(crate) async fn create(
             return back_to_tasks(&code, Some("Enter the reviewed handoff note."));
         }
         Ok(Some(handoff)) => {
-            store::task_handoffs::create(&surreal, &pg, project.id, person_id, &task, &handoff)
-                .await
+            store::task_handoffs::create(
+                &application_store,
+                &pg,
+                project.id,
+                person_id,
+                &task,
+                &handoff,
+            )
+            .await
         }
         Ok(None) => store::tasks::create(&pg, project.id, person_id, &task).await,
         Err(message) => return back_to_tasks(&code, Some(message)),
@@ -184,12 +196,20 @@ pub(crate) struct TaskAssignForm {
 /// `POST /app/projects/{code}/tasks/{task_id}/assign` — set or clear the
 /// task's assignee.
 pub(crate) async fn assign(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((code, task_id)): Path<(String, Uuid)>,
     Form(input): Form<TaskAssignForm>,
 ) -> Response {
-    let gate = match row_action_gate(&surreal, session.as_ref(), &code, "assign", task_id).await {
+    let gate = match row_action_gate(
+        &application_store,
+        session.as_ref(),
+        &code,
+        "assign",
+        task_id,
+    )
+    .await
+    {
         Ok(gate) => gate,
         Err(response) => return response,
     };
@@ -213,12 +233,19 @@ pub(crate) struct TaskTransitionForm {
 /// `POST /app/projects/{code}/tasks/{task_id}/transition` — move the task to
 /// the state the row action posted.
 pub(crate) async fn transition(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path((code, task_id)): Path<(String, Uuid)>,
     Form(input): Form<TaskTransitionForm>,
 ) -> Response {
-    let gate = match row_action_gate(&surreal, session.as_ref(), &code, "transition", task_id).await
+    let gate = match row_action_gate(
+        &application_store,
+        session.as_ref(),
+        &code,
+        "transition",
+        task_id,
+    )
+    .await
     {
         Ok(gate) => gate,
         Err(response) => return response,
@@ -252,7 +279,7 @@ struct RowActionGate {
 /// firm side, prepared store. Every refusal is the same 404 an off-matter
 /// lawyer already gets.
 async fn row_action_gate(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     session: Option<&Extension<SessionData>>,
     code: &str,
     operation: &'static str,
@@ -267,7 +294,7 @@ async fn row_action_gate(
     let Some(person_id) = session.person_id else {
         return Err(not_found_response());
     };
-    let Some(project) = store::projects::find_by_code(surreal, code)
+    let Some(project) = store::projects::find_by_code(application_store, code)
         .await
         .ok()
         .flatten()
@@ -279,17 +306,26 @@ async fn row_action_gate(
     }
     // The JSON door's own admission, verbatim: a firm-side viewer of this
     // matter or the non-disclosing 404.
-    let viewer = store::access::matter_viewer(surreal, session.person_id, session.role, project.id)
-        .await
-        .ok()
-        .flatten();
+    let viewer = store::access::matter_viewer(
+        application_store,
+        session.person_id,
+        session.role,
+        project.id,
+    )
+    .await
+    .ok()
+    .flatten();
     match viewer {
         Some(viewer) if viewer.is_firm_side() => {}
         _ => return Err(not_found_response()),
     }
-    let Ok(pg) =
-        crate::project_tasks_api::prepared_store(surreal, operation, project.id, Some(task_id))
-            .await
+    let Ok(pg) = crate::project_tasks_api::prepared_store(
+        application_store,
+        operation,
+        project.id,
+        Some(task_id),
+    )
+    .await
     else {
         return Err(back_to_tasks(
             code,

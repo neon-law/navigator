@@ -248,7 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn project_label_batches_and_retirement_are_firm_scoped() {
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
+        use crate::postgres::fixtures::{connect, fresh_schema};
 
         let Some((options, database)) = fresh_schema().await else {
             return;

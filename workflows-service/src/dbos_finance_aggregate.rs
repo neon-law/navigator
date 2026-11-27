@@ -8,13 +8,12 @@ use std::sync::Arc;
 
 use dbos::{WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
+use store::application_store::ApplicationStore;
 use store::finance_aggregate::{self, FinanceInput, Parameters};
-use store::surreal::SurrealDb;
 
 use cloud::StorageService;
 
 pub const WORKFLOW: &str = "FinanceAggregate";
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED";
 
 pub type FinanceAggregateWorkflow =
     WorkflowRef<RunRequest, FinanceAggregateReport, FinanceAggregateError>;
@@ -31,22 +30,17 @@ pub enum FinanceAggregateError {
 
 #[derive(Clone)]
 pub struct Context {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     storage: Arc<dyn StorageService>,
 }
 
 impl Context {
     #[must_use]
-    pub fn new(surreal: SurrealDb, storage: Arc<dyn StorageService>) -> Self {
-        Self { surreal, storage }
-    }
-}
-
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED must be true or false"),
+    pub fn new(application_store: ApplicationStore, storage: Arc<dyn StorageService>) -> Self {
+        Self {
+            application_store,
+            storage,
+        }
     }
 }
 
@@ -96,7 +90,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<FinanceAggregateW
             .await?;
 
             let storage = Arc::clone(&context.storage);
-            let surreal = context.surreal.clone();
+            let application_store = context.application_store.clone();
             let project_id = request.project_id;
             let key = finance_aggregate::report_key(&request.project_code, &run_id);
             let stored_key = key.clone();
@@ -105,7 +99,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<FinanceAggregateW
                 let storage = Arc::clone(&storage);
                 let key = stored_key.clone();
                 let report = stored_report.clone();
-                let surreal = surreal.clone();
+                let application_store = application_store.clone();
                 async move {
                     let bytes = serde_json::to_vec(&report)
                         .map_err(|_| dbos::Error::Application(FinanceAggregateError::Persist))?;
@@ -113,7 +107,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<FinanceAggregateW
                         .put(&key, &bytes, "application/json")
                         .await
                         .map_err(|_| dbos::Error::Application(FinanceAggregateError::Persist))?;
-                    finance_aggregate::upsert(&surreal, project_id, &report)
+                    finance_aggregate::upsert(&application_store, project_id, &report)
                         .await
                         .map_err(|_| dbos::Error::Application(FinanceAggregateError::Persist))
                 }
@@ -148,7 +142,7 @@ pub struct FinanceAggregateReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{enabled, workflow_id, ENABLED_ENV};
+    use super::workflow_id;
 
     #[test]
     fn finance_run_ids_are_namespaced_and_keep_the_restate_key() {
@@ -156,13 +150,5 @@ mod tests {
         assert_eq!(id, "FinanceAggregate:manual-123");
         assert_eq!(id.strip_prefix("FinanceAggregate:"), Some("manual-123"));
         assert_ne!(id, "Archives:manual-123");
-    }
-
-    #[test]
-    fn registration_is_opt_in_and_rejects_invalid_values() {
-        assert!(!enabled(|_| None).unwrap());
-        assert!(!enabled(|key| (key == ENABLED_ENV).then(|| "false".to_owned())).unwrap());
-        assert!(enabled(|key| (key == ENABLED_ENV).then(|| "true".to_owned())).unwrap());
-        assert!(enabled(|key| (key == ENABLED_ENV).then(|| "yes".to_owned())).is_err());
     }
 }

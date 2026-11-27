@@ -255,11 +255,11 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     let axum::extract::Path(id) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Path<uuid::Uuid>, _>()
             .await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let actor_person_id = crate::admin_listing::injected_person_id().await;
 
     let decision = store::firm_capability::resolve(
-        &surreal,
+        &application_store,
         store_role(role),
         actor_person_id,
         id,
@@ -285,7 +285,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         return Ok(base);
     }
 
-    let Some(firm) = store::firms::find_by_id(&surreal, id)
+    let Some(firm) = store::firms::find_by_id(&application_store, id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
     else {
@@ -297,7 +297,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     };
 
     let entity = match firm.entity_id {
-        Some(entity_id) => store::entities::find_by_id(&surreal, entity_id)
+        Some(entity_id) => store::entities::find_by_id(&application_store, entity_id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?,
         None => None,
@@ -320,7 +320,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         store::signatures::SignatureProvider::DropboxSign => "Dropbox Sign",
     }
     .to_string();
-    let brand_keys = store::firms::brand_keys_for_firm(&surreal, firm.id)
+    let brand_keys = store::firms::brand_keys_for_firm(&application_store, firm.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
 
@@ -330,11 +330,11 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     // person belongs to"; this page asks the inverse — "which people belong
     // to this Firm" — so it reads `person_firm_role` directly rather than
     // bending an existing helper to a question it does not ask.
-    for row in store::firms::memberships_for_firm(&surreal, firm.id)
+    for row in store::firms::memberships_for_firm(&application_store, firm.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
     {
-        let Some(person) = store::persons::find_by_id(&surreal, row.person_id)
+        let Some(person) = store::persons::find_by_id(&application_store, row.person_id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
         else {
@@ -352,7 +352,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         });
     }
 
-    let admin_dri_problem = store::firms::admin_dri_invariant_report(&surreal)
+    let admin_dri_problem = store::firms::admin_dri_invariant_report(&application_store)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
         .into_iter()
@@ -368,7 +368,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     // first).
     let can_edit = matches!(
         store::firm_capability::resolve(
-            &surreal,
+            &application_store,
             store_role(role),
             actor_person_id,
             id,
@@ -379,15 +379,20 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         store::firm_capability::FirmCapabilityDecision::Allowed
     );
 
-    let invoices =
-        store::xero_invoices::firm_thirty_day_rollup(&surreal, firm.id, chrono::Utc::now())
-            .await
-            .map_err(|error| ServerFnError::new(error.to_string()))?
-            .into();
+    let invoices = store::xero_invoices::firm_thirty_day_rollup(
+        &application_store,
+        firm.id,
+        chrono::Utc::now(),
+    )
+    .await
+    .map_err(|error| ServerFnError::new(error.to_string()))?
+    .into();
     let projected_cash =
-        crate::projected_cash::derive::load_firm(&surreal, actor_person_id, firm.id).await;
+        crate::projected_cash::derive::load_firm(&application_store, actor_person_id, firm.id)
+            .await;
     let calibration =
-        crate::outcome_calibration::derive::load_firm(&surreal, actor_person_id, firm.id).await;
+        crate::outcome_calibration::derive::load_firm(&application_store, actor_person_id, firm.id)
+            .await;
 
     // Integration-secret metadata (ENG-491): a separate, stricter capability
     // than `ViewDirectory` above. Owner holds it (governance without
@@ -395,7 +400,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     // everything else on this page.
     let can_view_secrets = matches!(
         store::firm_capability::resolve(
-            &surreal,
+            &application_store,
             store_role(role),
             actor_person_id,
             id,
@@ -406,25 +411,30 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         store::firm_capability::FirmCapabilityDecision::Allowed
     );
     let secrets = if can_view_secrets {
-        store::firm_secrets::list_metadata_for_firm(&surreal, store_role(role), actor_person_id, id)
-            .await
-            .map_err(|error| ServerFnError::new(error.to_string()))?
-            .into_iter()
-            .map(|m| SecretMetadataRow {
-                provider: m.provider.as_str().to_string(),
-                kind: m.kind.as_str().to_string(),
-                status: m.status,
-                version: m.version,
-                updated_at: m.updated_at,
-            })
-            .collect()
+        store::firm_secrets::list_metadata_for_firm(
+            &application_store,
+            store_role(role),
+            actor_person_id,
+            id,
+        )
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?
+        .into_iter()
+        .map(|m| SecretMetadataRow {
+            provider: m.provider.as_str().to_string(),
+            kind: m.kind.as_str().to_string(),
+            status: m.status,
+            version: m.version,
+            updated_at: m.updated_at,
+        })
+        .collect()
     } else {
         Vec::new()
     };
     let can_manage_secrets = can_view_secrets
         && matches!(
             store::firm_capability::resolve(
-                &surreal,
+                &application_store,
                 store_role(role),
                 actor_person_id,
                 id,
@@ -436,7 +446,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         );
     let can_manage_summary_approvals = matches!(
         store::firm_capability::resolve(
-            &surreal,
+            &application_store,
             store_role(role),
             actor_person_id,
             id,
@@ -448,7 +458,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     );
     let summary_approvals = if can_manage_summary_approvals {
         store::summary_sender_approvals::list_for_firm(
-            &surreal,
+            &application_store,
             store_role(role),
             actor_person_id,
             id,
@@ -470,17 +480,18 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     };
     let summary_dri_choices = if can_manage_summary_approvals {
         let mut choices = Vec::new();
-        for project in store::projects::all(&surreal)
+        for project in store::projects::all(&application_store)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
             .into_iter()
             .filter(|project| project.firm_id == Some(id))
         {
-            let participants = store::projects::participations_for_project(&surreal, project.id)
-                .await
-                .map_err(|error| ServerFnError::new(error.to_string()))?;
+            let participants =
+                store::projects::participations_for_project(&application_store, project.id)
+                    .await
+                    .map_err(|error| ServerFnError::new(error.to_string()))?;
             let people = store::persons::find_by_ids(
-                &surreal,
+                &application_store,
                 &participants
                     .iter()
                     .filter(|participant| {
@@ -506,7 +517,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     };
     let summary_approval_history = if can_manage_summary_approvals {
         store::summary_sender_approvals::audit_history_for_firm(
-            &surreal,
+            &application_store,
             store_role(role),
             actor_person_id,
             id,
@@ -527,16 +538,16 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         Vec::new()
     };
     let docusign_review = if can_view_secrets {
-        match store::postgres::PostgresDb::configured().await {
-            Ok(Some(pg)) => store::docusign_completion::review_queue(&pg, id)
-                .await
-                .map_err(|_| ServerFnError::new("DocuSign completion review unavailable"))?
-                .into_iter()
-                .map(|(envelope, reason)| (envelope.to_string(), reason.replace('_', " ")))
-                .collect(),
-            Ok(None) => Vec::new(),
-            Err(_) => return Err(ServerFnError::new("DocuSign completion review unavailable")),
-        }
+        let unavailable = || ServerFnError::new("DocuSign completion review unavailable");
+        let pg = store::postgres::PostgresDb::application()
+            .await
+            .map_err(|_| unavailable())?;
+        store::docusign_completion::review_queue(&pg, id)
+            .await
+            .map_err(|_| unavailable())?
+            .into_iter()
+            .map(|(envelope, reason)| (envelope.to_string(), reason.replace('_', " ")))
+            .collect()
     } else {
         Vec::new()
     };

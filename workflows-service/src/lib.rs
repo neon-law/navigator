@@ -34,7 +34,6 @@ pub mod notation_reset;
 
 pub mod notation_transport;
 pub mod project_slack;
-pub mod registry;
 pub mod social_publisher;
 mod tiktok_business;
 pub mod workflow_step_error;

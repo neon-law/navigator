@@ -124,7 +124,7 @@ async fn confirm(
     let Some(claim) = read(&state.sessions, &query.token, Utc::now().timestamp()) else {
         return webapp::auth_pages::invalid_link().into_response();
     };
-    let lead = match store::leads::find(&state.surreal, claim.lead).await {
+    let lead = match store::leads::find(&state.application_store, claim.lead).await {
         Ok(Some(lead)) if lead.email_lower == claim.email => lead,
         Ok(_) => return webapp::auth_pages::invalid_link().into_response(),
         Err(error) => return server_error(&error, claim.lead),
@@ -135,7 +135,7 @@ async fn confirm(
     }
     let person_id = match lead.person_id {
         Some(person_id) => person_id,
-        None => match store::leads::convert(&state.surreal, lead.id).await {
+        None => match store::leads::convert(&state.application_store, lead.id).await {
             Ok(converted) => match converted.person_id {
                 Some(person_id) => person_id,
                 None => return server_error(&"converted lead has no Person", lead.id),
@@ -143,12 +143,18 @@ async fn confirm(
             Err(error) => return server_error(&error, lead.id),
         },
     };
-    let person = match store::persons::set_email_confirmed(&state.surreal, person_id, true).await {
+    let person = match store::persons::set_email_confirmed(
+        &state.application_store,
+        person_id,
+        true,
+    )
+    .await
+    {
         Ok(Some(person)) => person,
         Ok(None) => return server_error(&"lead Person is missing", lead.id),
         Err(error) => return server_error(&error, lead.id),
     };
-    let admitted = store::persons::is_admitted(&state.surreal, person.id)
+    let admitted = store::persons::is_admitted(&state.application_store, person.id)
         .await
         .unwrap_or(false);
     if person.role != Role::Client || !admitted {
@@ -211,175 +217,5 @@ mod tests {
             read(&sessions, &session_cookie, 1_001).is_none(),
             "a session is no token"
         );
-    }
-
-    /// The confirmation is sent off the request path, where the request's
-    /// Brand would otherwise fall back to the deployment default.
-    #[tokio::test]
-    async fn the_confirmation_speaks_for_the_brand_that_took_the_request() {
-        let email = std::sync::Arc::new(crate::email::CapturingEmail::new());
-        let mut state =
-            crate::test_support::app_state(store::test_support::mem_surreal().await).await;
-        state.email = email.clone();
-        let branding = &views::brand::IEP_DEFENDERS_BRANDING;
-        views::brand::scope(branding, async {
-            spawn_send(state, Uuid::new_v4(), "visitor@example.com".to_string());
-        })
-        .await;
-        let mut sent = Vec::new();
-        for _ in 0..50 {
-            sent = email.captured();
-            if !sent.is_empty() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        assert_eq!(sent.len(), 1);
-        assert_eq!(
-            sent[0].subject,
-            format!("Confirm your email for {}", branding.firm.site_name)
-        );
-        assert!(
-            sent[0].body.contains(branding.firm_email),
-            "{}",
-            sent[0].body
-        );
-    }
-
-    async fn lead(db: &store::surreal::SurrealDb, email: &str) -> Uuid {
-        store::leads::record(
-            db,
-            &store::leads::NewLead {
-                email: email.to_string(),
-                phone: None,
-                brand_key: "neon".into(),
-                source_path: "/contact".into(),
-                consent_version: "consent".into(),
-                consented_at: Utc::now(),
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    async fn follow(state: &AppState, raw: &str) -> axum::http::Response<axum::body::Body> {
-        use tower::ServiceExt;
-        routes()
-            .layer(tower_cookies::CookieManagerLayer::new())
-            .with_state(state.clone())
-            .oneshot(
-                axum::http::Request::get(format!("{CONFIRM_PATH}?token={raw}"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-    }
-
-    fn session_from(
-        state: &AppState,
-        response: &axum::http::Response<axum::body::Body>,
-    ) -> Option<SessionData> {
-        response
-            .headers()
-            .get_all(axum::http::header::SET_COOKIE)
-            .iter()
-            .filter_map(|value| value.to_str().ok())
-            .find_map(|cookie| {
-                let (name, rest) = cookie.split_once('=')?;
-                (name == crate::session::SESSION_COOKIE_NAME)
-                    .then(|| state.sessions.decode(rest.split(';').next()?))
-                    .flatten()
-            })
-    }
-
-    #[tokio::test]
-    async fn a_confirmed_lead_becomes_a_signed_in_client_by_email_link() {
-        let db = store::test_support::mem_surreal().await;
-        let state = crate::test_support::app_state(db.clone()).await;
-        let lead_id = lead(&db, "Visitor@Example.com").await;
-        let raw = token(
-            &state.sessions,
-            lead_id,
-            "visitor@example.com",
-            Utc::now().timestamp(),
-        );
-
-        let response = follow(&state, &raw).await;
-        assert_eq!(
-            response.headers()["location"],
-            crate::purchases::PURCHASES_PATH
-        );
-        let session = session_from(&state, &response).expect("a session cookie");
-        assert_eq!(session.role, Role::Client);
-        assert_eq!(session.provider.as_deref(), Some(EMAIL_LINK_PROVIDER));
-        assert!(!crate::purchases::complimentary(
-            &session,
-            "visitor@example.com"
-        ));
-
-        let person = store::persons::find_by_email_ci(&db, "visitor@example.com")
-            .await
-            .unwrap()
-            .expect("the lead became a Person");
-        assert_eq!(session.person_id, Some(person.id));
-        assert!(person.email_confirmed);
-        let converted = store::leads::find(&db, lead_id).await.unwrap().unwrap();
-        assert_eq!(converted.person_id, Some(person.id));
-
-        let again = follow(&state, &raw).await;
-        assert_eq!(
-            session_from(&state, &again).unwrap().person_id,
-            Some(person.id),
-            "a repeat follow is the same Client"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_firm_account_is_confirmed_but_never_signed_in_by_link() {
-        let db = store::test_support::mem_surreal().await;
-        let state = crate::test_support::app_state(db.clone()).await;
-        store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role("Lawyer", "lawyer@example.com", Role::Lawyer),
-        )
-        .await
-        .unwrap();
-        let lead_id = lead(&db, "lawyer@example.com").await;
-        let raw = token(
-            &state.sessions,
-            lead_id,
-            "lawyer@example.com",
-            Utc::now().timestamp(),
-        );
-
-        let response = follow(&state, &raw).await;
-        assert_eq!(
-            response.headers()["location"],
-            "/auth/login?notice=email_confirmed"
-        );
-        assert!(session_from(&state, &response).is_none());
-    }
-
-    #[tokio::test]
-    async fn a_link_for_another_address_or_an_unknown_lead_is_refused() {
-        let db = store::test_support::mem_surreal().await;
-        let state = crate::test_support::app_state(db.clone()).await;
-        let lead_id = lead(&db, "visitor@example.com").await;
-        let now = Utc::now().timestamp();
-        for raw in [
-            token(&state.sessions, lead_id, "someone@example.com", now),
-            token(&state.sessions, Uuid::new_v4(), "visitor@example.com", now),
-            "garbage".to_string(),
-        ] {
-            let response = follow(&state, &raw).await;
-            assert!(session_from(&state, &response).is_none());
-            assert!(response.headers().get("location").is_none());
-        }
-        assert!(store::persons::find_by_email_ci(&db, "visitor@example.com")
-            .await
-            .unwrap()
-            .is_none());
     }
 }

@@ -16,7 +16,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 /// A router with the embedded policy, as every `/app/api` door sees it.
-async fn graph_app(db: store::surreal::SurrealDb) -> axum::Router {
+async fn graph_app(db: store::application_store::ApplicationStore) -> axum::Router {
     let mut state = portal::test_support::app_state(db).await;
     state.policy = portal::policy::PolicyClient::embedded().expect("embedded policy compiles");
     portal::router(state)
@@ -51,14 +51,20 @@ async fn get(app: &axum::Router, path: &str, bearer: &str) -> (StatusCode, serde
     (status, serde_json::from_slice(&body).unwrap_or_default())
 }
 
-async fn lawyer(db: &store::surreal::SurrealDb, name: &str) -> store::persons::Person {
+async fn lawyer(
+    db: &store::application_store::ApplicationStore,
+    name: &str,
+) -> store::persons::Person {
     let email = format!("{}@example.com", name.to_lowercase().replace(' ', "."));
     store::persons::create(db, &NewPerson::with_role(name, &email, Role::Lawyer))
         .await
         .unwrap()
 }
 
-async fn admin(db: &store::surreal::SurrealDb, name: &str) -> store::persons::Person {
+async fn admin(
+    db: &store::application_store::ApplicationStore,
+    name: &str,
+) -> store::persons::Person {
     let email = format!("{}@example.com", name.to_lowercase().replace(' ', "."));
     store::persons::create(db, &NewPerson::with_role(name, &email, Role::Admin))
         .await
@@ -66,7 +72,7 @@ async fn admin(db: &store::surreal::SurrealDb, name: &str) -> store::persons::Pe
 }
 
 async fn seed_firm(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     name: &str,
     admin_dri: Uuid,
 ) -> store::firms::Firm {
@@ -83,7 +89,7 @@ async fn seed_firm(
     .unwrap()
 }
 
-async fn seed_matter(db: &store::surreal::SurrealDb, code: &str) -> Uuid {
+async fn seed_matter(db: &store::application_store::ApplicationStore, code: &str) -> Uuid {
     store::test_support::seed_compiled_brands_postgres(db).await;
     store::projects::create(
         db,
@@ -103,7 +109,7 @@ async fn seed_matter(db: &store::surreal::SurrealDb, code: &str) -> Uuid {
 #[tokio::test]
 async fn graph_depth_above_the_ceiling_is_a_client_error() {
     store::test_support::with_required_postgres(async {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let lawyer = lawyer(&db, "Depth Lawyer").await;
         let app = graph_app(db).await;
         let bearer = bearer(lawyer.id, Role::Lawyer);
@@ -133,7 +139,7 @@ async fn graph_depth_above_the_ceiling_is_a_client_error() {
 #[tokio::test]
 async fn a_matter_outside_the_callers_scope_is_a_bare_404() {
     store::test_support::with_required_postgres(async {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let outsider = lawyer(&db, "Outsider Lawyer").await;
         let matter = seed_matter(&db, "outgraph").await;
         let app = graph_app(db).await;
@@ -149,7 +155,7 @@ async fn a_matter_outside_the_callers_scope_is_a_bare_404() {
 #[tokio::test]
 async fn a_firm_view_outside_the_callers_directory_is_a_bare_404() {
     store::test_support::with_required_postgres(async {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         // The firm's admin DRI holds the membership; the caller holds none.
         let member = admin(&db, "Firm Member").await;
         let firm = seed_firm(&db, "Out of Reach Firm", member.id).await;
@@ -167,7 +173,7 @@ async fn a_firm_view_outside_the_callers_directory_is_a_bare_404() {
 #[tokio::test]
 async fn a_lawyer_view_of_another_firms_person_is_a_bare_404() {
     store::test_support::with_required_postgres(async {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let member = admin(&db, "Directed Admin").await;
         let target = lawyer(&db, "Directed Target").await;
         let firm = seed_firm(&db, "Directed Firm", member.id).await;
@@ -232,7 +238,7 @@ async fn assert_view_or_unconfigured(app: &axum::Router, path: &str, bearer: &st
 #[tokio::test]
 async fn a_lawyer_reads_their_own_neighborhood() {
     store::test_support::with_required_postgres(async {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let lawyer = lawyer(&db, "Self View Lawyer").await;
         let app = graph_app(db).await;
         let bearer = bearer(lawyer.id, Role::Lawyer);
@@ -250,7 +256,7 @@ async fn a_lawyer_reads_their_own_neighborhood() {
 #[tokio::test]
 async fn a_directory_authorized_caller_reads_a_firm_view() {
     store::test_support::with_required_postgres(async {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let admin = admin(&db, "Firm Admin").await;
         let firm = seed_firm(&db, "Readable Firm", admin.id).await;
         let app = graph_app(db).await;
@@ -265,7 +271,7 @@ async fn a_directory_authorized_caller_reads_a_firm_view() {
 #[tokio::test]
 async fn an_unauthenticated_or_client_caller_is_refused_before_scope() {
     store::test_support::with_required_postgres(async {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let matter = seed_matter(&db, "nograph").await;
         let client = store::persons::create(
             &db,
@@ -317,7 +323,7 @@ async fn unavailable_graph_answers_503_for_an_authorized_self_view() {
         return;
     }
     let actor = Uuid::now_v7();
-    let app = graph_app(store::surreal::SurrealDb::uninitialized()).await;
+    let app = graph_app(store::application_store::ApplicationStore::uninitialized()).await;
     let (status, body) = get(
         &app,
         &format!("/app/api/graph/lawyer/{actor}"),

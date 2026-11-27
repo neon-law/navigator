@@ -183,28 +183,19 @@ fn never_store_passwords_promise_holds_in_the_code() {
         "the workshop section must state the no-password-storage promise",
     );
 
-    // The person record lives in SurrealDB (#1093; ENG-19): its shape is the
-    // `person` half of the schema file, and `store::persons` is the only
-    // module that reads or writes it. Both have to stay clean.
-    //
-    // The schema is read one `person` line at a time rather than whole. The
-    // file also defines `email_token`, whose `purpose` field asserts
-    // `'password_reset'` — a magic link sent to a verified address, which is
-    // the opposite of storing a password. Matching the whole file would fail
-    // on that and teach the next reader to delete the test.
-    let schema = repo_file("store/src/schema/navigator.surql").to_lowercase();
-    let person_definition: String = schema
-        .lines()
-        .filter(|line| line.contains(" on person"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let schema = repo_file("store/postgres/schema.sql").to_lowercase();
+    let person_definition = schema
+        .split_once("create table person (")
+        .and_then(|(_, rest)| rest.split_once("\n);"))
+        .map(|(definition, _)| definition)
+        .expect("the PostgreSQL schema defines the person table");
     assert!(
         person_definition.contains("email_lower"),
         "the `person` table definition was not found in the schema file — this guard is \
          matching nothing, which would pass silently",
     );
     for (what, source) in [
-        ("the `person` table definition", &person_definition),
+        ("the `person` table definition", person_definition),
         (
             "`store::persons`",
             &repo_file("store/src/persons.rs").to_lowercase(),
@@ -216,14 +207,7 @@ fn never_store_passwords_promise_holds_in_the_code() {
         );
     }
 
-    // The dependency fact is about what Navigator's OWN code can reach, so
-    // it reads the manifests rather than `Cargo.lock`. A password-hashing
-    // crate sitting in the lock file is not evidence of anything by itself:
-    // SurrealDB carries argon2, bcrypt, scrypt and pbkdf2 to authenticate
-    // its own database users (#1093), which is an engine authenticating to
-    // itself, not Navigator storing a person's password. What WOULD break
-    // the promise is a workspace crate declaring one, because that is the
-    // only way our code could call it — so that is what is asserted.
+    // Direct dependencies determine which hashing libraries Navigator can call.
     for manifest_path in workspace_manifests() {
         let manifest = repo_file(&manifest_path);
         for crate_name in ["argon2", "bcrypt", "scrypt", "pbkdf2", "password-hash"] {
@@ -254,15 +238,9 @@ fn the_no_password_guard_cannot_pass_vacuously() {
     // The matcher finds a real declaration, in each spelling the
     // workspace uses.
     assert!(declares_dependency("serde = { version = \"1\" }", "serde"));
-    assert!(declares_dependency(
-        "surrealdb.workspace = true",
-        "surrealdb"
-    ));
+    assert!(declares_dependency("serde.workspace = true", "serde"));
     assert!(declares_dependency("  argon2 = \"0.5\"", "argon2"));
-    assert!(declares_dependency(
-        &repo_file("store/Cargo.toml"),
-        "surrealdb"
-    ));
+    assert!(declares_dependency(&repo_file("store/Cargo.toml"), "sqlx"));
 
     // And does not fire on a mention that is not a declaration — the
     // name inside a comment, a feature list, or another crate's name.
@@ -271,7 +249,7 @@ fn the_no_password_guard_cannot_pass_vacuously() {
         "argon2"
     ));
     assert!(!declares_dependency(
-        "surrealdb = { features = [\"argon2\"] }",
+        "serde = { features = [\"argon2\"] }",
         "argon2"
     ));
     assert!(!declares_dependency("argon2-kdf = \"1\"", "argon2"));

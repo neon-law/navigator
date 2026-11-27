@@ -450,7 +450,7 @@ data:
       # NOTE on replicas: tail sampling needs all spans of a trace at one
       # collector instance. A single emitting process holds a sticky gRPC
       # connection to one replica, so single-process traces are decided
-      # correctly; cross-boundary traces (web -> Restate, Step 3) can split
+      # correctly; cross-boundary traces (external calls and queued work) can split
       # across the 2 replicas and be sampled approximately. Acceptable for v1
       # because the unsampled lake is the source of truth and ERROR spans are
       # kept on whichever replica sees them. The 2-tier loadbalancing-exporter

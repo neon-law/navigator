@@ -51,7 +51,7 @@ pub trait ImportSource: Send + Sync {
 /// The production source: each import's forge is resolved for its Project's
 /// own Firm, with that Firm's encrypted token.
 pub struct StoreImportSource {
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     pg: store::postgres::PostgresDb,
     kms: Arc<dyn cloud::RuntimeKms>,
 }
@@ -59,11 +59,15 @@ pub struct StoreImportSource {
 impl StoreImportSource {
     #[must_use]
     pub fn new(
-        surreal: store::surreal::SurrealDb,
+        application_store: store::application_store::ApplicationStore,
         pg: store::postgres::PostgresDb,
         kms: Arc<dyn cloud::RuntimeKms>,
     ) -> Self {
-        Self { surreal, pg, kms }
+        Self {
+            application_store,
+            pg,
+            kms,
+        }
     }
 }
 
@@ -84,7 +88,7 @@ impl ImportSource for StoreImportSource {
             .map_err(|error| error.to_string())?
             .project_id;
         let forge = store::project_surfaces::forgejo_for_project(
-            &self.surreal,
+            &self.application_store,
             project_id,
             self.kms.as_ref(),
             |key| std::env::var(key).ok(),
@@ -92,7 +96,7 @@ impl ImportSource for StoreImportSource {
         .await
         .map_err(|error| error.to_string())?;
         store::project_source_imports::process(
-            &self.surreal,
+            &self.application_store,
             &self.pg,
             &forge,
             import_id,

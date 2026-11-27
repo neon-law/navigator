@@ -112,85 +112,19 @@ fn argv(args: &[&str]) -> Vec<String> {
 }
 
 /// One step of a teardown boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Step {
-    /// Must succeed; a failure aborts the teardown before anything further is
-    /// deleted.
-    Required(Vec<String>),
-    /// May fail without aborting — releasing a finalizer on a CR that a
-    /// previous run already removed is not an error, and `kubectl patch` has
-    /// no `--ignore-not-found`.
-    BestEffort(Vec<String>),
-}
-
-impl Step {
-    pub(super) fn argv(&self) -> &[String] {
-        match self {
-            Step::Required(argv) | Step::BestEffort(argv) => argv,
-        }
-    }
-}
-
 /// The argv the KIND reset boundary deletes, in order.
 ///
 /// Every one pins `--context`, and that is the whole guard: `inspect` proves
 /// the *KIND* namespace carries the managed staging labels, so a delete that
 /// fell back to the current context would verify one cluster and destroy
 /// another.
-pub(super) fn delete_kind_boundary_args(context: &str, namespace: &str) -> Vec<Step> {
+fn delete_kind_boundary_args(context: &str, namespace: &str) -> Vec<Vec<String>> {
     vec![
-        // Mark the CR for deletion, but do NOT wait for the Operator here —
-        // it cannot finish, and the next step is what actually releases it.
-        Step::Required(argv(&[
-            "--context",
-            context,
-            "--namespace",
-            namespace,
-            "delete",
-            "restatedeployment",
-            "workflows-service",
-            "--ignore-not-found",
-            "--wait=false",
-        ])),
-        // Release the Operator's `deployments.restate.dev` finalizer by hand.
-        //
-        // This looks blunt, so here is why nothing gentler works. The Operator
-        // will not finalize while Restate reports the deployment live:
-        //
-        //     Cannot process deletion of RestateDeployment 'workflows-service'
-        //     from Restate as there are 1 active deployments that rely on it
-        //     reconcile failed: CleanupFailed(DeploymentInUse)
-        //
-        // and the thing reporting it live is the journal this very reset is
-        // about to destroy — so the finalizer waits on the journal, the
-        // namespace waits on the finalizer, and the journal waits on the
-        // namespace. Waiting deadlocks (`delete namespace` blocks forever);
-        // deferring it to the namespace delete deadlocks differently, because
-        // the Operator's cleanup emits an Event and a terminating namespace
-        // 403s every write into it.
-        //
-        // The finalizer exists to keep Restate's registry consistent. That
-        // registry is deleted three steps below, so there is no consistency
-        // left to protect — this is a disposable boundary, and graceful
-        // deregistration from a broker being destroyed in the same breath is
-        // ceremony. Best-effort: the CR is gone on a repeat run.
-        Step::BestEffort(argv(&[
-            "--context",
-            context,
-            "--namespace",
-            namespace,
-            "patch",
-            "restatedeployment",
-            "workflows-service",
-            "--type=merge",
-            "-p",
-            r#"{"metadata":{"finalizers":[]}}"#,
-        ])),
         // StatefulSet PVCs are intentionally part of the disposable staging
         // boundary. Delete them before the namespace so SeaweedFS bytes cannot
         // outlive the reset even on storage classes that retain claims during
         // termination.
-        Step::Required(argv(&[
+        argv(&[
             "--context",
             context,
             "--namespace",
@@ -200,7 +134,7 @@ pub(super) fn delete_kind_boundary_args(context: &str, namespace: &str) -> Vec<S
             "--all",
             "--ignore-not-found",
             "--wait=false",
-        ])),
+        ]),
     ]
 }
 
@@ -302,40 +236,11 @@ pub(super) fn new_environment_id() -> String {
     format!("stg-{}", uuid::Uuid::now_v7().simple())
 }
 
-/// The namespace the Restate Operator reconciles the `RestateCluster` into.
-///
-/// It is named after the cluster CR (`restate`) and is **not** the CR's own
-/// namespace, so the journal PVC and `StatefulSet` sit outside `cfg.namespace`
-/// and do not go away with it. `e2e::restate_ready_target` pins the same name
-/// for the readiness gate.
-pub(super) const RESTATE_NAMESPACE: &str = "restate";
-
-/// Every argv the KIND reset boundary deletes: the Restate deployment, the
-/// PVCs, the namespace itself, and finally the Restate journal.
-pub(super) fn kind_boundary_argv(context: &str, namespace: &str) -> Vec<Step> {
-    let mut argvs = delete_kind_boundary_args(context, namespace);
-    argvs.push(Step::Required(super::undeploy_args(context, namespace)));
-    // The journal is NOT in `namespace`. The Operator reconciles the
-    // RestateCluster into its own `restate` namespace, so a 1 GiB journal PVC
-    // outlives a `navigator` teardown — and a reset that left it standing
-    // would rebuild the store underneath a live journal, so the worker would
-    // replay invocations against rows that no longer exist. That
-    // `RecordNotFound` is the exact failure this lifecycle exists to prevent,
-    // which is why the journal is inside the boundary and not beside it.
-    //
-    // This must run AFTER the CR's namespace is gone: the Operator watches the
-    // CR, so deleting the journal while the CR still exists just has it
-    // reconciled straight back.
-    argvs.push(Step::Required(argv(&[
-        "--context",
-        context,
-        "delete",
-        "namespace",
-        RESTATE_NAMESPACE,
-        "--ignore-not-found",
-        "--wait=true",
-    ])));
-    argvs
+/// Delete the owned PVCs before removing their namespace.
+pub(super) fn kind_boundary_argv(context: &str, namespace: &str) -> Vec<Vec<String>> {
+    let mut args = delete_kind_boundary_args(context, namespace);
+    args.push(super::undeploy_args(context, namespace));
+    args
 }
 
 pub(super) fn inspect<C: Cluster>(
@@ -441,19 +346,11 @@ pub(super) fn teardown<C: Cluster>(
     environment: DeploymentEnvironment,
     context: &str,
     namespace: &str,
-    boundary: &[Step],
+    boundary: &[Vec<String>],
 ) -> Result<()> {
     inspect(cluster, environment, context, namespace)?;
-    for step in boundary {
-        let argv = step.argv();
-        match step {
-            Step::Required(_) => cluster.run(argv)?,
-            // A failure here is expected on a re-run and must not abort the
-            // teardown; the Required steps around it are what enforce order.
-            Step::BestEffort(_) => {
-                let _ = cluster.succeeds(argv);
-            }
-        }
+    for args in boundary {
+        cluster.run(args)?;
     }
     Ok(())
 }
@@ -465,7 +362,7 @@ pub(super) fn reset<C: Cluster>(
     environment: DeploymentEnvironment,
     context: &str,
     namespace: &str,
-    boundary: &[Step],
+    boundary: &[Vec<String>],
     id: &str,
     mut recreate: impl FnMut(&mut C) -> Result<()>,
 ) -> Result<()> {
@@ -602,12 +499,8 @@ mod tests {
     #[test]
     fn every_destructive_kind_delete_pins_the_context() {
         let steps = delete_kind_boundary_args("kind-navigator", "navigator");
-        assert_eq!(
-            steps.len(),
-            3,
-            "delete the CR, release its finalizer, delete the pvcs"
-        );
-        for argv in steps.iter().map(Step::argv) {
+        assert_eq!(steps.len(), 1);
+        for argv in &steps {
             assert_eq!(
                 argv.iter()
                     .position(|arg| arg == "--context")
@@ -821,83 +714,9 @@ mod tests {
             verbs[0].contains("get namespace"),
             "inspect runs first: {verbs:?}"
         );
-        assert_eq!(
-            cluster.deletes().len(),
-            4,
-            "restatedeployment, pvc, namespace, journal"
-        );
-        assert!(verbs[1].contains("delete restatedeployment"));
-        assert!(verbs[2].contains("patch restatedeployment"));
-        assert!(verbs[3].contains("delete pvc"));
-        assert!(verbs[4].contains("delete --ignore-not-found namespace navigator"));
-        assert!(verbs[5].contains(&format!("delete namespace {RESTATE_NAMESPACE}")));
-    }
-
-    /// The Operator never releases this finalizer on its own: it refuses while
-    /// Restate reports the deployment in use — `CleanupFailed(DeploymentInUse)`
-    /// — and the thing reporting it is the journal this same reset destroys
-    /// two steps later. So the finalizer waits on the journal, the namespace
-    /// waits on the finalizer, and the journal waits on the namespace.
-    /// Verified live against KIND: waiting on the Operator blocks forever.
-    #[test]
-    fn the_restate_finalizer_is_released_before_the_namespace_dies() {
-        let steps = kind_boundary_argv("kind-navigator", "navigator");
-        let verbs: Vec<String> = steps.iter().map(|s| s.argv().join(" ")).collect();
-
-        let release = verbs
-            .iter()
-            .position(|v| v.contains("patch restatedeployment"))
-            .expect("the boundary releases the finalizer itself");
-        let namespace = verbs
-            .iter()
-            .position(|v| v.contains("delete --ignore-not-found namespace navigator"))
-            .expect("the boundary deletes its namespace");
-
-        assert!(
-            verbs[release].contains(r#"{"metadata":{"finalizers":[]}}"#),
-            "the release must actually empty the finalizer list: {:?}",
-            verbs[release],
-        );
-        assert!(
-            release < namespace,
-            "a terminating namespace 403s the Event the Operator's cleanup \
-             writes, so the finalizer must go while it is still Active: \
-             {verbs:?}",
-        );
-        assert!(
-            matches!(steps[release], Step::BestEffort(_)),
-            "a repeat run has no CR left to patch; that is not a failure",
-        );
-    }
-
-    /// The Restate journal lives in its own namespace, so a boundary scoped to
-    /// `navigator` leaves it standing — a fresh store under a live journal,
-    /// which is the `RecordNotFound` this lifecycle exists to prevent.
-    #[test]
-    fn the_kind_boundary_deletes_the_restate_journal_after_the_cr() {
-        let verbs: Vec<String> = kind_boundary_argv("kind-navigator", "navigator")
-            .iter()
-            .map(|step| step.argv().join(" "))
-            .collect();
-
-        let journal = verbs
-            .iter()
-            .position(|v| v.contains(&format!("namespace {RESTATE_NAMESPACE}")))
-            .expect("the journal namespace must be inside the reset boundary");
-        let cluster_cr = verbs
-            .iter()
-            .position(|v| v.contains("delete --ignore-not-found namespace navigator"))
-            .expect("the CR's namespace is deleted too");
-
-        assert!(
-            journal > cluster_cr,
-            "deleting the journal before the CR just has the Operator \
-             reconcile it straight back: {verbs:?}",
-        );
-        assert!(
-            verbs[journal].contains("--context kind-navigator"),
-            "the journal delete pins the context like every other: {verbs:?}",
-        );
+        assert_eq!(cluster.deletes().len(), 2);
+        assert!(verbs[1].contains("delete pvc"));
+        assert!(verbs[2].contains("delete --ignore-not-found namespace navigator"));
     }
 
     #[test]

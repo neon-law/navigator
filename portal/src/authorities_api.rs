@@ -129,7 +129,7 @@ pub(crate) async fn create_authority_door(
 
     let citation = input.citation.trim();
     if let Some(existing) = store::authorities::find(
-        &state.surreal,
+        &state.application_store,
         store::authorities::AuthorityLookup::Citation(citation),
     )
     .await
@@ -139,7 +139,7 @@ pub(crate) async fn create_authority_door(
             return Ok(ambiguous_identity());
         }
         let archived = match existing.archived_asset_id {
-            Some(id) => store::assets::find_by_id(&state.surreal, id)
+            Some(id) => store::assets::find_by_id(&state.application_store, id)
                 .await
                 .map_err(|error| {
                     ApiError::Db(format!("authority archive lookup failed: {error}"))
@@ -163,18 +163,22 @@ pub(crate) async fn create_authority_door(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("application/octet-stream");
-    let asset_id =
-        match store::assets::ingest_content(&state.surreal, &state.storage, &bytes, content_type)
-            .await
-        {
-            Ok(id) => id,
-            Err(error) => {
-                tracing::error!(error = %error, "api: authority archive ingest failed");
-                return Err(ApiError::Db(
-                    "the archived artifact could not be persisted".to_string(),
-                ));
-            }
-        };
+    let asset_id = match store::assets::ingest_content(
+        &state.application_store,
+        &state.storage,
+        &bytes,
+        content_type,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(error) => {
+            tracing::error!(error = %error, "api: authority archive ingest failed");
+            return Err(ApiError::Db(
+                "the archived artifact could not be persisted".to_string(),
+            ));
+        }
+    };
 
     let new = store::authorities::NewAuthority {
         class,
@@ -187,7 +191,7 @@ pub(crate) async fn create_authority_door(
         checked_on: trimmed(input.checked_on.as_deref()),
         archived_asset_id: Some(asset_id),
     };
-    match store::authorities::record(&state.surreal, &new).await {
+    match store::authorities::record(&state.application_store, &new).await {
         Ok(authority) if authority.class != class.as_str() => Ok(ambiguous_identity()),
         Ok(authority) => Ok(Json(authority).into_response()),
         Err(error) => {
@@ -272,7 +276,7 @@ pub(crate) async fn update_authority_door(
             let content_type =
                 trimmed(input.content_type.as_deref()).unwrap_or("application/octet-stream");
             match store::assets::ingest_content(
-                &state.surreal,
+                &state.application_store,
                 &state.storage,
                 &bytes,
                 content_type,
@@ -301,7 +305,7 @@ pub(crate) async fn update_authority_door(
         archived_asset_id,
     };
 
-    match store::authorities::update(&state.surreal, lookup, &patch).await {
+    match store::authorities::update(&state.application_store, lookup, &patch).await {
         Ok(authority) => Ok(Json(authority).into_response()),
         Err(store::authorities::AuthorityError::NotFound) => Ok((
             StatusCode::NOT_FOUND,
@@ -342,20 +346,22 @@ pub(crate) async fn read_authority_archive_door(
         )
             .into_response()
     };
-    let authority =
-        match store::authorities::find(&state.surreal, store::authorities::AuthorityLookup::Id(id))
-            .await
-        {
-            Ok(found) => found,
-            Err(error) => {
-                tracing::error!(error = %error, "api: authority lookup failed");
-                return Err(ApiError::Db("the authority could not be read".to_string()));
-            }
-        };
+    let authority = match store::authorities::find(
+        &state.application_store,
+        store::authorities::AuthorityLookup::Id(id),
+    )
+    .await
+    {
+        Ok(found) => found,
+        Err(error) => {
+            tracing::error!(error = %error, "api: authority lookup failed");
+            return Err(ApiError::Db("the authority could not be read".to_string()));
+        }
+    };
     let Some(asset_id) = authority.and_then(|authority| authority.archived_asset_id) else {
         return Ok(not_found());
     };
-    let asset = match store::assets::find_by_id(&state.surreal, asset_id).await {
+    let asset = match store::assets::find_by_id(&state.application_store, asset_id).await {
         Ok(Some(asset)) => asset,
         Ok(None) => return Ok(not_found()),
         Err(error) => {
@@ -401,16 +407,18 @@ pub(crate) async fn read_filed_authority_door(
     _lawyer: LawyerSession,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> Result<Response, ApiError> {
-    let authority =
-        store::authorities::find(&state.surreal, store::authorities::AuthorityLookup::Id(id))
-            .await
-            .map_err(|_| {
-                tracing::error!(authority_id = %id, "api: filed authority lookup failed");
-                ApiError::Db("the filed authority could not be read".into())
-            })?
-            .ok_or(ApiError::NotFound)?;
+    let authority = store::authorities::find(
+        &state.application_store,
+        store::authorities::AuthorityLookup::Id(id),
+    )
+    .await
+    .map_err(|_| {
+        tracing::error!(authority_id = %id, "api: filed authority lookup failed");
+        ApiError::Db("the filed authority could not be read".into())
+    })?
+    .ok_or(ApiError::NotFound)?;
     let asset_id = authority.archived_asset_id.ok_or(ApiError::NotFound)?;
-    let asset = store::assets::find_by_id(&state.surreal, asset_id)
+    let asset = store::assets::find_by_id(&state.application_store, asset_id)
         .await
         .map_err(|_| {
             tracing::error!(authority_id = %id, asset_id = %asset_id, "api: authority archive lookup failed");

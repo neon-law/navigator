@@ -6,14 +6,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::catalog;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
-
-/// The table these rows live in.
-const TABLE: &str = "question";
 
 /// `questions.audience` — only lawyers see this question.
 pub const AUDIENCE_LAWYER: &str = "lawyer";
@@ -57,46 +53,10 @@ pub struct Question {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row as the engine reads and writes it. Separate from [`Question`]
-/// because the SDK owns its own `RecordId` and `Datetime`, and the
-/// conversion belongs at this seam rather than in every caller.
-#[derive(SurrealValue)]
-struct QuestionRow {
-    id: surrealdb::types::RecordId,
-    code: String,
-    prompt: String,
-    answer_type: String,
-    audience: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl QuestionRow {
-    /// `None` when the record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`].
-    fn into_question(self) -> Option<Question> {
-        Some(Question {
-            id: record_uuid(&self.id)?,
-            code: self.code,
-            prompt: self.prompt,
-            answer_type: self.answer_type,
-            audience: self.audience,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`QuestionRow`] from only one query.
-const SELECT: &str = "id, code, prompt, answer_type, audience, inserted_at, updated_at";
-
 /// Errors reading or writing a question.
 #[derive(Debug, thiserror::Error)]
 pub enum QuestionError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// The write collided with `question_code` — another row already holds
     /// this code.
     #[error("that question code is already in use")]
@@ -185,38 +145,17 @@ impl NewQuestion {
     }
 }
 
-/// Read one question out of a query response, dropping a row this module
-/// could not have written.
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Question>, QuestionError> {
-    let row: Option<QuestionRow> = response.take(0)?;
-    Ok(row.and_then(QuestionRow::into_question))
-}
-
-/// Read every question out of a query response, in the order the engine
-/// returned them.
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Question>, QuestionError> {
-    let rows: Vec<QuestionRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(QuestionRow::into_question)
-        .collect())
-}
-
 /// Resolve a question by id.
 ///
 /// # Errors
 ///
 /// [`QuestionError::Db`] if the lookup fails.
-pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Question>, QuestionError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::one(&pg, PG_BY_ID, id, from_pg).await?);
-    }
-    let response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+pub async fn find_by_id(
+    _db: &ApplicationStore,
+    id: Uuid,
+) -> Result<Option<Question>, QuestionError> {
+    let pg = catalog::authority().await?;
+    Ok(catalog::one(&pg, PG_BY_ID, id, from_pg).await?)
 }
 
 /// Resolve a question by its canonical `code`. Exact match — codes are
@@ -225,18 +164,12 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Question>, Qu
 /// # Errors
 ///
 /// [`QuestionError::Db`] if the lookup fails.
-pub async fn find_by_code(db: &SurrealDb, code: &str) -> Result<Option<Question>, QuestionError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::one(&pg, PG_BY_CODE, code.trim().to_string(), from_pg).await?);
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE code = $code LIMIT 1"
-        ))
-        .bind(("code", code.trim().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+pub async fn find_by_code(
+    _db: &ApplicationStore,
+    code: &str,
+) -> Result<Option<Question>, QuestionError> {
+    let pg = catalog::authority().await?;
+    Ok(catalog::one(&pg, PG_BY_CODE, code.trim().to_string(), from_pg).await?)
 }
 
 /// Resolve many questions by code in one round trip — what a walker does
@@ -248,23 +181,14 @@ pub async fn find_by_code(db: &SurrealDb, code: &str) -> Result<Option<Question>
 ///
 /// [`QuestionError::Db`] if the lookup fails.
 pub async fn find_by_codes(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     codes: &[String],
 ) -> Result<Vec<Question>, QuestionError> {
     if codes.is_empty() {
         return Ok(Vec::new());
     }
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::all(&pg, PG_BY_CODES, Some(codes.to_vec()), from_pg).await?);
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE code IN $codes ORDER BY code ASC"
-        ))
-        .bind(("codes", codes.to_vec()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = catalog::authority().await?;
+    Ok(catalog::all(&pg, PG_BY_CODES, Some(codes.to_vec()), from_pg).await?)
 }
 
 /// Resolve many questions by id in one round trip — what a listing does
@@ -273,21 +197,15 @@ pub async fn find_by_codes(
 /// # Errors
 ///
 /// [`QuestionError::Db`] if the lookup fails.
-pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Question>, QuestionError> {
+pub async fn find_by_ids(
+    _db: &ApplicationStore,
+    ids: &[Uuid],
+) -> Result<Vec<Question>, QuestionError> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::all(&pg, PG_BY_IDS, Some(ids.to_vec()), from_pg).await?);
-    }
-    let keys: Vec<surrealdb::types::RecordId> =
-        ids.iter().map(|id| record_id(TABLE, *id)).collect();
-    let response = db
-        .query(format!("SELECT {SELECT} FROM $ids ORDER BY code ASC"))
-        .bind(("ids", keys))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = catalog::authority().await?;
+    Ok(catalog::all(&pg, PG_BY_IDS, Some(ids.to_vec()), from_pg).await?)
 }
 
 /// Every question, ordered by code — the lawyer transparency listing and
@@ -296,30 +214,23 @@ pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Question>, 
 /// # Errors
 ///
 /// [`QuestionError::Db`] if the lookup fails.
-pub async fn list_all(db: &SurrealDb) -> Result<Vec<Question>, QuestionError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?);
-    }
-    let response = db
-        .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY code ASC"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn list_all(_db: &ApplicationStore) -> Result<Vec<Question>, QuestionError> {
+    let pg = catalog::authority().await?;
+    Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?)
 }
 
-/// Write a new question row. The record id is minted from a fresh v7
-/// `Uuid` through [`crate::surreal::record_id`], so the key stays the
-/// native UUID spelling `answers.question_id` addresses.
+/// Write a new question row.
 ///
 /// # Errors
 ///
 /// [`QuestionError::CodeTaken`] when another row already holds this code,
 /// and [`QuestionError::Db`] for anything else — including the schema
 /// ASSERT refusing an `audience` outside `lawyer`/`client`/`both`.
-pub async fn create(_db: &SurrealDb, input: &NewQuestion) -> Result<Question, QuestionError> {
-    let pg = catalog::authority()
-        .await?
-        .ok_or(QuestionError::AuthorityUnavailable)?;
+pub async fn create(
+    _db: &ApplicationStore,
+    input: &NewQuestion,
+) -> Result<Question, QuestionError> {
+    let pg = catalog::authority().await?;
     let row = catalog::row(
         sqlx::query(PG_INSERT)
             .bind(Uuid::now_v7())
@@ -346,13 +257,11 @@ pub async fn create(_db: &SurrealDb, input: &NewQuestion) -> Result<Question, Qu
 /// [`QuestionError::Db`] if the write fails, including the schema ASSERT
 /// refusing an `audience` outside `lawyer`/`client`/`both`.
 pub async fn set_audience(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     code: &str,
     audience: &str,
 ) -> Result<Option<Question>, QuestionError> {
-    let pg = catalog::authority()
-        .await?
-        .ok_or(QuestionError::AuthorityUnavailable)?;
+    let pg = catalog::authority().await?;
     let row = catalog::maybe_row(
         sqlx::query(PG_SET_AUDIENCE)
             .bind(code.to_string())
@@ -380,7 +289,7 @@ pub async fn set_audience(
 ///
 /// [`QuestionError::Db`] if the lookup or the write fails.
 pub async fn find_or_create(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     input: &NewQuestion,
 ) -> Result<Question, QuestionError> {
     if let Some(found) = find_by_code(db, &input.code).await? {
@@ -416,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn a_created_question_reads_back_whole() {
         test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let written = create(
                 &db,
                 &NewQuestion::new("client_name", "Your name?", "string"),
@@ -439,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn a_question_is_found_by_its_code() {
         test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let written = create(&db, &NewQuestion::new("trustee_name", "Who?", "string"))
                 .await
                 .unwrap();
@@ -456,7 +365,7 @@ mod tests {
     #[tokio::test]
     async fn a_duplicate_code_is_refused_by_the_index() {
         test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             create(
                 &db,
                 &NewQuestion::new("client_name", "Your name?", "string"),
@@ -479,7 +388,7 @@ mod tests {
     #[tokio::test]
     async fn find_or_create_is_idempotent_and_leaves_the_existing_row_alone() {
         test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let first = find_or_create(
                 &db,
                 &NewQuestion::new("client_name", "Your name?", "string"),
@@ -505,7 +414,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_find_or_create_on_one_code_settles_on_one_row() {
         test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let racers = (0..6).map(|_| {
                 let db = db.clone();
                 async move {
@@ -535,7 +444,7 @@ mod tests {
     #[tokio::test]
     async fn an_audience_outside_the_closed_set_is_refused_by_the_schema() {
         test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             // A typo'd audience would silently hide the question from the
             // client rather than fail, which is why the schema ASSERTs it.
             let refused = create(
@@ -551,7 +460,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_only_question_keeps_its_audience() {
         test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let written = create(
                 &db,
                 &NewQuestion::new("client_name", "Your name?", "string")
@@ -587,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn batched_lookups_resolve_by_code_and_by_id() {
         test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let a = create(&db, &NewQuestion::new("aaa", "A?", "string"))
                 .await
                 .unwrap();
@@ -615,7 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_batches_do_not_reach_the_engine() {
-        let db = crate::surreal::test_support::unreachable();
+        let db = crate::test_support::uninitialized_store();
         assert!(find_by_codes(&db, &[]).await.unwrap().is_empty());
         assert!(find_by_ids(&db, &[]).await.unwrap().is_empty());
     }
@@ -623,7 +532,7 @@ mod tests {
     #[tokio::test]
     async fn the_catalog_lists_in_code_order() {
         test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             for code in ["ccc", "aaa", "bbb"] {
                 create(&db, &NewQuestion::new(code, "?", "string"))
                     .await

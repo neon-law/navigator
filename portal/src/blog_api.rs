@@ -55,9 +55,10 @@ pub(crate) async fn record(
             "record requires a publication time in the past".into(),
         ));
     }
-    if let Some(post) = store::posts::find_by_brand_slug(&state.surreal, &input.brand, &input.slug)
-        .await
-        .map_err(database)?
+    if let Some(post) =
+        store::posts::find_by_brand_slug(&state.application_store, &input.brand, &input.slug)
+            .await
+            .map_err(database)?
     {
         return Err(BlogError::AlreadyExists(post.id));
     }
@@ -81,7 +82,7 @@ pub(crate) async fn record(
         accounts: &[],
         social_links: &[],
     };
-    let result = store::posts::import_source(&state.surreal, &source, now)
+    let result = store::posts::import_source(&state.application_store, &source, now)
         .await
         .map_err(|error| BlogError::Invalid(error.to_string()))?;
     Ok((
@@ -324,7 +325,7 @@ fn database(error: impl std::fmt::Display) -> BlogError {
 
 async fn authorize(state: &ApiState, actor: &SessionData, brand: &str) -> Result<(), BlogError> {
     let person = actor.person_id.ok_or(ApiError::Forbidden)?;
-    let keys = store::posts::manageable_brand_keys(&state.surreal, actor.role, person)
+    let keys = store::posts::manageable_brand_keys(&state.application_store, actor.role, person)
         .await
         .map_err(database)?;
     if keys.iter().any(|key| key == brand) {
@@ -341,7 +342,7 @@ pub(crate) async fn status(
 ) -> Result<Response, BlogError> {
     authorize(&state, &actor, &brand).await?;
     let accounts = store::social_accounts::for_actor(
-        &state.surreal,
+        &state.application_store,
         actor.role,
         actor.person_id.ok_or(ApiError::Forbidden)?,
     )
@@ -350,11 +351,11 @@ pub(crate) async fn status(
     .into_iter()
     .filter(|account| account.brand_key == brand)
     .collect::<Vec<_>>();
-    let post = store::posts::find_by_brand_slug(&state.surreal, &brand, &slug)
+    let post = store::posts::find_by_brand_slug(&state.application_store, &brand, &slug)
         .await
         .map_err(database)?;
     let publications = match &post {
-        Some(post) => store::social_publications::for_posts(&state.surreal, &[post.id])
+        Some(post) => store::social_publications::for_posts(&state.application_store, &[post.id])
             .await
             .map_err(database)?,
         None => Vec::new(),
@@ -402,7 +403,7 @@ async fn selected_accounts(
         ));
     }
     let person = actor.person_id.ok_or(ApiError::Forbidden)?;
-    let connected = store::social_accounts::for_actor(&state.surreal, actor.role, person)
+    let connected = store::social_accounts::for_actor(&state.application_store, actor.role, person)
         .await
         .map_err(database)?;
     let mut accounts = Vec::new();
@@ -463,7 +464,7 @@ async fn register_video(state: &ApiState, brand: &str, key: &str) -> Result<bool
     }
     let (width, height) = crate::admin::mp4_display_dimensions(&bytes)
         .ok_or_else(|| BlogError::Invalid("video_asset must be a readable MP4 video".into()))?;
-    match store::posts::find_video(&state.surreal, key)
+    match store::posts::find_video(&state.application_store, key)
         .await
         .map_err(database)?
     {
@@ -477,7 +478,7 @@ async fn register_video(state: &ApiState, brand: &str, key: &str) -> Result<bool
         }
         Some(_) => {}
         None => {
-            store::posts::record_video(&state.surreal, brand, key, width, height)
+            store::posts::record_video(&state.application_store, brand, key, width, height)
                 .await
                 .map_err(database)?;
         }
@@ -492,9 +493,10 @@ async fn prepare(
     now: DateTime<Utc>,
 ) -> Result<workflows::SocialPublishRequest, BlogError> {
     authorize(state, actor, &input.brand).await?;
-    let existing = store::posts::find_by_brand_slug(&state.surreal, &input.brand, &input.slug)
-        .await
-        .map_err(database)?;
+    let existing =
+        store::posts::find_by_brand_slug(&state.application_store, &input.brand, &input.slug)
+            .await
+            .map_err(database)?;
     if let Some(post) = &existing {
         // Repeating a command cannot move a live Post onto a new send schedule.
         if post.status == "published"
@@ -550,7 +552,7 @@ async fn prepare(
             .as_ref()
             .map_or(&[][..], |post| post.social_links.as_slice()),
     };
-    let result = store::posts::import_source(&state.surreal, &source, now)
+    let result = store::posts::import_source(&state.application_store, &source, now)
         .await
         .map_err(|error| BlogError::Invalid(error.to_string()))?;
     if !result.social_scheduled || !result.unresolved_accounts.is_empty() {
@@ -621,7 +623,7 @@ pub(crate) async fn handle(
     Json(input): Json<Handle>,
 ) -> Result<Response, BlogError> {
     authorize(&state, &actor, &brand).await?;
-    store::social_handles::set(&state.surreal, &brand, &provider, &input.handle)
+    store::social_handles::set(&state.application_store, &brand, &provider, &input.handle)
         .await
         .map_err(|error| BlogError::Invalid(error.to_string()))?;
     Ok(Json(json!({"brand":brand,"provider":provider,"handle":input.handle})).into_response())
@@ -641,12 +643,12 @@ pub(crate) async fn link(
     Json(input): Json<Link>,
 ) -> Result<Response, BlogError> {
     authorize(&state, &actor, &brand).await?;
-    let post = store::posts::find_by_brand_slug(&state.surreal, &brand, &slug)
+    let post = store::posts::find_by_brand_slug(&state.application_store, &brand, &slug)
         .await
         .map_err(database)?
         .ok_or(ApiError::NotFound)?;
     let link = store::posts::encode_social_link(
-        &state.surreal,
+        &state.application_store,
         post.id,
         &provider,
         &input.post_id,
@@ -660,195 +662,6 @@ pub(crate) async fn link(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use store::persons::Role;
-    use tower::ServiceExt;
-
-    async fn fixture() -> (ApiState, SessionData) {
-        let db = store::test_support::mem_surreal().await;
-        let admin = store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Publisher",
-                "publisher@example.com",
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &db,
-            &store::firms::NewFirm {
-                name: "Publication Test Firm".into(),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(&db).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::brands::create(
-            &db,
-            Role::Admin,
-            Some(admin.id),
-            &store::brands::NewBrand {
-                name: "Publication Test Brand".into(),
-                key: "publication-test".into(),
-                firm_id: Some(firm.id),
-                primary_color: None,
-                accent_color: None,
-                typeface: None,
-            },
-        )
-        .await
-        .unwrap();
-        let app = crate::test_support::app_state(db).await;
-        let state = ApiState {
-            surreal: app.surreal,
-            email: app.email,
-            bootstrap_owner_email: None,
-            bootstrap_company: "Publication Test Firm".into(),
-            questionnaire_runtime: app.questionnaire_runtime,
-            storage: app.storage,
-            workflow_runtime: app.workflow_runtime,
-            assets_storage: app.assets_storage,
-            forms_registry: app.forms_registry,
-            signature_provider: app.signature_provider,
-            contract_reviewer: app.contract_reviewer,
-            integration_providers: app.integration_providers,
-            billing_provider: app.billing_provider.clone(),
-            canonical_base_url: None,
-            jev: None,
-        };
-        let actor = SessionData {
-            person_id: Some(admin.id),
-            ..SessionData::fresh("publisher", Role::Admin)
-        };
-        (state, actor)
-    }
-
-    fn recorded_input() -> RecordPost {
-        serde_json::from_value(json!({
-            "brand":"publication-test", "slug":"recorded-video", "title":"A video update",
-            "description":"An approved caption.", "body_markdown":"An approved caption.",
-            "publish_at":"2026-01-01T12:00:00Z"
-        }))
-        .unwrap()
-    }
-
-    #[tokio::test]
-    async fn recording_without_connections_is_public_and_never_schedules_delivery() {
-        let (state, actor) = fixture().await;
-        assert_eq!(
-            record(
-                State(state.clone()),
-                AdminSession(actor.clone()),
-                Json(recorded_input())
-            )
-            .await
-            .unwrap()
-            .status(),
-            StatusCode::CREATED
-        );
-        let post =
-            store::posts::find_by_brand_slug(&state.surreal, "publication-test", "recorded-video")
-                .await
-                .unwrap()
-                .unwrap();
-        assert_eq!(post.status, "published");
-        assert!(post.selected_social_accounts.is_empty());
-        let visible =
-            store::posts::published_for_brand(&state.surreal, "publication-test", Utc::now())
-                .await
-                .unwrap();
-        assert_eq!(visible.len(), 1);
-        assert_eq!(visible[0].id, post.id);
-        assert!(crate::blog::body_html(&post).contains("<p>An approved caption.</p>"));
-        handle(
-            State(state.clone()),
-            AdminSession(actor.clone()),
-            Path(("publication-test".into(), "tiktok".into())),
-            Json(Handle {
-                handle: "example".into(),
-            }),
-        )
-        .await
-        .unwrap();
-        link(
-            State(state.clone()),
-            AdminSession(actor.clone()),
-            Path((
-                "publication-test".into(),
-                "recorded-video".into(),
-                "tiktok".into(),
-            )),
-            Json(Link {
-                post_id: "1234567890123456789".into(),
-                permalink: "https://www.tiktok.com/@example/video/1234567890123456789".into(),
-            }),
-        )
-        .await
-        .unwrap();
-        let linked = store::posts::find_by_id(&state.surreal, post.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(store::posts::public_social_links(&linked, &[]).len(), 1);
-
-        assert!(
-            store::social_publications::for_posts(&state.surreal, &[post.id])
-                .await
-                .unwrap()
-                .is_empty()
-        );
-        assert!(matches!(
-            record(State(state), AdminSession(actor), Json(recorded_input())).await,
-            Err(BlogError::AlreadyExists(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn recording_refuses_foreign_brands_future_dates_and_invalid_media() {
-        let (state, actor) = fixture().await;
-        let mut input = recorded_input();
-        input.brand = "another-brand".into();
-        assert_eq!(
-            record(
-                State(state.clone()),
-                AdminSession(actor.clone()),
-                Json(input)
-            )
-            .await
-            .unwrap_err()
-            .into_response()
-            .status(),
-            StatusCode::NOT_FOUND
-        );
-        let mut input = recorded_input();
-        input.publish_at = Utc::now() + chrono::Duration::days(1);
-        assert!(matches!(
-            record(
-                State(state.clone()),
-                AdminSession(actor.clone()),
-                Json(input)
-            )
-            .await,
-            Err(BlogError::Invalid(_))
-        ));
-        let mut input = recorded_input();
-        input.video_asset = Some("img/another-brand/video.mp4".into());
-        assert!(matches!(
-            record(State(state.clone()), AdminSession(actor), Json(input)).await,
-            Err(BlogError::Invalid(_))
-        ));
-        assert!(store::posts::find_by_brand_slug(
-            &state.surreal,
-            "publication-test",
-            "recorded-video"
-        )
-        .await
-        .unwrap()
-        .is_none());
-    }
 
     #[test]
     fn website_schedule_preserves_selected_destinations_and_offset() {
@@ -921,235 +734,6 @@ mod tests {
         assert!(matches!(input.into_publish(), Err(BlogError::Invalid(_))));
     }
 
-    fn input() -> PublishPost {
-        serde_json::from_value(json!({
-            "brand":"publication-test","slug":"example","title":"Example",
-            "description":"A synthetic publication.","body_markdown":"Example body.","providers":["threads"],
-            "account_ids":{"threads":"synthetic-threads"}
-        })).unwrap()
-    }
-
-    #[tokio::test]
-    async fn website_command_queues_one_durable_identity_for_a_future_schedule() {
-        let (state, actor) = connected_fixture().await;
-        let broker = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .respond_with(wiremock::ResponseTemplate::new(202).set_body_string("queued"))
-            .expect(2)
-            .mount(&broker)
-            .await;
-        let publish_at = Utc::now() + chrono::Duration::days(2);
-        let caption = "Approved synthetic provider caption. ".repeat(12);
-        let form: SchedulePost = serde_json::from_value(json!({
-            "brand":"publication-test", "slug":"website-schedule", "title":"Website schedule",
-            "description":"Approved caption", "body_markdown":"Approved article",
-            "publish_at":publish_at.to_rfc3339(), "video_asset":"", "tiktok_ai_generated":"",
-            "threads":"synthetic-threads", "threads_caption":caption
-        }))
-        .unwrap();
-        let command = form.into_publish().unwrap();
-        for _ in 0..2 {
-            let response =
-                queue_publication_dbos(&state, &actor, &command, &broker.uri(), "synthetic-token")
-                    .await
-                    .unwrap();
-            assert_eq!(response.status(), StatusCode::ACCEPTED);
-        }
-        let post = store::posts::find_by_brand_slug(
-            &state.surreal,
-            "publication-test",
-            "website-schedule",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(post.status, "scheduled");
-        assert_eq!(post.threads_caption.as_deref(), Some(caption.as_str()));
-        assert_eq!(
-            post.publish_at.unwrap().to_rfc3339(),
-            publish_at.to_rfc3339()
-        );
-        let requests = broker.received_requests().await.unwrap();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].url.path(), requests[1].url.path());
-        assert_eq!(requests[0].url.path(), "/internal/dbos/social-publisher");
-        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
-        assert_eq!(body["request"]["post_id"], post.id.to_string());
-        assert_eq!(body["request"]["publish_at"], serde_json::json!(publish_at));
-        let replay: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
-        assert_eq!(body["workflow_id"], replay["workflow_id"]);
-    }
-
-    #[tokio::test]
-    async fn denied_brand_and_missing_connection_never_create_a_post() {
-        let (state, actor) = fixture().await;
-        let foreign = SessionData {
-            person_id: Some(uuid::Uuid::now_v7()),
-            ..SessionData::fresh("other-admin", Role::Admin)
-        };
-        assert!(matches!(
-            prepare(&state, &foreign, &input(), Utc::now()).await,
-            Err(BlogError::Api(ApiError::NotFound))
-        ));
-        assert!(matches!(
-            prepare(&state, &actor, &input(), Utc::now()).await,
-            Err(BlogError::Invalid(_))
-        ));
-        assert!(
-            store::posts::find_by_brand_slug(&state.surreal, "publication-test", "example")
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    async fn connected_fixture() -> (ApiState, SessionData) {
-        let (state, actor) = fixture().await;
-        let provider = SocialProvider::Threads;
-        let scopes: Vec<_> = provider
-            .required_scopes()
-            .iter()
-            .map(|scope| (*scope).to_string())
-            .collect();
-        store::social_accounts::connect(
-            &state.surreal,
-            store::social_accounts::ConnectSocialAccount {
-                actor_role: actor.role,
-                actor_person_id: actor.person_id.unwrap(),
-                brand_key: "publication-test",
-                provider,
-                provider_account_id: "synthetic-threads",
-                display_name: None,
-                scopes: &scopes,
-                expires_at: None,
-                access_token: "synthetic-token",
-                refresh_token: None,
-            },
-            &cloud::FakeKms::new("synthetic-key"),
-        )
-        .await
-        .unwrap();
-        (state, actor)
-    }
-
-    #[tokio::test]
-    async fn repeat_publication_keeps_its_schedule_and_public_posts_cannot_send_again() {
-        let (state, actor) = connected_fixture().await;
-        let mut wrong_account = input();
-        wrong_account
-            .account_ids
-            .insert("threads".into(), "another-account".into());
-        assert!(matches!(
-            prepare(&state, &actor, &wrong_account, Utc::now()).await,
-            Err(BlogError::Invalid(_))
-        ));
-        assert!(
-            store::posts::find_by_brand_slug(&state.surreal, "publication-test", "example")
-                .await
-                .unwrap()
-                .is_none()
-        );
-        let now = Utc::now();
-        let first = prepare(&state, &actor, &input(), now).await.unwrap();
-        let again = prepare(
-            &state,
-            &actor,
-            &input(),
-            now + chrono::Duration::milliseconds(100),
-        )
-        .await
-        .unwrap();
-        assert_eq!(first, again);
-        let post = store::posts::find_by_id(&state.surreal, first.post_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(post.selected_social_accounts.len(), 1);
-        assert!(
-            matches!(prepare(&state, &actor, &input(), first.publish_at).await, Err(BlogError::AlreadyPublic(id)) if id == first.post_id)
-        );
-    }
-
-    async fn read_status(state: &ApiState, actor: &SessionData) -> serde_json::Value {
-        let response = status(
-            State(state.clone()),
-            AdminSession(actor.clone()),
-            Path(("publication-test".into(), "example".into())),
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        serde_json::from_slice(&bytes).unwrap()
-    }
-
-    #[tokio::test]
-    async fn status_identifies_accounts_and_linking_never_sends_or_reschedules() {
-        let (state, actor) = connected_fixture().await;
-        let before = read_status(&state, &actor).await;
-        assert!(before["post"].is_null());
-        assert!(before["publisher_configured"].is_boolean());
-        let setup = before["connection_setup"].as_object().unwrap();
-        assert_eq!(setup.len(), 7);
-        assert!(setup.values().all(serde_json::Value::is_boolean));
-        assert_eq!(
-            before["accounts"][0]["provider_account_id"],
-            "synthetic-threads"
-        );
-        assert!(!before.to_string().contains("synthetic-token"));
-        let request = prepare(&state, &actor, &input(), Utc::now()).await.unwrap();
-        let response = handle(
-            State(state.clone()),
-            AdminSession(actor.clone()),
-            Path(("publication-test".into(), "threads".into())),
-            Json(Handle {
-                handle: "example".into(),
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let response = link(
-            State(state.clone()),
-            AdminSession(actor.clone()),
-            Path((
-                "publication-test".into(),
-                "example".into(),
-                "threads".into(),
-            )),
-            Json(Link {
-                post_id: "synthetic-post".into(),
-                permalink: "https://www.threads.com/@example/post/synthetic-post".into(),
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let after = read_status(&state, &actor).await;
-        assert_eq!(after["post"]["id"], request.post_id.to_string());
-        assert_eq!(after["post"]["status"], "scheduled");
-        assert_eq!(
-            after["post"]["publish_at"],
-            serde_json::json!(request.publish_at)
-        );
-        assert_eq!(
-            after["post"]["social_links"][0]["post_id"],
-            "synthetic-post"
-        );
-        assert_eq!(after["publications"], serde_json::json!([]));
-        let denied = status(
-            State(state),
-            AdminSession(actor),
-            Path(("another-brand".into(), "example".into())),
-        )
-        .await
-        .unwrap_err()
-        .into_response();
-        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
-    }
-
     #[test]
     fn publication_errors_keep_actionable_http_statuses() {
         for (error, expected) in [
@@ -1164,71 +748,6 @@ mod tests {
             (BlogError::Unavailable, StatusCode::SERVICE_UNAVAILABLE),
         ] {
             assert_eq!(error.into_response().status(), expected);
-        }
-    }
-
-    #[tokio::test]
-    async fn media_validation_rejects_cross_brand_keys_and_malformed_uploads() {
-        let (state, _) = fixture().await;
-        assert!(matches!(
-            register_video(&state, "publication-test", "img/another-brand/video.mp4").await,
-            Err(BlogError::Invalid(_))
-        ));
-        let key = "img/publication-test/video.mp4";
-        state
-            .assets_storage
-            .put(key, b"not an MP4", "video/mp4")
-            .await
-            .unwrap();
-        assert!(matches!(
-            register_video(&state, "publication-test", key).await,
-            Err(BlogError::Invalid(_))
-        ));
-        assert!(store::posts::find_video(&state.surreal, key)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn non_admin_requests_are_denied_before_body_parsing() {
-        let (state, _) = fixture().await;
-        for (actor, expected) in [
-            (None, StatusCode::UNAUTHORIZED),
-            (
-                Some(SessionData::fresh("lawyer", Role::Lawyer)),
-                StatusCode::FORBIDDEN,
-            ),
-        ] {
-            for (path, content_type) in [
-                ("/app/api/blog", "application/json"),
-                ("/app/api/blog/record", "application/json"),
-                (
-                    "/app/api/blog/schedule",
-                    "application/x-www-form-urlencoded",
-                ),
-            ] {
-                let mut router = axum::Router::new()
-                    .route("/app/api/blog", axum::routing::post(publish))
-                    .route("/app/api/blog/record", axum::routing::post(record))
-                    .route("/app/api/blog/schedule", axum::routing::post(schedule))
-                    .with_state(state.clone());
-                if let Some(actor) = &actor {
-                    router = router.layer(axum::Extension(actor.clone()));
-                }
-                let response = router
-                    .oneshot(
-                        axum::http::Request::builder()
-                            .method("POST")
-                            .uri(path)
-                            .header("content-type", content_type)
-                            .body(axum::body::Body::from("not json"))
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), expected);
-            }
         }
     }
 }

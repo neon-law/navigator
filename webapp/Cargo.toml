@@ -79,7 +79,7 @@ views = { workspace = true, optional = true }
 rules = { workspace = true, optional = true }
 # Server-only: a successfully authorized client matter view queues the durable
 # internal Slack notice. The browser bundle never carries this dependency or
-# any Restate/Slack coordinates.
+# any Slack coordinates.
 workflows = { workspace = true, optional = true }
 # Server-only: the client matter-detail `#[server]` function probes the object
 # store for which of a notation's PDFs (rendered / signed / certificate) exist,
@@ -144,10 +144,7 @@ word = { workspace = true, optional = true }
 web-sys = { workspace = true, features = ["Storage", "Location", "Element", "Event", "EventTarget", "AbortController", "AbortSignal", "HtmlElement", "HtmlDialogElement", "HtmlInputElement", "HtmlSelectElement", "NodeList", "PageTransitionEvent", "RequestCache", "RequestCredentials", "RequestMode", "RequestRedirect", "ReferrerPolicy"] }
 # Reuse the already-locked browser Fetch wrapper and bindings; no new version or framework.
 gloo-net = { version = "=0.8.0", default-features = false, features = ["http", "json"] }
-# Exact pin raised from 0.2.126 to 0.2.130: surrealdb 4.0 requires
-# wasm-bindgen ^0.2.129, and cargo resolves versions workspace-wide even for
-# wasm32-only dependencies, so the old exact pin conflicts with it. Still an
-# exact pin so the client bundle's bindings stay reproducible.
+# Pin the browser bindings to keep the client bundle reproducible.
 wasm-bindgen = "=0.2.130"
 uuid = { workspace = true, features = ["js"] }
 
@@ -182,10 +179,6 @@ store = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true }
 views = { workspace = true }
 
-[[test]]
-name = "brand_seed_presentation"
-path = "tests/brand_seed_presentation.rs"
-required-features = ["server"]
 
 # `build.rs` reads the same kustomization to generate the shipped `CronJob`
 # table. Build-only for the same reason.

@@ -5,6 +5,7 @@
 async fn main() -> anyhow::Result<()> {
     workflows::trigger::run_dbos_cron(
         "navigator-youtube-comments-poll-trigger",
+        "YoutubeCommentsPoller",
         "/internal/dbos/youtube-comments-poll",
         &workflows_service::cron_triggers::youtube_comments_poll(chrono::Utc::now()),
     )

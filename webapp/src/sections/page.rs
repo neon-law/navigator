@@ -299,13 +299,13 @@ pub fn matter_tabs(
 /// declared pages rather than the show page.
 #[cfg(feature = "server")]
 pub async fn stored_page_tabs(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
     code: &str,
     viewer: store::access::MatterViewer,
 ) -> Vec<PageTab> {
     let entries: Vec<rules::pages::PageEntry> =
-        store::matter_pages::list_for_project(surreal, project_id)
+        store::matter_pages::list_for_project(application_store, project_id)
             .await
             .map(|stored| stored.into_iter().map(|page| page.entry).collect())
             .unwrap_or_default();
@@ -383,8 +383,8 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
     else {
@@ -394,15 +394,16 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
     // The same participation answer the show page dispatches on. No row is a
     // 404 for every tier here: a declared page is matter content, which the
     // unassigned-admin participation page never discloses.
-    let Some(viewer) = store::access::matter_viewer(&surreal, person_id, store_role, project.id)
-        .await
-        .map_err(ServerFnError::new)?
+    let Some(viewer) =
+        store::access::matter_viewer(&application_store, person_id, store_role, project.id)
+            .await
+            .map_err(ServerFnError::new)?
     else {
         commit_not_found();
         return Ok(MatterPageView::not_found(role));
     };
     let lens = lens_for_viewer(viewer);
-    let stored = store::matter_pages::list_for_project(&surreal, project.id)
+    let stored = store::matter_pages::list_for_project(&application_store, project.id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let synced_at = stored
@@ -430,7 +431,7 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
         viewer_person_id: person_id,
     };
     let (cx, viewing_as_dri) =
-        build_page_context(&surreal, &project, lens, &page, address, &query).await?;
+        build_page_context(&application_store, &project, lens, &page, address, &query).await?;
     Ok(MatterPageView {
         viewing_as_dri,
         tabs: matter_tabs(&project.code, &entries, viewer),
@@ -494,7 +495,7 @@ pub fn side_filter(query: &str) -> super::SideFilter {
 
 #[cfg(feature = "server")]
 async fn build_page_context(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project: &store::projects::Project,
     lens: PageLens,
     page: &rules::pages::PageEntry,
@@ -505,10 +506,11 @@ async fn build_page_context(
         let mut context = super::LoadContext::empty(lens);
         context.synced_at = address.synced_at;
         context.slug = address.slug;
-        context.whatsapp_timeline = load_whatsapp_timeline(surreal, project, page, query).await;
+        context.whatsapp_timeline =
+            load_whatsapp_timeline(application_store, project, page, query).await;
         return Ok((context, None));
     }
-    let mut context = load_context(surreal, project, lens, address).await?;
+    let mut context = load_context(application_store, project, lens, address).await?;
     let (chart, viewing_as_dri) = private_chart_context(project.id, lens).await;
     context.private_chart = chart;
     Ok((context, viewing_as_dri))
@@ -516,13 +518,15 @@ async fn build_page_context(
 
 #[cfg(feature = "server")]
 async fn load_whatsapp_timeline(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project: &store::projects::Project,
     page: &rules::pages::PageEntry,
     query: &str,
 ) -> Option<String> {
     let id = page.document_revision.as_deref()?.parse().ok()?;
-    let document = store::assets::find_by_id(surreal, id).await.ok()??;
+    let document = store::assets::find_by_id(application_store, id)
+        .await
+        .ok()??;
     if document.project_id != Some(project.id) || !store::evidence_shares::eligible(&document) {
         return None;
     }
@@ -542,24 +546,25 @@ async fn load_whatsapp_timeline(
         .unwrap_or(1);
     let base = format!("/app/projects/{}/{}", project.code, page.slug);
     let document_url = format!("/app/projects/{}/documents/{id}", project.code);
-    let images: Vec<_> = store::evidence_shares::resolve_media(surreal, project.id, &page.media)
-        .await
-        .ok()?
-        .into_iter()
-        .map(|image| {
-            let download = format!(
-                "/app/projects/{}/documents/{}/download",
-                project.code, image.id
-            );
-            crate::whatsapp_export::TimelineImage {
-                name: image.name,
-                at: image.at,
-                original_time: image.original_time,
-                preview: format!("{download}?inline=1"),
-                download,
-            }
-        })
-        .collect();
+    let images: Vec<_> =
+        store::evidence_shares::resolve_media(application_store, project.id, &page.media)
+            .await
+            .ok()?
+            .into_iter()
+            .map(|image| {
+                let download = format!(
+                    "/app/projects/{}/documents/{}/download",
+                    project.code, image.id
+                );
+                crate::whatsapp_export::TimelineImage {
+                    name: image.name,
+                    at: image.at,
+                    original_time: image.original_time,
+                    preview: format!("{download}?inline=1"),
+                    download,
+                }
+            })
+            .collect();
     Some(format!(
         r#"<p><a href="{}/evidence-shares?timeline={}">Manage evidence invitations</a></p>{}"#,
         crate::html_escape::escape_attr(&document_url),
@@ -619,19 +624,19 @@ impl MatterPeople {
 
 #[cfg(feature = "server")]
 async fn matter_people(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project: &store::projects::Project,
 ) -> Result<MatterPeople, String> {
-    let client_entity = store::entities::find_by_id(surreal, project.entity_id)
+    let client_entity = store::entities::find_by_id(application_store, project.entity_id)
         .await
         .map_err(|e| e.to_string())?
         .map(|entity| entity.name)
         .unwrap_or_default();
-    let rows = store::projects::participations_for_project(surreal, project.id)
+    let rows = store::projects::participations_for_project(application_store, project.id)
         .await
         .map_err(|e| e.to_string())?;
     let ids: Vec<uuid::Uuid> = rows.iter().map(|row| row.person_id).collect();
-    let people = store::persons::find_by_ids(surreal, &ids)
+    let people = store::persons::find_by_ids(application_store, &ids)
         .await
         .map_err(|e| e.to_string())?;
     let team = rows
@@ -650,12 +655,12 @@ async fn matter_people(
 /// Each Project Reference as `(name, reason)`, oldest first.
 #[cfg(feature = "server")]
 async fn references(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
 ) -> Result<Vec<(String, String)>, String> {
     use store::relationships::Endpoint;
 
-    let rows = store::project_references::for_project(surreal, project_id)
+    let rows = store::project_references::for_project(application_store, project_id)
         .await
         .map_err(|e| e.to_string())?;
     let ids = |kind: Endpoint| -> Vec<uuid::Uuid> {
@@ -664,10 +669,10 @@ async fn references(
             .map(|row| row.party.id)
             .collect()
     };
-    let people = store::persons::find_by_ids(surreal, &ids(Endpoint::Person))
+    let people = store::persons::find_by_ids(application_store, &ids(Endpoint::Person))
         .await
         .map_err(|e| e.to_string())?;
-    let entities = store::entities::find_by_ids(surreal, &ids(Endpoint::Entity))
+    let entities = store::entities::find_by_ids(application_store, &ids(Endpoint::Entity))
         .await
         .map_err(|e| e.to_string())?;
     Ok(rows
@@ -693,7 +698,7 @@ async fn references(
 /// clerk lens loads none of them.
 #[cfg(feature = "server")]
 async fn load_context(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project: &store::projects::Project,
     lens: PageLens,
     address: PageAddress,
@@ -710,7 +715,7 @@ async fn load_context(
     }
     let storage = consume_context::<std::sync::Arc<dyn cloud::StorageService>>();
     cx.notations = super::notations::load_notations(
-        surreal,
+        application_store,
         &storage,
         &super::notations::NotationsSource {
             project_id: project.id,
@@ -722,37 +727,47 @@ async fn load_context(
     )
     .await
     .map_err(ServerFnError::new)?;
-    let assets = store::assets::for_project(surreal, project.id)
+    let assets = store::assets::for_project(application_store, project.id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
-    cx.page_draft =
-        super::engagement::load_page_draft(surreal, &storage, project.id, address.draft.as_deref())
-            .await
-            .map_err(ServerFnError::new)?;
-    let runs = super::engagement::onboarding_runs(surreal, project.id)
+    cx.page_draft = super::engagement::load_page_draft(
+        application_store,
+        &storage,
+        project.id,
+        address.draft.as_deref(),
+    )
+    .await
+    .map_err(ServerFnError::new)?;
+    let runs = super::engagement::onboarding_runs(application_store, project.id)
         .await
         .map_err(ServerFnError::new)?;
     (cx.engagement_filed_any, cx.engagement_letters) =
         super::engagement::filed_letters(&project.code, &assets, &runs, lens);
-    load_docket(surreal, project, &assets, &mut cx)
+    load_docket(application_store, project, &assets, &mut cx)
         .await
         .map_err(ServerFnError::new)?;
-    load_records(surreal, project.id, &project.code, assets, &mut cx)
-        .await
-        .map_err(ServerFnError::new)?;
-    cx.authorities.cards = super::authorities::derive::load(surreal, project.id, lens)
+    load_records(
+        application_store,
+        project.id,
+        &project.code,
+        assets,
+        &mut cx,
+    )
+    .await
+    .map_err(ServerFnError::new)?;
+    cx.authorities.cards = super::authorities::derive::load(application_store, project.id, lens)
         .await
         .map_err(ServerFnError::new)?;
     // The relationship graph is the firm's conflicts record.
     if lens == PageLens::Lawyer {
-        cx.graph = super::graph::derive::load(surreal, project)
+        cx.graph = super::graph::derive::load(application_store, project)
             .await
             .map_err(ServerFnError::new)?;
         cx.outcome_projection =
-            load_outcome_projection(surreal, project.id, address.viewer_person_id).await;
+            load_outcome_projection(application_store, project.id, address.viewer_person_id).await;
     }
     super::instruments::load_sections(
-        surreal,
+        application_store,
         Some(&storage),
         project,
         super::instruments::OnPage {
@@ -772,7 +787,7 @@ async fn load_context(
 /// state.
 #[cfg(feature = "server")]
 async fn load_outcome_projection(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
     viewer: Option<uuid::Uuid>,
 ) -> super::OutcomeProjectionView {
@@ -787,7 +802,9 @@ async fn load_outcome_projection(
         return unavailable;
     };
     let today = chrono::Utc::now().date_naive();
-    match store::matter_projections::for_project(surreal, &pg, viewer, project_id, today).await {
+    match store::matter_projections::for_project(application_store, &pg, viewer, project_id, today)
+        .await
+    {
         Ok(projection) => super::outcome_projection::derive::view(&projection),
         Err(store::matter_projections::MatterProjectionError::NotFirmSide) => {
             super::OutcomeProjectionView::default()
@@ -800,24 +817,24 @@ async fn load_outcome_projection(
 /// board, the party roster, and the discovery pairs.
 #[cfg(feature = "server")]
 async fn load_docket(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project: &store::projects::Project,
     assets: &[store::assets::Asset],
     cx: &mut super::LoadContext,
 ) -> Result<(), String> {
     let client_lens = cx.lens == PageLens::Client;
     let now = chrono::Utc::now();
-    let deadlines = store::project_deadlines::list(surreal, project.id)
+    let deadlines = store::project_deadlines::list(application_store, project.id)
         .await
         .map_err(|e| e.to_string())?;
-    let cases = store::cases::for_project(surreal, project.id)
+    let cases = store::cases::for_project(application_store, project.id)
         .await
         .map_err(|e| e.to_string())?;
-    let entries = store::cases::docket_for_project(surreal, project.id)
+    let entries = store::cases::docket_for_project(application_store, project.id)
         .await
         .map_err(|e| e.to_string())?;
-    let people = matter_people(surreal, project).await?;
-    let matter = store::matter_captions::for_project(surreal, project.id)
+    let people = matter_people(application_store, project).await?;
+    let matter = store::matter_captions::for_project(application_store, project.id)
         .await
         .map_err(|e| e.to_string())?
         .map(|caption| caption.matter);
@@ -839,10 +856,10 @@ async fn load_docket(
         (Vec::new(), Vec::new())
     } else {
         (
-            store::project_service::list(surreal, project.id)
+            store::project_service::list(application_store, project.id)
                 .await
                 .map_err(|e| e.to_string())?,
-            references(surreal, project.id).await?,
+            references(application_store, project.id).await?,
         )
     };
     cx.roster = super::derive::roster(&super::derive::RosterInputs {
@@ -855,7 +872,8 @@ async fn load_docket(
         client_lens,
     });
     cx.discovery.pairs =
-        super::discovery::derive::load(surreal, &cases, &people.our_names(), cx.lens).await?;
+        super::discovery::derive::load(application_store, &cases, &people.our_names(), cx.lens)
+            .await?;
     cx.timeline.items = docket.items;
     cx.facts = docket.facts;
     cx.key_dates = docket.key_dates;
@@ -865,7 +883,7 @@ async fn load_docket(
 /// Files, e-filing receipts, and invoices.
 #[cfg(feature = "server")]
 async fn load_records(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
     project_code: &str,
     assets: Vec<store::assets::Asset>,
@@ -873,7 +891,7 @@ async fn load_records(
 ) -> Result<(), String> {
     let client_lens = cx.lens == PageLens::Client;
     cx.receipts = super::derive::receipts(
-        &store::efiling_transactions::list(surreal, project_id)
+        &store::efiling_transactions::list(application_store, project_id)
             .await
             .map_err(|e| e.to_string())?,
         &assets,
@@ -902,7 +920,7 @@ async fn load_records(
     match store::postgres::PostgresDb::from_env().await {
         Ok(pg) => {
             let costs = if client_lens {
-                store::project_costs::list_client_visible(surreal, &pg, project_id).await
+                store::project_costs::list_client_visible(application_store, &pg, project_id).await
             } else {
                 store::project_costs::list_for_project(&pg, project_id).await
             };
@@ -950,7 +968,7 @@ async fn load_records(
         }
         Err(_) => cx.project_costs.unavailable = true,
     }
-    cx.invoices = store::xero_invoices::for_projects(surreal, &[project_id])
+    cx.invoices = store::xero_invoices::for_projects(application_store, &[project_id])
         .await
         .map_err(|e| e.to_string())?
         .into_iter()

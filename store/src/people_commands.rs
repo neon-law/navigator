@@ -13,9 +13,9 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::external_identities::{self, ExternalIdentityError, ExternalSystem};
 use crate::persons::{self, ContactUpdate, NewPerson, Person, PersonEdit, PersonError, Role};
-use crate::surreal::SurrealDb;
 
 #[path = "person_creation_scope.rs"]
 mod creation_scope;
@@ -23,7 +23,7 @@ mod creation_scope;
 /// Authorize Person creation against the actor's current Project and Firm access.
 /// The resolved Firm is context only: creating a Person grants no matter access.
 pub async fn authorize_creation(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     input: &CreatePersonCommand,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
@@ -107,7 +107,7 @@ pub async fn authorize_creation(
 
 /// Authorize and create through the same boundary for the API and native forms.
 pub async fn create_person_for_actor(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     mut input: CreatePersonCommand,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
@@ -383,7 +383,7 @@ fn classify_firm_write(error: crate::firms::FirmError) -> PeopleCommandError {
 
 /// Grant Firm membership at creation. Only Lawyer and Clerk default to the anchor Firm.
 async fn grant_default_firm_membership(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person: &Person,
     firm_id: Option<Uuid>,
 ) -> Result<(), PeopleCommandError> {
@@ -417,7 +417,7 @@ async fn grant_default_firm_membership(
 }
 
 pub async fn create_person(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     input: &CreatePersonCommand,
 ) -> Result<Person, PeopleCommandError> {
     if let Some(message) = input.validation_message() {
@@ -466,7 +466,7 @@ pub async fn create_person(
 /// roles or submits a blank role; leaves an omitted structured-name part
 /// untouched and nulls a present-but-blank one.
 pub async fn update_person(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     input: &UpdatePersonCommand,
     ctx: &UpdateContext<'_>,
@@ -597,7 +597,7 @@ pub async fn update_person(
 /// `entity_commands::delete_entity` already uses for a Project still
 /// naming an Entity. Returns the deleted row on success.
 pub async fn delete_person(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     bootstrap_owner_email: Option<&str>,
 ) -> Result<Person, PeopleCommandError> {
@@ -639,7 +639,7 @@ pub async fn delete_person(
 /// `show_person` tool and any web lookup share this one query
 /// instead of re-implementing the `LIKE` predicate.
 pub async fn search_people(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     name: Option<&str>,
     email: Option<&str>,
     limit: u64,
@@ -655,7 +655,7 @@ pub async fn search_people(
 ///
 /// [`PeopleCommandError::NotFound`] when the person no longer exists.
 pub async fn update_person_contact(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     input: &ContactUpdate,
 ) -> Result<Person, PeopleCommandError> {
@@ -667,424 +667,9 @@ pub async fn update_person_contact(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        create_person, delete_person, search_people, update_person, CreatePersonCommand,
-        PeopleCommandError, UpdateContext, UpdatePersonCommand,
-    };
-    use crate::persons::{self, NewPerson, Role};
-    use crate::surreal::test_support::mem;
-    use crate::surreal::SurrealDb;
-    use uuid::Uuid;
-
-    async fn db() -> SurrealDb {
-        mem().await
-    }
-
-    fn create(name: &str, email: &str) -> CreatePersonCommand {
-        CreatePersonCommand {
-            name: name.into(),
-            email: email.into(),
-            role: String::new(),
-            given_name: None,
-            family_name: None,
-            middle_name: None,
-            notion_user_id: None,
-            firm_id: None,
-        }
-    }
-
-    /// An Entity carrying `firm_anchor_key`, wrapped in a Firm — the shape
-    /// [`crate::firms::anchor_firm`] resolves. No test here sets
-    /// `NAVIGATOR_BOOTSTRAP_COMPANY` (a process-wide variable every parallel
-    /// test would race on), so the default fallback,
-    /// [`crate::seed::FIRM_ENTITY_NAME`], is always the key.
-    async fn anchor_firm(db: &SurrealDb) -> crate::firms::Firm {
-        let entity_id = crate::entities::create(
-            db,
-            &crate::entities::NewEntity {
-                name: crate::seed::FIRM_ENTITY_NAME.to_string(),
-                entity_type_id: crate::test_support::SEED_ENTITY_TYPE_ID,
-                jurisdiction_id: crate::test_support::SEED_ENTITY_JURISDICTION_ID,
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: Some(crate::seed::FIRM_ENTITY_NAME.to_lowercase()),
-            },
-        )
-        .await
-        .unwrap()
-        .id;
-        crate::firms::create(
-            db,
-            &crate::firms::NewFirm {
-                name: crate::seed::FIRM_ENTITY_NAME.to_string(),
-                status: "active".to_string(),
-                entity_id,
-                admin_dri_person_id: firm_dri(db).await,
-            },
-        )
-        .await
-        .unwrap()
-    }
-
-    /// A fresh `person.role = admin` person, fit to name as a Firm's
-    /// `admin_dri_person_id` in these fixtures.
-    async fn firm_dri(db: &SurrealDb) -> Uuid {
-        persons::create(
-            db,
-            &NewPerson::with_role(
-                "Firm DRI",
-                format!("firm-dri-{}@example.com", Uuid::now_v7()),
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    /// An ordinary Firm — no `firm_anchor_key` on its Entity — for the
-    /// two-firm case: a deployment holding this one *and* the anchor.
-    async fn ordinary_firm(db: &SurrealDb, name: &str) -> crate::firms::Firm {
-        let entity_id = crate::test_support::seed_entity(db).await;
-        crate::firms::create(
-            db,
-            &crate::firms::NewFirm {
-                name: name.to_string(),
-                status: "active".to_string(),
-                entity_id,
-                admin_dri_person_id: firm_dri(db).await,
-            },
-        )
-        .await
-        .unwrap()
-    }
-
-    /// Every Firm id `person_id` holds a membership row on (ENG-463 removed
-    /// the narrower `firms::firm_ids_for_person` in favor of the full rows
-    /// `memberships_for_person` returns; this maps down to ids for the tests
-    /// below, which only ever ask "which Firms, if any").
-    async fn firm_ids_for(db: &SurrealDb, person_id: uuid::Uuid) -> Vec<uuid::Uuid> {
-        crate::firms::memberships_for_person(db, person_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|row| row.firm_id)
-            .collect()
-    }
-
-    #[tokio::test]
-    async fn create_defaults_role_to_client_and_persists() {
-        let db = db().await;
-        let row = create_person(&db, &create("Libra", "libra@example.com"))
-            .await
-            .unwrap();
-        assert_eq!(row.role, Role::Client);
-        let all = persons::list_directory(&db).await.unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].email, "libra@example.com");
-    }
-
-    #[tokio::test]
-    async fn create_accepts_the_explicit_non_lawyer_clerk_role() {
-        let db = db().await;
-        let mut command = create("Leo", "leo@neonlaw.com");
-        command.role = "clerk".into();
-
-        let row = create_person(&db, &command).await.unwrap();
-
-        assert_eq!(row.role, Role::Clerk);
-        assert!(!row.role.is_lawyer_tier());
-    }
-
-    #[tokio::test]
-    async fn create_trims_name_and_email() {
-        let db = db().await;
-        let row = create_person(&db, &create("  Libra ", "  libra@example.com "))
-            .await
-            .unwrap();
-        assert_eq!(row.name, "Libra");
-        assert_eq!(row.email, "libra@example.com");
-    }
+    use super::UpdatePersonCommand;
 
     // ── ENG-495: a newly created Lawyer or Clerk joins a Firm ──────────────
-
-    /// A newly created Lawyer appears in the anchor Firm's membership with no
-    /// manual step — the standing rule the one-time #ENG-462 backfill never
-    /// was.
-    #[tokio::test]
-    async fn create_grants_a_new_lawyers_membership_on_the_anchor_firm() {
-        let db = db().await;
-        let anchor = anchor_firm(&db).await;
-        let mut command = create("New Lawyer", "new-lawyer@neonlaw.com");
-        command.role = "lawyer".into();
-
-        let row = create_person(&db, &command).await.unwrap();
-
-        let membership = crate::firms::membership_for_person(&db, row.id, anchor.id)
-            .await
-            .unwrap()
-            .expect("the new lawyer's membership row");
-        assert_eq!(membership.membership, crate::firms::FirmMembership::Lawyer);
-        assert!(!membership.is_dri);
-    }
-
-    /// Same rule, the other supervised firm-side tier.
-    #[tokio::test]
-    async fn create_grants_a_new_clerks_membership_on_the_anchor_firm() {
-        let db = db().await;
-        let anchor = anchor_firm(&db).await;
-        let mut command = create("New Clerk", "new-clerk@neonlaw.com");
-        command.role = "clerk".into();
-
-        let row = create_person(&db, &command).await.unwrap();
-
-        let membership = crate::firms::membership_for_person(&db, row.id, anchor.id)
-            .await
-            .unwrap()
-            .expect("the new clerk's membership row");
-        assert_eq!(membership.membership, crate::firms::FirmMembership::Clerk);
-    }
-
-    /// A new Client gets no Firm row — a client reaches a matter through
-    /// `person_project_role`, never through firm membership.
-    #[tokio::test]
-    async fn create_grants_no_firm_row_for_a_new_client() {
-        let db = db().await;
-        anchor_firm(&db).await;
-        let row = create_person(&db, &create("Libra", "libra@example.com"))
-            .await
-            .unwrap();
-
-        assert!(firm_ids_for(&db, row.id).await.is_empty());
-    }
-
-    /// Owner and Admin membership stays explicit: creating either grants no
-    /// Firm row, unlike Lawyer and Clerk.
-    #[tokio::test]
-    async fn create_grants_no_firm_row_for_a_new_owner_or_admin() {
-        let db = db().await;
-        anchor_firm(&db).await;
-        for (tag, role) in [("owner", "owner"), ("admin", "admin")] {
-            let mut command = create(&format!("New {tag}"), &format!("new-{tag}@neonlaw.com"));
-            command.role = role.into();
-
-            let row = create_person(&db, &command).await.unwrap();
-
-            assert!(
-                firm_ids_for(&db, row.id).await.is_empty(),
-                "{tag} must get no firm row"
-            );
-        }
-    }
-
-    /// The two-firm case: a deployment holding the anchor Firm *and* an
-    /// ordinary one still lands the new lawyer on the anchor specifically —
-    /// the assertion that would pass vacuously against a single seeded firm
-    /// and is the whole point of ENG-495.
-    #[tokio::test]
-    async fn create_lands_a_new_lawyer_on_the_anchor_when_two_firms_exist() {
-        let db = db().await;
-        let anchor = anchor_firm(&db).await;
-        let other = ordinary_firm(&db, "Other Practice").await;
-        let mut command = create("Two Firm Lawyer", "two-firm-lawyer@neonlaw.com");
-        command.role = "lawyer".into();
-
-        let row = create_person(&db, &command).await.unwrap();
-
-        assert_eq!(firm_ids_for(&db, row.id).await, vec![anchor.id]);
-        assert!(crate::firms::membership_for_person(&db, row.id, other.id)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    /// The override: a creating surface names a different Firm than the
-    /// anchor, and that Firm — not the anchor — is the one that gets the row.
-    #[tokio::test]
-    async fn create_honors_an_explicit_firm_id_over_the_anchor() {
-        let db = db().await;
-        let anchor = anchor_firm(&db).await;
-        let other = ordinary_firm(&db, "Named Practice").await;
-        let mut command = create("Named Lawyer", "named-lawyer@neonlaw.com");
-        command.role = "lawyer".into();
-        command.firm_id = Some(other.id);
-
-        let row = create_person(&db, &command).await.unwrap();
-
-        assert_eq!(firm_ids_for(&db, row.id).await, vec![other.id]);
-        assert!(crate::firms::membership_for_person(&db, row.id, anchor.id)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    /// No anchor Firm exists yet and none was named: the create still
-    /// succeeds, granting nothing — this door does not invent a Firm.
-    #[tokio::test]
-    async fn create_succeeds_with_no_firm_row_when_no_anchor_firm_exists() {
-        let db = db().await;
-        let mut command = create("Homeless Lawyer", "homeless-lawyer@neonlaw.com");
-        command.role = "lawyer".into();
-
-        let row = create_person(&db, &command).await.unwrap();
-
-        assert!(firm_ids_for(&db, row.id).await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn create_and_update_store_the_notion_user_id_as_an_external_identity() {
-        let db = db().await;
-        let mut command = create("Notion Person", "notion-person@example.com");
-        command.notion_user_id = Some("notion-user-123".into());
-        let row = create_person(&db, &command).await.unwrap();
-        let identity = crate::external_identities::find_by_person_and_system(
-            &db,
-            row.id,
-            crate::external_identities::ExternalSystem::Notion,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(identity.external_id, "notion-user-123");
-
-        let updated = update_person(
-            &db,
-            row.id,
-            &UpdatePersonCommand {
-                name: Some(row.name.clone()),
-                email: Some(row.email.clone()),
-                role: String::new(),
-                given_name: None,
-                family_name: None,
-                middle_name: None,
-                notion_user_id: Some(Some("notion-user-456".into())),
-                linkedin_url: None,
-                csrf_token: None,
-            },
-            &UpdateContext {
-                bootstrap_owner_email: None,
-                actor_role: Role::Owner,
-                may_change_roles: true,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(updated.id, row.id);
-        assert_eq!(
-            crate::external_identities::find_by_account(
-                &db,
-                crate::external_identities::ExternalSystem::Notion,
-                "notion-user-456"
-            )
-            .await
-            .unwrap()
-            .unwrap()
-            .person_id,
-            row.id
-        );
-    }
-
-    #[tokio::test]
-    async fn create_rejects_blank_name_and_at_less_email() {
-        let db = db().await;
-        assert!(matches!(
-            create_person(&db, &create("   ", "libra@example.com")).await,
-            Err(PeopleCommandError::Invalid(_))
-        ));
-        assert!(matches!(
-            create_person(&db, &create("Libra", "not-an-email")).await,
-            Err(PeopleCommandError::Invalid(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn create_rejects_unknown_role() {
-        let db = db().await;
-        let mut cmd = create("Libra", "libra@example.com");
-        cmd.role = "wizard".into();
-        assert!(matches!(
-            create_person(&db, &cmd).await,
-            Err(PeopleCommandError::Invalid(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn duplicate_email_is_an_email_conflict() {
-        let db = db().await;
-        create_person(&db, &create("Libra", "dup@example.com"))
-            .await
-            .unwrap();
-        assert!(matches!(
-            create_person(&db, &create("Other", "dup@example.com")).await,
-            Err(PeopleCommandError::EmailConflict)
-        ));
-    }
-
-    #[tokio::test]
-    async fn update_preserves_role_when_caller_cannot_change_roles() {
-        let db = db().await;
-        let mut cmd = create("Cap", "cap@example.com");
-        cmd.role = "lawyer".into();
-        let row = create_person(&db, &cmd).await.unwrap();
-
-        let input = UpdatePersonCommand {
-            name: Some("Capricorn".into()),
-            email: Some("cap@example.com".into()),
-            role: "admin".into(),
-            given_name: None,
-            family_name: None,
-            middle_name: None,
-            notion_user_id: None,
-            linkedin_url: None,
-            csrf_token: None,
-        };
-        let ctx = UpdateContext {
-            bootstrap_owner_email: None,
-            actor_role: Role::Lawyer,
-            may_change_roles: false,
-        };
-        let updated = update_person(&db, row.id, &input, &ctx).await.unwrap();
-        assert_eq!(updated.name, "Capricorn");
-        // Role stays `lawyer` — the admin submission is ignored.
-        assert_eq!(updated.role, Role::Lawyer);
-    }
-
-    /// ENG-518: a `PATCH` naming only `linkedin_url` must succeed rather
-    /// than being refused for omitting `name` and `email` — the same shape
-    /// of body the entity command boundary now accepts.
-    #[tokio::test]
-    async fn update_accepts_a_linkedin_only_body_and_preserves_name_and_email() {
-        let db = db().await;
-        let row = create_person(&db, &create("Gem", "gem@example.com"))
-            .await
-            .unwrap();
-
-        let input = UpdatePersonCommand {
-            name: None,
-            email: None,
-            role: String::new(),
-            given_name: None,
-            family_name: None,
-            middle_name: None,
-            notion_user_id: None,
-            linkedin_url: Some(Some("https://linkedin.example/gem".into())),
-            csrf_token: None,
-        };
-        let ctx = UpdateContext {
-            bootstrap_owner_email: None,
-            actor_role: Role::Owner,
-            may_change_roles: true,
-        };
-        let updated = update_person(&db, row.id, &input, &ctx).await.unwrap();
-
-        assert_eq!(updated.name, "Gem");
-        assert_eq!(updated.email, "gem@example.com");
-        assert_eq!(
-            updated.linkedin_url.as_deref(),
-            Some("https://linkedin.example/gem")
-        );
-    }
 
     /// `deny_unknown_fields` refuses a body naming a field this command does
     /// not carry, and the error names it — never the caller-opaque
@@ -1095,287 +680,5 @@ mod tests {
         let error =
             serde_json::from_str::<UpdatePersonCommand>(r#"{"bogus_field": true}"#).unwrap_err();
         assert!(error.to_string().contains("bogus_field"), "{error}");
-    }
-
-    #[tokio::test]
-    async fn update_leaves_omitted_name_parts_untouched() {
-        let db = db().await;
-        let mut cmd = create("Gem", "gem@example.com");
-        cmd.given_name = Some("Gemma".into());
-        let row = create_person(&db, &cmd).await.unwrap();
-
-        let input = UpdatePersonCommand {
-            name: Some("Gemini".into()),
-            email: Some("gem@example.com".into()),
-            role: String::new(),
-            given_name: None, // omitted → preserved
-            family_name: None,
-            middle_name: None,
-            notion_user_id: None,
-            linkedin_url: None,
-            csrf_token: None,
-        };
-        let ctx = UpdateContext {
-            bootstrap_owner_email: None,
-            actor_role: Role::Owner,
-            may_change_roles: true,
-        };
-        let updated = update_person(&db, row.id, &input, &ctx).await.unwrap();
-        assert_eq!(updated.given_name.as_deref(), Some("Gemma"));
-    }
-
-    #[tokio::test]
-    async fn update_clears_a_present_blank_name_part() {
-        let db = db().await;
-        let mut cmd = create("Gem", "gem@example.com");
-        cmd.given_name = Some("Gemma".into());
-        let row = create_person(&db, &cmd).await.unwrap();
-
-        let input = UpdatePersonCommand {
-            name: Some("Gemini".into()),
-            email: Some("gem@example.com".into()),
-            role: String::new(),
-            given_name: Some(Some(String::new())), // present blank → clear
-            family_name: None,
-            middle_name: None,
-            notion_user_id: None,
-            linkedin_url: None,
-            csrf_token: None,
-        };
-        let ctx = UpdateContext {
-            bootstrap_owner_email: None,
-            actor_role: Role::Owner,
-            may_change_roles: true,
-        };
-        let updated = update_person(&db, row.id, &input, &ctx).await.unwrap();
-        assert!(updated.given_name.is_none());
-    }
-
-    #[tokio::test]
-    async fn update_pins_the_bootstrap_owners_email_and_role_but_allows_the_name() {
-        let db = db().await;
-        let mut cmd = create("Boss", "boss@example.com");
-        cmd.role = "owner".into();
-        let row = create_person(&db, &cmd).await.unwrap();
-
-        // Attempts to steal the email and demote the role alongside a
-        // legitimate rename — the command layer applies the name and
-        // silently drops the other two rather than rejecting the whole
-        // write.
-        let input = UpdatePersonCommand {
-            name: Some("Renamed".into()),
-            email: Some("attacker@example.com".into()),
-            role: "client".into(),
-            given_name: None,
-            family_name: None,
-            middle_name: None,
-            notion_user_id: None,
-            linkedin_url: None,
-            csrf_token: None,
-        };
-        let ctx = UpdateContext {
-            bootstrap_owner_email: Some("boss@example.com"),
-            actor_role: Role::Owner,
-            may_change_roles: true,
-        };
-        let updated = update_person(&db, row.id, &input, &ctx).await.unwrap();
-        assert_eq!(updated.name, "Renamed");
-        assert_eq!(updated.email, "boss@example.com");
-        assert_eq!(updated.role, Role::Owner);
-    }
-
-    #[tokio::test]
-    async fn admin_cannot_edit_or_assign_owner_but_owner_can_assign_owner() {
-        let db = db().await;
-        let mut owner = create("Owner", "owner@example.com");
-        owner.role = "owner".into();
-        let owner = create_person(&db, &owner).await.unwrap();
-        let client = create_person(&db, &create("Client", "client@example.com"))
-            .await
-            .unwrap();
-        let owner_input = UpdatePersonCommand {
-            name: Some("Owner Changed".into()),
-            email: Some(owner.email.clone()),
-            role: "admin".into(),
-            given_name: None,
-            family_name: None,
-            middle_name: None,
-            notion_user_id: None,
-            linkedin_url: None,
-            csrf_token: None,
-        };
-        let admin_ctx = UpdateContext {
-            bootstrap_owner_email: None,
-            actor_role: Role::Admin,
-            may_change_roles: true,
-        };
-        assert!(matches!(
-            update_person(&db, owner.id, &owner_input, &admin_ctx).await,
-            Err(PeopleCommandError::Blocked(_))
-        ));
-
-        let admin_promotion = UpdatePersonCommand {
-            name: Some(client.name.clone()),
-            email: Some(client.email.clone()),
-            ..owner_input
-        };
-        assert!(matches!(
-            update_person(&db, client.id, &admin_promotion, &admin_ctx).await,
-            Err(PeopleCommandError::Blocked(
-                "Only an Owner can assign the Admin role."
-            ))
-        ));
-
-        let promote_input = UpdatePersonCommand {
-            name: Some(client.name.clone()),
-            email: Some(client.email.clone()),
-            role: "owner".into(),
-            given_name: None,
-            family_name: None,
-            middle_name: None,
-            notion_user_id: None,
-            linkedin_url: None,
-            csrf_token: None,
-        };
-        assert!(matches!(
-            update_person(&db, client.id, &promote_input, &admin_ctx).await,
-            Err(PeopleCommandError::Blocked(_))
-        ));
-        let owner_ctx = UpdateContext {
-            bootstrap_owner_email: None,
-            actor_role: Role::Owner,
-            may_change_roles: true,
-        };
-        let promoted = update_person(&db, client.id, &promote_input, &owner_ctx)
-            .await
-            .unwrap();
-        assert_eq!(promoted.role, Role::Owner);
-    }
-
-    #[tokio::test]
-    async fn delete_refuses_non_client_and_bootstrap_owner() {
-        let db = db().await;
-        // Lawyer is not deletable.
-        let mut lawyer = create("Taurus", "taurus@example.com");
-        lawyer.role = "lawyer".into();
-        let lawyer_row = create_person(&db, &lawyer).await.unwrap();
-        assert!(matches!(
-            delete_person(&db, lawyer_row.id, None).await,
-            Err(PeopleCommandError::Blocked(_))
-        ));
-
-        // A client is deletable, unless it is the bootstrap Owner email.
-        let client_row = create_person(&db, &create("Cleo", "cleo@example.com"))
-            .await
-            .unwrap();
-        assert!(matches!(
-            delete_person(&db, client_row.id, Some("cleo@example.com")).await,
-            Err(PeopleCommandError::Blocked(_))
-        ));
-        // Without the bootstrap guard it deletes.
-        let deleted = delete_person(&db, client_row.id, None).await.unwrap();
-        assert_eq!(deleted.email, "cleo@example.com");
-        assert!(persons::find_by_id(&db, client_row.id)
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    /// ENG-928: the guard that keeps a `person_project_role` row from
-    /// outliving the Person it names. Without it, deleting a client who is
-    /// still a Project's `client_dri` is exactly how
-    /// `store::project_surfaces::read_handles` used to meet a DRI
-    /// participation pointing at a missing Person and 500.
-    #[tokio::test]
-    async fn delete_refuses_while_a_project_participation_still_names_the_person() {
-        let db = db().await;
-        let client_row = create_person(&db, &create("Cleo", "cleo@example.com"))
-            .await
-            .unwrap();
-        let entity_id = crate::test_support::seed_entity(&db).await;
-        let project = crate::projects::create(
-            &db,
-            &crate::projects::NewProject {
-                code: format!("part-{}", Uuid::now_v7()),
-                name: "Participation matter".into(),
-                status: "open".into(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        crate::projects::add_participation(&db, project.id, client_row.id, "client")
-            .await
-            .unwrap();
-
-        let error = delete_person(&db, client_row.id, None).await.unwrap_err();
-        assert!(
-            matches!(error, PeopleCommandError::ParticipatesInProjects(1)),
-            "{error:?}"
-        );
-
-        // Refused, so the row is untouched.
-        assert!(persons::find_by_id(&db, client_row.id)
-            .await
-            .unwrap()
-            .is_some());
-    }
-
-    #[tokio::test]
-    async fn delete_missing_id_is_not_found() {
-        let db = db().await;
-        // A fixed id no seeded row will ever carry (rows get random ids).
-        assert!(matches!(
-            delete_person(&db, uuid::Uuid::from_u128(0xdead_beef), None).await,
-            Err(PeopleCommandError::NotFound)
-        ));
-    }
-
-    async fn seed(db: &SurrealDb, name: &str, email: &str) {
-        persons::create(db, &NewPerson::new(name, email))
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn search_matches_substring_case_insensitively_and_sorts() {
-        let db = db().await;
-        seed(&db, "Sagittarius", "sagittarius@example.com").await;
-        seed(&db, "Aquarius", "aquarius@example.com").await;
-        seed(&db, "Aries", "aries@example.com").await;
-        let rows = search_people(&db, Some("ARI"), None, 50).await.unwrap();
-        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, vec!["Aquarius", "Aries", "Sagittarius"]);
-    }
-
-    #[tokio::test]
-    async fn search_ands_name_and_email() {
-        let db = db().await;
-        seed(&db, "Aquarius", "aquarius@neonlaw.com").await;
-        seed(&db, "Aries", "aries@example.com").await;
-        seed(&db, "Sagittarius", "sagittarius@neonlaw.com").await;
-        let rows = search_people(&db, Some("ari"), Some("neonlaw"), 50)
-            .await
-            .unwrap();
-        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, vec!["Aquarius", "Sagittarius"]);
-    }
-
-    #[tokio::test]
-    async fn search_respects_the_limit() {
-        let db = db().await;
-        seed(&db, "Aquarius", "aquarius@example.com").await;
-        seed(&db, "Aries", "aries@example.com").await;
-        let rows = search_people(&db, Some("a"), None, 1).await.unwrap();
-        assert_eq!(rows.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn search_no_match_is_empty_not_an_error() {
-        let db = db().await;
-        seed(&db, "Libra", "libra@example.com").await;
-        let rows = search_people(&db, Some("ghost"), None, 50).await.unwrap();
-        assert!(rows.is_empty());
     }
 }

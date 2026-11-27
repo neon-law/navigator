@@ -113,8 +113,8 @@ pub async fn get_firm_new_form() -> Result<FirmNewView, ServerFnError> {
             .map(|axum::extract::Query(q)| q)
             .unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let entities = store::entities::all(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let entities = store::entities::all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -125,14 +125,14 @@ pub async fn get_firm_new_form() -> Result<FirmNewView, ServerFnError> {
         .collect();
     // The admin roster is filtered in Rust: `persons` is in the other
     // engine and the directory read has no role predicate.
-    let admins = store::persons::list_directory(&surreal)
+    let admins = store::persons::list_directory(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
         .filter(|p| p.role.is_admin_tier())
         .map(|p| PersonChoice::new(p.id.to_string(), p.name, p.email).with_detail(p.role.as_str()))
         .collect();
-    let entity_types = store::entity_types::list(&surreal, &[])
+    let entity_types = store::entity_types::list(&application_store, &[])
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -141,7 +141,7 @@ pub async fn get_firm_new_form() -> Result<FirmNewView, ServerFnError> {
             label: t.name,
         })
         .collect();
-    let jurisdictions = store::jurisdictions::list_all(&surreal)
+    let jurisdictions = store::jurisdictions::list_all(&application_store)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()

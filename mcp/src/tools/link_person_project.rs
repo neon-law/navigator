@@ -52,7 +52,7 @@ struct Args {
 
 /// An authenticated Admin may assign participants to matters in the Firms they administer.
 pub(super) async fn require_admin_scope(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     identity: super::Identity,
     arguments: &Value,
 ) -> Result<(), ToolError> {
@@ -60,12 +60,12 @@ pub(super) async fn require_admin_scope(
         return Ok(());
     }
     let args: Args = super::decode_args(arguments)?;
-    let project = store::projects::find_by_id(surreal, args.project_id)
+    let project = store::projects::find_by_id(application_store, args.project_id)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?
         .ok_or_else(|| ToolError::NotFound("project".into()))?;
     if !store::projects::can_administer_project(
-        surreal,
+        application_store,
         Some(identity.person_id),
         identity.role,
         &project,
@@ -79,18 +79,18 @@ pub(super) async fn require_admin_scope(
 }
 
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
     let args: Args = super::decode_args(arguments)?;
 
-    if store::persons::find_by_id(surreal, args.person_id)
+    if store::persons::find_by_id(application_store, args.person_id)
         .await?
         .is_none()
     {
         return Err(ToolError::NotFound(format!("person_id={}", args.person_id)));
     }
-    if store::projects::find_by_id(surreal, args.project_id)
+    if store::projects::find_by_id(application_store, args.project_id)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?
         .is_none()
@@ -101,10 +101,13 @@ pub async fn call(
         )));
     }
 
-    let existing =
-        store::projects::participation_for_person(surreal, args.person_id, args.project_id)
-            .await
-            .map_err(|error| ToolError::Database(error.to_string()))?;
+    let existing = store::projects::participation_for_person(
+        application_store,
+        args.person_id,
+        args.project_id,
+    )
+    .await
+    .map_err(|error| ToolError::Database(error.to_string()))?;
 
     // Route the write through the shared participation commands so this tool
     // honours the same invariants as the REST door and the lawyer form — one
@@ -115,7 +118,7 @@ pub async fn call(
         (row, false)
     } else {
         let inserted = store::participation::add_participant(
-            surreal,
+            application_store,
             &store::participation::AddParticipantCommand {
                 project_id: args.project_id,
                 person_id: args.person_id,
@@ -188,9 +191,12 @@ mod tests {
     use serde_json::json;
     use uuid::Uuid;
 
-    async fn seed(surreal: &store::surreal::SurrealDb, role: store::persons::Role) -> (Uuid, Uuid) {
+    async fn seed(
+        application_store: &store::application_store::ApplicationStore,
+        role: store::persons::Role,
+    ) -> (Uuid, Uuid) {
         let p = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 crate::test_fixtures::person_name(),
                 crate::test_fixtures::email(),
@@ -199,14 +205,14 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::test_fixtures::seed_brands(surreal).await;
+        crate::test_fixtures::seed_brands(application_store).await;
         let proj = store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: format!("synthetic-{}", Uuid::now_v7().simple()),
                 name: crate::test_fixtures::MATTER.clone(),
                 status: "open".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: store::test_support::seed_entity(application_store).await,
                 ..Default::default()
             },
         )
@@ -244,10 +250,10 @@ mod tests {
                 (store::persons::Role::Lawyer, "lawyer"),
                 (store::persons::Role::Client, "client"),
             ] {
-                let surreal = crate::test_fixtures::handle();
-                let (pid, projid) = seed(&surreal, tier).await;
+                let application_store = crate::test_fixtures::handle();
+                let (pid, projid) = seed(&application_store, tier).await;
                 let r = call(
-                    &surreal,
+                    &application_store,
                     &json!({ "person_id": pid, "project_id": projid, "role": "wizard" }),
                 )
                 .await
@@ -263,7 +269,7 @@ mod tests {
                     r["structuredContent"]["role"].is_null(),
                     "`role` is the person's tier, not the matter-side word: {r}"
                 );
-                let all = store::projects::participations_for_project(&surreal, projid)
+                let all = store::projects::participations_for_project(&application_store, projid)
                     .await
                     .unwrap();
                 assert_eq!(all.len(), 1);
@@ -276,17 +282,17 @@ mod tests {
     #[tokio::test]
     async fn re_linking_the_same_pair_is_idempotent() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let (pid, projid) = seed(&surreal, store::persons::Role::Client).await;
+            let application_store = crate::test_fixtures::handle();
+            let (pid, projid) = seed(&application_store, store::persons::Role::Client).await;
             let args = json!({ "person_id": pid, "project_id": projid });
-            let first = call(&surreal, &args).await.unwrap();
-            let second = call(&surreal, &args).await.unwrap();
+            let first = call(&application_store, &args).await.unwrap();
+            let second = call(&application_store, &args).await.unwrap();
             assert_eq!(
                 first["structuredContent"]["id"],
                 second["structuredContent"]["id"]
             );
             assert_eq!(second["structuredContent"]["created"], false);
-            let all = store::projects::participations_for_project(&surreal, projid)
+            let all = store::projects::participations_for_project(&application_store, projid)
                 .await
                 .unwrap();
             assert_eq!(all.len(), 1);
@@ -297,10 +303,10 @@ mod tests {
     #[tokio::test]
     async fn unknown_person_id_returns_not_found() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let (_, projid) = seed(&surreal, store::persons::Role::Client).await;
+            let application_store = crate::test_fixtures::handle();
+            let (_, projid) = seed(&application_store, store::persons::Role::Client).await;
             let err = call(
-                &surreal,
+                &application_store,
                 &json!({ "person_id": Uuid::now_v7(), "project_id": projid }),
             )
             .await
@@ -313,10 +319,10 @@ mod tests {
     #[tokio::test]
     async fn unknown_project_id_returns_not_found() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let (pid, _) = seed(&surreal, store::persons::Role::Client).await;
+            let application_store = crate::test_fixtures::handle();
+            let (pid, _) = seed(&application_store, store::persons::Role::Client).await;
             let err = call(
-                &surreal,
+                &application_store,
                 &json!({ "person_id": pid, "project_id": Uuid::now_v7() }),
             )
             .await

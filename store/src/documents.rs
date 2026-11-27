@@ -40,12 +40,10 @@ use chrono::{DateTime, Utc};
 use cloud::{StorageError, StorageService};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::assets::{SELECT, TABLE};
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 pub use model::documents::{
     document_upload_size_message_for_kind, human_bytes, max_document_upload_bytes, sha256_hex,
     streaming_upload_size_message, validate_document_slug, validate_onboarding_envelope,
@@ -271,8 +269,6 @@ pub struct UploadSession {
 /// Why a streaming upload step was refused.
 #[derive(Debug, thiserror::Error)]
 pub enum UploadSessionError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// The configured PostgreSQL server could not be reached.
     #[error("PostgreSQL: {0}")]
     Postgres(#[from] crate::postgres::PostgresError),
@@ -452,7 +448,7 @@ fn validate_upload_session(args: &UploadSessionArgs<'_>) -> Result<i64, UploadSe
 /// [`UploadSessionError`] on an invalid kind, visibility, digest, or size,
 /// or a database failure.
 pub async fn create_upload_session(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     args: &UploadSessionArgs<'_>,
 ) -> Result<UploadSession, UploadSessionError> {
     let declared_size = validate_upload_session(args)?;
@@ -487,66 +483,8 @@ pub async fn create_upload_session(
         created_at: now,
         expires_at: now + chrono::Duration::hours(UPLOAD_SESSION_TTL_HOURS),
     };
-    if let Some(pg) = PostgresDb::configured().await? {
-        Box::pin(upload_sessions::create(&pg, &session)).await?;
-        return Ok(session);
-    }
-    crate::assets::writing(|| {
-        db.query(format!(
-            "CREATE $id SET \
-             project_id = $project_id, \
-             filename = $filename, \
-             kind = $kind, \
-             content_type = $content_type, \
-             visibility = $visibility, \
-             description = $description, \
-             slug = $slug, \
-             transcript_quality = $transcript_quality, \
-             metadata = $metadata, \
-             derived_from = $derived_from, \
-             signing = $signing, \
-             notarization = $notarization, \
-             folder = $folder, \
-             declared_size = $declared_size, \
-             declared_sha256 = $declared_sha256, \
-             chunk_size = $chunk_size, \
-             received_bytes = 0, \
-             created_at = $created_at, \
-             expires_at = $expires_at \
-             RETURN {UPLOAD_SESSION_SELECT}"
-        ))
-        .bind(("id", record_id(UPLOAD_SESSION_TABLE, session.id)))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, session.project_id),
-        ))
-        .bind(("filename", session.filename.clone()))
-        .bind(("kind", session.kind.clone()))
-        .bind(("content_type", session.content_type.clone()))
-        .bind(("visibility", session.visibility.clone()))
-        .bind(("description", session.description.clone()))
-        .bind(("slug", session.slug.clone()))
-        .bind(("transcript_quality", session.transcript_quality.clone()))
-        .bind(("metadata", session.metadata.clone()))
-        .bind(("derived_from", session.derived_from.clone()))
-        .bind(("signing", session.signing.clone()))
-        .bind(("notarization", session.notarization.clone()))
-        .bind(("folder", session.folder.clone()))
-        .bind(("declared_size", session.declared_size))
-        .bind(("declared_sha256", session.declared_sha256.clone()))
-        .bind(("chunk_size", session.chunk_size))
-        .bind((
-            "created_at",
-            surrealdb::types::Datetime::from(session.created_at),
-        ))
-        .bind((
-            "expires_at",
-            surrealdb::types::Datetime::from(session.expires_at),
-        ))
-    })
-    .await?;
-    // The create wrote every field of `session`, so the reply is the same
-    // session a read-back would return.
+    let pg = PostgresDb::application().await?;
+    Box::pin(upload_sessions::create(&pg, &session)).await?;
     Ok(session)
 }
 
@@ -554,38 +492,12 @@ pub async fn create_upload_session(
 /// same filename, same declared size and digest, not yet expired. Rows are
 /// removed on completion, so any survivor is in flight.
 async fn find_resumable_session(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     args: &UploadSessionArgs<'_>,
     now: DateTime<Utc>,
 ) -> Result<Option<UploadSession>, UploadSessionError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(upload_sessions::find_resumable(&pg, args, now)).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {UPLOAD_SESSION_SELECT} FROM {UPLOAD_SESSION_TABLE} \
-             WHERE project_id = $project_id AND filename = $filename \
-             AND declared_size = $declared_size \
-             AND declared_sha256 = $declared_sha256 \
-             AND expires_at > $now ORDER BY created_at DESC LIMIT 1"
-        ))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, args.project_id),
-        ))
-        .bind(("filename", args.filename.trim().to_string()))
-        .bind((
-            "declared_size",
-            i64::try_from(args.declared_size).unwrap_or(i64::MAX),
-        ))
-        .bind(("declared_sha256", args.declared_sha256.to_string()))
-        .bind(("now", surrealdb::types::Datetime::from(now)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<UploadSessionRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .find_map(UploadSessionRow::into_upload_session))
+    let pg = PostgresDb::application().await?;
+    Box::pin(upload_sessions::find_resumable(&pg, args, now)).await
 }
 
 /// Read one upload session by id, scoped to the matter. `None` when the id
@@ -595,24 +507,12 @@ async fn find_resumable_session(
 /// # Errors
 /// Database failure.
 pub async fn find_upload_session(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
     session_id: Uuid,
 ) -> Result<Option<UploadSession>, UploadSessionError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(upload_sessions::find(&pg, project_id, session_id)).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {UPLOAD_SESSION_SELECT} FROM ONLY $id LIMIT 1"
-        ))
-        .bind(("id", record_id(UPLOAD_SESSION_TABLE, session_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<UploadSessionRow> = response.take(0)?;
-    Ok(row
-        .and_then(UploadSessionRow::into_upload_session)
-        .filter(|session| session.project_id == project_id))
+    let pg = PostgresDb::application().await?;
+    Box::pin(upload_sessions::find(&pg, project_id, session_id)).await
 }
 
 /// Stage one chunk at exactly the offset the session counts, then advance
@@ -628,7 +528,7 @@ pub async fn find_upload_session(
 /// or the chunk is not the one the offset names; database and storage
 /// failures propagate.
 pub async fn append_upload_chunk(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     project_id: Uuid,
     session_id: Uuid,
@@ -663,29 +563,19 @@ pub async fn append_upload_chunk(
 /// Move a session's resume point from `offset` to `received_bytes` with one
 /// conditional write; `false` when a concurrent append already moved it.
 async fn advance_received(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     session_id: Uuid,
     offset: i64,
     received_bytes: i64,
 ) -> Result<bool, UploadSessionError> {
-    if let Some(pg) = PostgresDb::configured().await? {
-        return Box::pin(upload_sessions::advance(
-            &pg,
-            session_id,
-            offset,
-            received_bytes,
-        ))
-        .await;
-    }
-    let mut response = crate::assets::writing(|| {
-        db.query("UPDATE $id SET received_bytes = $received_bytes WHERE received_bytes = $offset RETURN AFTER")
-            .bind(("id", record_id(UPLOAD_SESSION_TABLE, session_id)))
-            .bind(("received_bytes", received_bytes))
-            .bind(("offset", offset))
-    })
-    .await?;
-    let updated: Vec<UploadSessionRow> = response.take(0)?;
-    Ok(!updated.is_empty())
+    let pg = PostgresDb::application().await?;
+    Box::pin(upload_sessions::advance(
+        &pg,
+        session_id,
+        offset,
+        received_bytes,
+    ))
+    .await
 }
 
 /// Compose the staged parts, verify them against the digest declared at
@@ -711,7 +601,7 @@ async fn advance_received(
 /// so a retry starts clean); database, storage, and ingest failures
 /// propagate.
 pub async fn complete_upload(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     project_id: Uuid,
     session_id: Uuid,
@@ -831,18 +721,11 @@ async fn remove_upload_parts(
 
 /// Best-effort removal of the session row. A failure is logged: the next
 /// completion of the same id re-files idempotently until the row goes.
-async fn remove_upload_session_row(db: &SurrealDb, session_id: Uuid) {
-    let result = match PostgresDb::configured().await {
-        Ok(Some(pg)) => upload_sessions::remove(&pg, session_id)
+async fn remove_upload_session_row(_db: &ApplicationStore, session_id: Uuid) {
+    let result = match PostgresDb::application().await {
+        Ok(pg) => upload_sessions::remove(&pg, session_id)
             .await
             .map_err(|error| error.to_string()),
-        Ok(None) => crate::assets::writing(|| {
-            db.query("DELETE $id")
-                .bind(("id", record_id(UPLOAD_SESSION_TABLE, session_id)))
-        })
-        .await
-        .map(drop)
-        .map_err(|error| error.to_string()),
         Err(error) => Err(error.to_string()),
     };
     if let Err(error) = result {
@@ -850,67 +733,9 @@ async fn remove_upload_session_row(db: &SurrealDb, session_id: Uuid) {
     }
 }
 
-/// The row as the engine reads it. Separate from [`UploadSession`]
-/// because the SDK owns its own `RecordId` and `Datetime`, and the
-/// conversion belongs at this seam rather than in every caller.
-#[derive(SurrealValue)]
-struct UploadSessionRow {
-    id: surrealdb::types::RecordId,
-    project_id: surrealdb::types::RecordId,
-    filename: String,
-    kind: String,
-    content_type: String,
-    visibility: String,
-    description: Option<String>,
-    slug: Option<String>,
-    transcript_quality: Option<String>,
-    metadata: Option<Json>,
-    derived_from: Option<Json>,
-    signing: Option<Json>,
-    notarization: Option<Json>,
-    folder: Option<String>,
-    declared_size: i64,
-    declared_sha256: String,
-    chunk_size: i64,
-    received_bytes: i64,
-    created_at: surrealdb::types::Datetime,
-    expires_at: surrealdb::types::Datetime,
-}
-
-impl UploadSessionRow {
-    /// `None` when a record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`].
-    fn into_upload_session(self) -> Option<UploadSession> {
-        Some(UploadSession {
-            id: record_uuid(&self.id)?,
-            project_id: record_uuid(&self.project_id)?,
-            filename: self.filename,
-            kind: self.kind,
-            content_type: self.content_type,
-            visibility: self.visibility,
-            description: self.description,
-            slug: self.slug,
-            transcript_quality: self.transcript_quality,
-            metadata: self.metadata,
-            derived_from: self.derived_from,
-            signing: self.signing,
-            notarization: self.notarization,
-            folder: self.folder,
-            declared_size: self.declared_size,
-            declared_sha256: self.declared_sha256,
-            chunk_size: self.chunk_size,
-            received_bytes: self.received_bytes,
-            created_at: self.created_at.into(),
-            expires_at: self.expires_at.into(),
-        })
-    }
-}
-
 /// Errors surfaced by [`ingest_bytes`].
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error("storage: {0}")]
     Storage(#[from] StorageError),
     #[error(transparent)]
@@ -1071,7 +896,7 @@ pub struct IngestedDocument {
 /// # Errors
 /// [`IngestError`] on a storage or database failure.
 pub async fn ingest_bytes(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &IngestArgs<'_>,
     bytes: &[u8],
@@ -1084,7 +909,7 @@ pub async fn ingest_bytes(
 /// committed; returning that row prevents a second internal document record
 /// while retaining the ordinary content-addressed storage semantics.
 pub async fn ingest_bytes_exactly_once(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &IngestArgs<'_>,
     bytes: &[u8],
@@ -1097,7 +922,7 @@ pub async fn ingest_bytes_exactly_once(
 /// carries (LAW-344). Same `(Project, filename, content)` dedup; the
 /// provider filing also records its envelope when identical bytes were uploaded earlier.
 pub async fn ingest_bytes_exactly_once_as(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &IngestArgs<'_>,
     identity: &DocumentIdentity<'_>,
@@ -1149,7 +974,7 @@ pub(crate) fn matches_provider_filing(
 /// [`IngestError`] on storage/database failure or when a stable key is reused
 /// for different bytes or metadata.
 pub async fn ingest_bytes_with_idempotency_key(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &IngestArgs<'_>,
     idempotency_key: &str,
@@ -1239,7 +1064,7 @@ fn stable_asset_id(project_id: Uuid, filename: &str, idempotency_key: &str) -> U
 /// # Errors
 /// Propagates database and storage errors.
 pub async fn ingest_bytes_as(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &IngestArgs<'_>,
     identity: &DocumentIdentity<'_>,
@@ -1256,7 +1081,7 @@ pub async fn ingest_bytes_as(
 /// # Errors
 /// Propagates database and storage errors.
 pub async fn ingest_bytes_with_mail_provenance(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &IngestArgs<'_>,
     identity: &DocumentIdentity<'_>,
@@ -1275,7 +1100,7 @@ pub async fn ingest_bytes_with_mail_provenance(
 /// # Errors
 /// Storage/database failures, a missing slug, or a changed archived source.
 pub async fn ingest_bytes_with_mail_provenance_once(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &IngestArgs<'_>,
     identity: &DocumentIdentity<'_>,
@@ -1348,7 +1173,7 @@ fn existing_mail_document(
 }
 
 async fn ingest_bytes_as_inner(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: &IngestArgs<'_>,
     identity: &DocumentIdentity<'_>,
@@ -1364,12 +1189,7 @@ async fn ingest_bytes_as_inner(
         .await
         .map_err(crate::assets::AssetError::from)?;
     if args.kind == "onboarding" {
-        let pg = match pg {
-            Some(pg) => pg,
-            None => PostgresDb::from_env()
-                .await
-                .map_err(|error| crate::assets::AssetError::Postgres(error.to_string()))?,
-        };
+        let pg = pg;
         let filed = Box::pin(crate::onboarding::file_document(
             &pg, storage, args, identity, None, bytes,
         ))
@@ -1397,84 +1217,11 @@ async fn ingest_bytes_as_inner(
             }
         };
     }
-    if let Some(pg) = pg {
-        return crate::postgres::assets::ingest_document(
-            &pg, storage, args, identity, provenance, asset_id, bytes,
-        )
-        .await;
-    }
-
-    let sha_hex = sha256_hex(bytes);
-    let byte_size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
-    let project = crate::projects::find_by_id(db, args.project_id)
-        .await?
-        .ok_or(crate::projects::ProjectStoreError::NoSuchProject(
-            args.project_id,
-        ))?;
-    let storage_key = format!(
-        "{}/{sha_hex}",
-        cloud::workspace::documents_prefix(&project.code)
-    );
-
-    // Storage dedup, scoped to this matter: if an asset **on this project**
-    // already references this content, the object is stored; otherwise write
-    // it once. Write before inserting the row so a crash mid-ingest never
-    // leaves an `asset` row pointing at a key that doesn't exist — the
-    // ordering is what carries that, not a transaction (see the module doc).
-    //
-    // The `project_id` filter is the whole point: deduping across matters
-    // made one matter's governed expunge destroy another's document. Two
-    // matters holding the same exhibit is ordinary; a sealing order on one
-    // silently emptying the other is not. Bytes are cheap, cross-matter
-    // coupling is not.
-    let reused = project_holds_content(db, args.project_id, &sha_hex).await?;
-    if !reused {
-        storage.put(&storage_key, bytes, args.content_type).await?;
-    }
-
-    let asset_id = insert_asset_row(
-        db,
-        args,
-        identity,
-        provenance,
-        StoredDocumentBytes {
-            storage_key: &storage_key,
-            sha256_hex: &sha_hex,
-            byte_size,
-        },
-        asset_id,
+    let pg = pg;
+    crate::postgres::assets::ingest_document(
+        &pg, storage, args, identity, provenance, asset_id, bytes,
     )
-    .await?;
-
-    Ok(IngestedDocument {
-        asset_id,
-        storage_key,
-        sha256_hex: sha_hex,
-        byte_size,
-        reused,
-    })
-}
-
-/// Whether this matter already holds an asset referencing `sha_hex`.
-async fn project_holds_content(
-    db: &SurrealDb,
-    project_id: Uuid,
-    sha_hex: &str,
-) -> Result<bool, IngestError> {
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM {TABLE} \
-             WHERE sha256_hex = $sha AND project_id = $project LIMIT 1"
-        ))
-        .bind(("sha", sha_hex.to_string()))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let found: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(found.is_some())
+    .await
 }
 
 /// The docket-record attestation (LAW-24, option 1): does an independently
@@ -1492,120 +1239,6 @@ async fn project_holds_content(
 #[must_use]
 pub fn verify_independent_copy(recorded_sha256_hex: &str, independently_fetched: &[u8]) -> bool {
     sha256_hex(independently_fetched) == recorded_sha256_hex
-}
-
-struct StoredDocumentBytes<'a> {
-    storage_key: &'a str,
-    sha256_hex: &'a str,
-    byte_size: i64,
-}
-
-async fn insert_asset_row(
-    db: &SurrealDb,
-    args: &IngestArgs<'_>,
-    identity: &DocumentIdentity<'_>,
-    provenance: Option<&MailProvenance<'_>>,
-    bytes: StoredDocumentBytes<'_>,
-    asset_id: Option<Uuid>,
-) -> Result<Uuid, IngestError> {
-    let id = asset_id.unwrap_or_else(Uuid::now_v7);
-    let mut response = crate::assets::writing(|| {
-        db.query(format!(
-            "CREATE $id SET \
-             storage_key = $storage_key, \
-             secondary_storage_key = $secondary_storage_key, \
-             content_type = $content_type, \
-             byte_size = $byte_size, \
-             sha256_hex = $sha256_hex, \
-             project_id = $project_id, \
-             filename = $filename, \
-             kind = $kind, \
-             source = $source, \
-             received_at = $received_at, \
-             description = $description, \
-             visibility = $visibility, \
-             slug = $slug, \
-             published_at = $published_at, \
-             source_message_id = $source_message_id, \
-             source_sender = $source_sender, \
-             source_received_at = $source_received_at, \
-             source_subject = $source_subject, \
-             metadata = $metadata, \
-             derived_from = $derived_from, \
-             transcript_quality = $transcript_quality, \
-             signing = $signing, \
-             notarization = $notarization, \
-             evidence = $evidence, \
-             folder = $folder \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("storage_key", bytes.storage_key.to_string()))
-        .bind((
-            "secondary_storage_key",
-            args.secondary_storage_key.map(String::from),
-        ))
-        .bind(("content_type", args.content_type.to_string()))
-        .bind(("byte_size", bytes.byte_size))
-        .bind(("sha256_hex", bytes.sha256_hex.to_string()))
-        .bind((
-            "project_id",
-            record_id(crate::projects::PROJECT_TABLE, args.project_id),
-        ))
-        .bind(("filename", Some(args.filename.to_string())))
-        .bind(("kind", Some(args.kind.to_string())))
-        .bind(("source", Some(args.source.to_string())))
-        .bind(("received_at", Some(Utc::now().to_rfc3339())))
-        .bind(("description", args.description.map(String::from)))
-        .bind(("visibility", args.visibility.to_string()))
-        .bind(("slug", identity.slug.map(String::from)))
-        .bind(("published_at", identity.published_at.map(String::from)))
-        .bind((
-            "source_message_id",
-            provenance.map(|p| p.message_id.to_string()),
-        ))
-        .bind(("source_sender", provenance.map(|p| p.sender.to_string())))
-        .bind((
-            "source_received_at",
-            provenance.map(|p| p.received_at.to_string()),
-        ))
-        .bind(("source_subject", provenance.map(|p| p.subject.to_string())))
-        .bind(("metadata", identity.metadata.clone()))
-        .bind(("derived_from", identity.derived_from.clone()))
-        .bind((
-            "transcript_quality",
-            identity.transcript_quality.map(String::from),
-        ))
-        .bind((
-            "signing",
-            identity
-                .signing
-                .and_then(|signing| serde_json::to_value(signing).ok()),
-        ))
-        .bind((
-            "notarization",
-            (!identity.notarization.is_empty())
-                .then(|| serde_json::to_value(&identity.notarization).ok())
-                .flatten(),
-        ))
-        .bind((
-            "evidence",
-            identity
-                .evidence
-                .as_ref()
-                .and_then(|evidence| serde_json::to_value(evidence).ok()),
-        ))
-        .bind(("folder", identity.folder.map(String::from)))
-    })
-    .await?;
-
-    let written: Option<surrealdb::types::RecordId> = response.take((0, "id"))?;
-    let id = written
-        .as_ref()
-        .and_then(crate::surreal::record_uuid)
-        .ok_or(IngestError::WriteReturnedNothing)?;
-    crate::assets::mirror_writes(db, &[id]).await;
-    Ok(id)
 }
 
 #[cfg(test)]
@@ -1631,18 +1264,6 @@ mod tests {
             id,
             stable_asset_id(project_a, "letter.pdf", "other-purpose/v1")
         );
-    }
-    use crate::assets::find_by_id;
-    use crate::surreal::test_support::mem;
-    use cloud::FsStorage;
-
-    async fn fixtures() -> (SurrealDb, Arc<dyn StorageService>, tempfile::TempDir, Uuid) {
-        let db = mem().await;
-        let tmp = tempfile::tempdir().unwrap();
-        let storage: Arc<dyn StorageService> =
-            Arc::new(FsStorage::new(tmp.path().to_path_buf()).await.unwrap());
-        let project_id = crate::test_support::seed_project_surreal(&db, "Test Matter").await;
-        (db, storage, tmp, project_id)
     }
 
     #[test]
@@ -1770,409 +1391,6 @@ mod tests {
         assert!(validate_document_slug("complaint", "dkt-001-complaint").is_err());
     }
 
-    #[tokio::test]
-    async fn ingest_writes_a_document_asset_with_provenance() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let args = IngestArgs {
-            project_id,
-            source: "upload",
-            filename: "retainer.pdf",
-            kind: "onboarding",
-            content_type: "application/pdf",
-            description: Some("client-signed retainer"),
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-
-        let out = ingest_bytes(&db, &storage, &args, b"hello world")
-            .await
-            .unwrap();
-
-        assert!(!out.reused);
-        assert_eq!(out.byte_size, 11);
-        // sha256("hello world") =
-        //   b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
-        assert_eq!(
-            out.sha256_hex,
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-        );
-
-        let a = find_by_id(&db, out.asset_id)
-            .await
-            .unwrap()
-            .expect("asset row");
-        assert_eq!(a.content_type, "application/pdf");
-        assert_eq!(a.byte_size, 11);
-        let project = crate::projects::find_by_id(&db, project_id)
-            .await
-            .unwrap()
-            .expect("project row");
-        assert_eq!(
-            a.storage_key,
-            format!("projects/{}/documents/{}", project.code, out.sha256_hex)
-        );
-        assert_eq!(a.filename.as_deref(), Some("retainer.pdf"));
-        assert_eq!(a.kind.as_deref(), Some("onboarding"));
-        assert_eq!(a.project_id, Some(project_id));
-        assert_eq!(a.source.as_deref(), Some("upload"));
-        assert_eq!(a.description.as_deref(), Some("client-signed retainer"));
-        assert!(
-            a.received_at.is_some(),
-            "received_at must be stamped on insert"
-        );
-        assert_eq!(a.visibility, visibility::INTERNAL);
-
-        let stored = storage.get(&a.storage_key).await.unwrap();
-        assert_eq!(stored.bytes, b"hello world");
-    }
-
-    #[tokio::test]
-    async fn ingest_refuses_an_unknown_project_before_writing() {
-        let (db, storage, _tmp, _project_id) = fixtures().await;
-        let missing_project = Uuid::now_v7();
-        let args = IngestArgs {
-            project_id: missing_project,
-            source: source::UPLOAD,
-            filename: "retainer.pdf",
-            kind: "onboarding",
-            content_type: "application/pdf",
-            description: None,
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-
-        let error = ingest_bytes(&db, &storage, &args, b"hello world")
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            IngestError::Project(crate::projects::ProjectStoreError::NoSuchProject(id)) if id == missing_project
-        ));
-    }
-
-    #[tokio::test]
-    async fn ingest_dedupes_storage_but_keeps_distinct_asset_rows() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let bytes = b"same bytes";
-        let mk = |fname: &'static str| IngestArgs {
-            project_id,
-            source: "upload",
-            filename: fname,
-            kind: "unclassified",
-            content_type: "text/plain",
-            description: None,
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-
-        let first = ingest_bytes(&db, &storage, &mk("a.txt"), bytes)
-            .await
-            .unwrap();
-        assert!(!first.reused);
-
-        let second = ingest_bytes(&db, &storage, &mk("b.txt"), bytes)
-            .await
-            .unwrap();
-        assert!(second.reused, "the content-addressed object is reused");
-        assert_ne!(
-            second.asset_id, first.asset_id,
-            "each document ingest is a distinct asset row, even sharing bytes"
-        );
-
-        // Two asset rows on this matter, one shared storage key. Scoped to
-        // the project rather than counted table-wide: the cucumber suite
-        // shares one engine across concurrent scenarios.
-        let assets = crate::assets::for_project(&db, project_id).await.unwrap();
-        assert_eq!(assets.len(), 2);
-        assert_eq!(assets[0].storage_key, assets[1].storage_key);
-    }
-
-    #[tokio::test]
-    async fn exact_once_ingest_reuses_the_committed_document_row_on_replay() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let args = IngestArgs {
-            project_id,
-            source: "generated",
-            filename: "reviewed-contract.docx",
-            kind: "inbound_contract",
-            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            description: Some("Attorney-reviewed Word contract"),
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-        let first = ingest_bytes_exactly_once(&db, &storage, &args, b"reviewed bytes")
-            .await
-            .unwrap();
-        let second = ingest_bytes_exactly_once(&db, &storage, &args, b"reviewed bytes")
-            .await
-            .unwrap();
-        assert_eq!(first.asset_id, second.asset_id);
-        assert!(!first.reused);
-        assert!(second.reused);
-    }
-
-    #[tokio::test]
-    async fn keyed_ingest_rejects_changed_bytes_without_replacing_the_filed_document() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let args = IngestArgs {
-            project_id,
-            source: source::GENERATED,
-            filename: "pitch-offboarding-letter.pdf",
-            kind: "offboarding",
-            content_type: "application/pdf",
-            description: Some("Generated pitch offboarding letter"),
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-        let first = ingest_bytes_with_idempotency_key(
-            &db,
-            &storage,
-            &args,
-            "pitch-offboarding/v1",
-            b"first letter",
-        )
-        .await
-        .unwrap();
-        let error = ingest_bytes_with_idempotency_key(
-            &db,
-            &storage,
-            &args,
-            "pitch-offboarding/v1",
-            b"different letter",
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, IngestError::IdempotencyConflict(_)));
-
-        let saved = find_by_id(&db, first.asset_id).await.unwrap().unwrap();
-        assert_eq!(saved.sha256_hex, sha256_hex(b"first letter"));
-        assert_eq!(
-            storage.get(&saved.storage_key).await.unwrap().bytes,
-            b"first letter"
-        );
-    }
-
-    #[tokio::test]
-    async fn ingest_does_not_dedupe_across_matters() {
-        // Dedup is scoped to one matter. Two matters that happen to receive
-        // identical bytes each get their own storage write.
-        //
-        // Global dedup made one matter's governed expunge destroy another's
-        // document. Two clients sharing a common exhibit is ordinary; one
-        // client's sealing order silently emptying an unrelated matter is not.
-        let (db, storage, _tmp, first) = fixtures().await;
-        let second = crate::test_support::seed_project_surreal(&db, "Second Matter").await;
-        let bytes = b"an exhibit filed on two matters";
-        let mk = |project_id: Uuid| IngestArgs {
-            project_id,
-            source: "upload",
-            filename: "exhibit.pdf",
-            kind: "unclassified",
-            content_type: "application/pdf",
-            description: None,
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-
-        let a = ingest_bytes(&db, &storage, &mk(first), bytes)
-            .await
-            .unwrap();
-        assert!(!a.reused);
-
-        let b = ingest_bytes(&db, &storage, &mk(second), bytes)
-            .await
-            .unwrap();
-        assert!(
-            !b.reused,
-            "a second matter must own its copy, not reuse the first matter's object"
-        );
-
-        // The same hash is stored at two Project-scoped keys. Each matter owns
-        // its copy, which is what `reused: false` records.
-        assert_eq!(a.sha256_hex, b.sha256_hex);
-        assert_ne!(a.asset_id, b.asset_id);
-        let first_asset = find_by_id(&db, a.asset_id)
-            .await
-            .unwrap()
-            .expect("first asset");
-        let second_asset = find_by_id(&db, b.asset_id)
-            .await
-            .unwrap()
-            .expect("second asset");
-        assert_ne!(first_asset.storage_key, second_asset.storage_key);
-        assert!(first_asset.storage_key.ends_with(&a.sha256_hex));
-        assert!(second_asset.storage_key.ends_with(&b.sha256_hex));
-    }
-
-    #[tokio::test]
-    async fn ingest_different_bytes_produces_different_assets() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let mk = |fname: &'static str| IngestArgs {
-            project_id,
-            source: "upload",
-            filename: fname,
-            kind: "unclassified",
-            content_type: "text/plain",
-            description: None,
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-        let a = ingest_bytes(&db, &storage, &mk("a.txt"), b"alpha")
-            .await
-            .unwrap();
-        let b = ingest_bytes(&db, &storage, &mk("b.txt"), b"bravo")
-            .await
-            .unwrap();
-        assert_ne!(a.asset_id, b.asset_id);
-        assert_ne!(a.sha256_hex, b.sha256_hex);
-    }
-
-    #[tokio::test]
-    async fn ingest_stamps_the_secondary_key_with_the_row() {
-        // #470: a generated PDF's notation-key copy is recorded on the asset
-        // row by the SAME statement that creates it, so every asset row for
-        // the bytes carries it and a governed expunge can delete every copy —
-        // no window where a committed row is missing its second key.
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let notation_key = "notations/abc/document.pdf";
-        let args = IngestArgs {
-            project_id,
-            source: source::GENERATED,
-            filename: "document.pdf",
-            kind: "onboarding",
-            content_type: "application/pdf",
-            description: None,
-            secondary_storage_key: Some(notation_key),
-            visibility: visibility::INTERNAL,
-        };
-        let ingested = ingest_bytes(&db, &storage, &args, b"%PDF-1.7 body")
-            .await
-            .unwrap();
-
-        let row = find_by_id(&db, ingested.asset_id).await.unwrap().unwrap();
-        assert_eq!(row.secondary_storage_key.as_deref(), Some(notation_key));
-        let project = crate::projects::find_by_id(&db, project_id)
-            .await
-            .unwrap()
-            .expect("project row");
-        assert_eq!(
-            row.storage_key,
-            format!(
-                "projects/{}/documents/{}",
-                project.code, ingested.sha256_hex
-            )
-        );
-    }
-
-    #[tokio::test]
-    async fn ingest_leaves_the_secondary_key_unset_by_default() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let args = IngestArgs {
-            project_id,
-            source: "upload",
-            filename: "a.txt",
-            kind: "unclassified",
-            content_type: "text/plain",
-            description: None,
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-        let ingested = ingest_bytes(&db, &storage, &args, b"plain").await.unwrap();
-        let row = find_by_id(&db, ingested.asset_id).await.unwrap().unwrap();
-        assert_eq!(row.secondary_storage_key, None);
-    }
-
-    #[tokio::test]
-    async fn ingest_stamps_the_caller_stated_visibility() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let args = IngestArgs {
-            project_id,
-            source: "upload",
-            filename: "client-visible.pdf",
-            kind: "unclassified",
-            content_type: "application/pdf",
-            description: None,
-            secondary_storage_key: None,
-            visibility: visibility::CLIENT,
-        };
-        let ingested = ingest_bytes(&db, &storage, &args, b"client bytes")
-            .await
-            .unwrap();
-        let row = find_by_id(&db, ingested.asset_id).await.unwrap().unwrap();
-        assert_eq!(row.visibility, visibility::CLIENT);
-    }
-
-    /// The schema ASSERT is what closes the visibility vocabulary.
-    /// A typo'd visibility would drop a document out of the client's "Your
-    /// documents" silently rather than fail, so it must fail at write time.
-    #[tokio::test]
-    async fn an_unknown_visibility_is_refused_by_the_schema() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let args = IngestArgs {
-            project_id,
-            source: "upload",
-            filename: "typo.pdf",
-            kind: "unclassified",
-            content_type: "application/pdf",
-            description: None,
-            secondary_storage_key: None,
-            visibility: "clientt",
-        };
-        assert!(
-            ingest_bytes(&db, &storage, &args, b"bytes").await.is_err(),
-            "the engine accepted visibility `clientt`"
-        );
-    }
-
-    /// The ingest boundary is the asset lane's write gate: a `kind` outside
-    /// `rules::kind::Kind::valid_for(Lane::Asset)` must be refused before any
-    /// bytes are written or any row is inserted, not silently coerced to
-    /// `unclassified`.
-    #[tokio::test]
-    async fn ingest_bytes_rejects_a_kind_outside_the_asset_lane() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let args = IngestArgs {
-            project_id,
-            source: "upload",
-            filename: "typo.pdf",
-            kind: "bogus",
-            content_type: "application/pdf",
-            description: None,
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-        assert!(
-            matches!(
-                ingest_bytes(&db, &storage, &args, b"bytes").await,
-                Err(IngestError::InvalidKind(k)) if k == "bogus"
-            ),
-            "the engine accepted kind `bogus`"
-        );
-    }
-
-    /// A template-lane-only kind (a matter dashboard, a content page) is not
-    /// a document classification either — the same lane split
-    /// `rules::kind::Kind::valid_for` enforces on the template side must hold
-    /// on the asset side.
-    #[tokio::test]
-    async fn ingest_bytes_rejects_a_template_lane_only_kind() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let args = IngestArgs {
-            project_id,
-            source: "upload",
-            filename: "not-a-workshop.pdf",
-            kind: "workshop",
-            content_type: "application/pdf",
-            description: None,
-            secondary_storage_key: None,
-            visibility: visibility::INTERNAL,
-        };
-        assert!(
-            ingest_bytes(&db, &storage, &args, b"bytes").await.is_err(),
-            "the engine accepted the template-lane-only kind `workshop`"
-        );
-    }
-
     // ---- streaming upload lane (LAW-172) ----
 
     /// A session mid-flight: four-byte chunks, a 100-byte file, 40 received.
@@ -2198,26 +1416,6 @@ mod tests {
             received_bytes: received,
             created_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::hours(1),
-        }
-    }
-
-    fn stream_session_args(project_id: Uuid, size: usize, sha: &str) -> UploadSessionArgs<'_> {
-        UploadSessionArgs {
-            project_id,
-            filename: "hearing.transcript.mp3",
-            kind: "transcript",
-            content_type: "audio/mpeg",
-            visibility: visibility::INTERNAL,
-            description: None,
-            slug: None,
-            transcript_quality: Some("machine"),
-            metadata: None,
-            derived_from: None,
-            signing: None,
-            notarization: None,
-            folder: None,
-            declared_size: size,
-            declared_sha256: sha,
         }
     }
 
@@ -2296,261 +1494,5 @@ mod tests {
     fn the_lane_cap_message_names_the_cap() {
         let message = streaming_upload_size_message(MAX_STREAMING_UPLOAD_BYTES + 1);
         assert!(message.contains(&format!("{MAX_STREAMING_UPLOAD_BYTES}")));
-    }
-
-    #[tokio::test]
-    async fn the_streaming_lane_refuses_sizes_at_its_boundaries() {
-        let (db, _storage, _tmp, project_id) = fixtures().await;
-        let sha = crate::assets::sha256_hex(b"hearing");
-        // Zero bytes is not an upload.
-        assert!(
-            create_upload_session(&db, &stream_session_args(project_id, 0, &sha))
-                .await
-                .is_err(),
-            "the lane accepted a zero-byte upload"
-        );
-        // The cap itself is accepted: create writes a row, no bytes.
-        let at_cap = create_upload_session(
-            &db,
-            &stream_session_args(project_id, MAX_STREAMING_UPLOAD_BYTES, &sha),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            at_cap.declared_size,
-            i64::try_from(MAX_STREAMING_UPLOAD_BYTES).unwrap()
-        );
-        // One byte past it is refused.
-        assert!(
-            create_upload_session(
-                &db,
-                &stream_session_args(project_id, MAX_STREAMING_UPLOAD_BYTES + 1, &sha)
-            )
-            .await
-            .is_err(),
-            "the lane accepted an upload past its cap"
-        );
-        // A malformed digest is refused before any row is written.
-        assert!(
-            create_upload_session(&db, &stream_session_args(project_id, 64, "nothex"))
-                .await
-                .is_err(),
-            "the lane accepted a malformed sha256"
-        );
-        // A kind the asset lane does not take is refused.
-        let mut wrong_kind = stream_session_args(project_id, 64, &sha);
-        wrong_kind.kind = "bogus";
-        assert!(
-            create_upload_session(&db, &wrong_kind).await.is_err(),
-            "the lane accepted kind `bogus`"
-        );
-        // So is a visibility outside the matter-page split.
-        let mut wrong_visibility = stream_session_args(project_id, 64, &sha);
-        wrong_visibility.visibility = "internal-quiet";
-        assert!(
-            create_upload_session(&db, &wrong_visibility).await.is_err(),
-            "the lane accepted a visibility outside `internal`/`client`"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_session_resumes_from_its_received_bytes_and_files_the_original_bytes() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let chunk = STREAMING_UPLOAD_CHUNK_SIZE;
-        let size = chunk * 3; // Equal-sized parts cannot detect a retry by length.
-        let bytes: Vec<u8> = (0..size).map(|i| u8::try_from(i % 251).unwrap()).collect();
-        let sha = sha256_hex(&bytes);
-        let session = create_upload_session(&db, &stream_session_args(project_id, size, &sha))
-            .await
-            .unwrap();
-        assert_eq!(session.chunk_size, i64::try_from(chunk).unwrap());
-
-        // First chunk lands.
-        let after_first =
-            append_upload_chunk(&db, &storage, project_id, session.id, 0, &bytes[..chunk])
-                .await
-                .unwrap();
-        assert_eq!(after_first.received_bytes, i64::try_from(chunk).unwrap());
-
-        // The connection drops after the second chunk's acknowledgement. The
-        // client retries that chunk; the server refuses it at the offset it
-        // stands at — never applies it twice.
-        let after_second = append_upload_chunk(
-            &db,
-            &storage,
-            project_id,
-            session.id,
-            i64::try_from(chunk).unwrap(),
-            &bytes[chunk..chunk * 2],
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            after_second.received_bytes,
-            i64::try_from(chunk * 2).unwrap()
-        );
-        let resent = append_upload_chunk(
-            &db,
-            &storage,
-            project_id,
-            session.id,
-            i64::try_from(chunk).unwrap(),
-            &bytes[chunk..chunk * 2],
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(
-                resent,
-                UploadSessionError::ChunkOffset { expected, actual }
-                    if expected == i64::try_from(chunk * 2).unwrap()
-                        && actual == i64::try_from(chunk).unwrap()
-            ),
-            "the retried chunk was mis-applied: {resent:?}"
-        );
-
-        // The client re-syncs from the status and finishes with the short
-        // final chunk.
-        let resumed = find_upload_session(&db, project_id, session.id)
-            .await
-            .unwrap()
-            .expect("session still in flight");
-        assert_eq!(resumed.received_bytes, i64::try_from(chunk * 2).unwrap());
-        append_upload_chunk(
-            &db,
-            &storage,
-            project_id,
-            session.id,
-            i64::try_from(chunk * 2).unwrap(),
-            &bytes[chunk * 2..],
-        )
-        .await
-        .unwrap();
-
-        // Completing files the document: the stored bytes hash to the
-        // declared digest — the original bytes, not a re-encoding.
-        let filed = complete_upload(&db, &storage, project_id, session.id, None)
-            .await
-            .unwrap();
-        let asset_id = match filed {
-            crate::assets::Filed::Revision(revision) => revision.asset_id,
-            crate::assets::Filed::Unchanged { .. } => {
-                panic!("a first filing is a revision")
-            }
-        };
-        let asset = crate::assets::find_by_id(&db, asset_id)
-            .await
-            .unwrap()
-            .expect("asset row");
-        assert_eq!(asset.byte_size, i64::try_from(size).unwrap());
-        assert_eq!(asset.sha256_hex, sha);
-        let stored = storage.get(&asset.storage_key).await.unwrap();
-        assert_eq!(
-            stored.bytes, bytes,
-            "the filed bytes are the original bytes"
-        );
-
-        // The session and its staged parts are gone; a repeat completion
-        // reports the missing session rather than re-filing.
-        assert!(
-            find_upload_session(&db, project_id, session.id)
-                .await
-                .unwrap()
-                .is_none(),
-            "the session row survived completion"
-        );
-        assert!(
-            storage.get(&upload_part_key(session.id, 0)).await.is_err(),
-            "a staged part survived completion"
-        );
-    }
-
-    #[tokio::test]
-    async fn creating_twice_for_one_upload_resumes_the_same_session() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let sha = sha256_hex(b"hearing");
-        let first = create_upload_session(&db, &stream_session_args(project_id, 64, &sha))
-            .await
-            .unwrap();
-        append_upload_chunk(&db, &storage, project_id, first.id, 0, &[0; 64])
-            .await
-            .unwrap();
-
-        let second = create_upload_session(&db, &stream_session_args(project_id, 64, &sha))
-            .await
-            .unwrap();
-        assert_eq!(
-            second.id, first.id,
-            "the second create opened a second session"
-        );
-        assert_eq!(
-            second.received_bytes, 64,
-            "the resumed session lost its progress"
-        );
-
-        // A different upload identity on the same matter gets its own row.
-        let other = stream_session_args(project_id, 128, &sha);
-        let other = create_upload_session(&db, &other).await.unwrap();
-        assert_ne!(other.id, first.id);
-    }
-
-    #[tokio::test]
-    async fn an_expired_session_is_never_resumed() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let sha = sha256_hex(b"hearing");
-        let session = create_upload_session(&db, &stream_session_args(project_id, 64, &sha))
-            .await
-            .unwrap();
-        // Age the row past its TTL the way a night would.
-        let past = surrealdb::types::Datetime::from(Utc::now() - chrono::Duration::hours(25));
-        db.query("UPDATE $id SET expires_at = $past")
-            .bind(("id", record_id(UPLOAD_SESSION_TABLE, session.id)))
-            .bind(("past", past))
-            .await
-            .unwrap();
-        assert!(
-            append_upload_chunk(&db, &storage, project_id, session.id, 0, &[0; 64])
-                .await
-                .is_err(),
-            "an expired session accepted a chunk"
-        );
-        let fresh = create_upload_session(&db, &stream_session_args(project_id, 64, &sha))
-            .await
-            .unwrap();
-        assert_ne!(
-            fresh.id, session.id,
-            "the expired session was resumed instead of replaced"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_sha_mismatch_at_completion_removes_the_session_so_a_retry_starts_clean() {
-        let (db, storage, _tmp, project_id) = fixtures().await;
-        let wrong = sha256_hex(b"wrong bytes");
-        let session = create_upload_session(&db, &stream_session_args(project_id, 11, &wrong))
-            .await
-            .unwrap();
-        append_upload_chunk(&db, &storage, project_id, session.id, 0, b"right bytes")
-            .await
-            .unwrap();
-
-        let error = complete_upload(&db, &storage, project_id, session.id, None)
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(error, UploadSessionError::ShaMismatch { .. }),
-            "the mismatch was not reported: {error:?}"
-        );
-        assert!(
-            find_upload_session(&db, project_id, session.id)
-                .await
-                .unwrap()
-                .is_none(),
-            "the mismatched session survived completion"
-        );
-        assert!(
-            storage.get(&upload_part_key(session.id, 0)).await.is_err(),
-            "the mismatched part survived completion"
-        );
     }
 }

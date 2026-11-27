@@ -2,11 +2,11 @@
 use crate::notation_documents::{
     self as documents, DecideCommentError, ImportRoot, NotationDocumentError,
 };
+use crate::postgres::fixtures::{connect, fresh_schema};
 use crate::postgres::{
     fixtures::{activate_application, workflow_fixture},
     PostgresDb,
 };
-use crate::postgres_mirror::tests::{connect, fresh_schema};
 use uuid::Uuid;
 
 const AT: &str = "2026-11-18T12:00:00Z";
@@ -32,7 +32,7 @@ async fn fixture() -> Option<Fixture> {
     let dir = tempfile::tempdir().unwrap();
     let storage: std::sync::Arc<dyn cloud::StorageService> =
         std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     let version = PostgresDb::with_test_db(pg.clone(), async {
         let original = crate::assets::ingest_content(
             &db,
@@ -76,7 +76,7 @@ async fn fixture() -> Option<Fixture> {
 async fn child(f: &Fixture, parent: Uuid) -> Uuid {
     let markdown = format!("# Revised {parent}");
     documents::append_edit(
-        &crate::surreal::SurrealDb::uninitialized(),
+        &crate::application_store::ApplicationStore::uninitialized(),
         &f.storage,
         documents::AppendEdit {
             project_id: f.project,
@@ -99,7 +99,7 @@ async fn comments_keep_version_scope_and_historical_review_admission() {
     let Some(f) = fixture().await else {
         return;
     };
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(f.pg.clone(),async {
         assert!(documents::all_comments_decided(&db,f.project,f.note,f.version).await.unwrap());
         let id=documents::add_comment(&db,f.project,f.note,f.version,"anchor",f.person,"synthetic comment").await.unwrap();
@@ -126,7 +126,7 @@ async fn carry_comments_checks_lineage_and_preserves_anchor_decisions() {
     let Some(f) = fixture().await else {
         return;
     };
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(f.pg.clone(), async {
         let kept =
             documents::add_comment(&db, f.project, f.note, f.version, "kept", f.person, "keep")
@@ -208,7 +208,7 @@ async fn concurrent_comment_decisions_record_exactly_one_pinned_event() {
     let Some(f) = fixture().await else {
         return;
     };
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(f.pg.clone(),async {
         let id=documents::add_comment(&db,f.project,f.note,f.version,"anchor",f.person,"private synthetic text").await.unwrap();
         let (a,b)=tokio::join!(documents::decide_comment(&db,f.project,f.note,id,documents::DECISION_ACCEPTED,f.person,AT),documents::decide_comment(&db,f.project,f.note,id,documents::DECISION_REJECTED,f.person,AT));
@@ -231,7 +231,7 @@ async fn failed_review_event_rolls_back_the_comment_decision() {
     let Some(f) = fixture().await else {
         return;
     };
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(f.pg.clone(),async {
         let id=documents::add_comment(&db,f.project,f.note,f.version,"anchor",f.person,"rollback").await.unwrap();
         sqlx::raw_sql("CREATE FUNCTION reject_review() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN IF NEW.machine_kind='document_review' THEN RAISE EXCEPTION 'synthetic rejection'; END IF; RETURN NEW; END$$; CREATE TRIGGER reject_review BEFORE INSERT ON notation_event FOR EACH ROW EXECUTE FUNCTION reject_review();").execute(f.pg.pool()).await.unwrap();
@@ -246,7 +246,7 @@ async fn missing_history_refuses_comment_writes_without_source_fallback() {
     let Some(f) = fixture().await else {
         return;
     };
-    let db = crate::surreal::SurrealDb::uninitialized();
+    let db = crate::application_store::ApplicationStore::uninitialized();
     PostgresDb::with_test_db(f.pg.clone(), async {
         sqlx::query(
             "UPDATE mirror_backfill_run SET status='running',completed_at=NULL WHERE scope='application:1'",

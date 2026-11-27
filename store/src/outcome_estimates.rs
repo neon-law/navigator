@@ -343,7 +343,7 @@ pub(crate) mod tests {
         use super::super::{current, history, record, NewOutcomeEstimate, OutcomeEstimateError};
         use super::worked_example;
         use crate::firm_side::tests::matter;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
+        use crate::postgres::fixtures::{connect, fresh_schema};
         use chrono::NaiveDate;
 
         fn estimate(note: &str) -> NewOutcomeEstimate {

@@ -48,10 +48,6 @@ impl S3StorageConfig {
         Self::exports_from_lookup(|key| std::env::var(key).ok())
     }
 
-    pub fn surreal_archives_from_env() -> Result<Self, StorageError> {
-        Self::surreal_archives_from_lookup(|key| std::env::var(key).ok())
-    }
-
     pub fn exports_from_lookup<F: Fn(&str) -> Option<String>>(
         get: F,
     ) -> Result<Self, StorageError> {
@@ -59,18 +55,6 @@ impl S3StorageConfig {
             get("NAVIGATOR_STORAGE_BUCKET")
                 .filter(|value| !value.is_empty())
                 .ok_or(StorageError::MissingEnv("NAVIGATOR_STORAGE_BUCKET"))
-        })
-    }
-
-    pub fn surreal_archives_from_lookup<F: Fn(&str) -> Option<String>>(
-        get: F,
-    ) -> Result<Self, StorageError> {
-        Self::from_lookup_with_bucket(get, "NAVIGATOR_SURREAL_ARCHIVES", |get| {
-            get("NAVIGATOR_SURREAL_ARCHIVES_BUCKET")
-                .filter(|value| !value.is_empty())
-                .ok_or(StorageError::MissingEnv(
-                    "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
-                ))
         })
     }
 
@@ -471,42 +455,6 @@ mod tests {
                 .unwrap();
         assert_eq!(exports.bucket, "exports");
         assert_eq!(exports.access_key, "exports-access");
-    }
-
-    #[test]
-    fn surreal_archive_lane_selects_its_bucket_and_credentials() {
-        let values = HashMap::from([
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "example-archives"),
-            ("NAVIGATOR_STORAGE_BUCKET", "exports"),
-            ("NAVIGATOR_STORAGE_ENDPOINT", "http://seaweedfs:8333"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_ACCESS_KEY", "archive-access"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_SECRET_KEY", "archive-secret"),
-        ]);
-        let config = S3StorageConfig::surreal_archives_from_lookup(|key| {
-            values.get(key).map(ToString::to_string)
-        })
-        .unwrap();
-        assert_eq!(config.bucket, "example-archives");
-        assert_eq!(config.access_key, "archive-access");
-    }
-
-    #[test]
-    fn surreal_archive_lane_requires_its_dedicated_bucket() {
-        let values = HashMap::from([
-            ("NAVIGATOR_DOCUMENTS_BUCKET", "documents"),
-            ("NAVIGATOR_STORAGE_BUCKET", "exports"),
-            ("NAVIGATOR_STORAGE_ENDPOINT", "http://seaweedfs:8333"),
-            ("NAVIGATOR_STORAGE_ACCESS_KEY", "access"),
-            ("NAVIGATOR_STORAGE_SECRET_KEY", "secret"),
-        ]);
-        let error = S3StorageConfig::surreal_archives_from_lookup(|key| {
-            values.get(key).map(ToString::to_string)
-        })
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            StorageError::MissingEnv("NAVIGATOR_SURREAL_ARCHIVES_BUCKET")
-        ));
     }
 
     #[test]

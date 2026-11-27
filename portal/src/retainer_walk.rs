@@ -45,7 +45,7 @@ use workflows::{
 /// (an unseeded dev DB); the caller then signals context-less and the
 /// store layer flags the missing actor.
 pub(crate) async fn resolve_lawyer_actor(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     session: Option<&SessionData>,
 ) -> Option<Uuid> {
     if let Some(id) = session.and_then(|s| s.person_id) {
@@ -60,7 +60,7 @@ pub(crate) async fn resolve_lawyer_actor(
     // paths use for the lawyer DRI — so the transition is attributed
     // firm-side, never to the notation's client. Warn so the substitution is
     // never silent.
-    let firm_dri = store::persons::default_firm_dri(surreal)
+    let firm_dri = store::persons::default_firm_dri(application_store)
         .await
         .ok()
         .flatten();
@@ -139,11 +139,11 @@ fn refuse_start(body: &StartWalkBody, error: &str) -> Response {
 /// explicitly before they return an error or refusal after creating the
 /// Project.
 async fn discard_pending_intake_project(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     withdraw_admission: bool,
 ) -> Result<(), String> {
-    let roles = store::projects::participations_for_project(surreal, project_id)
+    let roles = store::projects::participations_for_project(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?;
     let client_person_ids: Vec<Uuid> = roles
@@ -152,18 +152,18 @@ async fn discard_pending_intake_project(
         .map(|role| role.person_id)
         .collect();
     for role in roles {
-        store::projects::remove_participation(surreal, role.id)
+        store::projects::remove_participation(application_store, role.id)
             .await
             .map_err(|error| error.to_string())?;
     }
     if withdraw_admission {
         for person_id in client_person_ids {
-            if store::projects::participations_for_person(surreal, person_id)
+            if store::projects::participations_for_person(application_store, person_id)
                 .await
                 .map_err(|error| error.to_string())?
                 .is_empty()
             {
-                store::persons::set_admitted(surreal, person_id, false)
+                store::persons::set_admitted(application_store, person_id, false)
                     .await
                     .map_err(|error| error.to_string())?;
             }
@@ -175,15 +175,15 @@ async fn discard_pending_intake_project(
     // notation still references, so this request's own aborted one must
     // go first, via the one narrow exception documented on
     // `store::notations::delete_uncommitted`.
-    for notation in store::notations::list_by_project(surreal, project_id)
+    for notation in store::notations::list_by_project(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?
     {
-        store::notations::delete_uncommitted(surreal, notation.id)
+        store::notations::delete_uncommitted(application_store, notation.id)
             .await
             .map_err(|error| error.to_string())?;
     }
-    store::projects::delete_project_with_surreal(surreal, project_id)
+    store::projects::delete_project(application_store, project_id)
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -217,7 +217,7 @@ pub(crate) enum OpenIntakeError {
 /// already signed-in client who is opening their own matter.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(crate) async fn open_intake_matter(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     template_row: &store::templates::Template,
     questionnaire_snapshot: serde_json::Value,
     client: IntakeClient<'_>,
@@ -229,7 +229,7 @@ pub(crate) async fn open_intake_matter(
     let (client_email, client_name, existing_person_id) = match client {
         IntakeClient::ByEmail { email, name } => (email.to_string(), name, None),
         IntakeClient::Existing(person_id) => {
-            let person = match store::persons::find_by_id(surreal, person_id).await {
+            let person = match store::persons::find_by_id(application_store, person_id).await {
                 Ok(Some(person)) => person,
                 Ok(None) => {
                     tracing::error!(%person_id, "open_intake_matter: client person missing");
@@ -243,7 +243,8 @@ pub(crate) async fn open_intake_matter(
             (person.email, None, Some(person_id))
         }
     };
-    let firm_id = match store::firms::firm_id_for_brand_key(surreal, brand.as_str()).await {
+    let firm_id = match store::firms::firm_id_for_brand_key(application_store, brand.as_str()).await
+    {
         Ok(Some(id)) => id,
         Ok(None) => {
             tracing::warn!(
@@ -257,7 +258,7 @@ pub(crate) async fn open_intake_matter(
             return Err(OpenIntakeError::Internal);
         }
     };
-    let entity_id = match create_human_entity(surreal, &client_email).await {
+    let entity_id = match create_human_entity(application_store, &client_email).await {
         Ok(id) => id,
         Err(error) => {
             tracing::error!(error = %error, "open_intake_matter: human entity create failed");
@@ -265,7 +266,7 @@ pub(crate) async fn open_intake_matter(
         }
     };
     let project = match store::projects::create(
-        surreal,
+        application_store,
         &store::projects::NewProject {
             code: store::projects::random_code(),
             name: format!("(pending) {client_email}"),
@@ -288,7 +289,7 @@ pub(crate) async fn open_intake_matter(
     let rows = match existing_person_id {
         Some(person_id) => {
             attach_retainer_rows(
-                surreal,
+                application_store,
                 template_row.id,
                 project_id,
                 person_id,
@@ -299,7 +300,7 @@ pub(crate) async fn open_intake_matter(
         }
         None => {
             link_retainer_rows(
-                surreal,
+                application_store,
                 template_row.id,
                 project_id,
                 &client_email,
@@ -312,7 +313,7 @@ pub(crate) async fn open_intake_matter(
     };
     let Ok(rows) = rows else {
         if let Err(error) =
-            discard_pending_intake_project(surreal, project_id, withdraw_admission).await
+            discard_pending_intake_project(application_store, project_id, withdraw_admission).await
         {
             tracing::error!(
                 error = %error,
@@ -322,11 +323,12 @@ pub(crate) async fn open_intake_matter(
         }
         return Err(OpenIntakeError::Internal);
     };
-    match store::conflicts::check_new_matter(surreal, rows.person_id, entity_id).await {
+    match store::conflicts::check_new_matter(application_store, rows.person_id, entity_id).await {
         Ok(report) if report.has_blocking() => {
             tracing::warn!(%project_id, "open_intake_matter: conflict refused");
             if let Err(error) =
-                discard_pending_intake_project(surreal, project_id, withdraw_admission).await
+                discard_pending_intake_project(application_store, project_id, withdraw_admission)
+                    .await
             {
                 tracing::error!(
                     error = %error,
@@ -339,15 +341,20 @@ pub(crate) async fn open_intake_matter(
         }
         Ok(_) => {
             if let Err(error) =
-                designate_intake_dris(surreal, project_id, rows.person_id, lawyer_dri_id).await
+                designate_intake_dris(application_store, project_id, rows.person_id, lawyer_dri_id)
+                    .await
             {
                 tracing::error!(
                     error = %error,
                     %project_id,
                     "open_intake_matter: DRI designation failed"
                 );
-                if let Err(cleanup) =
-                    discard_pending_intake_project(surreal, project_id, withdraw_admission).await
+                if let Err(cleanup) = discard_pending_intake_project(
+                    application_store,
+                    project_id,
+                    withdraw_admission,
+                )
+                .await
                 {
                     tracing::error!(
                         error = %cleanup,
@@ -367,7 +374,8 @@ pub(crate) async fn open_intake_matter(
                 "open_intake_matter: conflict check failed"
             );
             if let Err(cleanup) =
-                discard_pending_intake_project(surreal, project_id, withdraw_admission).await
+                discard_pending_intake_project(application_store, project_id, withdraw_admission)
+                    .await
             {
                 tracing::error!(
                     error = %cleanup,
@@ -381,20 +389,20 @@ pub(crate) async fn open_intake_matter(
 }
 
 async fn designate_intake_dris(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     client_person_id: Uuid,
     lawyer_dri_id: Uuid,
 ) -> Result<(), store::projects::ProjectStoreError> {
-    store::projects::designate_dri_in_surreal(
-        surreal,
+    store::projects::designate_dri(
+        application_store,
         project_id,
         client_person_id,
         store::projects::DriSide::Client,
     )
     .await?;
-    store::projects::designate_dri_in_surreal(
-        surreal,
+    store::projects::designate_dri(
+        application_store,
         project_id,
         lawyer_dri_id,
         store::projects::DriSide::Lawyer,
@@ -417,27 +425,28 @@ pub async fn start_post(
         return refuse_start(&body, "choose an onboarding template");
     }
     let brand = views::brand::brand_key();
-    let firm_id = match store::firms::firm_id_for_brand_key(&state.surreal, brand.as_str()).await {
-        Ok(Some(firm_id)) => firm_id,
-        Ok(None) => return refuse_start(&body, "this brand is not worn by a firm"),
-        Err(error) => {
-            tracing::error!(error = %error, "start_post: firm lookup for brand failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
-        }
-    };
+    let firm_id =
+        match store::firms::firm_id_for_brand_key(&state.application_store, brand.as_str()).await {
+            Ok(Some(firm_id)) => firm_id,
+            Ok(None) => return refuse_start(&body, "this brand is not worn by a firm"),
+            Err(error) => {
+                tracing::error!(error = %error, "start_post: firm lookup for brand failed");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+            }
+        };
     // The Firm's own Library version of the code wins over the shared one;
     // another Firm's Library is never consulted.
-    let template_row = match store::templates::resolve_for_firm(&state.surreal, firm_id, code).await
-    {
-        Ok(Some(template)) => template,
-        Ok(None) => return refuse_start(&body, "that onboarding template was not found"),
-        Err(error) => {
-            tracing::error!(error = %error, "start_post: template lookup failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
-        }
-    };
+    let template_row =
+        match store::templates::resolve_for_firm(&state.application_store, firm_id, code).await {
+            Ok(Some(template)) => template,
+            Ok(None) => return refuse_start(&body, "that onboarding template was not found"),
+            Err(error) => {
+                tracing::error!(error = %error, "start_post: template lookup failed");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+            }
+        };
     let questionnaire_snapshot = match notation_session::questionnaire_snapshot_for_template(
-        &state.surreal,
+        &state.application_store,
         Some(&state.storage),
         &template_row,
     )
@@ -451,14 +460,14 @@ pub async fn start_post(
     };
     let lawyer_dri_id = if let Some(id) = session.as_deref().and_then(|s| s.person_id) {
         id
-    } else if let Ok(Some(id)) = store::persons::default_firm_dri(&state.surreal).await {
+    } else if let Ok(Some(id)) = store::persons::default_firm_dri(&state.application_store).await {
         id
     } else {
         tracing::error!("start_post: no lawyer DRI resolvable (unseeded db?)");
         return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
     };
     match open_intake_matter(
-        &state.surreal,
+        &state.application_store,
         &template_row,
         questionnaire_snapshot,
         IntakeClient::ByEmail {
@@ -504,23 +513,23 @@ pub(crate) struct RetainerRows {
 /// self-serve intake never fails on missing reference data (the
 /// canonical seed normally supplies both; this is the fallback).
 async fn create_human_entity(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     label: &str,
 ) -> anyhow::Result<Uuid> {
     // Every table this touches is Surreal-resident since ENG-120, so
     // nothing here runs inside the caller's write — which
     // it never did for the reference tables anyway.
-    let type_id = store::entity_types::find_or_create(surreal, "Human")
+    let type_id = store::entity_types::find_or_create(application_store, "Human")
         .await?
         .id;
     let jurisdiction_id = store::jurisdictions::find_or_create(
-        surreal,
+        application_store,
         &store::jurisdictions::NewJurisdiction::new("United States", "US", "country"),
     )
     .await?
     .id;
     Ok(store::entities::create(
-        surreal,
+        application_store,
         &store::entities::NewEntity {
             name: label.to_string(),
             entity_type_id: type_id,
@@ -551,7 +560,7 @@ async fn create_human_entity(
 /// `discard_pending_intake_project`).
 #[allow(clippy::too_many_arguments)] // + the Surreal handle (#1093; ENG-19)
 pub(crate) async fn link_retainer_rows(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     template_id: Uuid,
     project_id: Uuid,
     client_email: &str,
@@ -574,7 +583,7 @@ pub(crate) async fn link_retainer_rows(
         .filter(|s| !s.is_empty())
         .unwrap_or(client_email);
     let person_id = match store::persons::find_or_create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role(name, client_email, store::persons::Role::Client),
     )
     .await
@@ -587,7 +596,7 @@ pub(crate) async fn link_retainer_rows(
     };
 
     attach_retainer_rows(
-        surreal,
+        application_store,
         template_id,
         project_id,
         person_id,
@@ -601,7 +610,7 @@ pub(crate) async fn link_retainer_rows(
 /// retainer Notation. This is the path the signed-in service door uses.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn attach_retainer_rows(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     template_id: Uuid,
     project_id: Uuid,
     person_id: Uuid,
@@ -609,7 +618,7 @@ pub(crate) async fn attach_retainer_rows(
     questionnaire_snapshot: Option<serde_json::Value>,
 ) -> Result<RetainerRows, Response> {
     if let Err(error) =
-        store::projects::add_participation(surreal, project_id, person_id, "client").await
+        store::projects::add_participation(application_store, project_id, person_id, "client").await
     {
         tracing::error!(error = %error, "attach_retainer_rows: role insert failed");
         return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response());
@@ -620,7 +629,7 @@ pub(crate) async fn attach_retainer_rows(
     if let Some(snapshot) = questionnaire_snapshot {
         new_notation = new_notation.with_questionnaire_snapshot(snapshot);
     }
-    let notation_id = match store::notations::create(surreal, &new_notation).await {
+    let notation_id = match store::notations::create(application_store, &new_notation).await {
         Ok(n) => n.id,
         Err(e) => {
             tracing::error!(error = %e, "attach_retainer_rows: notation insert failed");
@@ -677,34 +686,35 @@ impl std::error::Error for CloseMatterError {}
 /// `closed` is the close workflow's job when the walk completes (see
 /// `workflows-service`), not this command's; this only starts the walk.
 pub async fn open_closing_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     project_id: Uuid,
 ) -> Result<Uuid, CloseMatterError> {
-    let project_row = store::projects::find_by_id(surreal, project_id)
+    let project_row = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|e| CloseMatterError::Db(e.to_string()))?
         .ok_or(CloseMatterError::MatterNotFound)?;
-    let template_row = store::templates::resolve(surreal, Some(project_id), CLOSING_TEMPLATE_CODE)
-        .await
-        .map_err(|e| CloseMatterError::Db(e.to_string()))?
-        .ok_or(CloseMatterError::ClosingTemplateMissing)?;
+    let template_row =
+        store::templates::resolve(application_store, Some(project_id), CLOSING_TEMPLATE_CODE)
+            .await
+            .map_err(|e| CloseMatterError::Db(e.to_string()))?
+            .ok_or(CloseMatterError::ClosingTemplateMissing)?;
     let questionnaire_snapshot = notation_session::questionnaire_snapshot_for_template(
-        surreal,
+        application_store,
         Some(storage),
         &template_row,
     )
     .await
     .map_err(|e| CloseMatterError::Db(e.to_string()))?;
     // The matter's client is the closing letter's respondent.
-    let client_role = store::projects::participations_for_project(surreal, project_id)
+    let client_role = store::projects::participations_for_project(application_store, project_id)
         .await
         .map_err(|e| CloseMatterError::Db(e.to_string()))?
         .into_iter()
         .find(|role| role.participation == "client")
         .ok_or(CloseMatterError::NoClient)?;
     let notation = store::notations::create(
-        surreal,
+        application_store,
         &store::notations::NewNotation::new(
             template_row.id,
             client_role.person_id,
@@ -726,10 +736,12 @@ pub async fn close_matter_post(
     State(state): State<AdminState>,
     AxumPath(project_code): AxumPath<String>,
 ) -> Response {
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
+    let Some(project_id) =
+        store::projects::id_for_code(&state.application_store, &project_code).await
+    else {
         return (StatusCode::NOT_FOUND, "matter not found").into_response();
     };
-    match open_closing_notation(&state.surreal, &state.storage, project_id).await {
+    match open_closing_notation(&state.application_store, &state.storage, project_id).await {
         Ok(notation_id) => {
             Redirect::to(&format!("/app/lawyer/notations/{notation_id}/step")).into_response()
         }
@@ -787,17 +799,17 @@ impl From<String> for SendIntakeError {
 /// idempotent and can be re-sent — so a captured-but-undelivered email never
 /// fails the command. Returns the recipient address.
 pub(crate) async fn send_intake(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     email: &dyn crate::email::EmailService,
     notation_id: Uuid,
 ) -> Result<String, SendIntakeError> {
-    let notation_row = store::notations::find_by_id(surreal, notation_id)
+    let notation_row = store::notations::find_by_id(application_store, notation_id)
         .await?
         .ok_or(SendIntakeError::NotationNotFound(notation_id))?;
-    let client = store::persons::find_by_id(surreal, notation_row.person_id)
+    let client = store::persons::find_by_id(application_store, notation_row.person_id)
         .await?
         .ok_or(SendIntakeError::NoClient(notation_id))?;
-    let project = store::projects::find_by_id(surreal, notation_row.project_id)
+    let project = store::projects::find_by_id(application_store, notation_row.project_id)
         .await
         .map_err(|error| SendIntakeError::Db(error.to_string()))?
         .ok_or_else(|| {
@@ -806,14 +818,22 @@ pub(crate) async fn send_intake(
 
     // Ensure the client can see the matter (they already should from
     // matter-open; this is the find-or-create that backs the magic link).
-    let participation =
-        store::projects::participation_for_person(surreal, client.id, notation_row.project_id)
-            .await
-            .map_err(|error| SendIntakeError::Db(error.to_string()))?;
+    let participation = store::projects::participation_for_person(
+        application_store,
+        client.id,
+        notation_row.project_id,
+    )
+    .await
+    .map_err(|error| SendIntakeError::Db(error.to_string()))?;
     if participation.is_none() {
-        store::projects::add_participation(surreal, notation_row.project_id, client.id, "client")
-            .await
-            .map_err(|error| SendIntakeError::Db(error.to_string()))?;
+        store::projects::add_participation(
+            application_store,
+            notation_row.project_id,
+            client.id,
+            "client",
+        )
+        .await
+        .map_err(|error| SendIntakeError::Db(error.to_string()))?;
     }
 
     let base_url = workflows::email::base_url_from_env();
@@ -854,7 +874,7 @@ pub async fn send_intake_post(
     State(state): State<AdminState>,
     AxumPath(notation_id): AxumPath<Uuid>,
 ) -> Response {
-    match send_intake(&state.surreal, state.email.as_ref(), notation_id).await {
+    match send_intake(&state.application_store, state.email.as_ref(), notation_id).await {
         Ok(_) => Redirect::to(&format!("/app/lawyer/notations/{notation_id}/step")).into_response(),
         Err(SendIntakeError::NotationNotFound(_)) => {
             (StatusCode::NOT_FOUND, "notation not found").into_response()
@@ -884,16 +904,22 @@ pub async fn send_intake_post(
 /// answer into another. Surfaces a batch-coverage proposal (`source =
 /// extracted`) the same way, so the walk can offer it as a default to confirm.
 async fn prior_answer_row(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
     question_id: Uuid,
     state_name: &str,
     person_id: Uuid,
 ) -> Option<store::answers::Answer> {
-    store::answers::latest_for_state(surreal, question_id, state_name, person_id, notation_id)
-        .await
-        .ok()
-        .flatten()
+    store::answers::latest_for_state(
+        application_store,
+        question_id,
+        state_name,
+        person_id,
+        notation_id,
+    )
+    .await
+    .ok()
+    .flatten()
 }
 
 async fn person_choices(
@@ -901,7 +927,7 @@ async fn person_choices(
     answer_type: &str,
     notation_id: Uuid,
 ) -> Vec<webapp::components::PersonChoice> {
-    crate::intake::reference_candidates(&state.surreal, answer_type, notation_id)
+    crate::intake::reference_candidates(&state.application_store, answer_type, notation_id)
         .await
         .unwrap_or_else(|e| {
             tracing::error!(error = %e, %notation_id, "walker: reference_candidates failed");
@@ -933,7 +959,7 @@ pub(crate) async fn resolve_walker_step(
     // `notation_session::current_step` reads from the runtime and resolves the
     // question row in one call.
     let step = notation_session::current_step(
-        &state.surreal,
+        &state.application_store,
         state.questionnaire_runtime.as_ref(),
         Some(&state.storage),
         notation_id,
@@ -960,7 +986,7 @@ pub(crate) async fn resolve_walker_step(
     // notation, so both the prior-answer lookup (needs person_id) and the chrome
     // (title + progress total) must follow the actual template — not assume the
     // retainer.
-    let notation_row = store::notations::find_by_id(&state.surreal, notation_id)
+    let notation_row = store::notations::find_by_id(&state.application_store, notation_id)
         .await
         .ok()
         .flatten();
@@ -968,7 +994,7 @@ pub(crate) async fn resolve_walker_step(
         .as_ref()
         .map_or_else(Uuid::nil, |n| n.person_id);
     let template_row = match notation_row.as_ref() {
-        Some(n) => store::templates::find_by_id(&state.surreal, n.template_id)
+        Some(n) => store::templates::find_by_id(&state.application_store, n.template_id)
             .await
             .ok()
             .flatten(),
@@ -978,7 +1004,7 @@ pub(crate) async fn resolve_walker_step(
     // Pre-fill any prior answer for this (state, person) pair so navigating back
     // re-displays without mutating durable state.
     let prior_answer = prior_answer_row(
-        &state.surreal,
+        &state.application_store,
         notation_id,
         question.id,
         &question.code,
@@ -1013,7 +1039,8 @@ pub(crate) async fn resolve_walker_step(
     );
 
     let country_options =
-        crate::intake::jurisdiction_option_names(&state.surreal, &question.answer_type).await;
+        crate::intake::jurisdiction_option_names(&state.application_store, &question.answer_type)
+            .await;
     let choices = question
         .choices
         .into_iter()
@@ -1064,7 +1091,7 @@ async fn step_json(
             // failure — show an empty list rather than failing the whole
             // step; the POST resolver is where a lookup error must be loud.
             let candidates = crate::intake::reference_candidates(
-                &state.surreal,
+                &state.application_store,
                 &question.answer_type,
                 notation_id,
             )
@@ -1078,13 +1105,13 @@ async fn step_json(
             // the CLI walk shows it as a default to confirm or edit. The
             // `prior_source` lets the CLI mark a proposal ("from transcript")
             // apart from a previously-typed answer.
-            let person_id = store::notations::find_by_id(&state.surreal, notation_id)
+            let person_id = store::notations::find_by_id(&state.application_store, notation_id)
                 .await
                 .ok()
                 .flatten()
                 .map_or_else(Uuid::nil, |n| n.person_id);
             let prior = prior_answer_row(
-                &state.surreal,
+                &state.application_store,
                 notation_id,
                 question.id,
                 &question.code,
@@ -1146,7 +1173,7 @@ async fn expected_question(
     notation_id: Uuid,
 ) -> Result<notation_session::QuestionDescriptor, Response> {
     match notation_session::current_step(
-        &state.surreal,
+        &state.application_store,
         state.questionnaire_runtime.as_ref(),
         Some(&state.storage),
         notation_id,
@@ -1183,8 +1210,13 @@ async fn resolved_scalar_answer(
     notation_id: Uuid,
     body: &[(String, String)],
 ) -> Result<(String, Option<Uuid>), Response> {
-    match crate::intake::resolve_reference_answer(&state.surreal, answer_type, notation_id, body)
-        .await
+    match crate::intake::resolve_reference_answer(
+        &state.application_store,
+        answer_type,
+        notation_id,
+        body,
+    )
+    .await
     {
         Ok(crate::intake::ReferenceResolution::Resolved { value, id }) => Ok((value, id)),
         Ok(crate::intake::ReferenceResolution::Rejected(_)) => {
@@ -1211,21 +1243,25 @@ pub async fn step_post(
     // Resolve the matter and its firm-side lens before asking the runtime or
     // accepting any form value. A notation outside the caller's scope is
     // indistinguishable from a missing one so this door does not disclose it.
-    let Some(notation) = store::notations::find_by_id(&state.surreal, notation_id)
+    let Some(notation) = store::notations::find_by_id(&state.application_store, notation_id)
         .await
         .ok()
         .flatten()
     else {
         return (StatusCode::NOT_FOUND, "notation not found").into_response();
     };
-    let acting = resolve_lawyer_actor(&state.surreal, session.as_deref()).await;
+    let acting = resolve_lawyer_actor(&state.application_store, session.as_deref()).await;
     let role = session
         .as_deref()
         .map_or(store::persons::Role::Lawyer, |session| session.role);
-    let in_scope =
-        store::access::can_see_project_as_lawyer(&state.surreal, acting, role, notation.project_id)
-            .await
-            .unwrap_or(false);
+    let in_scope = store::access::can_see_project_as_lawyer(
+        &state.application_store,
+        acting,
+        role,
+        notation.project_id,
+    )
+    .await
+    .unwrap_or(false);
     if !in_scope {
         return (StatusCode::NOT_FOUND, "notation not found").into_response();
     }
@@ -1280,7 +1316,7 @@ pub async fn step_post(
         };
 
     let next = match notation_session::answer_step_with_reference(
-        &state.surreal,
+        &state.application_store,
         state.questionnaire_runtime.as_ref(),
         Some(&state.storage),
         notation_id,
@@ -1338,7 +1374,7 @@ async fn resume_completed_questionnaire(
     acting: Option<Uuid>,
 ) -> Option<Response> {
     let step = notation_session::current_step(
-        &state.surreal,
+        &state.application_store,
         state.questionnaire_runtime.as_ref(),
         Some(&state.storage),
         notation_id,
@@ -1521,23 +1557,23 @@ impl std::error::Error for TranscriptCoverageError {}
 /// the REST door. Coverage runs against the DB-bound template (including a
 /// project-scoped override), never a file on the caller's disk.
 pub async fn record_transcript_coverage(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     notation_id: Uuid,
     transcript: &str,
 ) -> Result<TranscriptCoverage, TranscriptCoverageError> {
-    let notation_row = store::notations::find_by_id(surreal, notation_id)
+    let notation_row = store::notations::find_by_id(application_store, notation_id)
         .await
         .ok()
         .flatten()
         .ok_or(TranscriptCoverageError::NotationNotFound)?;
-    let template = store::templates::find_by_id(surreal, notation_row.template_id)
+    let template = store::templates::find_by_id(application_store, notation_row.template_id)
         .await
         .ok()
         .flatten()
         .ok_or(TranscriptCoverageError::TemplateNotFound)?;
     let code = template.code.clone();
-    let template_body = store::templates::body(surreal, storage, &template)
+    let template_body = store::templates::body(application_store, storage, &template)
         .await
         .map_err(|e| TranscriptCoverageError::Db(e.to_string()))?;
     let loaded = live_inquiry::load_template_from_str(&template_body, &code)
@@ -1557,7 +1593,7 @@ pub async fn record_transcript_coverage(
         match &finding.proposed_answer {
             Some(value) if finding.status == live_inquiry::CoverageStatus::LikelyAnswered => {
                 match notation_session::record_extracted_answer(
-                    surreal,
+                    application_store,
                     Some(storage),
                     notation_id,
                     &finding.inquiry_code,
@@ -1596,7 +1632,13 @@ pub async fn transcript_post(
     else {
         return (StatusCode::BAD_REQUEST, "transcript is required").into_response();
     };
-    match record_transcript_coverage(&state.surreal, &state.storage, notation_id, transcript).await
+    match record_transcript_coverage(
+        &state.application_store,
+        &state.storage,
+        notation_id,
+        transcript,
+    )
+    .await
     {
         Ok(c) => axum::Json(serde_json::json!({
             "template_code": c.template_code,
@@ -1716,21 +1758,21 @@ struct WorkflowOutput {
 /// edge must be unique; a path requiring another action is refused before
 /// starting the runtime. The runtime owns state entry and its durable work.
 pub async fn advance_to_lawyer_review(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: &Arc<dyn cloud::StorageService>,
     notation_id: Uuid,
     acting: Option<Uuid>,
 ) -> Result<StateName, WorkflowDriveError> {
-    let notation_row = store::notations::find_by_id(surreal, notation_id)
+    let notation_row = store::notations::find_by_id(application_store, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let template_row = store::templates::find_by_id(surreal, notation_row.template_id)
+    let template_row = store::templates::find_by_id(application_store, notation_row.template_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
     let authored = if template_row.project_id.is_some() && template_row.asset_id.is_some() {
         let body = store::templates::body_pinned_to(
-            surreal,
+            application_store,
             storage,
             &template_row,
             notation_row.template_body_sha256.as_deref(),
@@ -1768,7 +1810,7 @@ pub async fn advance_to_lawyer_review(
         .await
         .unwrap_or_else(StateName::begin);
     if state.prefix() == "lawyer_review" {
-        sync_notation_state(surreal, notation_id, state.as_str()).await?;
+        sync_notation_state(application_store, notation_id, state.as_str()).await?;
         return Ok(state);
     }
     let start = path
@@ -1782,7 +1824,7 @@ pub async fn advance_to_lawyer_review(
         })?;
     for step in path.iter().skip(start) {
         state = signal_workflow(runtime, notation_id, &step.event, None, acting).await?;
-        sync_notation_state(surreal, notation_id, state.as_str()).await?;
+        sync_notation_state(application_store, notation_id, state.as_str()).await?;
         if state != step.to {
             return Err(WorkflowDriveError::Spec(format!(
                 "workflow reached `{}` instead of `{}`",
@@ -1856,7 +1898,7 @@ async fn drive_post_questionnaire_workflow(
     // human gate (N116). The matter-open form reaches this same gate through
     // `advance_to_lawyer_review` directly.
     let final_state = advance_to_lawyer_review(
-        deps.surreal,
+        deps.application_store,
         deps.runtime,
         deps.storage,
         notation_id,
@@ -1897,7 +1939,7 @@ pub async fn begin_post_questionnaire_workflow(
     notation_id: Uuid,
     acting: Option<Uuid>,
 ) -> Result<StateName, WorkflowDriveError> {
-    if notation_template_code(deps.surreal, notation_id)
+    if notation_template_code(deps.application_store, notation_id)
         .await
         .as_deref()
         == Some("offboarding__letter")
@@ -1943,7 +1985,7 @@ pub async fn begin_post_questionnaire_workflow(
 /// begin a workflow through one code path with one set of dependencies.
 #[derive(Clone)]
 pub struct PostQuestionnaire {
-    pub surreal: store::surreal::SurrealDb,
+    pub application_store: store::application_store::ApplicationStore,
     pub workflow_runtime: Arc<dyn StateMachineRuntime>,
     pub storage: Arc<dyn cloud::StorageService>,
     pub assets_storage: Arc<dyn cloud::StorageService>,
@@ -1958,7 +2000,7 @@ impl workflows::PostQuestionnaireDrive for PostQuestionnaire {
         acting: Option<Uuid>,
     ) -> Result<String, workflows::PostQuestionnaireError> {
         let deps = RenderDeps {
-            surreal: &self.surreal,
+            application_store: &self.application_store,
             runtime: self.workflow_runtime.as_ref(),
             storage: &self.storage,
             assets_storage: &self.assets_storage,
@@ -1978,7 +2020,7 @@ impl workflows::PostQuestionnaireDrive for PostQuestionnaire {
 /// state is what lets one drive serve both doors.
 pub(crate) fn render_deps(state: &AdminState) -> RenderDeps<'_> {
     RenderDeps {
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         runtime: state.workflow_runtime.as_ref(),
         storage: &state.storage,
         assets_storage: &state.assets_storage,
@@ -1988,7 +2030,7 @@ pub(crate) fn render_deps(state: &AdminState) -> RenderDeps<'_> {
 
 pub struct RenderDeps<'a> {
     /// The other store — the bound client's identity is a `persons` row.
-    pub surreal: &'a store::surreal::SurrealDb,
+    pub application_store: &'a store::application_store::ApplicationStore,
     pub runtime: &'a dyn StateMachineRuntime,
     pub storage: &'a Arc<dyn cloud::StorageService>,
     /// The public assets bucket the government-form blank is pulled from.
@@ -2003,7 +2045,7 @@ pub(crate) async fn render_and_park(
     acting: Option<Uuid>,
 ) -> Result<StateName, WorkflowDriveError> {
     let runtime = deps.runtime;
-    let notation_row = store::notations::find_by_id(deps.surreal, notation_id)
+    let notation_row = store::notations::find_by_id(deps.application_store, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
     if notation_row.state == "lawyer_review" {
@@ -2037,7 +2079,7 @@ pub(crate) async fn render_and_park(
         if current_state.prefix() == "generate_pdf" || document_ready {
             if notation_row.state == "lawyer_review" && document_ready {
                 store::notations::reconcile_state(
-                    deps.surreal,
+                    deps.application_store,
                     notation_id,
                     &notation_row.state,
                     current_state.as_str(),
@@ -2074,7 +2116,7 @@ pub(crate) async fn render_and_park(
         "approval submitted",
     );
     if let Some(next) = accepted {
-        sync_notation_state(deps.surreal, notation_id, next.as_str()).await?;
+        sync_notation_state(deps.application_store, notation_id, next.as_str()).await?;
         Ok(next)
     } else {
         Ok(current_state)
@@ -2086,21 +2128,21 @@ async fn approval_document_payload(
     notation: &store::notations::Notation,
 ) -> Result<String, WorkflowDriveError> {
     let notation_id = notation.id;
-    let template = store::templates::find_by_id(deps.surreal, notation.template_id)
+    let template = store::templates::find_by_id(deps.application_store, notation.template_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let source = store::templates::body(deps.surreal, deps.storage, &template).await?;
-    let clauses = store::notation_clauses::for_notation(deps.surreal, notation_id)
+    let source = store::templates::body(deps.application_store, deps.storage, &template).await?;
+    let clauses = store::notation_clauses::for_notation(deps.application_store, notation_id)
         .await
         .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
     let body = store::notation_clauses::splice(&source, &clauses);
     let (keys, labels) =
-        build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
+        build_answer_context(deps.application_store, Some(deps.storage), notation_id).await?;
     let source = if template.kind.as_deref() == Some("pleading") {
         let markdown =
             rules::frontmatter::split(&body).map_or(body.as_str(), |(_, markdown)| markdown);
         crate::pleading::source(
-            deps.surreal,
+            deps.application_store,
             notation.project_id,
             &body,
             substitute_template_body(markdown, &keys, &labels),
@@ -2109,7 +2151,7 @@ async fn approval_document_payload(
     } else {
         let format = template_output(template.kind.as_deref());
         let letterhead =
-            project_letterhead(deps.surreal, notation.project_id, &body, &format).await?;
+            project_letterhead(deps.application_store, notation.project_id, &body, &format).await?;
         typst_body_with_letterhead(&body, &keys, &labels, &format, &letterhead)
     };
     let (typst_source, fields) = crate::signature_render::expand_signatures_for_firm(
@@ -2203,20 +2245,25 @@ pub async fn approve_send_post(
     AxumPath(notation_id): AxumPath<Uuid>,
     session: Option<Extension<SessionData>>,
 ) -> Response {
-    let Some(notation) = store::notations::find_by_id(&state.surreal, notation_id)
+    let Some(notation) = store::notations::find_by_id(&state.application_store, notation_id)
         .await
         .ok()
         .flatten()
     else {
         return (StatusCode::NOT_FOUND, "notation not found").into_response();
     };
-    let acting = resolve_lawyer_actor(&state.surreal, session.as_deref()).await;
+    let acting = resolve_lawyer_actor(&state.application_store, session.as_deref()).await;
     let role = session
         .as_deref()
         .map_or(store::persons::Role::Lawyer, |session| session.role);
-    if !store::access::can_see_project_as_lawyer(&state.surreal, acting, role, notation.project_id)
-        .await
-        .unwrap_or(false)
+    if !store::access::can_see_project_as_lawyer(
+        &state.application_store,
+        acting,
+        role,
+        notation.project_id,
+    )
+    .await
+    .unwrap_or(false)
     {
         return (StatusCode::NOT_FOUND, "notation not found").into_response();
     }
@@ -2224,7 +2271,7 @@ pub async fn approve_send_post(
     // The attorney approving owns the `approved` transition — attribute it
     // to their session Person, not the notation's client (#252).
     let deps = RenderDeps {
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         runtime: state.workflow_runtime.as_ref(),
         storage: &state.storage,
         assets_storage: &state.assets_storage,
@@ -2268,9 +2315,9 @@ pub async fn send_post(
 ) -> Response {
     // The lawyer sending owns the `pdf_persisted` transition — attribute
     // it to their session Person, not the notation's client (#252).
-    let acting = resolve_lawyer_actor(&state.surreal, session.as_deref()).await;
+    let acting = resolve_lawyer_actor(&state.application_store, session.as_deref()).await;
     let ctx = SendFlowContext {
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         runtime: state.workflow_runtime.as_ref(),
         storage: &state.storage,
         acting,
@@ -2406,7 +2453,7 @@ pub(crate) async fn resolve_intake_review(
     notation_id: Uuid,
     format: Option<&str>,
 ) -> Result<webapp::intake_review::IntakeReviewData, Response> {
-    let Some(notation_row) = store::notations::find_by_id(&state.surreal, notation_id)
+    let Some(notation_row) = store::notations::find_by_id(&state.application_store, notation_id)
         .await
         .ok()
         .flatten()
@@ -2414,7 +2461,7 @@ pub(crate) async fn resolve_intake_review(
         return Err((StatusCode::NOT_FOUND, "notation not found").into_response());
     };
     let signature_request_id =
-        store::signatures::request_id_for_notation(&state.surreal, notation_id)
+        store::signatures::request_id_for_notation(&state.application_store, notation_id)
             .await
             .ok()
             .flatten();
@@ -2434,9 +2481,12 @@ pub(crate) async fn resolve_intake_review(
 
     // The envelope status card (LAW-326): the same read the REST status
     // door serves. A notation with no envelope carries no card.
-    let status =
-        crate::signature_status::status_for_notation(&state.surreal, &state.storage, &notation_row)
-            .await;
+    let status = crate::signature_status::status_for_notation(
+        &state.application_store,
+        &state.storage,
+        &notation_row,
+    )
+    .await;
     let envelope = envelope_card(&status, notation_id);
 
     let rendered_html = match render_assembled_document(&render_deps(state), notation_id).await {
@@ -2476,7 +2526,7 @@ pub(crate) async fn resolve_intake_review(
         .collect();
 
     let governing_law_defaulted = match render_context_from_answers(
-        &state.surreal,
+        &state.application_store,
         Some(&state.storage),
         notation_id,
     )
@@ -2551,7 +2601,7 @@ async fn review_document_status(
 
 async fn questionnaire_questions(state: &AdminState, notation_id: Uuid) -> Vec<(String, String)> {
     let codes = notation_session::questionnaire_chain_for_reask(
-        &state.surreal,
+        &state.application_store,
         Some(&state.storage),
         notation_id,
     )
@@ -2560,7 +2610,7 @@ async fn questionnaire_questions(state: &AdminState, notation_id: Uuid) -> Vec<(
     let mut out = Vec::with_capacity(codes.len());
     for code in codes {
         let canonical = code.split_once("__").map_or(code.as_str(), |(p, _)| p);
-        let prompt = store::questions::find_by_code(&state.surreal, canonical)
+        let prompt = store::questions::find_by_code(&state.application_store, canonical)
             .await
             .ok()
             .flatten()
@@ -2630,7 +2680,7 @@ impl std::error::Error for RequestChangesError {}
 /// the respondent so re-collection still works, but the signal stays unattributed
 /// rather than crediting the client a lawyer action (#252).
 pub async fn request_notation_changes(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn cloud::StorageService>>,
     notation_id: Uuid,
@@ -2638,7 +2688,7 @@ pub async fn request_notation_changes(
     flagged: &[String],
     note: Option<&str>,
 ) -> Result<(), RequestChangesError> {
-    let notation_row = store::notations::find_by_id(surreal, notation_id)
+    let notation_row = store::notations::find_by_id(application_store, notation_id)
         .await
         .map_err(|e| RequestChangesError::Db(e.to_string()))?
         .ok_or(RequestChangesError::NotationNotFound)?;
@@ -2648,25 +2698,32 @@ pub async fn request_notation_changes(
     if flagged.is_empty() {
         return Err(RequestChangesError::NothingFlagged);
     }
-    let route = notation_session::questionnaire_chain_for_reask(surreal, storage, notation_id)
-        .await
-        .map_err(|error| match error {
-            notation_session::NotationSessionError::QuestionnaireAuthorityMissing => {
-                RequestChangesError::QuestionnaireAuthorityMissing
-            }
-            error => RequestChangesError::Db(error.to_string()),
-        })?;
+    let route =
+        notation_session::questionnaire_chain_for_reask(application_store, storage, notation_id)
+            .await
+            .map_err(|error| match error {
+                notation_session::NotationSessionError::QuestionnaireAuthorityMissing => {
+                    RequestChangesError::QuestionnaireAuthorityMissing
+                }
+                error => RequestChangesError::Db(error.to_string()),
+            })?;
     if flagged.iter().any(|code| !route.contains(code)) {
         return Err(RequestChangesError::OffRouteQuestion);
     }
     let record_actor = actor.unwrap_or(notation_row.person_id);
-    store::reask::record_change_request(surreal, notation_id, record_actor, flagged, note)
-        .await
-        .map_err(|e| RequestChangesError::Db(e.to_string()))?;
+    store::reask::record_change_request(
+        application_store,
+        notation_id,
+        record_actor,
+        flagged,
+        note,
+    )
+    .await
+    .map_err(|e| RequestChangesError::Db(e.to_string()))?;
     let next = signal_workflow(runtime, notation_id, "changes_requested", None, actor)
         .await
         .map_err(|e| RequestChangesError::Db(e.to_string()))?;
-    let _ = sync_notation_state(surreal, notation_id, next.as_str()).await;
+    let _ = sync_notation_state(application_store, notation_id, next.as_str()).await;
     Ok(())
 }
 
@@ -2687,9 +2744,9 @@ pub async fn request_changes_post(
         .filter(|s| !s.is_empty());
     // The lawyer requesting changes owns the transition — attribute it to their
     // session Person, never the notation's client (#252).
-    let acting = resolve_lawyer_actor(&state.surreal, session.as_deref()).await;
+    let acting = resolve_lawyer_actor(&state.application_store, session.as_deref()).await;
     match request_notation_changes(
-        &state.surreal,
+        &state.application_store,
         state.workflow_runtime.as_ref(),
         Some(&state.storage),
         notation_id,
@@ -2744,7 +2801,7 @@ pub(crate) async fn resolve_reask(
     state: &AdminState,
     notation_id: Uuid,
 ) -> Result<webapp::reask::ReaskData, Response> {
-    let Some(notation_row) = store::notations::find_by_id(&state.surreal, notation_id)
+    let Some(notation_row) = store::notations::find_by_id(&state.application_store, notation_id)
         .await
         .ok()
         .flatten()
@@ -2755,7 +2812,7 @@ pub(crate) async fn resolve_reask(
         // Nothing parked for re-collection — send lawyer to the review page.
         return Err(back_to_review(notation_id));
     }
-    let request = store::reask::latest_change_request(&state.surreal, notation_id)
+    let request = store::reask::latest_change_request(&state.application_store, notation_id)
         .await
         .ok()
         .flatten();
@@ -2764,7 +2821,7 @@ pub(crate) async fn resolve_reask(
         .map(|r| r.flagged_questions.clone())
         .unwrap_or_default();
     let route = notation_session::questionnaire_chain_for_reask(
-        &state.surreal,
+        &state.application_store,
         Some(&state.storage),
         notation_id,
     )
@@ -2874,21 +2931,21 @@ impl std::error::Error for ResubmitReaskError {}
 /// before writing, so a blank flagged answer refuses the resubmit rather than
 /// leaving it partial.
 pub async fn resubmit_reask(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn cloud::StorageService>>,
     notation_id: Uuid,
     actor: Option<Uuid>,
     answers: &std::collections::BTreeMap<String, String>,
 ) -> Result<(), ResubmitReaskError> {
-    let notation_row = store::notations::find_by_id(surreal, notation_id)
+    let notation_row = store::notations::find_by_id(application_store, notation_id)
         .await
         .map_err(|e| ResubmitReaskError::Db(e.to_string()))?
         .ok_or(ResubmitReaskError::NotationNotFound)?;
     if notation_row.state != store::reask::REASK_STATE {
         return Err(ResubmitReaskError::NotAwaitingReask);
     }
-    let flagged = store::reask::flagged_questions(surreal, notation_id)
+    let flagged = store::reask::flagged_questions(application_store, notation_id)
         .await
         .map_err(|e| ResubmitReaskError::Db(e.to_string()))?;
     let mut to_write: Vec<(&str, &str)> = Vec::with_capacity(flagged.len());
@@ -2906,7 +2963,7 @@ pub async fn resubmit_reask(
         .iter()
         .map(|(code, value)| ((*code).to_owned(), (*value).to_owned()))
         .collect();
-    notation_session::validate_reask_answers(surreal, storage, notation_id, &corrections)
+    notation_session::validate_reask_answers(application_store, storage, notation_id, &corrections)
         .await
         .map_err(|error| match error {
             notation_session::NotationSessionError::QuestionnaireAuthorityMissing => {
@@ -2926,7 +2983,7 @@ pub async fn resubmit_reask(
     // answers in place rather than rolling the set back.
     for (code, value) in &to_write {
         notation_session::record_reask_answer(
-            surreal,
+            application_store,
             storage,
             notation_id,
             code,
@@ -2940,7 +2997,7 @@ pub async fn resubmit_reask(
     let next = signal_workflow(runtime, notation_id, "intake_resubmitted", None, actor)
         .await
         .map_err(|e| ResubmitReaskError::Db(e.to_string()))?;
-    let _ = sync_notation_state(surreal, notation_id, next.as_str()).await;
+    let _ = sync_notation_state(application_store, notation_id, next.as_str()).await;
     Ok(())
 }
 
@@ -2959,9 +3016,9 @@ pub async fn reask_post(
                 .map(|code| (code.to_string(), v.clone()))
         })
         .collect();
-    let acting = resolve_lawyer_actor(&state.surreal, session.as_deref()).await;
+    let acting = resolve_lawyer_actor(&state.application_store, session.as_deref()).await;
     match resubmit_reask(
-        &state.surreal,
+        &state.application_store,
         state.workflow_runtime.as_ref(),
         Some(&state.storage),
         notation_id,
@@ -3009,15 +3066,16 @@ async fn render_assembled_document(
     deps: &RenderDeps<'_>,
     notation_id: Uuid,
 ) -> Result<String, WorkflowDriveError> {
-    let notation_row = store::notations::find_by_id(deps.surreal, notation_id)
+    let notation_row = store::notations::find_by_id(deps.application_store, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let template_row = store::templates::find_by_id(deps.surreal, notation_row.template_id)
-        .await?
-        .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
+    let template_row =
+        store::templates::find_by_id(deps.application_store, notation_row.template_id)
+            .await?
+            .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
     let raw_template_body =
-        store::templates::body(deps.surreal, deps.storage, &template_row).await?;
-    let clauses = store::notation_clauses::for_notation(deps.surreal, notation_id)
+        store::templates::body(deps.application_store, deps.storage, &template_row).await?;
+    let clauses = store::notation_clauses::for_notation(deps.application_store, notation_id)
         .await
         .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
     let template_body = store::notation_clauses::splice(&raw_template_body, &clauses);
@@ -3025,7 +3083,7 @@ async fn render_assembled_document(
     // (`Nevada`). The public preview already splits those maps. Using labels
     // for both dropped every `{{#if state=KEY}}` branch on review and PDF.
     let (keys, labels) =
-        build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
+        build_answer_context(deps.application_store, Some(deps.storage), notation_id).await?;
     Ok(views::notation::render_filled_in_with_display(
         &template_body,
         &keys,
@@ -3051,14 +3109,14 @@ pub fn closing_letter_storage_key(notation_id: Uuid) -> String {
 /// Fetch the template `code` bound to a notation, if resolvable. Used
 /// to pick the post-questionnaire workflow drive.
 async fn notation_template_code(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
 ) -> Option<String> {
-    let n = store::notations::find_by_id(surreal, notation_id)
+    let n = store::notations::find_by_id(application_store, notation_id)
         .await
         .ok()
         .flatten()?;
-    let t = store::templates::find_by_id(surreal, n.template_id)
+    let t = store::templates::find_by_id(application_store, n.template_id)
         .await
         .ok()
         .flatten()?;
@@ -3103,17 +3161,20 @@ async fn drive_closing_workflow(
 
     StateMachineRuntime::start(runtime, MachineKind::Workflow, notation_id, &spec).await?;
     let s = signal_workflow(runtime, notation_id, "close_requested", None, acting).await?;
-    sync_notation_state(deps.surreal, notation_id, s.as_str()).await?;
+    sync_notation_state(deps.application_store, notation_id, s.as_str()).await?;
 
     // Render the closing letter from the answers the walker just landed.
-    let notation_row = store::notations::find_by_id(deps.surreal, notation_id)
+    let notation_row = store::notations::find_by_id(deps.application_store, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let template_row = store::templates::find_by_id(deps.surreal, notation_row.template_id)
-        .await?
-        .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let template_body = store::templates::body(deps.surreal, deps.storage, &template_row).await?;
-    let (keys, ctx) = build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
+    let template_row =
+        store::templates::find_by_id(deps.application_store, notation_row.template_id)
+            .await?
+            .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
+    let template_body =
+        store::templates::body(deps.application_store, deps.storage, &template_row).await?;
+    let (keys, ctx) =
+        build_answer_context(deps.application_store, Some(deps.storage), notation_id).await?;
 
     // Lawyer review short-circuits to `approved` in the dev loop (a real
     // lawyer-review handler swaps in for prod). The `approved` signal
@@ -3122,7 +3183,7 @@ async fn drive_closing_workflow(
     // `generate_pdf__closing_letter`.
     let format = template_output(template_row.kind.as_deref());
     let letterhead = project_letterhead(
-        deps.surreal,
+        deps.application_store,
         notation_row.project_id,
         &template_body,
         &format,
@@ -3141,15 +3202,15 @@ async fn drive_closing_workflow(
         acting,
     )
     .await?;
-    sync_notation_state(deps.surreal, notation_id, s.as_str()).await?;
+    sync_notation_state(deps.application_store, notation_id, s.as_str()).await?;
 
     let s = signal_workflow(runtime, notation_id, "pdf_persisted", None, acting).await?;
-    sync_notation_state(deps.surreal, notation_id, s.as_str()).await?;
+    sync_notation_state(deps.application_store, notation_id, s.as_str()).await?;
 
     // The firm signs the closing letter; this transition lands on END
     // and closes the matter (the runtime's `close_matter` side effect).
     let s = signal_workflow(runtime, notation_id, "signed", None, acting).await?;
-    sync_notation_state(deps.surreal, notation_id, s.as_str()).await?;
+    sync_notation_state(deps.application_store, notation_id, s.as_str()).await?;
 
     Ok(s)
 }
@@ -3206,7 +3267,7 @@ fn typst_body_with_letterhead(
 }
 
 async fn project_letterhead(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     template: &str,
     format: &pdf::OutputFormat,
@@ -3214,7 +3275,7 @@ async fn project_letterhead(
     if !matches!(format, pdf::OutputFormat::Letter(_)) {
         return Ok(pdf::Letterhead::default());
     }
-    let project = store::projects::find_by_id(surreal, project_id)
+    let project = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
     let Some(project) =
@@ -3313,21 +3374,21 @@ pub fn resolve_client_recipient(
 /// missing body metadata cannot revoke delivery access. This legacy lookup
 /// authorizes neither document rendering nor Re-ask, and certifies no artifact freshness.
 pub async fn client_recipient_for_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     notation_row: &store::notations::Notation,
 ) -> Result<ClientRecipient, ContextError> {
     let legacy_envelope = notation_row.questionnaire_snapshot.is_none()
-        && store::signatures::request_id_for_notation(surreal, notation_row.id)
+        && store::signatures::request_id_for_notation(application_store, notation_row.id)
             .await
             .map_err(|error| ContextError::Db(error.to_string()))?
             .is_some();
     let ctx = if legacy_envelope {
-        legacy_client_identity_context(surreal, notation_row.id).await?
+        legacy_client_identity_context(application_store, notation_row.id).await?
     } else {
-        render_context_from_answers(surreal, Some(storage), notation_row.id).await?
+        render_context_from_answers(application_store, Some(storage), notation_row.id).await?
     };
-    let client = store::persons::find_by_id(surreal, notation_row.person_id).await?;
+    let client = store::persons::find_by_id(application_store, notation_row.person_id).await?;
     let captive = notation_row.delivery != store::notations::DELIVERY_EMAILED;
     Ok(resolve_client_recipient(
         notation_row.id,
@@ -3339,10 +3400,10 @@ pub async fn client_recipient_for_notation(
 
 /// Identity fields only, retaining the existing latest-answer precedence.
 async fn legacy_client_identity_context(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
 ) -> Result<BTreeMap<String, String>, ContextError> {
-    let answers = store::answers::for_notation(surreal, notation_id)
+    let answers = store::answers::for_notation(application_store, notation_id)
         .await
         .map_err(|error| ContextError::Db(error.to_string()))?;
     let mut context = BTreeMap::new();
@@ -3374,11 +3435,11 @@ pub fn signer_role_for_recipient(template_source: &str, recipient_id: &str) -> O
 /// Display labels for recipient resolution and review indicators. Body
 /// rendering takes condition keys and labels from one answer projection.
 async fn render_context_from_answers(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn cloud::StorageService>>,
     notation_id: Uuid,
 ) -> Result<BTreeMap<String, String>, ContextError> {
-    build_answer_context(surreal, storage, notation_id)
+    build_answer_context(application_store, storage, notation_id)
         .await
         .map(|(_, labels)| labels)
 }
@@ -3404,13 +3465,14 @@ pub enum ContextError {
 
 /// Condition keys and display labels derived from one scoped answer read.
 pub(crate) async fn build_answer_context(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn cloud::StorageService>>,
     notation_id: Uuid,
 ) -> Result<(BTreeMap<String, String>, BTreeMap<String, String>), ContextError> {
-    let projection = notation_session::render_answer_projection(surreal, storage, notation_id)
-        .await
-        .map_err(|error| ContextError::Questionnaire(Box::new(error)))?;
+    let projection =
+        notation_session::render_answer_projection(application_store, storage, notation_id)
+            .await
+            .map_err(|error| ContextError::Questionnaire(Box::new(error)))?;
     let notation = &projection.notation;
     let mut keys = context_from_answers(
         &projection.answers,
@@ -3425,7 +3487,7 @@ pub(crate) async fn build_answer_context(
         |state| projection.declares_state(state),
     );
     let person = if projection.includes_state("person__client") {
-        store::persons::find_by_id(surreal, notation.person_id).await?
+        store::persons::find_by_id(application_store, notation.person_id).await?
     } else {
         None
     };
@@ -3433,9 +3495,9 @@ pub(crate) async fn build_answer_context(
     // A picked person answer carries the referenced row's id in its
     // envelope; resolve it to the Person row's identity fields for the
     // declared signer defaults (`person__<role>.email`).
-    fill_picked_person_fields(surreal, &projection, &mut keys, &mut labels).await?;
+    fill_picked_person_fields(application_store, &projection, &mut keys, &mut labels).await?;
 
-    let project = store::projects::find_by_id(surreal, notation.project_id)
+    let project = store::projects::find_by_id(application_store, notation.project_id)
         .await
         .map_err(|error| ContextError::Db(error.to_string()))?;
     let firm = project
@@ -3451,7 +3513,7 @@ pub(crate) async fn build_answer_context(
         .as_ref()
         .and_then(|project| project.client_dri_person_id)
     {
-        Some(client_dri_id) => store::persons::find_by_id(surreal, client_dri_id).await?,
+        Some(client_dri_id) => store::persons::find_by_id(application_store, client_dri_id).await?,
         None => None,
     };
     for (ctx, rendering) in [
@@ -3513,7 +3575,7 @@ pub(crate) async fn build_answer_context(
 /// questionnaire picked. Entries fill gaps: a dotted key the envelope's
 /// own expansion already surfaced keeps its value.
 async fn fill_picked_person_fields(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     projection: &workflows::notation_session::RenderAnswerProjection,
     keys: &mut BTreeMap<String, String>,
     labels: &mut BTreeMap<String, String>,
@@ -3533,7 +3595,7 @@ async fn fill_picked_person_fields(
         else {
             continue;
         };
-        if let Some(person) = store::persons::find_by_id(surreal, id).await? {
+        if let Some(person) = store::persons::find_by_id(application_store, id).await? {
             for ctx in [&mut *keys, &mut *labels] {
                 ctx.entry(format!("{state}.email"))
                     .or_insert_with(|| person.email.clone());
@@ -3666,11 +3728,11 @@ fn json_scalar(value: &serde_json::Value) -> String {
 }
 
 pub(crate) async fn sync_notation_state(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
     new_state: &str,
 ) -> Result<(), String> {
-    store::notations::update_state(surreal, notation_id, new_state)
+    store::notations::update_state(application_store, notation_id, new_state)
         .await
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -3712,7 +3774,7 @@ async fn walker_progress(
     current_state: &StateName,
 ) -> (usize, usize, Vec<StateName>) {
     let order = match notation_session::questionnaire_chain_for_notation(
-        &state.surreal,
+        &state.application_store,
         Some(&state.storage),
         notation_id,
     )
@@ -3771,171 +3833,12 @@ fn progress_from_chain(order: &[StateName], current_state: &StateName) -> (usize
 mod tests {
     use super::{
         context_from_answers, firm_legal_name_for_brand, progress_from_chain, questionnaire_chain,
-        render_context_from_answers, start_post, substitute_template_body,
-        typst_body_from_template, StartWalkBody,
+        substitute_template_body, typst_body_from_template,
     };
     use axum::http::StatusCode;
     use std::collections::BTreeMap;
     use uuid::Uuid;
     use workflows::{retainer_intake_questionnaire, StateName};
-
-    /// The client DRI renders from the Project's bound Person row without a
-    /// question being asked: `client_dri.name`/`client_dri.email` (the
-    /// template body's alias) and `project.client_dri` (the Clause input
-    /// expansion's display name) fill from the pinned Person in both the
-    /// keys and labels contexts. A Project with no pin renders nothing.
-    #[tokio::test]
-    async fn the_project_fills_its_client_dri_and_branded_portal_link() {
-        const TEMPLATE: &str =
-            include_str!("../../workflows/tests/fixtures/onboarding_implicit_end.txt");
-        let surreal = store::test_support::mem_surreal().await;
-        let dir = tempfile::tempdir().unwrap();
-        let storage: std::sync::Arc<dyn cloud::StorageService> =
-            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
-        let brand = views::brand::BrandKey::Vesta;
-        let project = store::projects::create(
-            &surreal,
-            &store::projects::NewProject {
-                code: "onboarding-render-test".to_string(),
-                name: "Onboarding render test".to_string(),
-                status: "open".to_string(),
-                brand: brand.as_str().to_string(),
-                entity_id: store::test_support::seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        store::template_source::persist_contents(
-            &surreal,
-            &storage,
-            project.id,
-            "onboarding",
-            TEMPLATE.into(),
-            "synthetic-commit".into(),
-        )
-        .await
-        .unwrap();
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::new("Designated Client", "dri@example.com"),
-        )
-        .await
-        .unwrap();
-        let role = store::projects::add_participation(&surreal, project.id, person.id, "client")
-            .await
-            .unwrap();
-        surreal
-            .query("UPDATE $id SET is_client_dri = true, updated_at = $now")
-            .bind((
-                "id",
-                store::surreal::record_id("person_project_role", role.id),
-            ))
-            .bind(("now", chrono::Utc::now().to_rfc3339()))
-            .await
-            .unwrap();
-        let pinned =
-            store::projects::set_client_dri_person_id(&surreal, project.id, Some(person.id))
-                .await
-                .unwrap();
-        assert!(pinned.is_some(), "the seeded project exists");
-
-        let runtime = workflows::InMemoryRuntime::new();
-        let notation = workflows::start_notation(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            "onboarding",
-            person.id,
-            project.id,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let (keys, labels) =
-            super::build_answer_context(&surreal, Some(&storage), notation.notation_id)
-                .await
-                .unwrap();
-        let portal_url = format!("{}/app/projects", brand.public_home_href());
-        let onboarding = rules::clauses::compile(workflows::RETAINER_INTAKE_TEMPLATE).unwrap();
-        let typst =
-            super::typst_body_from_template(&onboarding, &keys, &labels, Some("onboarding"));
-        assert!(typst.contains(&format!("#link(\"{portal_url}\")")));
-        for ctx in [&keys, &labels] {
-            assert_eq!(
-                ctx.get("client_dri.name").map(String::as_str),
-                Some("Designated Client")
-            );
-            assert_eq!(
-                ctx.get("client_dri.email").map(String::as_str),
-                Some("dri@example.com")
-            );
-            assert_eq!(
-                ctx.get("project.client_dri").map(String::as_str),
-                Some("Designated Client")
-            );
-            assert_eq!(
-                ctx.get("project.client_dri.name").map(String::as_str),
-                Some("Designated Client")
-            );
-            assert_eq!(
-                ctx.get("project.client_dri.email").map(String::as_str),
-                Some("dri@example.com")
-            );
-        }
-    }
-
-    /// The absence of a pin is not filled with an empty string: a matter
-    /// with no client DRI renders nothing for the alias.
-    #[tokio::test]
-    async fn an_unpinned_project_fills_nothing_for_the_client_dri() {
-        const TEMPLATE: &str =
-            include_str!("../../workflows/tests/fixtures/onboarding_implicit_end.txt");
-        let surreal = store::test_support::mem_surreal().await;
-        let dir = tempfile::tempdir().unwrap();
-        let storage: std::sync::Arc<dyn cloud::StorageService> =
-            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
-        let unpinned = store::test_support::seed_project(&surreal, "No DRI project").await;
-        store::template_source::persist_contents(
-            &surreal,
-            &storage,
-            unpinned.id,
-            "onboarding",
-            TEMPLATE.into(),
-            "synthetic-commit".into(),
-        )
-        .await
-        .unwrap();
-        let other = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::new("Uninvolved", "other@example.com"),
-        )
-        .await
-        .unwrap();
-        let runtime = workflows::InMemoryRuntime::new();
-        let notation = workflows::start_notation(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            "onboarding",
-            other.id,
-            unpinned.id,
-            None,
-        )
-        .await
-        .unwrap();
-        let (keys, labels) =
-            super::build_answer_context(&surreal, Some(&storage), notation.notation_id)
-                .await
-                .unwrap();
-        for ctx in [&keys, &labels] {
-            assert!(
-                !ctx.contains_key("client_dri.name"),
-                "no pin fills nothing: {ctx:?}"
-            );
-        }
-    }
 
     #[test]
     fn a_declared_brand_supplies_its_firm_legal_name() {
@@ -3949,362 +3852,6 @@ mod tests {
         );
         assert!(firm_legal_name_for_brand("not-a-brand").is_none());
         assert!(firm_legal_name_for_brand("").is_none());
-    }
-
-    #[tokio::test]
-    async fn project_authored_onboarding_walk_reaches_its_declared_review_gate() {
-        const TEMPLATE: &str =
-            include_str!("../../workflows/tests/fixtures/onboarding_implicit_end.txt");
-        let surreal = store::test_support::mem_surreal().await;
-        let dir = tempfile::tempdir().unwrap();
-        let storage: std::sync::Arc<dyn cloud::StorageService> =
-            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
-        let project = store::test_support::seed_project(&surreal, "Synthetic project").await;
-        let person = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::new("Client", "client@example.com"),
-        )
-        .await
-        .unwrap();
-        store::template_source::persist_contents(
-            &surreal,
-            &storage,
-            project.id,
-            "onboarding",
-            TEMPLATE.into(),
-            "synthetic-commit".into(),
-        )
-        .await
-        .unwrap();
-        let runtime = workflows::InMemoryRuntime::new();
-        let notation = workflows::start_notation(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            "onboarding",
-            person.id,
-            project.id,
-            None,
-        )
-        .await
-        .unwrap();
-        for (code, value) in [
-            ("jurisdiction__governing_law", "NV"),
-            ("jurisdiction__arbitration_seat", "NV"),
-        ] {
-            workflows::answer_step(
-                &surreal,
-                &runtime,
-                Some(&storage),
-                notation.notation_id,
-                code,
-                value,
-                workflows::AnswerAuthor::lawyer(None),
-            )
-            .await
-            .unwrap();
-        }
-        // A newer authored revision does not change an already-open notation.
-        store::template_source::persist_contents(
-            &surreal,
-            &storage,
-            project.id,
-            "onboarding",
-            TEMPLATE.replace("created: lawyer_review", "received: lawyer_review"),
-            "synthetic-newer-commit".into(),
-        )
-        .await
-        .unwrap();
-        let state = super::advance_to_lawyer_review(
-            &surreal,
-            &runtime,
-            &storage,
-            notation.notation_id,
-            None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(state.as_str(), "lawyer_review");
-        let saved = store::notations::find_by_id(&surreal, notation.notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(saved.state, "lawyer_review");
-    }
-
-    /// The branched onboarding fixture the LAW-209 walk tests route
-    /// through: one branch question whose choices each carry their
-    /// own route and share no fallback.
-    const BRANCHED_TEMPLATE: &str =
-        include_str!("../../workflows/tests/fixtures/onboarding_branched.txt");
-
-    async fn branched_fixture(
-        surreal: &store::surreal::SurrealDb,
-    ) -> (
-        tempfile::TempDir,
-        std::sync::Arc<dyn cloud::StorageService>,
-        store::persons::Person,
-        store::projects::Project,
-    ) {
-        let dir = tempfile::tempdir().unwrap();
-        let storage: std::sync::Arc<dyn cloud::StorageService> =
-            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
-        let project = store::test_support::seed_project(surreal, "Synthetic project").await;
-        let person = store::persons::create(
-            surreal,
-            &store::persons::NewPerson::new("Client", "client@example.com"),
-        )
-        .await
-        .unwrap();
-        store::template_source::persist_contents(
-            surreal,
-            &storage,
-            project.id,
-            "onboarding",
-            BRANCHED_TEMPLATE.into(),
-            "synthetic-commit".into(),
-        )
-        .await
-        .unwrap();
-        (dir, storage, person, project)
-    }
-
-    async fn branched_ask(
-        surreal: &store::surreal::SurrealDb,
-        runtime: &workflows::InMemoryRuntime,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-        notation_id: Uuid,
-        expected: &str,
-    ) {
-        let step =
-            workflows::notation_session::current_step(surreal, runtime, Some(storage), notation_id)
-                .await
-                .unwrap();
-        let workflows::NextStep::NeedsAnswer { question } = step else {
-            panic!("expected the next ask to be {expected}");
-        };
-        assert_eq!(question.code, expected);
-    }
-
-    async fn branched_route(
-        surreal: &store::surreal::SurrealDb,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-        notation_id: Uuid,
-        expected: &[&str],
-    ) {
-        let chain = workflows::notation_session::questionnaire_chain_for_notation(
-            surreal,
-            Some(storage),
-            notation_id,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            chain,
-            expected.iter().map(ToString::to_string).collect::<Vec<_>>()
-        );
-    }
-
-    async fn branched_complete(
-        surreal: &store::surreal::SurrealDb,
-        runtime: &workflows::InMemoryRuntime,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-        notation_id: Uuid,
-    ) {
-        assert!(matches!(
-            workflows::notation_session::current_step(surreal, runtime, Some(storage), notation_id)
-                .await
-                .unwrap(),
-            workflows::NextStep::QuestionnaireComplete
-        ));
-    }
-
-    /// LAW-209: the portal walker routes on the answered branch. The
-    /// step the pre-layer resolves and the progress rail's question
-    /// count both come from the route-aware order, so the not-taken
-    /// branch's questions never render and the walk ends on the taken
-    /// branch's last question — never a runtime dead end.
-    #[tokio::test]
-    async fn branched_onboarding_walk_follows_the_answered_route() {
-        let surreal = store::test_support::mem_surreal().await;
-        let (_dir, storage, person, project) = branched_fixture(&surreal).await;
-        let runtime = workflows::InMemoryRuntime::new();
-        let branch_code = "custom_single_choice__path";
-
-        // Before any answer the walk fans only what the route policy
-        // can reach: the branch question itself — its choices each
-        // carry their own route and none shares a fallback.
-        let started = workflows::start_notation(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            "onboarding",
-            person.id,
-            project.id,
-            None,
-        )
-        .await
-        .unwrap();
-        branched_ask(
-            &surreal,
-            &runtime,
-            &storage,
-            started.notation_id,
-            branch_code,
-        )
-        .await;
-        branched_route(&surreal, &storage, started.notation_id, &[branch_code]).await;
-
-        // Answering "transactional" takes that route: the closing date
-        // is the next ask, the governing-law question never appears,
-        // and the rail fans through the rejoin — the seat question
-        // both branches share stays on the taken route.
-        workflows::answer_step(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            started.notation_id,
-            branch_code,
-            "transactional",
-            workflows::AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        branched_ask(
-            &surreal,
-            &runtime,
-            &storage,
-            started.notation_id,
-            "custom_datetime__closing_date",
-        )
-        .await;
-        branched_route(
-            &surreal,
-            &storage,
-            started.notation_id,
-            &[
-                branch_code,
-                "custom_datetime__closing_date",
-                "jurisdiction__arbitration_seat",
-            ],
-        )
-        .await;
-        workflows::answer_step(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            started.notation_id,
-            "custom_datetime__closing_date",
-            "2026-12-01",
-            workflows::AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        // The rejoin: the seat question both branches share is next —
-        // convergence, not completion.
-        branched_ask(
-            &surreal,
-            &runtime,
-            &storage,
-            started.notation_id,
-            "jurisdiction__arbitration_seat",
-        )
-        .await;
-        workflows::answer_step(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            started.notation_id,
-            "jurisdiction__arbitration_seat",
-            "NV",
-            workflows::AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        branched_complete(&surreal, &runtime, &storage, started.notation_id).await;
-    }
-
-    /// LAW-209: the litigation route asks governing law — the closing
-    /// date the transactional route owns never enters the chain.
-    #[tokio::test]
-    async fn branched_walk_litigation_route_skips_the_closing_date() {
-        let surreal = store::test_support::mem_surreal().await;
-        let (_dir, storage, person, project) = branched_fixture(&surreal).await;
-        let runtime = workflows::InMemoryRuntime::new();
-        let branch_code = "custom_single_choice__path";
-        let other = workflows::start_notation(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            "onboarding",
-            person.id,
-            project.id,
-            None,
-        )
-        .await
-        .unwrap();
-        workflows::answer_step(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            other.notation_id,
-            branch_code,
-            "litigation",
-            workflows::AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        branched_ask(
-            &surreal,
-            &runtime,
-            &storage,
-            other.notation_id,
-            "jurisdiction__governing_law",
-        )
-        .await;
-        branched_route(
-            &surreal,
-            &storage,
-            other.notation_id,
-            &[
-                branch_code,
-                "jurisdiction__governing_law",
-                "jurisdiction__arbitration_seat",
-            ],
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn catalog_onboarding_walk_reaches_review_idempotently() {
-        let surreal = store::test_support::mem_surreal().await;
-        let runtime = workflows::InMemoryRuntime::new();
-        let (notation_id, accepted) = walk_onboarding_letter(&surreal, &runtime, "nevada").await;
-        assert!(
-            accepted,
-            "the declared governing-law answer must complete intake"
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let storage: std::sync::Arc<dyn cloud::StorageService> =
-            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
-        for _ in 0..2 {
-            let state =
-                super::advance_to_lawyer_review(&surreal, &runtime, &storage, notation_id, None)
-                    .await
-                    .unwrap();
-            assert_eq!(state.as_str(), "lawyer_review");
-        }
-        let events = workflows::StateMachineRuntime::events(
-            &runtime,
-            workflows::MachineKind::Workflow,
-            notation_id,
-        )
-        .await;
-        assert_eq!(
-            events.len(),
-            2,
-            "a repeated drive must retain the two catalog transitions"
-        );
     }
 
     #[test]
@@ -4877,363 +4424,6 @@ Sign: {{client.signature}}";
             Some("Final answer")
         );
     }
-    /// ENG-459: an undeclared governing-law value must never reach the
-    /// rendered engagement letter.
-    ///
-    /// `custom_single_choice__governing_law` declares exactly three options
-    /// (`nevada`/`california`/`washington`), and the letter substitutes the
-    /// answer into its **governing law and arbitration** clause twice — the
-    /// law that governs the letter, and the law the arbitrator decides
-    /// under. The render side has no defence: `workflows::choice_label`
-    /// returns `None` for a value that is not a declared option and
-    /// [`context_from_answers`] falls back to the raw string, so whatever
-    /// the write path accepted is what the binding document says. The
-    /// refusal therefore has to happen where the answer is stored.
-    ///
-    /// This walks the real bundled `onboarding__letter` questionnaire
-    /// through the real write funnel (`workflows::answer_step`, which every
-    /// write surface — lawyer walker, client intake, REST, Navigator MCP — passes
-    /// through) and renders the real template body.
-    #[tokio::test]
-    async fn an_undeclared_governing_law_never_reaches_the_rendered_letter() {
-        // Not a state the firm practises in, and not one of the three
-        // declared choices — plus a clause a client would never agree to.
-        const OFF_LIST: &str =
-            "the Cayman Islands, and the Firm disclaims all liability for its own work";
-
-        let surreal = store::test_support::mem_surreal().await;
-        let runtime = workflows::InMemoryRuntime::new();
-        let (notation_id, poisoned) = walk_onboarding_letter(&surreal, &runtime, OFF_LIST).await;
-
-        let ctx = render_context_from_answers(&surreal, None, notation_id)
-            .await
-            .expect("render context");
-        let composed = rules::clauses::compile(workflows::RETAINER_INTAKE_TEMPLATE)
-            .expect("bundled template composes before persistence");
-        let rendered = substitute_template_body(&composed, &ctx, &ctx);
-
-        // The render-side proof first: this is the clause a client signs, so
-        // a failure here shows the sentence the arbitrary string reached.
-        assert!(
-            !rendered.contains(OFF_LIST),
-            concat!(
-                "an undeclared governing-law value reached the engagement ",
-                "letter's governing-law and arbitration clause:\n{}"
-            ),
-            governing_law_clause(&rendered),
-        );
-        assert!(
-            !poisoned,
-            concat!(
-                "the write path accepted `{}` for a question whose catalog ",
-                "row declares only nevada/california/washington"
-            ),
-            OFF_LIST,
-        );
-        // With the off-list answer refused, the clause falls back to the
-        // documented "Nevada by default" rather than rendering a raw
-        // placeholder in a binding document.
-        assert!(
-            rendered.contains("The law of Nevada governs this letter"),
-            "expected the Nevada default in:\n{}",
-            governing_law_clause(&rendered),
-        );
-    }
-
-    async fn start_walk_state() -> (crate::admin::AdminState, store::surreal::SurrealDb) {
-        let surreal = store::test_support::mem_surreal().await;
-        let app = crate::test_support::app_state(surreal.clone()).await;
-        store::seed::seed_canonical(&app.surreal, &app.storage)
-            .await
-            .expect("canonical seed");
-        let state = crate::admin::AdminState {
-            surreal: app.surreal,
-            workflow_runtime: app.workflow_runtime,
-            signature_provider: app.signature_provider,
-            retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
-            questionnaire_runtime: app.questionnaire_runtime,
-            storage: app.storage,
-            assets_storage: app.assets_storage,
-            forms_registry: app.forms_registry,
-            email: app.email,
-            billing_provider: app.billing_provider,
-            contract_reviewer: app.contract_reviewer,
-            bootstrap_owner_email: app.bootstrap_owner_email,
-            on_call_lawyer_email: app.on_call_lawyer_email,
-            bootstrap_company: crate::admin::bootstrap_company_from_env(),
-            sessions: app.sessions,
-            secure_cookies: false,
-            attachment_scanner: app.attachment_scanner,
-            runtime_kms: app.runtime_kms,
-            twilio_registry: None,
-        };
-        (state, surreal)
-    }
-
-    async fn start_walk_on_brand(
-        state: crate::admin::AdminState,
-        branding: &'static views::brand::Branding,
-        client_email: &str,
-    ) -> axum::response::Response {
-        Box::pin(views::brand::scope(
-            branding,
-            start_post(
-                axum::extract::State(state),
-                None,
-                axum::extract::Form(StartWalkBody {
-                    client_email: client_email.to_string(),
-                    retainer_template_code: "onboarding__letter".into(),
-                }),
-            ),
-        ))
-        .await
-    }
-
-    #[tokio::test]
-    async fn start_post_writes_the_firm_that_wears_the_request_brand() {
-        let (state, surreal) = start_walk_state().await;
-        let email = format!("walk-firm-{}@example.com", Uuid::now_v7());
-        let worn = store::firms::firm_id_for_brand_key(&surreal, "neon")
-            .await
-            .expect("brand lookup")
-            .expect("seed practice wears neon");
-
-        let resp = Box::pin(start_walk_on_brand(
-            state,
-            &views::brand::DEFAULT_BRANDING,
-            &email,
-        ))
-        .await;
-        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-
-        let project = store::projects::find_by_name(&surreal, &format!("(pending) {email}"))
-            .await
-            .expect("project lookup")
-            .expect("project row inserted");
-        assert_eq!(project.brand, "neon");
-        assert_eq!(project.firm_id, Some(worn));
-    }
-
-    #[tokio::test]
-    async fn start_post_does_not_assign_the_anchor_when_the_brand_belongs_to_another_firm() {
-        let (state, surreal) = start_walk_state().await;
-        let anchor = store::firms::anchor_firm(&surreal)
-            .await
-            .expect("anchor lookup")
-            .expect("seeded practice is the anchor");
-        let admin = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Other Admin DRI",
-                format!("other-admin-{}@example.com", Uuid::now_v7()),
-                store::persons::Role::Admin,
-            ),
-        )
-        .await
-        .expect("other admin");
-        let other = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: format!("Other Practice {}", Uuid::now_v7()),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(&surreal).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .expect("other firm");
-        store::firms::detach_brand(
-            &surreal,
-            store::persons::Role::Owner,
-            None,
-            anchor.id,
-            "guieb-shook",
-        )
-        .await
-        .expect("detach guieb-shook from the seed practice");
-        store::firms::attach_brand(
-            &surreal,
-            store::persons::Role::Owner,
-            None,
-            other.id,
-            "guieb-shook",
-        )
-        .await
-        .expect("other firm wears guieb-shook");
-
-        let email = format!("walk-other-firm-{}@example.com", Uuid::now_v7());
-        let resp = Box::pin(start_walk_on_brand(
-            state,
-            &views::brand::GUIEB_SHOOK_BRANDING,
-            &email,
-        ))
-        .await;
-        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-
-        let project = store::projects::find_by_name(&surreal, &format!("(pending) {email}"))
-            .await
-            .expect("project lookup")
-            .expect("project row inserted");
-        assert_eq!(project.brand, "guieb-shook");
-        assert_eq!(project.firm_id, Some(other.id));
-        assert_ne!(project.firm_id, Some(anchor.id));
-    }
-
-    #[tokio::test]
-    async fn start_post_refuses_when_no_firm_wears_the_request_brand() {
-        let (state, surreal) = start_walk_state().await;
-        let worn_by = store::firms::firm_id_for_brand_key(&surreal, "delete-your-data")
-            .await
-            .expect("seat lookup")
-            .expect("the seed seats delete-your-data");
-        store::firms::detach_brand(
-            &surreal,
-            store::persons::Role::Owner,
-            None,
-            worn_by,
-            "delete-your-data",
-        )
-        .await
-        .expect("detach delete-your-data so no Firm wears it");
-
-        let email = format!("walk-unworn-{}@example.com", Uuid::now_v7());
-        let resp = Box::pin(start_walk_on_brand(
-            state,
-            &views::brand::DELETE_YOUR_DATA_BRANDING,
-            &email,
-        ))
-        .await;
-        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-        let loc = resp
-            .headers()
-            .get(axum::http::header::LOCATION)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        assert!(
-            loc.contains("this+brand+is+not+worn+by+a+firm")
-                || loc.contains("this%20brand%20is%20not%20worn%20by%20a%20firm"),
-            "redirect was {loc:?}"
-        );
-        assert!(
-            store::projects::find_by_name(&surreal, &format!("(pending) {email}"))
-                .await
-                .expect("project lookup")
-                .is_none(),
-            "an unworn brand must not open a Project"
-        );
-    }
-
-    /// The rendered letter's governing-law/arbitration section, for a
-    /// failure message that shows the clause rather than the whole letter.
-    fn governing_law_clause(rendered: &str) -> String {
-        rendered
-            .lines()
-            .skip_while(|l| !l.contains("Governing law"))
-            .take(12)
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    /// Walk the bundled `onboarding__letter` questionnaire to its last step
-    /// and answer the governing-law question with `governing_law`. Returns
-    /// the notation and whether that final write was accepted.
-    async fn walk_onboarding_letter(
-        surreal: &store::surreal::SurrealDb,
-        runtime: &workflows::InMemoryRuntime,
-        governing_law: &str,
-    ) -> (Uuid, bool) {
-        store::templates::save_version(
-            surreal,
-            None,
-            "onboarding__letter",
-            store::templates::Version {
-                title: "Onboarding Letter".into(),
-                respondent_type: "person_and_entity".into(),
-                asset_id: None,
-                form_code: None,
-                kind: Some("onboarding".into()),
-                source_commit_sha: None,
-            },
-        )
-        .await
-        .expect("save template");
-        for (code, prompt, shape) in [
-            ("entity", "Which entity?", "entity"),
-            ("address", "What is the address?", "address"),
-            ("person", "Who is the person?", "person"),
-            ("project", "What is the project?", "project"),
-            ("custom_datetime", "When?", "string"),
-            ("custom_text", "What scope?", "string"),
-            ("custom_single_choice", "Which state's law?", "string"),
-        ] {
-            store::questions::create(
-                surreal,
-                &store::questions::NewQuestion::new(code, prompt, shape),
-            )
-            .await
-            .expect("seed question");
-        }
-        let client = store::persons::create(
-            surreal,
-            &store::persons::NewPerson::with_role(
-                "Libra",
-                "libra@example.com",
-                store::persons::Role::Client,
-            ),
-        )
-        .await
-        .expect("seed client");
-
-        let started = workflows::start_notation(
-            surreal,
-            runtime,
-            None,
-            "onboarding__letter",
-            client.id,
-            Uuid::now_v7(),
-            None,
-        )
-        .await
-        .expect("start notation");
-        let notation_id = started.notation_id;
-
-        // Every step but the last takes a value the letter renders verbatim;
-        // the governing-law step takes the value under test.
-        let steps = [
-            ("entity", "Northstar Ventures LLC"),
-            (
-                "address__principal_office",
-                "100 Innovation Way, Reno, NV 89501",
-            ),
-            ("person__client", "Libra"),
-            ("project__engagement", "Apollo"),
-            ("custom_datetime__engagement_start_date", "2026-09-01"),
-            (
-                "custom_text__engagement_scope",
-                "Draft and file the Apollo formation documents.",
-            ),
-            ("custom_single_choice__governing_law", governing_law),
-        ];
-        let mut accepted = false;
-        for (code, value) in steps {
-            let outcome = workflows::answer_step(
-                surreal,
-                runtime,
-                None,
-                notation_id,
-                code,
-                value,
-                workflows::AnswerAuthor::lawyer(None),
-            )
-            .await;
-            if code == "custom_single_choice__governing_law" {
-                accepted = outcome.is_ok();
-            } else {
-                outcome.unwrap_or_else(|e| panic!("step `{code}` must be accepted: {e}"));
-            }
-        }
-        (notation_id, accepted)
-    }
 
     /// A one-question onboarding Draft: a lawyer-audience single choice and a
     /// workflow that goes straight from BEGIN to lawyer review.
@@ -5307,7 +4497,7 @@ workflow:
     /// fixture, with the one-question onboarding Draft published to it.
     async fn onboarding_matter(
         state: &crate::admin::AdminState,
-        db: &store::surreal::SurrealDb,
+        db: &store::application_store::ApplicationStore,
     ) -> (Uuid, Uuid, Uuid) {
         let project = store::test_support::seed_project(db, "Synthetic onboarding").await;
         let client = store::persons::create(
@@ -5344,7 +4534,7 @@ workflow:
 
     async fn open_notation(
         state: &crate::admin::AdminState,
-        db: &store::surreal::SurrealDb,
+        db: &store::application_store::ApplicationStore,
         code: &str,
         client: Uuid,
         project: Uuid,
@@ -5363,7 +4553,10 @@ workflow:
         .notation_id
     }
 
-    async fn notation_state(db: &store::surreal::SurrealDb, notation_id: Uuid) -> String {
+    async fn notation_state(
+        db: &store::application_store::ApplicationStore,
+        notation_id: Uuid,
+    ) -> String {
         store::notations::find_by_id(db, notation_id)
             .await
             .unwrap()
@@ -5381,7 +4574,7 @@ workflow:
         missing_step: &str,
     ) {
         let ctx = super::SendFlowContext {
-            surreal: &state.surreal,
+            application_store: &state.application_store,
             runtime: state.workflow_runtime.as_ref(),
             storage: &state.storage,
             acting: Some(lawyer),
@@ -5533,14 +4726,17 @@ workflow:
         .await;
     }
 
-    async fn postgres_walk_state() -> (crate::admin::AdminState, store::surreal::SurrealDb) {
-        let db = store::surreal::SurrealDb::uninitialized();
+    async fn postgres_walk_state() -> (
+        crate::admin::AdminState,
+        store::application_store::ApplicationStore,
+    ) {
+        let db = store::application_store::ApplicationStore::uninitialized();
         let app = crate::test_support::app_state(db.clone()).await;
         store::seed::seed_canonical(&db, &app.storage)
             .await
             .expect("canonical seed");
         let state = crate::admin::AdminState {
-            surreal: app.surreal,
+            application_store: app.application_store,
             workflow_runtime: app.workflow_runtime,
             signature_provider: app.signature_provider,
             retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),

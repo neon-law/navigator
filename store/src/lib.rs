@@ -1,16 +1,9 @@
 #![allow(clippy::doc_markdown)]
 //! Neon Law Navigator CRM data layer.
 //!
-//! Owns the SurrealDB schema and the canonical seed. Every workspace
-//! crate that touches the store — `web`, `cli`, `mcp` — depends on this
-//! crate; nothing here depends on axum, reqwest, or any HTTP machinery.
-//!
-//! One table is one top-level module: `store::persons` owns `person`,
-//! `store::projects` owns `project`, and so on. The schema itself is a
-//! statement of the present rather than a history — one idempotent
-//! `DEFINE` file at `store/src/schema/navigator.surql`, applied whole on
-//! every boot, plus a `schema_version` record. You change it by editing
-//! that file, not by appending a step.
+//! Owns the PostgreSQL schema, migrations, and canonical seed. Store modules such as
+//! [`persons`] and [`projects`] own their domain accessors. Changes live in
+//! `store/postgres/migrations/`, and `store/postgres/schema.sql` records the current schema.
 //!
 //! # Accounting
 //!
@@ -19,59 +12,6 @@
 //! Navigator also stores rate and quoted usage provenance for Notations.
 //! [`cap_table_holdings`] records a Project's current holdings; each cap-table
 //! ledger remains outside Navigator.
-
-#[cfg(test)]
-pub(crate) mod test_tracing {
-    use tracing::span::{Attributes, Id, Record};
-    use tracing::subscriber::Interest;
-    use tracing::{Event, Metadata, Subscriber};
-
-    /// A globally-installed subscriber that claims interest in every callsite
-    /// but records nothing itself.
-    ///
-    /// `tracing` computes and caches each callsite's interest from the
-    /// *globally registered* dispatchers only — a thread-local `set_default`
-    /// (how the capture tests install their subscriber) is invisible to that
-    /// cache. With no global dispatcher, a callsite first seen — or rebuilt —
-    /// while the global default is `NoSubscriber` caches as `Interest::never()`,
-    /// and the event a capturing test is asserting on is dropped before its
-    /// per-event `enabled` check ever runs against the thread-local subscriber.
-    /// Returning `Interest::sometimes()` from a globally-registered dispatcher
-    /// keeps every callsite deferring to the current dispatcher, so the
-    /// thread-local capture is consulted per event; `enabled` returns `false`
-    /// so this global itself records nothing on threads without a capturing
-    /// default. Mirrors `portal::test_tracing`.
-    struct AlwaysInterested;
-
-    impl Subscriber for AlwaysInterested {
-        fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
-            Interest::sometimes()
-        }
-        fn enabled(&self, _: &Metadata<'_>) -> bool {
-            false
-        }
-        fn new_span(&self, _: &Attributes<'_>) -> Id {
-            Id::from_u64(1)
-        }
-        fn record(&self, _: &Id, _: &Record<'_>) {}
-        fn record_follows_from(&self, _: &Id, _: &Id) {}
-        fn event(&self, _: &Event<'_>) {}
-        fn enter(&self, _: &Id) {}
-        fn exit(&self, _: &Id) {}
-    }
-
-    static INSTALL: std::sync::Once = std::sync::Once::new();
-
-    /// Installs [`AlwaysInterested`] as the process-global default the first
-    /// time any capture test runs, so callsite interest can never cache as
-    /// `never`. Idempotent, and a no-op if some other global default is
-    /// already set.
-    pub(crate) fn ensure_callsite_interest() {
-        INSTALL.call_once(|| {
-            let _ = tracing::subscriber::set_global_default(AlwaysInterested);
-        });
-    }
-}
 
 pub mod access;
 pub mod addresses;
@@ -112,10 +52,8 @@ pub mod disclosures;
 pub mod document_comments;
 pub mod docusign_completion;
 pub mod evidence_shares;
-pub mod project_labels;
-/// Canonical export section selection for buffered capture and streaming verification.
-pub(crate) use model::source_capture as export_filter;
 pub mod project_envelopes;
+pub mod project_labels;
 pub use model::document_pointers;
 pub use model::pleading;
 pub mod attorney_calendars;
@@ -157,7 +95,6 @@ pub mod inbox_import;
 pub mod inbox_triage;
 pub mod iolta_accounts;
 pub mod iolta_withdrawals;
-pub mod journal_startup_migration;
 pub mod jurisdictions;
 pub mod leads;
 pub mod legal_plans;
@@ -204,7 +141,6 @@ pub mod plan_seeds;
 pub mod playbooks;
 pub mod postgres;
 /// Resumable batches that copy rows the PostgreSQL mirror never saw.
-pub mod postgres_backfill;
 /// The AGE relationship graph, projected from the mirrors and parity-checked
 /// against the Surreal conflict traversal.
 pub mod postgres_graph;
@@ -212,7 +148,6 @@ pub mod postgres_graph;
 /// graph REST endpoints.
 pub mod postgres_graph_views;
 /// Best-effort PostgreSQL mirror of Surreal writes, with parity and reconcile.
-pub mod postgres_mirror;
 /// PostgreSQL schema history and deterministic parity artifacts.
 pub mod postgres_schema;
 pub mod posts;
@@ -248,10 +183,11 @@ pub mod sample_project;
 /// The metered-credit ledger behind the Same Day Legal sandbox.
 pub mod sandbox_usage;
 /// The schema, applied as one idempotent `DEFINE` file (#1093).
-pub mod schema;
 pub mod seed;
 pub mod sent_emails;
 
+/// The store connection, over the `NAVIGATOR_SURREAL_*` contract.
+pub mod application_store;
 pub mod billing_annotations;
 pub mod signature_webhook_journal;
 pub mod signatures;
@@ -264,8 +200,6 @@ pub mod source_pages;
 pub mod ssh_public_keys;
 pub mod statutory_deadlines;
 pub mod summary_sender_approvals;
-/// The store connection, over the `NAVIGATOR_SURREAL_*` contract.
-pub mod surreal;
 pub mod synthetic_portfolio;
 pub mod task_handoffs;
 pub mod tasks;
@@ -274,6 +208,8 @@ pub mod templates;
 pub mod testimonials;
 pub mod time_entries;
 pub mod timers;
+#[path = "runtime/tls.rs"]
+pub mod tls;
 pub mod trust;
 pub mod xero_invoices;
 
@@ -290,6 +226,6 @@ pub mod communication_dashboard;
 
 pub mod fi_import;
 
-pub use model::workflow_engine;
+pub use model::disabled_billing;
 pub mod durable_object_handover;
 pub mod project_slack_deliveries;

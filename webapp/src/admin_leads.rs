@@ -148,38 +148,40 @@ fn consent_detail(
 
 #[cfg(feature = "server")]
 async fn latest_consent(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     lead_id: uuid::Uuid,
 ) -> Result<Option<store::leads::ConsentEvent>, ServerFnError> {
-    store::leads::latest_consent_event(surreal, lead_id)
+    store::leads::latest_consent_event(application_store, lead_id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))
 }
 
 #[cfg(feature = "server")]
 async fn existing_person_id(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     lead: &store::leads::Lead,
 ) -> Result<Option<String>, ServerFnError> {
     if lead.person_id.is_some() {
         return Ok(None);
     }
-    Ok(store::persons::find_by_email_ci(surreal, &lead.email)
-        .await
-        .map_err(|error| ServerFnError::new(error.to_string()))?
-        .map(|person| person.id.to_string()))
+    Ok(
+        store::persons::find_by_email_ci(application_store, &lead.email)
+            .await
+            .map_err(|error| ServerFnError::new(error.to_string()))?
+            .map(|person| person.id.to_string()),
+    )
 }
 
 /// Load the queue: Owner/Admin only, newest first, phones masked.
 #[server]
 pub async fn leads_list_view() -> Result<LeadsListView, ServerFnError> {
     let role = crate::admin_listing::require_admin().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let leads = store::leads::list(&surreal)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let leads = store::leads::list(&application_store)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let people = store::persons::find_by_ids(
-        &surreal,
+        &application_store,
         &leads
             .iter()
             .filter_map(|lead| lead.person_id)
@@ -194,7 +196,7 @@ pub async fn leads_list_view() -> Result<LeadsListView, ServerFnError> {
     let mut rows = Vec::with_capacity(leads.len());
     for lead in leads {
         let person = lead.person_id.and_then(|id| people.get(&id));
-        let latest_consent = store::leads::latest_consent_event(&surreal, lead.id)
+        let latest_consent = store::leads::latest_consent_event(&application_store, lead.id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?;
         rows.push(LeadListRow {
@@ -289,8 +291,8 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
         intake: Vec::new(),
         lead: None,
     };
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(lead) = store::leads::find(&surreal, id)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(lead) = store::leads::find(&application_store, id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
     else {
@@ -302,14 +304,14 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
     };
 
     let linked_person = if let Some(person_id) = lead.person_id {
-        store::persons::find_by_id(&surreal, person_id)
+        store::persons::find_by_id(&application_store, person_id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
     } else {
         None
     };
-    let existing_person_id = existing_person_id(&surreal, &lead).await?;
-    let latest_consent = latest_consent(&surreal, lead.id).await?;
+    let existing_person_id = existing_person_id(&application_store, &lead).await?;
+    let latest_consent = latest_consent(&application_store, lead.id).await?;
     let call_opt_in = latest_consent
         .as_ref()
         .map_or_else(|| "—".to_string(), |event| event.call_opt_in.to_string());

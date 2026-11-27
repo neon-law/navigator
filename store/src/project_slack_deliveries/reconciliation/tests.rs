@@ -258,13 +258,13 @@ async fn canonical_project_deletion_preserves_audit_without_bypassing_protected_
     crate::test_support::with_postgres(async {
         let pg=PostgresDb::application().await.unwrap();let request=fixture(&pg).await;
         reconcile(&pg,request).await.unwrap();
-        let source=crate::surreal::SurrealDb::uninitialized();
-        let protected = crate::projects::delete_project_with_surreal(&source, request.project_id).await;
+        let source=crate::application_store::ApplicationStore::uninitialized();
+        let protected = crate::projects::delete_project(&source, request.project_id).await;
         assert!(matches!(protected, Err(crate::projects::ProjectCommandError::Referenced(_))), "protected Project deletion returned {protected:?}");
         assert!(crate::projects::find_by_id(&source,request.project_id).await.unwrap().is_some());
         // Remove only this fixture's protected document to exercise the empty case.
         sqlx::query("DELETE FROM notation WHERE project_id=$1").bind(request.project_id).execute(pg.pool()).await.unwrap();
-        crate::projects::delete_project_with_surreal(&source,request.project_id).await.unwrap();
+        crate::projects::delete_project(&source,request.project_id).await.unwrap();
         assert!(crate::projects::find_by_id(&source,request.project_id).await.unwrap().is_none());
         let retained: (Uuid,Uuid,Uuid,String)=sqlx::query_as("SELECT project_id,actor_person_id,evidence_reference,decision FROM project_slack_delivery_reconciliation WHERE operation_id=$1")
             .bind(request.operation_id).fetch_one(pg.pool()).await.unwrap();

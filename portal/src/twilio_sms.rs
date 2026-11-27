@@ -184,7 +184,7 @@ pub(crate) async fn resolve(
     let boot_host = state.canonical_host.host().map(str::to_string);
     let spine = crate::twilio_resolution::Spine {
         registry,
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         kms: state.runtime_kms.as_ref(),
     };
     spine
@@ -315,7 +315,7 @@ pub async fn webhook(
     let Some(sms) = InboundSms::from_params(&params) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let Ok(saved) = ingest_sms(&state.surreal, &resolved, &sms).await else {
+    let Ok(saved) = ingest_sms(&state.application_store, &resolved, &sms).await else {
         return StatusCode::UNPROCESSABLE_ENTITY.into_response();
     };
     if crate::inbox::start_inbound_message_alert(saved.message_id)
@@ -353,7 +353,7 @@ pub async fn webhook(
     let mailbox = mailbox_for(&resolved.registration.number_e164);
     let email = sms.into_email(mailbox.clone());
     let receipt = match crate::inbound_email::persist_summary_receipt(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         &summary.deployment,
         mailbox,
@@ -379,7 +379,7 @@ pub async fn webhook(
 }
 
 async fn ingest_sms(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     resolved: &crate::twilio_resolution::ResolvedTwilioWebhook,
     sms: &InboundSms,
 ) -> Result<store::inbox::IngestedInbound, String> {
@@ -466,7 +466,7 @@ pub async fn status(
         _ => return StatusCode::NO_CONTENT.into_response(),
     };
     if store::inbox::apply_delivery(
-        &state.surreal,
+        &state.application_store,
         resolved.firm_id,
         store::inbox::channel::SMS,
         &resolved.registration.number_e164,
@@ -696,7 +696,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let number = "+15551234444";
             let (mut state, _) =
                 registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
@@ -751,7 +751,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let number = "+15551234444";
             let (state, firm) =
                 registry_state(&db, &pg, "neon", number, &token, "www.neonlaw.com").await;
@@ -820,7 +820,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let number = "+15551234444";
             let firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await
@@ -856,8 +856,10 @@ mod tests {
 
     #[tokio::test]
     async fn an_unconfigured_deployment_does_not_expose_the_route() {
-        let state =
-            crate::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+        let state = crate::test_support::app_state(
+            store::application_store::ApplicationStore::uninitialized(),
+        )
+        .await;
         let response = webhook(State(state.clone()), HeaderMap::new(), Bytes::new()).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let response = status(State(state.clone()), HeaderMap::new(), Bytes::new()).await;
@@ -872,7 +874,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let (state, _) =
                 registry_state(&db, &pg, "neon", "+15551234444", &token, "www.neonlaw.com").await;
             let body = Bytes::from_static(b"MessageSid=SM1&From=%2B15555550100&To=%2B15551234444");
@@ -894,7 +896,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let (state, _) =
                 registry_state(&db, &pg, "neon", "+15551234444", &token, "www.neonlaw.com").await;
             let signed = params(&[
@@ -933,7 +935,7 @@ mod tests {
         store::test_support::with_required_postgres(async {
             let token = store::test_support::twilio::auth_token();
             let pg = store::postgres::PostgresDb::application().await.unwrap();
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let firm = store::test_support::seed_firm_with_new_brand(&db, "neon")
                 .await
                 .0;

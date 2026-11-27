@@ -1,8 +1,6 @@
-//! DBOS adapter for the `project-slack` virtual object's two lanes.
+//! Durable execution for Project Slack notices.
 //!
-//! Restate keyed the service by the Project id and serialized every event
-//! through one virtual object. DBOS has no virtual objects, so the port
-//! replaces that single-writer guarantee with two mechanisms:
+//! DBOS deduplicates each event and serializes delivery per Project:
 //!
 //! - **Per-event workflow identity.** A main-push notice runs as
 //!   `ProjectSlack:{project id}:{short sha}:{run attempt}` and a client
@@ -13,7 +11,7 @@
 //!   interleaving channel creation and posts.
 //!
 //! Project channel metadata lives in PostgreSQL. Retained posted-event history
-//! and client-view posting evidence pass through the explicit object handover.
+//! and client-view posting evidence govern delivery admission.
 //! Native ownership and delivery admission are checked before provider access;
 //! the provider's existing durable checkpoint precedes the PG-only receipt step.
 
@@ -23,7 +21,7 @@ use crate::firm_slack::ProjectSlackBots;
 use dbos::WorkflowRef;
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 
 use crate::project_slack::{
     main_push_destination_on, render_main_push, LaneError, MainPushRequest,
@@ -34,9 +32,6 @@ use crate::project_slack::{
 /// and from the Restate service (`project-slack`), so the two engines can
 /// run side by side during the migration.
 pub const WORKFLOW: &str = "ProjectSlack";
-/// The rollout flag. Default off; the Restate object keeps serving until
-/// cutover flips callers.
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED";
 /// The lane key of the client-view workflow for a Project.
 pub const CLIENT_VIEW_LANE: &str = "client-view";
 
@@ -206,7 +201,7 @@ impl Drop for ProjectSlackLane {
 /// runs on. Each step resolves the owning Firm's bot (ENG-392).
 #[derive(Clone)]
 pub struct Context {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     bots: Arc<dyn ProjectSlackBots>,
     postgres: store::postgres::PostgresDb,
     simulated: bool,
@@ -216,26 +211,17 @@ impl Context {
     /// Assemble the lane's collaborators.
     #[must_use]
     pub fn new(
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         bots: Arc<dyn ProjectSlackBots>,
         postgres: store::postgres::PostgresDb,
         simulated: bool,
     ) -> Self {
         Self {
-            surreal,
+            application_store,
             bots,
             postgres,
             simulated,
         }
-    }
-}
-
-/// Whether the DBOS Project Slack lane is switched on for this deployment.
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED must be true or false"),
     }
 }
 
@@ -285,18 +271,18 @@ async fn run_lane(
     match request {
         LaneRequest::ClientView => post_client_view(context, project_id).await?,
         LaneRequest::MainPush(event) => {
-            let surreal = context.surreal.clone();
+            let application_store = context.application_store.clone();
             let bots = Arc::clone(&context.bots);
             let simulated = context.simulated;
             let postgres = context.postgres.clone();
             let destination =
                 dbos::step_with("resolve-destination", lane_step_options(), move || {
-                    let surreal = surreal.clone();
+                    let application_store = application_store.clone();
                     let bots = Arc::clone(&bots);
                     let postgres = postgres.clone();
                     async move {
                         let slack = bots
-                            .for_project_on(&postgres, &surreal, project_id)
+                            .for_project_on(&postgres, &application_store, project_id)
                             .await
                             .map_err(dbos::Error::Application)?;
                         main_push_destination_on(&postgres, &slack, project_id, simulated)
@@ -306,19 +292,19 @@ async fn run_lane(
                 })
                 .await?;
             let message = render_main_push(&event, destination.repository_url.as_deref());
-            let surreal = context.surreal.clone();
+            let application_store = context.application_store.clone();
             let bots = Arc::clone(&context.bots);
             let channel_id = destination.channel_id;
             let postgres = context.postgres.clone();
             dbos::step_with("post-main-push", lane_step_options(), move || {
-                let surreal = surreal.clone();
+                let application_store = application_store.clone();
                 let bots = Arc::clone(&bots);
                 let channel_id = channel_id.clone();
                 let message = message.clone();
                 let postgres = postgres.clone();
                 async move {
                     let slack = bots
-                        .for_project_on(&postgres, &surreal, project_id)
+                        .for_project_on(&postgres, &application_store, project_id)
                         .await
                         .map_err(dbos::Error::Application)?;
                     post_correlated(slack.as_ref(), &channel_id, &message).await
@@ -344,17 +330,17 @@ async fn post_client_view(
     context: &Context,
     project_id: uuid::Uuid,
 ) -> dbos::Result<(), LaneError> {
-    let surreal = context.surreal.clone();
+    let application_store = context.application_store.clone();
     let bots = Arc::clone(&context.bots);
     let simulated = context.simulated;
     let postgres = context.postgres.clone();
     let channel_id: String = dbos::step_with("ensure-channel", lane_step_options(), move || {
-        let surreal = surreal.clone();
+        let application_store = application_store.clone();
         let bots = Arc::clone(&bots);
         let postgres = postgres.clone();
         async move {
             let slack = bots
-                .for_project_on(&postgres, &surreal, project_id)
+                .for_project_on(&postgres, &application_store, project_id)
                 .await
                 .map_err(dbos::Error::Application)?;
             main_push_destination_on(&postgres, &slack, project_id, simulated)
@@ -364,17 +350,17 @@ async fn post_client_view(
         }
     })
     .await?;
-    let surreal = context.surreal.clone();
+    let application_store = context.application_store.clone();
     let bots = Arc::clone(&context.bots);
     let postgres = context.postgres.clone();
     dbos::step_with("post-client-view", lane_step_options(), move || {
-        let surreal = surreal.clone();
+        let application_store = application_store.clone();
         let bots = Arc::clone(&bots);
         let channel_id = channel_id.clone();
         let postgres = postgres.clone();
         async move {
             let slack = bots
-                .for_project_on(&postgres, &surreal, project_id)
+                .for_project_on(&postgres, &application_store, project_id)
                 .await
                 .map_err(dbos::Error::Application)?;
             post_correlated(slack.as_ref(), &channel_id, CLIENT_PROJECT_VIEW_MESSAGE).await
@@ -436,8 +422,8 @@ fn lane_step_options() -> dbos::StepOptions<LaneError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        client_view_workflow_id, enabled, lane_lock_key, main_push_workflow_id, parse_workflow_id,
-        LaneKey, LaneRequest, CLIENT_VIEW_LANE, ENABLED_ENV, WORKFLOW,
+        client_view_workflow_id, lane_lock_key, main_push_workflow_id, parse_workflow_id, LaneKey,
+        LaneRequest, CLIENT_VIEW_LANE, WORKFLOW,
     };
     use crate::project_slack::{CiOutcome, LaneError, MainPushRequest};
     use uuid::Uuid;
@@ -452,17 +438,6 @@ mod tests {
             run_attempt,
             subject: None,
         }
-    }
-
-    #[test]
-    fn the_rollout_flag_defaults_off_and_refuses_junk() {
-        assert!(!enabled(|_| None).expect("unset"));
-        assert!(!enabled(|name| (name == ENABLED_ENV).then(String::new)).expect("empty"));
-        assert!(
-            !enabled(|name| (name == ENABLED_ENV).then(|| "false".to_string())).expect("false"),
-        );
-        assert!(enabled(|name| (name == ENABLED_ENV).then(|| "true".to_string())).expect("true"));
-        assert!(enabled(|name| (name == ENABLED_ENV).then(|| "yes".to_string())).is_err());
     }
 
     #[test]

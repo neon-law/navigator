@@ -16,8 +16,7 @@ This document is the canonical narrative for the system. The Rust modules link b
   `upsert_person_from_claims`. [`portal::session`](../portal/src/session.rs) — signed cookie shape (`SessionData`).
   [`portal::policy`](../portal/src/policy.rs) — `PolicyClient` and `require_policy` middleware.
   [`store::persons`](../store/src/persons.rs) — the `person` row, including the `role` field. `role` is a single string,
-  not a list, and its accepted values are the schema's own ASSERT — see
-  [`navigator.surql`](../store/src/schema/navigator.surql).
+  constrained by the [PostgreSQL schema](../store/postgres/schema.sql).
 
 ## Login sequence
 

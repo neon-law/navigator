@@ -158,12 +158,16 @@ async fn the_store_source_reads_pending_imports_and_reports_why_one_stops() {
     store::test_support::with_postgres(async {
         let pg = store::postgres::PostgresDb::application().await.unwrap();
         store::postgres::PostgresDb::with_application_db(pg.clone(), async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
-            let (project, admin) = native_project::matter(&surreal).await;
+            let application_store = store::application_store::ApplicationStore::uninitialized();
+            let (project, admin) = native_project::matter(&application_store).await;
             let firm = project
                 .firm_id
                 .expect("synthetic Project belongs to the Firm");
-            let source = StoreImportSource::new(surreal, pg.clone(), Arc::new(cloud::NoRuntimeKms));
+            let source = StoreImportSource::new(
+                application_store,
+                pg.clone(),
+                Arc::new(cloud::NoRuntimeKms),
+            );
             assert!(source.pending().await.unwrap().is_empty());
 
             // An id the queue never held stops with a reason.
