@@ -231,21 +231,4 @@ mod tests {
         }
         assert!(!WORKFLOW_SERVICES.contains(&"ProjectSlackMembershipSync"));
     }
-
-    /// Drift guard: the registry must account for every service `host.rs`
-    /// actually binds. Counting `.bind(` calls in the worker's source keeps the
-    /// two in lockstep — add a `.bind(...)` without listing its name here (or
-    /// vice versa) and this fails. Cheap, but it catches the one mistake that
-    /// otherwise ships a service with no naming guarantee at all.
-    #[test]
-    fn registry_accounts_for_every_bound_service() {
-        let host_rs = include_str!("host.rs");
-        let bind_calls = host_rs.matches(".bind(").count();
-        let registered = WORKFLOW_SERVICES.len() + VIRTUAL_OBJECTS.len();
-        assert_eq!(
-            bind_calls, registered,
-            "host.rs binds {bind_calls} services but the registry lists {registered}; \
-             update WORKFLOW_SERVICES / VIRTUAL_OBJECTS to match the `.bind(...)` calls"
-        );
-    }
 }

@@ -3285,14 +3285,14 @@ pub(super) fn run_selected_ship(
     if opts.dry_run {
         return offline_ship_plan(&cfg, deployment, opts, lane);
     }
-    ensure!(
-        cfg.dbos_only,
-        "this release requires DBOS-only deployment configuration before a live rollout"
-    );
     // Held until the ship returns: dropping it deletes the scratch
     // kubeconfig and registry login.
     let _credentials = ShipCredentials::cluster_and_registry(&cfg)?;
     ensure_ship_permissions(&cfg, deployment, opts, lane)?;
+    ensure!(
+        cfg.dbos_only,
+        "this release requires DBOS-only deployment configuration before a live rollout"
+    );
     if lane_requires_asset_preflight(lane) {
         // The applicable inventory — on-disk markdown when `server/content` is
         // a directory, otherwise the references embedded in this CLI — is
