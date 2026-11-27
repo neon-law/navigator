@@ -1576,12 +1576,12 @@ fn postgres_image_is_published_weekly_from_this_repository_and_pinned_back() {
         );
     }
 
-    let compatibility = read(".github/workflows/postgres-compatibility.yml");
+    let persistence = read(".github/workflows/postgres-persistence.yml");
     assert!(
-        !compatibility.contains("repository:"),
-        "the compatibility gate must test images/postgres, not another repository's checkout"
+        !persistence.contains("repository:"),
+        "the persistence workflow must test images/postgres from the current checkout"
     );
-    assert!(compatibility.contains("images/postgres/tests/dbos/Cargo.toml"));
+    assert!(persistence.contains("images/postgres/tests/dbos/Cargo.toml"));
 
     let tests = workspace().join("images/postgres/tests");
     for file in [

@@ -5,7 +5,7 @@ name: PostgreSQL image
 # pgvector, so security fixes reach GKE and KIND every week;
 # a change to the recipe publishes on merge. Each publish is then dogfooded:
 # `scripts/postgres-image-pin.sh` moves every Navigator pin to the new digest
-# and the pull request it opens runs the compatibility and persistence gates
+# and the pull request it opens runs the persistence workflow
 # against exactly what was published.
 on:
   schedule:
@@ -164,7 +164,7 @@ jobs:
           digest="${REFERENCE##*:}"
           scripts/open-signed-pr.sh "postgres-image/$(date -u +%Y%m%d)-${digest::12}" \
             "build(postgres): pin the weekly navigator/postgres image" \
-            "Dogfoods \`$REFERENCE\`, published and signed by [run $GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). PostgreSQL compatibility and PVC persistence run against this digest on this pull request; staging takes it with the next release."
+            "Dogfoods \`$REFERENCE\`, published and signed by [run $GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). PVC persistence and recovery run against this digest on this pull request; staging takes it with the next release."
   bump:
     # Dependabot cannot read the recipe's source pins, so the weekly run opens
     # the equivalent pull request: the newest PostgreSQL minor, base digest,

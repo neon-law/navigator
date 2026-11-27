@@ -31,7 +31,7 @@ values = [
 ]
 
 [[paths]]
-reason = "Vendored third-party code, generated inventories, and the scanner itself."
+reason = "Vendored third-party code and the scanner itself."
 values = [
   "cargo.lock",
   "server/public/vendor/*",
@@ -39,8 +39,6 @@ values = [
   "server/tests/assets/axe.min.js",
   "k8s/vendor/*",
   "vendor/*",
-  "store/postgres/caller-inventory.json",
-  "store/postgres/source-call-sites.jsonl",
   ".github/pii/*",
 ]
 

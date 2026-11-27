@@ -98,8 +98,6 @@ parquet = { version = "60", default-features = false, features = ["arrow", "snap
 # out of a PDF someone else produced. MIT licensed.
 pdf-extract = "0.12"
 percent-encoding = "2"
-proc-macro2 = { version = "1", features = ["span-locations"] }
-quote = "1"
 # Google Cloud SDKs. `google-cloud-storage` is consumed only by the
 # `cloud` crate (which wraps it in the provider-agnostic
 # `StorageService` trait). `google-cloud-auth` + `google-cloud-token`
@@ -179,7 +177,6 @@ md-5 = "0.11"
 regex = "1"
 nix = { version = "0.32.0", default-features = false }
 rustix = { version = "1.1.4", features = ["fs", "termios"] }
-syn = { version = "3", features = ["full", "visit"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "json", "chrono"] }
 # The release pipeline's whole grammar and its ordering. `cli::release` asks this
 # crate what a release version is, and which of two versions is newer, instead of

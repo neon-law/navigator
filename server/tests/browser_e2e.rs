@@ -1941,15 +1941,10 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
 
     c.close().await.unwrap();
 
-    // --- Journal: read `notation_event` from SurrealDB --------
-    // Talks to the in-cluster SurrealDB through `navigator dev up`'s
-    // port-forward; `NAVIGATOR_SURREAL_ENDPOINT` etc. are exported by
-    // `.devx/env`. We read through the same `store::notation_events` seam
-    // the worker writes through, so the assertion exercises the wire
-    // shape end-to-end without shelling out to a client.
+    // Read the PostgreSQL journal through the same accessor the worker uses.
     let mut events = store::notation_events::for_notation(&surreal, notation_id)
         .await
-        .expect("read notation_event from surreal");
+        .expect("read notation_event from PostgreSQL");
     events.retain(|e| e.machine_kind == store::notation_events::MACHINE_QUESTIONNAIRE);
 
     // Eight rows: BEGIN → entity → address__principal_office → person__client →

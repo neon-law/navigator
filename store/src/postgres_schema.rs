@@ -1044,6 +1044,7 @@ mod tests {
     use super::*;
 
     const SOURCE_ERD: &str = include_str!("../postgres/surreal-source-erd.mmd");
+    const TARGET_ERD: &str = include_str!("../postgres/postgres-erd.mmd");
     const PARITY_MANIFEST: &str = include_str!("../postgres/parity-manifest.json");
 
     #[test]
@@ -2499,17 +2500,66 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_source_erd_and_manifest_match_the_surreal_schema() {
+    fn checked_in_diagrams_and_manifest_match_the_schemas() {
         assert_eq!(
             SOURCE_ERD,
             render_surreal_source_erd(),
             "regenerate store/postgres/surreal-source-erd.mmd after source schema changes"
         );
         assert_eq!(
+            TARGET_ERD,
+            render_erd().expect("target ERD renders"),
+            "regenerate store/postgres/postgres-erd.mmd after PostgreSQL schema changes"
+        );
+        assert_eq!(
             PARITY_MANIFEST,
             render_parity_manifest().expect("manifest serializes"),
             "regenerate store/postgres/parity-manifest.json after schema or migration changes"
         );
+    }
+
+    #[test]
+    fn ownership_matrix_covers_the_source_tables_and_postgres_only_entries() {
+        #[derive(serde::Deserialize)]
+        struct Ownership {
+            scope: String,
+            through: String,
+            migration_slice: String,
+            parity_scenario: String,
+            #[serde(default)]
+            target_only: bool,
+        }
+
+        let entries: BTreeMap<String, Ownership> =
+            serde_json::from_str(include_str!("../postgres/ownership.json"))
+                .expect("ownership matrix parses");
+        let source_tables = crate::schema::table_names();
+        let classified: Vec<_> = entries
+            .iter()
+            .filter(|(_, ownership)| !ownership.target_only)
+            .map(|(table, _)| table)
+            .collect();
+        assert_eq!(
+            classified,
+            source_tables.iter().collect::<Vec<_>>(),
+            "ownership matrix must cover exactly the source tables"
+        );
+
+        let target_tables = parse_schema(canonical_schema()).expect("canonical schema parses");
+        for (table, owner) in &entries {
+            assert!(
+                !owner.target_only
+                    || (target_tables.contains_key(table) && !source_tables.contains(table)),
+                "target-only {table} must be a PostgreSQL table with no Surreal source"
+            );
+            assert!(
+                !owner.scope.is_empty()
+                    && !owner.through.is_empty()
+                    && !owner.migration_slice.is_empty()
+                    && !owner.parity_scenario.is_empty(),
+                "incomplete ownership contract for {table}"
+            );
+        }
     }
 
     #[test]

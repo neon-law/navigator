@@ -1,8 +1,9 @@
 # PostgreSQL schema transition artifacts
 
 The [ownership matrix](ownership.json) defines each source table's target scope, migration slice and parity scenario.
-The [caller inventory](caller-inventory.md) lists candidate Rust callers and source indexes/relations for review. [SQL
-tooling](../../docs/postgres-tooling.md) describes the explicit SQLx migration connection and adoption requirements.
+[Runtime parity evidence](runtime-parity.json) records reviewed assertions and acceptance gaps by source table.
+
+[SQL tooling](../../docs/postgres-tooling.md) describes the migration connection and adoption requirements.
 [Compatibility evidence](../../docs/postgres-compatibility.md) covers the pinned image, extensions and DBOS recovery.
 
 `migrations/` contains Rails-style, UTC timestamp-ordered PostgreSQL SQL. The canonical `schema.sql` is assembled from

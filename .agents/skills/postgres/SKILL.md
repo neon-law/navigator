@@ -33,8 +33,9 @@ source-engine contracts; [surreal-migrations](../surreal-migrations/SKILL.md) go
 - **Weekly publish:** [`postgres-image.yml`](../../../.github/workflows/postgres-image.yml) builds, tests, signs, and
   publishes, then opens a pull request moving every pin with
   [`scripts/postgres-image-pin.sh`](../../../scripts/postgres-image-pin.sh).
-- **CI gates:** [`postgres-compatibility.yml`](../../../.github/workflows/postgres-compatibility.yml) and
-  [`postgres-persistence.yml`](../../../.github/workflows/postgres-persistence.yml).
+- **CI gates:** [workspace CI](../../../.github/workflows/ci.yml), [native KIND
+  E2E](../../../.github/workflows/quickstart.yml), and [PVC persistence and
+  recovery](../../../.github/workflows/postgres-persistence.yml).
 - **Retained StatefulSet (GKE):** [`docs/postgres-kubernetes.md`](../../../docs/postgres-kubernetes.md).
 - **Decision and evidence:**
   [`postgres-compatibility-spike.html`](../../../server/public/reports/postgres-compatibility-spike.html).

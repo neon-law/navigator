@@ -82,9 +82,6 @@ uuid.workspace = true
 word.workspace = true
 
 [dev-dependencies]
-proc-macro2.workspace = true
-quote.workspace = true
-syn.workspace = true
 # Self-enable test-support so this crate's own unit + integration tests
 # reach `store::test_support`.
 store = { path = ".", features = ["test-support"] }
