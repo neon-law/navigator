@@ -32,10 +32,15 @@ spec:
             - forgejo
             - queue-observer
             - --url=YOUR_FORGEJO_ROOT_URL
-            - --repository=YOUR_SYNTHETIC_REPOSITORY
+            - --repository=$(FORGEJO_QUEUE_REPOSITORY)
           env:
             - name: OTEL_SERVICE_NAME
               value: navigator-forgejo-queue-observer
+            - name: FORGEJO_QUEUE_REPOSITORY
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-forgejo-queue-observer
+                  key: repository
             - name: FORGEJO_TOKEN
               valueFrom:
                 secretKeyRef:

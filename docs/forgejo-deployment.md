@@ -441,6 +441,9 @@ seconds. The Pod has no Kubernetes API token. It emits run numbers and queue age
 recent failed gates and CD runs on `main`. Each poll replaces the sample. The observer keeps collecting if the
 controller stops.
 
+Set the `repository` key of the `navigator-forgejo-queue-observer` ConfigMap in the application namespace to the exact
+synthetic `owner/repository` before deploying the observer.
+
 Set the same staging Forgejo origin without a trailing slash in the observer and the [Dash0
 rules](../examples/deploy/k8s/observability/dash0-forgejo-check-rules.yaml). The waiting and failure alerts link to the
 exact run. Use the staging dataset and the existing Slack route for the `forgejo_actions` workflow label.

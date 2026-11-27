@@ -2372,6 +2372,7 @@ See docs/forgejo-deployment.md."
         once: bool,
     },
     /// Observe waiting and failed Actions runs for one private repository.
+    #[command(after_help = "Use a repository-read FORGEJO_TOKEN for the selected repository.")]
     QueueObserver {
         /// Public HTTPS Forgejo origin.
         #[arg(long)]

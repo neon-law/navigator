@@ -950,6 +950,7 @@ fn forgejo_policy_help_requires_explicit_targets_and_names_the_guarded_actions()
             "backfill-closed",
             "bundle",
             "logs",
+            "queue-observer",
             "release",
             "rename-organization",
             "restore",
@@ -961,6 +962,9 @@ fn forgejo_policy_help_requires_explicit_targets_and_names_the_guarded_actions()
             "help"
         ]
     );
+    let observer = help(&["ops", "forgejo", "queue-observer", "--help"]);
+    assert!(unwrapped(&observer).contains("--url <URL> --repository <REPOSITORY>"));
+    assert!(unwrapped(&observer).contains("repository-read FORGEJO_TOKEN"));
     let ssh_keys = help(&["ops", "forgejo", "ssh-keys", "sync", "--help"]);
     for required in [
         "--dry-run",
