@@ -1049,12 +1049,12 @@ async fn stock_local_personas_reach_the_litigation_matter_through_their_own_lens
 
 #[tokio::test]
 async fn unverified_drive_shortcut_opens_the_working_folder_settings() {
-    let Some(browser) = new_client_or_skip().await else {
-        return;
-    };
     use futures::FutureExt as _;
     use std::panic::{resume_unwind, AssertUnwindSafe};
 
+    let Some(browser) = new_client_or_skip().await else {
+        return;
+    };
     let db = postgres_browser_store().await.unwrap();
     let pg = store::postgres::PostgresDb::application().await.unwrap();
     let firm_id = store::projects::find_by_code(&db, "sample-litigation")
