@@ -143,10 +143,9 @@ impl Source for MembershipSource {
             .iter()
             .map(|membership| membership.firm_id)
             .collect();
-        let assigned =
-            store::project_calendar::shared_freebusy_calendars(&db, &firms, &[person_id])
-                .await
-                .map_err(|_| sync_error("reading current Project Calendar assignments"))?;
+        let assigned = store::project_calendar::booking_calendars(&db, &firms, person_id)
+            .await
+            .map_err(|_| sync_error("reading current Project Calendar assignments"))?;
         let first_project = assigned
             .values()
             .flatten()
