@@ -405,3 +405,25 @@ fn technology_clause_renders_the_jurisdiction_and_lawyer_review() {
     assert!(normalized.contains("our professional obligations in Nevada"));
     assert!(normalized.contains("A lawyer reviews"));
 }
+
+#[test]
+fn engagement_client_duties_and_confidentiality_expand_without_inputs() {
+    let source = "---\nkind: onboarding\nquestionnaire:\n  BEGIN: {_: jurisdiction__law}\n  jurisdiction__law: {_: END}\n  END: {}\nclauses:\n  arbitration:\n    source: engagement_arbitration@1\n    inputs:\n      law: jurisdiction__law\n      seat: jurisdiction__seat\n  duties:\n    source: engagement_client_duties@1\n  confidentiality:\n    source: engagement_confidentiality@1\n---\n## What the Client provides\n\n{{> duties}}\n\n## Confidentiality\n\n{{> confidentiality}}\n\n{{> arbitration}}\n";
+    assert!(
+        rules::clauses::compile(&source.replace("kind: onboarding", "kind: agreement")).is_err()
+    );
+    let body = compile_plan_clause(source);
+    let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    for expected in [
+        "The Firm needs three things from the Client.",
+        "**A. Complete and accurate information.**",
+        "**B. Timely decisions.**",
+        "**C. Prompt payment.**",
+        "**The Firm discloses the Client's information only with the Client's consent**",
+        "where the law allows, before responding**",
+        "**A. Email and client portal.**",
+    ] {
+        assert!(normalized.contains(expected), "missing {expected}");
+    }
+    assert!(!normalized.contains("Technology tools"));
+}
