@@ -368,7 +368,7 @@ async fn signature_loop(fake: Option<Arc<FakeSignatureProvider>>) -> SentLoop {
                 let result: serde_json::Value = serde_json::from_str(&body).unwrap();
                 let id = result["signature_request_id"].as_str().unwrap();
                 if request_id.is_empty() {
-                    request_id = id.to_owned();
+                    request_id.push_str(id);
                 }
                 assert_eq!(id, request_id);
                 assert!(result["state"]
