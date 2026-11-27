@@ -212,16 +212,6 @@ pub(super) fn environment(
     let base = super::render_env_for(cfg, &database, cfg.web_port, root);
     let mut values = dotenvy::from_read_iter(base.as_bytes())
         .collect::<Result<BTreeMap<String, String>, _>>()?;
-    values.retain(|key, _| {
-        !key.starts_with("NAVIGATOR_SURREAL_")
-            && !key.starts_with("RESTATE_")
-            && !matches!(
-                key.as_str(),
-                "NAVIGATOR_KIND_SURREAL_PORT"
-                    | "NAVIGATOR_KIND_RESTATE_INGRESS_PORT"
-                    | "NAVIGATOR_KIND_RESTATE_ADMIN_PORT"
-            )
-    });
     values.extend(app);
     values.extend(timer_coordinates(&get)?);
     values.insert("NAVIGATOR_KIND_DEPS_OVERLAY".into(), OVERLAY.into());

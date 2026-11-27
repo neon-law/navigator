@@ -3850,8 +3850,11 @@ async fn email_review_exposes_a_project_proposal_without_a_conversation_assignme
 
 #[tokio::test]
 async fn a_lawyer_can_approve_one_inbox_message_for_internal_filing() {
-    // The rest of the browser suite also runs with a Restate-only fixture.
-    if std::env::var("NAVIGATOR_DBOS_INBOUND_TRIAGE_ENABLED").as_deref() != Ok("true") {
+    if !workflows::trigger::inbox_attachment_filing_enabled() {
+        assert!(
+            std::env::var_os("NAV_BROWSER_IMAGE_ID").is_none(),
+            "the release image browser gate requires Inbox filing"
+        );
         return;
     }
     let Some(c) = new_client_or_skip().await else {

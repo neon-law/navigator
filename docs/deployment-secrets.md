@@ -78,8 +78,7 @@ hudson ops secrets apply --deployment <row> --project-id <project> --service pos
 The web apply writes each coordinate-sourced object to Secret Manager, reads every secret object's `versions/latest`,
 and applies `<name>-web-secrets`; a key with no value fails naming `ops secrets set`. The service apply reads only that
 service's keys and applies only that service's mounted-file Secrets, so `ops secrets set --service postgres` followed by
-it is how a record row gains an optional PostgreSQL login such as `NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD`
-([`postgres-kubernetes.md`](postgres-kubernetes.md#archives-opt-in)). `--check` compares SOPS with Secret Manager and so
+it is how a record row gains a dedicated PostgreSQL login secret. `--check` compares SOPS with Secret Manager and so
 works only with `--deployments-dir`.
 
 ## Rotation revokes nothing unless you rotate at the provider

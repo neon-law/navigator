@@ -1,16 +1,9 @@
 #![allow(clippy::doc_markdown)]
 //! Neon Law Navigator CRM data layer.
 //!
-//! Owns the SurrealDB schema and the canonical seed. Every workspace
-//! crate that touches the store — `web`, `cli`, `mcp` — depends on this
-//! crate; nothing here depends on axum, reqwest, or any HTTP machinery.
-//!
-//! One table is one top-level module: `store::persons` owns `person`,
-//! `store::projects` owns `project`, and so on. The schema itself is a
-//! statement of the present rather than a history — one idempotent
-//! `DEFINE` file at `store/src/schema/navigator.surql`, applied whole on
-//! every boot, plus a `schema_version` record. You change it by editing
-//! that file, not by appending a step.
+//! Owns the PostgreSQL schema, migrations, and canonical seed. Store modules such as
+//! [`persons`] and [`projects`] own their domain accessors. Changes live in
+//! `store/postgres/migrations/`, and `store/postgres/schema.sql` records the current schema.
 //!
 //! # Accounting
 //!

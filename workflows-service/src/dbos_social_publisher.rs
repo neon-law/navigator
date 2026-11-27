@@ -1,13 +1,7 @@
-//! DBOS port of the social publication workflows.
+//! DBOS workflows for social publication and reconciliation.
 //!
-//! [`SocialPublisher`] and [`SocialPublishReconciler`] run on Restate today;
-//! this module journals the same calls as DBOS steps and replaces Restate's
-//! durable `ctx.sleep` with `dbos::sleep`, whose wake time is checkpointed
-//! before the first wait — a worker that dies mid-poll resumes at the same
-//! step with the original deadline instead of re-waiting. The provider
-//! interactions and their store claims stay in `social_publisher.rs`: both
-//! engines drive one [`Publisher`], so a step body here and a Restate
-//! `ctx.run` there call the identical code.
+//! Durable timers preserve their wake time across a restart. Provider
+//! interactions and claims live in the shared social publisher.
 //!
 //! Two layers keep a provider write from happening twice:
 //!
@@ -20,17 +14,8 @@
 //!    claim and settles `unknown` — the post is never sent again, and the
 //!    reconciler closes the loop from the publication state.
 //!
-//! The rest of Restate's durable surface carries over step by step: the
-//! `publish_at` timer, the retryable-backoff timer, the permalink read-after
-//! timer, the container-readiness poll, and the `TikTok` upload poll are all
-//! durable timers; the reconciler starts one publisher run per due post as a
-//! child workflow with the deterministic id
-//! [`publisher_workflow_id`], and its own slot starts are idempotent through
-//! [`reconciler_workflow_id`]. Steps retry transient failures a bounded
-//! number of times and then fail the run; Restate Cloud retried a failed
-//! invocation indefinitely, so that resilience difference is a documented
-//! tradeoff of this port (recovery is the reconciler's publication-state
-//! machinery plus a manual resume).
+//! The reconciler starts one child workflow per due Post using
+//! [`publisher_workflow_id`]. Its recurring starts use [`reconciler_workflow_id`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,21 +36,6 @@ use crate::social_publisher::{
 };
 use store::social_accounts::SocialProvider;
 
-/// Validate both registration switches before constructing worker services.
-///
-/// # Errors
-/// Refuses malformed switches and a reconciler whose publisher is disabled.
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<(bool, bool), &'static str> {
-    let publisher = publisher_enabled(&get)?;
-    let reconciler = reconciler_enabled(&get)?;
-    if reconciler && !publisher {
-        return Err("NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED requires NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED");
-    }
-    Ok((publisher, reconciler))
-}
-
-pub const PUBLISHER_ENABLED_ENV: &str = "NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED";
-pub const RECONCILER_ENABLED_ENV: &str = "NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED";
 const PUBLISHER_WORKFLOW: &str = "SocialPublisher";
 const RECONCILER_WORKFLOW: &str = "SocialPublishReconciler";
 /// How often the reconciler wakes to start due posts and recover notices.
@@ -218,22 +188,6 @@ impl ReconcilerContext {
     pub fn with_pacing(mut self, pacing: Pacing) -> Self {
         self.pacing = pacing;
         self
-    }
-}
-
-pub fn publisher_enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(PUBLISHER_ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED must be true or false"),
-    }
-}
-
-pub fn reconciler_enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(RECONCILER_ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED must be true or false"),
     }
 }
 
@@ -575,11 +529,8 @@ async fn start_publisher_child(
     .await
 }
 
-/// One inbound notice's recovery, delivered through the alert workflow's
-/// configured route. The Restate branch keeps the per-tick invocation key
-/// (`{message_id}:{tick}`) the Restate handler used; the DBOS branch uses
-/// the alert's canonical message id, so duplicate recovery joins the same
-/// durable run.
+/// Start a distinct recovery run per message and tick. Delivery ownership
+/// stays with the message's persisted receipt.
 async fn recover_notice_step(
     context: &ReconcilerContext,
     message_id: Uuid,
@@ -921,25 +872,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn social_publish_flags_default_off_and_reject_garbage() {
-        assert!(!publisher_enabled(|_| None).unwrap());
-        assert!(!publisher_enabled(|_| Some("false".into())).unwrap());
-        assert!(publisher_enabled(|_| Some("true".into())).unwrap());
-        assert!(!reconciler_enabled(|_| None).unwrap());
-        assert!(reconciler_enabled(|_| Some("true".into())).unwrap());
-        assert!(publisher_enabled(|_| Some("yes".into())).is_err());
-        assert!(reconciler_enabled(|_| Some("yes".into())).is_err());
-        assert_eq!(
-            PUBLISHER_ENABLED_ENV,
-            "NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED"
-        );
-        assert_eq!(
-            RECONCILER_ENABLED_ENV,
-            "NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED"
-        );
-    }
-
-    #[test]
     fn publisher_ids_key_the_post_and_schedule() {
         let post_id = Uuid::nil();
         let publish_at = DateTime::parse_from_rfc3339("2026-10-30T12:00:00Z")
@@ -973,22 +905,5 @@ mod tests {
         );
         // A slot boundary is its own floor.
         assert_eq!(reconcile_slot(slot), slot);
-    }
-
-    #[test]
-    fn reconciler_registration_requires_its_publisher() {
-        for (publisher,reconciler,expected) in [
-            (false,false,Ok((false,false))),
-            (true,false,Ok((true,false))),
-            (true,true,Ok((true,true))),
-            (false,true,Err("NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED requires NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED")),
-        ] {
-            assert_eq!(enabled(|key| match key {
-                PUBLISHER_ENABLED_ENV=>Some(publisher.to_string()),
-                RECONCILER_ENABLED_ENV=>Some(reconciler.to_string()),
-                _=>None,
-            }),expected);
-        }
-        assert!(enabled(|key| (key == RECONCILER_ENABLED_ENV).then(|| "yes".into())).is_err());
     }
 }

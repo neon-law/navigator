@@ -1,8 +1,8 @@
 # DBOS durability
 
-How Navigator runs [durable execution](glossary/durable-execution.md) on DBOS, the PostgreSQL-backed replacement for
-[Restate](durable-workflows.md). The DBOS executor can run inside `web` or `workflows-service`; each schedule moves
-individually while `workflows-service` keeps serving the Restate endpoint for every unported service.
+Navigator runs [durable execution](glossary/durable-execution.md) in the DBOS executor hosted by the web application.
+PostgreSQL stores workflow state and checkpoints. See [durable workflows](durable-workflows.md) for job ownership and
+ingress.
 
 ## The pin
 

@@ -5,7 +5,7 @@ description: "Hudson is Navigator's operator CLI for deployments, infrastructure
 
 Navigator's **operator CLI**: the `hudson` binary, built from the `hudson` package under `deploy/`. A [Deployment
 Operator](deployment-operator.md) uses `ops` and `dev` for cloud access, deployment, infrastructure, migrations,
-backups, recovery, secrets provisioning and the remaining Restate operations.
+backups, recovery, and secrets provisioning.
 
 Authorized application work belongs in `navigator`, including People, Firm and Brand administration, Legal Plans, mail
 drafts, Inbox, Downloads and Notation rendering. These operations use the existing Navigator site session and key

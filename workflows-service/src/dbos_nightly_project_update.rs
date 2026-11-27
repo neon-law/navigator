@@ -16,7 +16,6 @@ use workflows::SlackBot;
 use crate::firm_slack::ProjectSlackBots;
 use crate::nightly_project_update::{self as nightly, NightlyProjectUpdateReport, Tag, TagOutcome};
 
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED";
 const WORKFLOW: &str = "NightlyProjectUpdate";
 const MESSAGE_ATTEMPTS: u32 = 3;
 
@@ -78,14 +77,6 @@ impl Context {
             runtime_version: providers.runtime_version,
             portal_origin: providers.portal_origin,
         }
-    }
-}
-
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED must be true or false"),
     }
 }
 
@@ -486,9 +477,7 @@ mod tests {
         CapturingSlackBot, SlackBot, SlackBotError, SlackChannel, SlackMessageReceipt,
     };
 
-    use super::{
-        child_workflow_id, enabled, post_once, unlaunched_workflow, workflow_id, NightlyError,
-    };
+    use super::{child_workflow_id, post_once, unlaunched_workflow, workflow_id, NightlyError};
     use crate::nightly_project_update::Tag;
 
     #[tokio::test]
@@ -566,17 +555,6 @@ mod tests {
         assert_eq!(
             ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
             Tag::ALL.len()
-        );
-    }
-
-    #[test]
-    fn the_switch_accepts_only_true_or_false() {
-        assert!(!enabled(|_| None).unwrap());
-        assert!(!enabled(|_| Some(" false ".into())).unwrap());
-        assert!(enabled(|_| Some("true".into())).unwrap());
-        assert_eq!(
-            enabled(|_| Some("on".into())),
-            Err("NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED must be true or false")
         );
     }
 

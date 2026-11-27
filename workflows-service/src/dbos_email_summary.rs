@@ -22,21 +22,9 @@ use crate::email_summary::{
 pub mod recovery;
 
 pub const WORKFLOW: &str = "EmailSummary";
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED";
 
 pub type EmailSummaryWorkflow =
     WorkflowRef<EmailSummaryRequest, EmailSummaryReport, EmailSummaryError>;
-
-/// Whether the `EmailSummary` twin is enabled in the DBOS host. Disabled
-/// unless explicitly set, so enabling the executor alone cannot duplicate the
-/// live Restate lane.
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED must be true or false"),
-    }
-}
 
 /// The workflow id every delivery of one email receipt joins. The Restate
 /// invocation key is the receipt id; preserving it as the DBOS id keeps

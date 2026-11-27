@@ -2,9 +2,7 @@
 //!
 //! Mirrors `portal::email::select_backend` in shape but returns a
 //! **bare** backend — no `RetryingEmail`. The locked design for
-//! `email_send__*` dispatch is that Restate's invocation journal IS the
-//! retry layer (per-step backoff is built into the worker, not a
-//! Tokio-side decorator). `main` wraps the backend in
+//! `email_send__*` dispatch uses DBOS step retries. The worker wraps the backend in
 //! `workflows::email::LoggingEmail`, so every worker send journals one
 //! `sent_email` row, as `web`'s sends do.
 //!

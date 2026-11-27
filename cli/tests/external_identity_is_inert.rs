@@ -175,9 +175,9 @@ fn the_table_this_guard_is_about_still_exists() {
          remove this guard with it"
     );
 
-    let definitions = read(&repo_root().join("store/src/schema/navigator.surql"));
+    let definitions = read(&repo_root().join("store/postgres/schema.sql"));
     assert!(
-        definitions.contains("DEFINE TABLE IF NOT EXISTS person_external_identity"),
-        "person_external_identity is not defined in navigator.surql"
+        definitions.contains("CREATE TABLE person_external_identity ("),
+        "person_external_identity is not defined in the PostgreSQL schema"
     );
 }

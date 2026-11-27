@@ -15,12 +15,11 @@ the retained StatefulSet in [docs/postgres-kubernetes.md](postgres-kubernetes.md
 
 One Apache AGE graph, `navigator_graph`, in the existing PostgreSQL 16.15 cluster. The engine pair (PostgreSQL 16.15 +
 AGE 1.6.0) ships inside the digest-pinned `navigator/postgres` image — there is nothing to install at the filesystem
-level. A deployment moves onto the graph in four steps: extension and roles, migrations, backfill, then the web rollout
-that reads and writes the graph. Each step verifies before the next begins.
+level. A deployment moves onto the graph in four steps: extension and roles, migrations, graph parity, then the web
+rollout that reads and writes the graph. Each step verifies before the next begins.
 
-The write posture after cutover: PostgreSQL is authoritative. The `entity_role` and `relationship` relational rows and
-their graph edges land in PostgreSQL; the SurrealDB graph tables receive nothing. `relationship_log` is untouched by all
-of this — it stays an append-only relational table in SurrealDB per its own contract.
+The write posture after cutover: PostgreSQL holds `entity_role`, `relationship`, and their AGE edges. It also holds the
+append-only `relationship_log`.
 
 ## 1. Extension and roles (privileged init, superuser)
 
@@ -77,32 +76,13 @@ WHERE proname IN ('graph_load_vertices', 'graph_load_edges',
                   'graph_ensure_vertices');                            -- five functions
 ```
 
-## 3. Backfill and parity
+## 3. Verify graph parity
 
-The graph projects from the relational mirrors, so the relational tables must be whole first. The Mirror Backfill runs
-the graph arm last, after every source group converges.
-
-Run the backfill with `NAVIGATOR_POSTGRES_USER=navigator_owner` and the migration login's credentials from the
-[PostgreSQL access runbook](postgres-kubernetes.md#mirror-parity-and-reconcile). The graph arm calls
-`graph_clear_navigator()` and `graph_load_vertices()`, which require the migration login. Run parity as `navigator_app`.
+Use the `navigator_app` login and its [PostgreSQL connection settings](postgres-kubernetes.md#application-admission).
 
 ```bash
-hudson ops postgres backfill --dry-run --json          # the plan; writes nothing
-hudson ops postgres backfill --batch-size 500 --json   # the run; resumable by run id
-hudson ops postgres mirror parity                      # relational mirror parity
-hudson ops postgres graph parity                       # AGE projection parity, as navigator_app
+hudson ops postgres graph parity
 ```
-
-The graph arm rebuilds the projection wholesale — vertices keyed by the Surreal record UUIDs, so `source_id` provenance
-chains stay traceable — then validates counts and endpoint existence and reports them in the run's JSON. A clean run
-reports graph validation alongside the relational parity counts. After the first backfill completes, parity skips
-PostgreSQL-authoritative graph tables and validates the AGE projection against PostgreSQL. Exit status 0 requires zero
-drift. The failed row list in `mirror_backfill_failure` gives table names and UUIDs.
-
-When PostgreSQL holds the source rows, pause graph writers and run `hudson ops postgres graph rebuild` as
-`navigator_owner` to replace the AGE projection from PostgreSQL alone. Run `graph parity` as `navigator_app` before
-resuming writes. It checks label and edge counts and endpoint integrity. Use the staging conflict flows below to verify
-findings.
 
 ## 4. Staging soak, then production cutover
 

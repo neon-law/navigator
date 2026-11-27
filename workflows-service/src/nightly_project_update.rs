@@ -1,9 +1,9 @@
 //! The Nightly Project Update: the parent DAG that walks every Project each
 //! night and runs one child DAG per tag.
 //!
-//! The parent is a Restate workflow keyed on the UTC date, so a second fire on
+//! The parent is a DBOS workflow keyed on the UTC date, so a second fire on
 //! the same day attaches to the first instead of running again. Every child is
-//! a Restate workflow keyed `{date}:{project id}`, one per (Project, tag), so a
+//! a DBOS workflow keyed by tag, UTC date, and Project id, so a
 //! failing tag is counted against that Project and tag and the sweep moves on.
 //! The tag set is closed ([`Tag`]); see the glossary term for what each child
 //! owns.
@@ -135,7 +135,7 @@ pub enum TagOutcome {
     Repository(RepositoryOutcome),
 }
 
-/// Aggregate counts for one run. Safe for the Restate journal and for
+/// Aggregate counts for one run. Safe for the workflow journal and for
 /// `#messages` or `#staging-messages`.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NightlyProjectUpdateReport {
@@ -217,7 +217,7 @@ pub struct FailureCause {
     pub reason: String,
     pub count: usize,
     /// The first message seen for this cause, capped at 300 characters.
-    /// Slack and Restate errors carry no addresses.
+    /// Reported errors omit addresses.
     pub example: String,
 }
 
@@ -953,11 +953,12 @@ mod tests {
             update_prs_opened: 4,
             update_prs_pending: 1,
             update_prs_declined: 0,
+            calendars_synced: 6,
             ..Default::default()
         });
         assert_eq!(
             message,
-            "*Nightly Project Update complete*\nProjects: 9 (8 open).\nChannels checked: 3; channels created: 5; channels repaired: 6; channels archived: 14; channels unarchived: 2; Projects without a channel: 2; people invited: 4; people removed: 5; already members: 2; unmatched assignments: 1.\nCanvases created: 10; canvases edited: 11; notices posted: 12.\nRepositories created or adopted: 7. Navigator pins — current: 5; stale: 1; unreadable: 2.\nUpdate pull requests — opened: 4; awaiting merge: 1; declined: 0. Governance repaired: 3.\nFailures by tag — membership: 0; slack: 0; repository: 0."
+            "*Nightly Project Update complete*\nProjects: 9 (8 open).\nChannels checked: 3; channels created: 5; channels repaired: 6; channels archived: 14; channels unarchived: 2; Projects without a channel: 2; people invited: 4; people removed: 5; already members: 2; unmatched assignments: 1.\nCanvases created: 10; canvases edited: 11; notices posted: 12.\nRepositories created or adopted: 7. Navigator pins — current: 5; stale: 1; unreadable: 2.\nUpdate pull requests — opened: 4; awaiting merge: 1; declined: 0. Governance repaired: 3.\nShared calendars synced: 6.\nFailures by tag — membership: 0; slack: 0; repository: 0; calendar: 0."
         );
         assert!(!message.contains('@'));
     }

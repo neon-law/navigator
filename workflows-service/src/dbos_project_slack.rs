@@ -1,8 +1,6 @@
-//! DBOS adapter for the `project-slack` virtual object's two lanes.
+//! Durable execution for Project Slack notices.
 //!
-//! Restate keyed the service by the Project id and serialized every event
-//! through one virtual object. DBOS has no virtual objects, so the port
-//! replaces that single-writer guarantee with two mechanisms:
+//! DBOS deduplicates each event and serializes delivery per Project:
 //!
 //! - **Per-event workflow identity.** A main-push notice runs as
 //!   `ProjectSlack:{project id}:{short sha}:{run attempt}` and a client
@@ -13,7 +11,7 @@
 //!   interleaving channel creation and posts.
 //!
 //! Project channel metadata lives in PostgreSQL. Retained posted-event history
-//! and client-view posting evidence pass through the explicit object handover.
+//! and client-view posting evidence govern delivery admission.
 //! Native ownership and delivery admission are checked before provider access;
 //! the provider's existing durable checkpoint precedes the PG-only receipt step.
 
@@ -34,9 +32,6 @@ use crate::project_slack::{
 /// and from the Restate service (`project-slack`), so the two engines can
 /// run side by side during the migration.
 pub const WORKFLOW: &str = "ProjectSlack";
-/// The rollout flag. Default off; the Restate object keeps serving until
-/// cutover flips callers.
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED";
 /// The lane key of the client-view workflow for a Project.
 pub const CLIENT_VIEW_LANE: &str = "client-view";
 
@@ -227,15 +222,6 @@ impl Context {
             postgres,
             simulated,
         }
-    }
-}
-
-/// Whether the DBOS Project Slack lane is switched on for this deployment.
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED must be true or false"),
     }
 }
 
@@ -436,8 +422,8 @@ fn lane_step_options() -> dbos::StepOptions<LaneError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        client_view_workflow_id, enabled, lane_lock_key, main_push_workflow_id, parse_workflow_id,
-        LaneKey, LaneRequest, CLIENT_VIEW_LANE, ENABLED_ENV, WORKFLOW,
+        client_view_workflow_id, lane_lock_key, main_push_workflow_id, parse_workflow_id, LaneKey,
+        LaneRequest, CLIENT_VIEW_LANE, WORKFLOW,
     };
     use crate::project_slack::{CiOutcome, LaneError, MainPushRequest};
     use uuid::Uuid;
@@ -452,17 +438,6 @@ mod tests {
             run_attempt,
             subject: None,
         }
-    }
-
-    #[test]
-    fn the_rollout_flag_defaults_off_and_refuses_junk() {
-        assert!(!enabled(|_| None).expect("unset"));
-        assert!(!enabled(|name| (name == ENABLED_ENV).then(String::new)).expect("empty"));
-        assert!(
-            !enabled(|name| (name == ENABLED_ENV).then(|| "false".to_string())).expect("false"),
-        );
-        assert!(enabled(|name| (name == ENABLED_ENV).then(|| "true".to_string())).expect("true"));
-        assert!(enabled(|name| (name == ENABLED_ENV).then(|| "yes".to_string())).is_err());
     }
 
     #[test]

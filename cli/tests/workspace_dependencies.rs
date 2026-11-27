@@ -129,7 +129,6 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "sqlx",
     "store",
     "strum",
-    "surrealdb",
     "symphonia",
     "syntect",
     "tar",

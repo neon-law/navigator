@@ -61,9 +61,9 @@ created with `hudson ops deployments init` or `import` and edited with `set` / `
 [`manual-roll.md`](manual-roll.md#the-published-record-is-the-row)) — from the `STAGING_GCP_PROJECT_ID` or
 `PRODUCTION_GCP_PROJECT_ID` environment secret. A row edit takes effect on the next ship with no merge to `main`. `ops
 ship` writes the GKE credentials and a short-lived registry login for `cosign` to its own scratch directory, so neither
-depends on the runner's or an operator's shell. The brand-readiness and Restate registration health checks read the same
-record. A tag whose CLI predates their `--project-id` flag skips them with a warning; a tag older than `ops ship
---project-id` (26.10.20) must be rolled by hand.
+depends on the runner's or an operator's shell. The brand-readiness check reads the same record. A tag whose CLI
+predates their `--project-id` flag skips them with a warning; a tag older than `ops ship --project-id` (26.10.20) must
+be rolled by hand.
 
 Both ship jobs use quiet logging with each protected environment’s configured sink, keeping full transcripts private.
 
@@ -81,10 +81,8 @@ Operators retrieve a run using their own credentials:
 hudson ops logs --deployment <row> --run <run-id>-<attempt> [--prefix <prefix>]
 ```
 
-That is the full reconcile: manifests, the Secret checks, CronJob pins, and Restate registration. `--assert-signing-iam`
-verifies the web service account's signing binding without writing IAM. The health checks are `ops brand-readiness` and
-`ops restate register`, and each posts its name, the tag, and `pass` or `fail` to `#navigator`. `ship-production` opens
-with a line saying staging passed and production begins.
+`--assert-signing-iam` verifies the web service account's signing binding. The ship job reports the brand-readiness
+health check and release tag to `#navigator`. Production opens with a notice after staging passes.
 
 `ship-production` needs `ship-staging` and carries no status function in its `if:`, so a failed, cancelled, or skipped
 staging run blocks it. It rolls `needs.ship-staging.outputs.tag` — exactly the tag staging served.
@@ -155,8 +153,7 @@ The account holds what the full `ops ship` uses:
   `--assert-signing-iam`. It is bound at the project level because a deny policy blocks `setIamPolicy` on the web
   service account for everyone but its admin, so the resource-level binding cannot be written.
 
-It holds no KMS decrypt (`ops ship` reads SOPS key names, never values) and no `setIamPolicy`. Restate registration
-authenticates with the admin token below.
+It holds no KMS decrypt (`ops ship` reads SOPS key names, never values) and no `setIamPolicy`.
 
 The GitHub token each job receives:
 
@@ -167,16 +164,12 @@ The GitHub token each job receives:
 | `dedup`, `resolve-rollback` | `contents: read`, `deployments: read` |
 | `ship-staging`, `ship-production` | `contents: read`, `id-token: write`, `deployments: write` |
 
-Each environment holds its own secrets and variables, never a repository-wide copy either ship job could read. The
-Restate admin tokens are Restate Cloud API keys, one per environment, not the `restate` CLI's login session, which lasts
-about a day:
+Each protected environment holds its own deployment credentials and log sink.
 
-- **`staging-deploy`**: `STAGING_SHIP_WIF_PROVIDER`, `STAGING_SHIP_SERVICE_ACCOUNT`,
-  `STAGING_DEPLOYMENT`, `STAGING_SHIP_LOG_SINK`, and `STAGING_RESTATE_ADMIN_TOKEN` are secrets;
-  `STAGING_RESTATE_ADMIN_URL` is a variable.
-- **`production-deploy`**: `PRODUCTION_SHIP_WIF_PROVIDER`, `PRODUCTION_SHIP_SERVICE_ACCOUNT`,
-  `PRODUCTION_DEPLOYMENT`, `PRODUCTION_SHIP_LOG_SINK`, and `PRODUCTION_RESTATE_ADMIN_TOKEN` are secrets;
-  `PRODUCTION_RESTATE_ADMIN_URL` is a variable.
+- **`staging-deploy`** uses `STAGING_SHIP_WIF_PROVIDER`, `STAGING_SHIP_SERVICE_ACCOUNT`, `STAGING_DEPLOYMENT`, and
+  `STAGING_SHIP_LOG_SINK`.
+- **`production-deploy`** uses `PRODUCTION_SHIP_WIF_PROVIDER`, `PRODUCTION_SHIP_SERVICE_ACCOUNT`,
+  `PRODUCTION_DEPLOYMENT`, and `PRODUCTION_SHIP_LOG_SINK`.
 
 At repository scope, set variable `DEPLOY_EXPECTED_REPOSITORY` and secrets `NAVIGATOR_IMAGE_REGISTRY`,
 `NAVIGATOR_REGISTRY_HOST`, `NAVIGATOR_PUBLISHER_SERVICE_ACCOUNT`, and `NAVIGATOR_PUBLISHER_WIF_PROVIDER`.

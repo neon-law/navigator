@@ -14,7 +14,6 @@ use store::finance_aggregate::{self, FinanceInput, Parameters};
 use cloud::StorageService;
 
 pub const WORKFLOW: &str = "FinanceAggregate";
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED";
 
 pub type FinanceAggregateWorkflow =
     WorkflowRef<RunRequest, FinanceAggregateReport, FinanceAggregateError>;
@@ -42,14 +41,6 @@ impl Context {
             application_store,
             storage,
         }
-    }
-}
-
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED must be true or false"),
     }
 }
 
@@ -151,7 +142,7 @@ pub struct FinanceAggregateReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{enabled, workflow_id, ENABLED_ENV};
+    use super::workflow_id;
 
     #[test]
     fn finance_run_ids_are_namespaced_and_keep_the_restate_key() {
@@ -159,13 +150,5 @@ mod tests {
         assert_eq!(id, "FinanceAggregate:manual-123");
         assert_eq!(id.strip_prefix("FinanceAggregate:"), Some("manual-123"));
         assert_ne!(id, "Archives:manual-123");
-    }
-
-    #[test]
-    fn registration_is_opt_in_and_rejects_invalid_values() {
-        assert!(!enabled(|_| None).unwrap());
-        assert!(!enabled(|key| (key == ENABLED_ENV).then(|| "false".to_owned())).unwrap());
-        assert!(enabled(|key| (key == ENABLED_ENV).then(|| "true".to_owned())).unwrap());
-        assert!(enabled(|key| (key == ENABLED_ENV).then(|| "yes".to_owned())).is_err());
     }
 }

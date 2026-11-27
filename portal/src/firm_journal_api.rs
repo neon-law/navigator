@@ -1541,7 +1541,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn journal_reads_use_postgres_and_require_explicit_source_for_triage() {
+    async fn journal_reads_use_postgres_and_report_no_pending_triage() {
         store::test_support::with_postgres(async {
             let fixture = door_fixture().await;
             let owner = door_bearer(fixture.owner, Role::Owner);
@@ -1591,7 +1591,8 @@ mod tests {
                 None,
             )
             .await;
-            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body, "[]");
         })
         .await;
     }

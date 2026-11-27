@@ -62,15 +62,8 @@ compile without it.
 
 **To run the local KIND cluster** (`hudson dev up`, and the per-worktree `dev worktree-env up`):
 
-A fresh tier uses PostgreSQL and DBOS without a SurrealDB server, Restate broker, or separate workflow worker. It
-requires Docker, `kubectl`, `kind`, and `openssl` (`deploy/src/devx/orchestrate.rs:133`); quickstart also uses `git`,
-`ssh-keygen`, Rust, and `cmake`. Its Ubuntu job installs KIND v0.33.0 (`.github/workflows/quickstart.yml:25`).
-
-Existing legacy tier descriptors retain their compatibility topology. Their tool gate also requires Helm
-(`deploy/src/devx/orchestrate.rs:43`) for the Restate Operator install (`deploy/src/devx/orchestrate.rs:1102`). The
-native deploy browser gate and standalone quickstart job both pin KIND v0.33.0. The deploy gate provisions through the
-ordinary quickstart CLI and then tests the exact built application image without Source, Restate, or a separate workflow
-worker. The compatibility topology remains explicit in the CLI.
+The local tier uses PostgreSQL and DBOS. It requires Docker, `kubectl`, `kind`, and `openssl`. Quickstart also uses
+`git`, `ssh-keygen`, Rust, and `cmake`. CI provisions through the same CLI and tests the exact built application image.
 
 Quickstart builds and stages the current checkout's Dioxus client before creating the KIND tier or starting the server
 watcher. It uses the debug profile locally and rebuilds incrementally on each launch; an existing bundle is not treated
@@ -154,11 +147,20 @@ and documentation contract.
 The minimum to boot `web` against a real store:
 
 ```dotenv
-NAVIGATOR_SURREAL_ENDPOINT=wss://surreal.internal.example
-NAVIGATOR_SURREAL_NAMESPACE=navigator
-NAVIGATOR_SURREAL_DATABASE=navigator
-NAVIGATOR_SURREAL_USER=<secret-backed username>
-NAVIGATOR_SURREAL_PASSWORD=<secret-backed password>
+NAVIGATOR_POSTGRES_HOST=postgres.internal.example
+NAVIGATOR_POSTGRES_DATABASE=navigator
+NAVIGATOR_POSTGRES_USER=navigator_app
+NAVIGATOR_POSTGRES_PASSWORD=<secret-backed application password>
+NAVIGATOR_POSTGRES_SSLMODE=verify-full
+NAVIGATOR_POSTGRES_ROOT_CERT=/run/secrets/postgres/ca.crt
+NAVIGATOR_DBOS_HOST=postgres.internal.example
+NAVIGATOR_DBOS_DATABASE=navigator
+NAVIGATOR_DBOS_USER=navigator_dbos
+NAVIGATOR_DBOS_PASSWORD=<secret-backed DBOS password>
+NAVIGATOR_DBOS_SSLMODE=verify-full
+NAVIGATOR_DBOS_ROOT_CERT=/run/secrets/postgres/ca.crt
+NAVIGATOR_DBOS_INGRESS_URL=http://127.0.0.1:9083
+NAVIGATOR_DBOS_INGRESS_TOKEN=<secret-backed ingress token>
 NAVIGATOR_ENVIRONMENT=dev                       # exact; production/empty/unset means production
 NAVIGATOR_STORAGE_BACKEND=s3                   # SeaweedFS or a conforming S3 endpoint
 NAVIGATOR_STORAGE_ENDPOINT=https://s3.internal.example
@@ -171,7 +173,6 @@ OAUTH_ISSUER_URL=https://accounts.google.com
 OAUTH_CLIENT_ID=<your client id>
 OAUTH_CLIENT_SECRET=<your client secret>
 OAUTH_REDIRECT_URI=https://www.your-domain.example/auth/callback
-RESTATE_BROKER_URL=<your Restate Cloud or in-cluster operator URL>
 SENDGRID_API_KEY=<key>
 SENDGRID_FROM_EMAIL=<verified non-production sender>
 SENDGRID_INBOUND_SECRET=<random secret>
@@ -218,8 +219,8 @@ available only to the explicit CI harness. See [`third-party-integrations.md`](t
 
 The `navigator` CLI ships a one-shot, idempotent provisioner for the GCP-side infrastructure — VPC, five GCS buckets
 (`assets`, `documents`, `exports`, `logs`, `applications`), runtime identity, GKE Autopilot cluster, Fleet membership,
-Gateway static IP, and the deployment's KMS key. It provisions no database: the store is SurrealDB, and you bring your
-own instance.
+Gateway static IP, and the deployment's KMS key. Use the [PostgreSQL deployment instructions](postgres-kubernetes.md)
+for the database and dedicated credentials.
 
 ```bash
 gcloud auth application-default login
@@ -235,8 +236,7 @@ cargo run -p hudson -- ops gcp setup \
 Each flag has a sensible default (see `cargo run -p hudson -- ops gcp setup --help`) and falls back to a `NAVIGATOR_*`
 env var if unset. Pass `--dry-run` first to print the exact REST calls / `gcloud` invocations the run will emit.
 
-The subcommand generates no credential and prints no secret. Your store credentials come from your SurrealDB provider
-instead.
+Provision the application and DBOS logins through the PostgreSQL roles job.
 
 ## 4. Adapt the example overlay
 
@@ -258,11 +258,9 @@ Create the runtime Kubernetes Secret (out-of-band — `kubectl create secret` ke
 
 ```bash
 kubectl -n navigator create secret generic navigator-web-secrets \
-  --from-literal=NAVIGATOR_SURREAL_PASSWORD='...' \
+  --from-literal=NAVIGATOR_DBOS_INGRESS_TOKEN="$(openssl rand -hex 32)" \
   --from-literal=OAUTH_CLIENT_SECRET='...' \
   --from-literal=SESSION_SECRET="$(openssl rand -hex 32)" \
-  --from-literal=RESTATE_BROKER_URL='...' \
-  --from-literal=RESTATE_AUTH_TOKEN='...' \
   --from-literal=SENDGRID_API_KEY='...' \
   --from-literal=SENDGRID_FROM_EMAIL='noreply@your-domain.example' \
   --from-literal=SENDGRID_INBOUND_SECRET="$(openssl rand -hex 32)" \
@@ -305,14 +303,12 @@ Then roll your cluster onto the new tag — `hudson ops ship --tag <TAG>` render
 ## 6. Verify
 
 `kubectl get pods -n navigator` should show `navigator-web` running. Hit `https://www.your-domain.example/app/health`
-(must return `OK`) and `https://www.your-domain.example/` (must render the home page). The first inbound request starts
-embedded Rego, OIDC, and Restate handshakes. Any missing env var crashes the pod with a structured
-`enforce_deployment_invariants` error before serving traffic, which is the loud-failure-by-design behavior.
+(must return `OK`) and `https://www.your-domain.example/` (must render the home page). Startup checks PostgreSQL
+application admission and DBOS readiness before serving traffic.
 
 ## Where things go from here
 
-- For Restate Cloud setup, see [`gke-prod.md`](gke-prod.md). For driving Navigator from an agent, see
-  [`claude-mcp-client.md`](claude-mcp-client.md).
+- For driving Navigator from an agent, see [`claude-mcp-client.md`](claude-mcp-client.md).
 - For an OSS-friendly deploy via GitHub Actions, a fork inherits the canonical
   [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml), which builds every image and publishes it to Neon
   Law's Artifact Registry through Workload Identity. A fork points the publish jobs at its own registry and identity

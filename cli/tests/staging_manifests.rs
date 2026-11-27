@@ -690,72 +690,6 @@ fn postgres_migrate_job_runs_the_entrypoint_as_the_migration_login() {
 }
 
 #[test]
-fn postgres_mirror_reconcile_job_runs_once_as_the_runtime_login() {
-    for (environment, namespace) in POSTGRES_OVERLAYS {
-        let Some(resources) = render(&format!(
-            "examples/deploy/k8s/gke/postgres/mirror/{environment}"
-        )) else {
-            return;
-        };
-        assert_eq!(
-            resources.len(),
-            1,
-            "the mirror overlay renders only its Job, never a CronJob"
-        );
-        let job = resource(&resources, "Job", "navigator-postgres-mirror-reconcile");
-        assert_eq!(job["metadata"]["namespace"].as_str(), Some(namespace));
-        assert_eq!(job["spec"]["backoffLimit"].as_u64(), Some(0));
-        assert_eq!(
-            job["spec"]["template"]["metadata"]["labels"]["navigator.neonlaw.org/postgres-client"]
-                .as_str(),
-            Some("true")
-        );
-        let reconcile = container(job, "reconcile");
-        assert_eq!(
-            reconcile["image"].as_str(),
-            Some("navigator-ops"),
-            "the operator pins the release image carrying hudson, the binary with `ops`"
-        );
-        let args: Vec<&str> = reconcile["args"]
-            .as_sequence()
-            .expect("reconcile args")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect();
-        assert_eq!(args, ["ops", "postgres", "mirror", "reconcile", "--json"]);
-        assert_eq!(
-            env_entry(job, "NAVIGATOR_POSTGRES_USER")["value"].as_str(),
-            Some("navigator_app")
-        );
-        assert_eq!(
-            env_entry(job, "NAVIGATOR_POSTGRES_PASSWORD")["valueFrom"]["secretKeyRef"]["name"]
-                .as_str(),
-            Some("navigator-postgres-app")
-        );
-        assert_eq!(config_map_key(job, "NAVIGATOR_POSTGRES_SSLMODE"), "sslmode");
-        assert_eq!(config_map_key(job, "NAVIGATOR_POSTGRES_HOST"), "host");
-        for application_store in [
-            "NAVIGATOR_SURREAL_ENDPOINT",
-            "NAVIGATOR_SURREAL_NAMESPACE",
-            "NAVIGATOR_SURREAL_DATABASE",
-            "NAVIGATOR_SURREAL_USER",
-            "NAVIGATOR_SURREAL_PASSWORD",
-        ] {
-            let source = &env_entry(job, application_store)["valueFrom"]["secretKeyRef"];
-            assert_eq!(source["name"].as_str(), Some("navigator-web-secrets"));
-            assert_eq!(source["key"].as_str(), Some(application_store));
-        }
-        assert!(
-            reconcile["envFrom"].is_null(),
-            "the Job reads only the keys it names, not the whole deployment Secret"
-        );
-        assert_eq!(secret_volumes(job), vec!["navigator-postgres-app"]);
-    }
-}
-
-/// Normal operator workloads require Hudson from the neutral image; the Source
-/// exporter retains a same-build alias rather than a separate compilation.
-#[test]
 fn operator_image_carries_hudson() {
     let workflow: Value = serde_yaml::from_str(
         &std::fs::read_to_string(workspace().join(".github/workflows/deploy.yml")).unwrap(),
@@ -780,14 +714,6 @@ fn operator_image_carries_hudson() {
         (
             "k8s/postgres/admission/application-readiness-job.yaml",
             "image: navigator-ops",
-        ),
-        (
-            "k8s/postgres/mirror/mirror-reconcile-job.yaml",
-            "image: navigator-ops",
-        ),
-        (
-            "k8s/postgres/mirror/recovery/cronjob.yaml",
-            "image: YOUR_IMAGE_REGISTRY/navigator-ops:YY.M.D",
         ),
         (
             "examples/deploy/k8s/gke/forgejo/runner-controller/runner-controller.yaml",
@@ -1059,7 +985,6 @@ fn postgres_production_overlays_render_the_staging_shape() {
     for overlay in [
         "examples/deploy/k8s/gke/postgres/{}",
         "examples/deploy/k8s/gke/postgres/migrate/{}",
-        "examples/deploy/k8s/gke/postgres/mirror/{}",
         "examples/deploy/k8s/gke/postgres/restore-drill/{}",
     ] {
         let (Some(staging), Some(production)) = (

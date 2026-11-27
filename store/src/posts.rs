@@ -8,7 +8,7 @@
 //! id every `social_publication` receipt is keyed by, and the receipts
 //! themselves survive an edit. [`publish_scheduled`] records worker completion through the same PostgreSQL authority.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -1008,10 +1008,12 @@ pub async fn import_source(
     let selected: Vec<String> = resolved.into_iter().map(|(_, key)| key).collect();
 
     let existing = find_by_brand_slug(db, post.brand_key, post.slug).await?;
+    // SQLx stores PostgreSQL timestamps with microsecond precision.
+    let publish_at = post.publish_at.trunc_subsecs(6);
 
     // A scheduled time that has already passed publishes the article and
     // schedules no social send.
-    let source_status = if post.status == "scheduled" && post.publish_at <= now {
+    let source_status = if post.status == "scheduled" && publish_at <= now {
         "published"
     } else {
         post.status
@@ -1031,14 +1033,14 @@ pub async fn import_source(
                 || (row.status == "scheduled" && current_at.is_some_and(|at| at <= now));
             let held = row.status == "cancelled"
                 && source_status == "scheduled"
-                && current_at == Some(post.publish_at);
+                && current_at == Some(publish_at);
             let status = if held {
                 row.status.clone()
             } else if live && source_status != "draft" {
-                if current_at != Some(post.publish_at) {
+                if current_at != Some(publish_at) {
                     return Err(PostError::ScheduleLocked {
-                        current: current_at.unwrap_or(post.publish_at),
-                        requested: post.publish_at,
+                        current: current_at.unwrap_or(publish_at),
+                        requested: publish_at,
                     });
                 }
                 row.status.clone()
@@ -1052,14 +1054,14 @@ pub async fn import_source(
                 } else {
                     (id, status, ImportChange::Unchanged)
                 }
-            } else if row.status != status || current_at != Some(post.publish_at) {
+            } else if row.status != status || current_at != Some(publish_at) {
                 (id, status, ImportChange::Schedule)
             } else {
                 (id, status, ImportChange::Editorial)
             }
         }
     };
-    let social_scheduled = status == "scheduled" && post.publish_at > now && !selected.is_empty();
+    let social_scheduled = status == "scheduled" && publish_at > now && !selected.is_empty();
     let result = ImportResult {
         post_id: id,
         change,
@@ -1502,7 +1504,7 @@ mod tests {
 
             let (_, admin_a, brand_a) = practice(&db, "schedule-a").await;
             let (_, admin_b, _) = practice(&db, "schedule-b").await;
-            let now = Utc::now();
+            let now = Utc::now().trunc_subsecs(6) + chrono::Duration::nanoseconds(123);
             let first_time = now + chrono::Duration::days(3);
             let mut post = source(&brand_a, "scheduled", "Scheduled");
             post.status = "scheduled";
@@ -1734,7 +1736,7 @@ mod tests {
             let db = crate::application_store::ApplicationStore::uninitialized();
             test_support::seed_compiled_brands_postgres(&db).await;
 
-            let now = Utc::now();
+            let now = Utc::now().trunc_subsecs(6) + chrono::Duration::nanoseconds(123);
             crate::social_handles::set(&db, "neon", "facebook", "synthetic-page")
                 .await
                 .unwrap();
@@ -1825,7 +1827,7 @@ mod tests {
             let db = crate::application_store::ApplicationStore::uninitialized();
             test_support::seed_compiled_brands_postgres(&db).await;
 
-            let now = Utc::now();
+            let now = Utc::now().trunc_subsecs(6) + chrono::Duration::nanoseconds(123);
             let mut past = source("neon", "past", "Past");
             past.status = "scheduled";
             past.publish_at = now - chrono::Duration::hours(1);

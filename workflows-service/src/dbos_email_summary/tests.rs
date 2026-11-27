@@ -1,4 +1,4 @@
-use super::{enabled, workflow_id, EmailSummaryError, ENABLED_ENV, WORKFLOW};
+use super::{workflow_id, EmailSummaryError, WORKFLOW};
 
 #[test]
 fn every_failure_names_its_step_without_message_content() {
@@ -25,14 +25,6 @@ fn every_failure_names_its_step_without_message_content() {
     let journaled = serde_json::to_string(&EmailSummaryError::Provider("x".into())).unwrap();
     let replayed: EmailSummaryError = serde_json::from_str(&journaled).unwrap();
     assert!(matches!(replayed, EmailSummaryError::Provider(reason) if reason == "x"));
-}
-
-#[test]
-fn registration_is_opt_in_and_rejects_invalid_values() {
-    assert!(!enabled(|_| None).unwrap());
-    assert!(!enabled(|key| (key == ENABLED_ENV).then(|| "false".to_owned())).unwrap());
-    assert!(enabled(|key| (key == ENABLED_ENV).then(|| "true".to_owned())).unwrap());
-    assert!(enabled(|key| (key == ENABLED_ENV).then(|| "yes".to_owned())).is_err());
 }
 
 #[test]

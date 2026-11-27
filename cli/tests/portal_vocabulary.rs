@@ -32,10 +32,6 @@ const ALLOWED: &[&str] = &[
     // `features/src/portfolio_acceptance.rs`, and by the diagram fixture in
     // `webapp/src/marketing_page.rs`.
     "\"client portal\"",
-    // `webapp/src/project_resources.rs` — `ResourceKind::name`, emitted as the
-    // row's `data-resource` slug and asserted by
-    // `server/tests/project_integrations_buttons.rs`.
-    "\"client-portal\"",
     // `webapp/src/firm_footer.rs` — the matter page footer's CSS modifier, read
     // by `portal/src/dioxus_app.rs` and `webapp/src/portal_project_detail.rs`.
     "app-footer--client-portal",

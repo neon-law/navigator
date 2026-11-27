@@ -40,24 +40,6 @@ use crate::notation_logic::{
     NotationLogicError, ReviewNotificationHop, WorkflowFunnelStep,
 };
 
-/// The workflow-specific switch that runs the notation port beside the
-/// Restate virtual object. Strict `true`/`false` — a typo must fail boot,
-/// not silently leave traffic on Restate.
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_NOTATION_ENABLED";
-
-/// Whether [`ENABLED_ENV`] registers the notation transition workflow.
-///
-/// # Errors
-///
-/// Refuses any value other than `true` or `false`.
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_NOTATION_ENABLED must be true or false"),
-    }
-}
-
 /// The DBOS workflow name the transition workflow registers under.
 pub const WORKFLOW: &str = "NotationTransition";
 
@@ -998,8 +980,8 @@ async fn back(
 #[cfg(test)]
 mod tests {
     use super::{
-        enabled, kind_token, parse_spec, retryable_steps, NotationTransitionError, Operation,
-        TransitionRequest, ENABLED_ENV,
+        kind_token, parse_spec, retryable_steps, NotationTransitionError, Operation,
+        TransitionRequest,
     };
     use store::notation_events::{MACHINE_QUESTIONNAIRE, MACHINE_WORKFLOW};
     use workflows::MachineKind;
@@ -1017,23 +999,6 @@ BEGIN:
   _: END
 END: {}
 ";
-
-    #[test]
-    fn flag_follows_the_strict_switch_contract() {
-        assert!(!enabled(|_| None).expect("unset is off"));
-        assert!(
-            !enabled(|name| (name == ENABLED_ENV).then(|| "false".to_owned()))
-                .expect("false is off")
-        );
-        assert!(!enabled(|name| (name == ENABLED_ENV).then(String::new)).expect("empty is off"));
-        assert!(
-            enabled(|name| (name == ENABLED_ENV).then(|| "true".to_owned())).expect("true is on")
-        );
-        assert!(
-            enabled(|name| (name == ENABLED_ENV).then(|| "TRUE".to_owned())).is_err(),
-            "non-lowercase truthy values fail closed, like every other DBOS flag"
-        );
-    }
 
     #[test]
     fn retry_policy_retries_store_failures_and_deterministic_outcomes_fail_fast() {

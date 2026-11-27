@@ -64,15 +64,6 @@ collector has two replicas with independent tail samplers. Complete cross-servic
 trace to reach the same sampler, using trace-ID routing or another consistent sampling design. See the [OpenTelemetry
 collector deployment guidance](https://opentelemetry.io/docs/collector/deploy/other/agent-to-gateway/).
 
-`store::surreal::ping` — the readiness probe's one query — runs on its own `tokio::spawn`ed task rather than inline
-(ENG-709). `readyz`'s caller is a kubelet HTTP probe with a short timeout; when it fires before the query answers,
-kubelet drops the connection and axum drops the handler future that was awaiting `ping`. Awaited inline, that drop would
-drop the receiver half of the remote WS engine's internal response channel while the query was still in flight, and the
-`surrealdb` client's own router task would log `Failed to send query results to channel: SendError(..)` at ERROR when it
-tried to deliver a response nobody was waiting for — this was roughly 85% of staging's log volume. Spawning decouples
-the two lifetimes: the caller giving up only stops it from *waiting*, not the query from *running*, so the engine always
-finds its receiver.
-
 Web also records first-party public website visits as aggregate analytics. The durable table and OTel counter
 (`navigator.web.visit.count`) use bounded dimensions only: UTC day, Axum matched route pattern, trusted edge
 country/region code, route-derived locale, coarse status class, and a source bucket derived from approved UTM/ref query
@@ -106,9 +97,9 @@ event name in the bounded `step` field. The five steps and their fields are:
 | `funnel.sent` | `notation_id`, `project_id`, `channel` (`email` or `signature`) |
 
 The matching `navigator.funnel.step` counter carries only the `step` attribute, so Dash0 can chart conversion and
-drop-off without querying event logs. The workflow-service events are emitted from journaled Restate side effects, so a
-replay reuses the recorded side effect instead of incrementing the counter or writing a duplicate event. The signature
-send path uses its existing idempotent request record and emits only after the provider succeeds.
+drop-off without querying event logs. The workflow-service events are emitted from checkpointed DBOS steps, so a replay
+reuses the recorded side effect instead of incrementing the counter or writing a duplicate event. The signature send
+path uses its existing idempotent request record and emits only after the provider succeeds.
 
 ## Browser sign-in
 
@@ -251,10 +242,8 @@ deployment-specific dataset and token before rollout. Verify the collector's run
 after applying changes; application image rollout alone does not apply the collector manifest. Direct OpenObserve
 remains a separate supported export contract.
 
-The Iceberg archive ([iceberg-archive guide](iceberg-archive.md)) remains distinct. Its nightly `Archives` workflow
-snapshots SurrealDB tables to Parquet on GCS for BigQuery external-table analysis; it is not an operational telemetry
-sink. Any decision to retain application logs in BigQuery is a separate deployment-operator decision, recorded with that
-deployment rather than implied by the exporter.
+Use the [Iceberg archive](iceberg-archive.md) for PostgreSQL logical data exports. The deployment's telemetry exports
+and retention are configured separately.
 
 ## Seeing telemetry locally: OpenObserve
 
@@ -277,27 +266,15 @@ exports directly; in-cluster `web` and `workflows-service` receive the same comp
 
 Open `NAVIGATOR_OPENOBSERVE_URL`, sign in with the generated development credentials, and use Explorer to select the
 `default` organization and the stream for traces, logs, or metrics. Search by `service_name = neon-server` for the host
-loop, `navigator-web` for the in-cluster web process, or `workflows-service` for the worker. A Restate-triggered
-workflow should retain its W3C trace id across the boundary. Use `RUST_LOG=info` for that verification so the caller
-span is enabled. Set an empty `OTEL_EXPORTER_OTLP_ENDPOINT` to intentionally run stdout-only.
+loop or `navigator-web` for the deployed application and embedded DBOS executor. Use `RUST_LOG=info` to include the
+caller span. An empty `OTEL_EXPORTER_OTLP_ENDPOINT` keeps logging on stdout.
 
-## Debugging "the workflow didn't run"
+## Debugging a workflow
 
-Work down the chain (full version in the [durable-workflows guide](durable-workflows.md)); each rung now has telemetry:
-
-1. **Did the trigger fire — and is a job wedged?** Run **`hudson ops doctor`**. It reads the cluster and
-   names, in plain language, any trigger Job stuck in `ImagePullBackOff` / `CrashLoopBackOff` or Active too long (which,
-   under `Forbid`, skips every subsequent run) and any unready workload. It prints the exact `kubectl` command that
-   fixes each finding. First stop for a missing nightly/periodic job.
-2. **Did the ingress accept it?** Query OpenObserve for `navigator.workflow.trigger.fired` by `service` and `outcome`,
-   or read the trigger-outcome log events: `rejected` with `status=401` is a stale `RESTATE_AUTH_TOKEN`; `status=404` is
-   the registration gotcha; `transport_error` is an unreachable/hung ingress (now capped by a 30s client timeout +
-   `activeDeadlineSeconds`).
-3. **Did the worker run it?** The Restate Cloud console → Invocations shows the journal; a failing step retries and
-   surfaces there. Open it for this deployment's environment; the `Archives` notice names the invocation but do not link
-   to it.
-4. **Is durable execution alive at all?** The six-hourly `Heartbeat` Slack line, posted by the DBOS executor in `web`,
-   is the liveness signal; its *absence* is the alert.
+1. For a scheduled workflow, check its UTC slot and the executor's schedule registration.
+2. For an ingress submission, query `navigator.workflow.trigger.fired` by service and outcome. A 401 indicates an
+   ingress token mismatch. A transport failure means the caller could not reach the DBOS listener.
+3. Inspect the workflow status and checkpoints using the [DBOS recovery procedure](dbos-durability.md#several-replicas).
 
 ## Authenticated DBOS ingress
 
@@ -307,8 +284,8 @@ verify its checkpoint.
 
 ## See also
 
-- The [durable-workflows guide](durable-workflows.md) — the durable-execution model and the registration gotcha. The
-  [Iceberg archive guide](iceberg-archive.md) — the nightly store → Parquet → BigQuery table archive.
+- The [durable-workflows guide](durable-workflows.md) describes durable execution. The
+  [Iceberg archive guide](iceberg-archive.md) describes PostgreSQL logical exports.
   [`cloud-operations.md`](cloud-operations.md) — the deployment and operator boundary.
 
 ## Email pipeline

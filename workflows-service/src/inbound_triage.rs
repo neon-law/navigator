@@ -867,7 +867,6 @@ mod tests {
             ("NAVIGATOR_TRIAGE_VERTEX_BASE_URL", "http://fixture.invalid"),
             ("GOOGLE_METADATA_URL", "http://fixture.invalid/token"),
             ("NAVIGATOR_CI_HARNESS", "1"),
-            ("RESTATE_BROKER_URL", "http://127.0.0.1:8080"),
         ]);
         let providers = TriageProviders::from_lookup(harness)
             .unwrap()

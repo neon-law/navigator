@@ -2,8 +2,7 @@
 //!
 //! The webhook submits only an opaque receipt ID and immutable run
 //! configuration. Every archive read, provider request, and Slack delivery is
-//! a named Restate step so replay uses the journal instead of repeating an
-//! ordinary successful side effect.
+//! a named DBOS step whose persisted result is reused on recovery.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -605,7 +604,14 @@ mod tests {
             ),
             ("SENDGRID_INBOUND_PUBLIC_KEY", "key"),
             ("NAVIGATOR_DEPLOYMENT_ID", "staging"),
-            ("RESTATE_BROKER_URL", "https://restate.example.test"),
+            (
+                workflows::trigger::DBOS_INGRESS_URL_ENV,
+                "https://worker.example.test",
+            ),
+            (
+                workflows::trigger::DBOS_INGRESS_TOKEN_ENV,
+                "synthetic-worker-token",
+            ),
             ("NAVIGATOR_GCP_PROJECT_ID", "synthetic-project"),
             ("NAVIGATOR_SUMMARY_CHANNEL_ID", "C-SYNTHETIC"),
             (
@@ -647,7 +653,10 @@ mod tests {
             ),
             ("GOOGLE_METADATA_URL", "http://fixture.invalid/token"),
             ("NAVIGATOR_CI_HARNESS", "1"),
-            ("RESTATE_BROKER_URL", "http://127.0.0.1:8080"),
+            (
+                workflows::trigger::DBOS_INGRESS_URL_ENV,
+                "http://127.0.0.1:8080",
+            ),
         ]);
         assert!(SummaryProviders::from_lookup(harness).unwrap().is_some());
 

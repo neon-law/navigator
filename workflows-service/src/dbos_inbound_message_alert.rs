@@ -13,21 +13,9 @@ use workflows::{InboundMessageAlertReport, InboundMessageAlertRequest};
 use crate::inbound_message_alert::{alert_context, AlertContextError, InboundMessageAlertService};
 
 pub const WORKFLOW: &str = "InboundMessageAlert";
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED";
 
 pub type InboundMessageAlertWorkflow =
     WorkflowRef<InboundMessageAlertRequest, InboundMessageAlertReport, InboundMessageAlertError>;
-
-/// Whether the `InboundMessageAlert` twin is enabled in the DBOS host.
-/// Disabled unless explicitly set, so enabling the executor alone cannot
-/// duplicate the live Restate lane.
-pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static str> {
-    match get(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err("NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED must be true or false"),
-    }
-}
 
 /// The workflow id every delivery of one inbound message joins. The Restate
 /// invocation key is the message id; preserving it as the DBOS id keeps
@@ -162,15 +150,7 @@ async fn run_alert(
 
 #[cfg(test)]
 mod tests {
-    use super::{enabled, workflow_id, ENABLED_ENV, WORKFLOW};
-
-    #[test]
-    fn registration_is_opt_in_and_rejects_invalid_values() {
-        assert!(!enabled(|_| None).unwrap());
-        assert!(!enabled(|key| (key == ENABLED_ENV).then(|| "false".to_owned())).unwrap());
-        assert!(enabled(|key| (key == ENABLED_ENV).then(|| "true".to_owned())).unwrap());
-        assert!(enabled(|key| (key == ENABLED_ENV).then(|| "yes".to_owned())).is_err());
-    }
+    use super::{workflow_id, WORKFLOW};
 
     #[test]
     fn every_delivery_of_one_message_joins_one_workflow_id() {

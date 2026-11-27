@@ -10,9 +10,8 @@ description: >-
 - **No `unwrap` or `panic!` outside `main` and tests.** Use `?` with `anyhow` (binaries) or `thiserror` (libraries);
   `expect("invariant: …")` only when a reader can verify the invariant in one line.
 - **`unsafe_code = "forbid"`** in `[workspace.lints.rust]`; every member crate declares `[lints] workspace = true`.
-- **One stack: Axum, Tokio, and the current store.** SurrealDB runs today; PostgreSQL replaces it (see
-  [`postgres`](../postgres/SKILL.md)). Add no other store client, web framework, or async runtime; extend the existing
-  router, entity, and runtime.
+- **One stack: Axum, Tokio, and [PostgreSQL](../postgres/SKILL.md).** Extend the existing router, entity, and
+  runtime.
 - **Target macOS and Linux only.** Add no `cfg(windows)` arm, `.exe` name, `%USERPROFILE%` fallback, or Windows CI or
   release job; `cfg(unix)` covers every host we ship.
 - **Use `portal::hosting::shutdown_signal`** (SIGTERM + SIGINT); no inline `ctrl_c().await.unwrap()` in `main`.

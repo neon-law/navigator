@@ -1,69 +1,12 @@
 # Archives
 
-`archives` is the durable export service for Navigator's operational data. It snapshots PostgreSQL tables to Parquet,
-records cloud-cost data when configured, and reports each scheduled run to firm operators.
+The `archives` crate exports PostgreSQL tables to Parquet, publishes Iceberg metadata, and reads retained generations
+for recovery and verification. Operators run logical export and recovery through [Hudson](../docs/iceberg-archive.md).
+Physical PostgreSQL backups and WAL remain the disaster-recovery path.
 
-It serves deployment operators and analysts who need recoverable, queryable history without placing reporting work on
-the application database. The retained Restate worker hosts the workflow in `workflows-service`. With
-`NAVIGATOR_DBOS_ARCHIVES_ENABLED`, the DBOS executor in `web` hosts it using PostgreSQL. Neither needs a separate
-long-running archive service.
-
-See [Iceberg archive](../docs/iceberg-archive.md) for the data contract, [scheduled jobs](../docs/cronjobs.md) for the
-runtime shape, and the crate source for implementation details.
-
-The cloud and KIND CronJobs both fire at **05:55 and 17:55 UTC**. The trigger sends the scheduled UTC time as the
-workflow key and request payload; retries within that run attach to the same Restate invocation. Application Parquet
-uses `application/<table>/data/dt=<date>/run=<HHMM>/snapshot.parquet`, with `0555` and `1755` as separate generations.
-Re-extraction overwrites the same generation file, and Iceberg promotion selects only that generation's files. That
-overwrite is the **unlocked** lane's behavior. On a retention-locked offsite bucket every write is create-only
-(`put_immutable`) under attempt-unique keys — a re-extraction of the same slot claims a fresh attempt key instead of
-replacing the committed bytes — and `metadata/version-hint.text` is never written; readers resolve the latest version
-from the highest `v<N>.metadata.json`. See the offsite, immutability, and drill sections in [Iceberg
-archive](../docs/iceberg-archive.md).
-
-A missed scheduled run can be submitted with `ARCHIVES_SCHEDULED_FOR=<RFC3339 UTC time>` on the trigger. It must name
-05:55 or 17:55 exactly. The override preserves that run's key and date; it does not reconstruct historical source data.
-
-The journaled `email` step posts mrkdwn through the existing Slack bot to the deployment's messages channel (the staging
-messages channel for simulated matters). Missing bot credentials or a channel fail the step rather than silently
-capturing a successful digest. Slack transport failures retry that step; acknowledgment loss can produce a duplicate
-notice. The durable step names remain unchanged so existing invocations can replay.
-
-When the archive bucket lives in a GCP project other than the deployment's, `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID` names it
-— the archive project's id or numeric project number. Lane resolution verifies the bucket's owning project through the
-storage credential and **refuses to write** when the match cannot be confirmed: every unverifiable shape fails the run
-before any object is written. The Slack digest then annotates the archive project and pins its console links with
-`?project=`. Leave it unset for an in-project bucket and on non-GCS backends.
-
-The default PostgreSQL snapshot requires reviewed coverage for Navigator and Forgejo. Both databases must export
-successfully before a paired completion manifest is written. Each retains its own MVCC watermark. Missing inventory,
-inaccessible relations, schema drift, or failed Iceberg metadata publication records a PostgreSQL failure in the digest.
-Explicit `all` mode records a separate Source snapshot outcome. See PostgreSQL coverage below.
-
-The DBOS executor requires completed PostgreSQL application handoff before opening archive storage. It requires a
-PostgreSQL host, reviewed paired coverage, reader credentials and TLS configuration. The retained Restate workflow
-accepts `NAVIGATOR_ARCHIVE_SOURCE=all` for compatibility extraction. In that mode it may omit PostgreSQL when the host
-and paired settings are absent.
-
-Physical backup/WAL procedures and the raw PostgreSQL generation exporter remain available independently of application
-admission and SurrealDB availability. PostgreSQL selection does not recover rows still held solely in SurrealDB;
-retiring its separate backup requires reconciliation and recovery proof. Ordinary application and worker startup require
-PostgreSQL application admission and use inert Source handles.
-
-A PostgreSQL failure is journaled for digest delivery and terminates that invocation. Repair its configuration or source
-and start a new invocation; replay retains the failed extraction outcome.
-
-Iceberg publication refuses unsupported Arrow types and selected Parquet files with different schemas. The persistent
-`postgres/navigator/<table>` lineage preserves field IDs when the same live PostgreSQL relation adds, renames, drops, or
-reorders columns; new fields get IDs above the prior maximum. It fails closed when relation identity is missing or
-changed, metadata is malformed, or a continuing field has an incompatible mapped type change. This continuity does not
-cover dump/restore or OID reuse. Paired PostgreSQL coverage uses a separate generation-scoped lineage. Other archive
-sources retain their existing fail-closed schema behavior.
-
-The `SurrealDB` lane writes full-table application snapshots, not a database-wide consistent recovery image. Empty-table
-replacement, concurrent generation publication, cross-project archive infrastructure and native DBOS orchestration
-remain separate migration gates. A merged schedule change requires a published release and worker/trigger rollout before
-it is live.
+The logical exporter requires reviewed coverage, read-only database credentials, TLS, and approved object storage. It
+exports Navigator and Forgejo before committing the paired generation. See the [write-only
+archive](../docs/write-only-iceberg.md) for retention-locked destinations and verification.
 
 ## PostgreSQL coverage
 
@@ -79,10 +22,7 @@ database with DBOS launched. `cargo run -p archives --example coverage_inventory
 database, which is how the `forgejo` half is captured. See [Iceberg
 archive](../docs/iceberg-archive.md#exporting-a-generation).
 
-The deployed export runs on the DBOS executor in `web` with `NAVIGATOR_DBOS_ARCHIVES_ENABLED`. It signs in to both
-databases as the read-only `navigator_archive` login, set by `NAVIGATOR_ARCHIVE_POSTGRES_USER` and
-`NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD`. Physical backups and WAL remain the recovery path; this export is the logical
-copy.
+The export uses a read-only database login for each source. Physical backups and WAL provide disaster recovery.
 
 The Forgejo source uses the same PostgreSQL server and TLS options with database `forgejo` and separate
 `NAVIGATOR_ARCHIVE_FORGEJO_USER` and `NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD` credentials. The caller must provision read
