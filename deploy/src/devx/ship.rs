@@ -302,6 +302,14 @@ where
                 .unwrap_or_else(|| "false".to_string()),
         },
         Substitution {
+            token: "YOUR_FORGEJO_ARCHIVES_BUCKET",
+            env: "NAVIGATOR_FORGEJO_ARCHIVES_BUCKET",
+            value: serde_json::Value::String(
+                non_empty_env("NAVIGATOR_FORGEJO_ARCHIVES_BUCKET", get).unwrap_or_default(),
+            )
+            .to_string(),
+        },
+        Substitution {
             token: "YOUR_SUMMARY_ENVELOPE_RECIPIENTS",
             env: NAVIGATOR_SUMMARY_ENVELOPE_RECIPIENTS,
             value: non_empty_env(NAVIGATOR_SUMMARY_ENVELOPE_RECIPIENTS, get).unwrap_or_default(),
@@ -6691,6 +6699,38 @@ mod tests {
                     "{path}: {setting:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn configured_forgejo_archive_bucket_reaches_the_web_process() {
+        let key = "NAVIGATOR_FORGEJO_ARCHIVES_BUCKET";
+        for bucket in [
+            None,
+            Some("example-staging-bundles"),
+            Some("example-production-bundles"),
+        ] {
+            let subs =
+                resolve_substitutions_for_deployment("example-deployment", "26.9.16", |name| {
+                    if name == key {
+                        bucket.map(str::to_owned)
+                    } else {
+                        env_getter(FULL_ENV)(name)
+                    }
+                })
+                .unwrap();
+            let rendered = render_manifests_with(&subs).unwrap();
+            let web = fs::read_to_string(
+                rendered
+                    .path()
+                    .join(GKE_KUSTOMIZE_SUBPATH)
+                    .join("patches/web-env.yaml"),
+            )
+            .unwrap();
+            assert!(web.contains(&format!(
+                "name: {key}\n              value: \"{}\"",
+                bucket.unwrap_or_default()
+            )));
         }
     }
 

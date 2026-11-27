@@ -516,12 +516,40 @@ fn resolve_locked_lane<'a>(
     Ok(resolved)
 }
 
-/// Stage 13: the locked archives — the offsite Iceberg archive and the Git
-/// bundle archive, each a locked, write-only bucket in a different GCP
-/// project, plus the workflows-service grant that may write it but never
-/// administer it. Each bucket is created with its retention policy already
-/// in place, verified against the live bucket, and only then locked: the
-/// lock is irreversible.
+async fn provision_locked_archive(
+    client: &GcpClient,
+    project_id: &str,
+    config: &SetupConfig,
+    archive_project: &str,
+    bucket: &str,
+    lane: LockedLane,
+) -> SetupResult<()> {
+    buckets::ensure_locked_archive(client, archive_project, bucket, &config.region, lane).await?;
+    buckets::ensure_locked_archive_writer(
+        client,
+        project_id,
+        &config.google_service_account_id,
+        bucket,
+    )
+    .await
+}
+
+/// Provision only the locked Git-bundle archive for an existing deployment.
+/// The full setup and this narrower command use the same policy and grants.
+pub async fn run_forgejo_archives(
+    client: &GcpClient,
+    project_id: &str,
+    config: &SetupConfig,
+) -> SetupResult<()> {
+    tenants::validate_target(tenants::TenantRole::Environment, project_id)?;
+    let lane = LockedLane::GitBundles;
+    let (archive_project, bucket) = resolve_locked_lane(project_id, config, lane)?
+        .ok_or(SetupError::MissingConfiguration("--archive-project-id"))?;
+    tenants::validate_target(tenants::TenantRole::Archive, archive_project)?;
+    provision_locked_archive(client, project_id, config, archive_project, bucket, lane).await
+}
+
+/// Stage 13: provision the configured offsite Iceberg and Git-bundle lanes.
 async fn ensure_locked_archives(
     client: &GcpClient,
     project_id: &str,
@@ -539,21 +567,8 @@ async fn ensure_locked_archives(
                         lane.retention_seconds() / 31_557_600
                     ),
                 );
-                buckets::ensure_locked_archive(
-                    client,
-                    archive_project,
-                    bucket,
-                    &config.region,
-                    lane,
-                )
-                .await?;
-                buckets::ensure_locked_archive_writer(
-                    client,
-                    project_id,
-                    &config.google_service_account_id,
-                    bucket,
-                )
-                .await?;
+                provision_locked_archive(client, project_id, config, archive_project, bucket, lane)
+                    .await?;
             }
             None => progress(
                 project_id,
@@ -980,6 +995,62 @@ mod tests {
         }
         // The offsite lane was declined, so nothing names it.
         assert!(!plan.contains("archives-offsite"), "{plan}");
+    }
+
+    #[tokio::test]
+    async fn standalone_forgejo_archive_plan_is_scoped_to_each_deployment() {
+        for deployment in ["example-staging", "example-production"] {
+            let client = offline_dry_run_client();
+            let config = super::SetupConfig {
+                region: "us-west4".into(),
+                forgejo_archives_project_id: Some("example-recovery".into()),
+                forgejo_archives_bucket: Some(format!("{deployment}-bundles")),
+                google_service_account_id: format!("{deployment}-web"),
+                ..super::SetupConfig::default()
+            };
+            super::run_forgejo_archives(&client, deployment, &config)
+                .await
+                .unwrap();
+            let calls = client.recorded_calls();
+            assert!(calls[0]
+                .url
+                .ends_with("/storage/v1/b?project=example-recovery"));
+            let create = calls[0].body.as_deref().unwrap();
+            assert!(create.contains(&format!("{deployment}-bundles")));
+            assert!(create.contains("\"retentionPeriod\":\"220903200\""));
+            assert!(create.contains("\"publicAccessPrevention\":\"enforced\""));
+            for call in &calls[1..] {
+                assert!(
+                    call.url.contains(&format!("{deployment}-bundles")),
+                    "{}",
+                    call.url
+                );
+            }
+            assert!(calls
+                .iter()
+                .any(|call| call.url.contains("lockRetentionPolicy")));
+            assert!(calls.iter().any(|call| call.url.contains(&format!(
+                "serviceAccount:{deployment}-web@{deployment}.iam.gserviceaccount.com"
+            ))));
+            assert!(calls
+                .iter()
+                .all(|call| !call.url.contains("roles/storage.objectAdmin")));
+        }
+    }
+
+    #[tokio::test]
+    async fn standalone_forgejo_archive_refuses_the_runtime_project_before_writes() {
+        let client = offline_dry_run_client();
+        let config = super::SetupConfig {
+            forgejo_archives_project_id: Some("example-runtime".into()),
+            forgejo_archives_bucket: Some("example-runtime-bundles".into()),
+            ..super::SetupConfig::default()
+        };
+        let error = super::run_forgejo_archives(&client, "example-runtime", &config)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("must differ"));
+        assert!(client.recorded_calls().is_empty());
     }
 
     #[tokio::test]

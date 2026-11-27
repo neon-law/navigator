@@ -1076,7 +1076,15 @@ fn ops_gcp_help_lists_the_cloud_operations() {
 
     assert_eq!(
         command_names(&output),
-        vec!["access", "hub", "iap", "services", "setup", "help",]
+        vec![
+            "access",
+            "forgejo-archives",
+            "hub",
+            "iap",
+            "services",
+            "setup",
+            "help",
+        ]
     );
 }
 
