@@ -641,8 +641,7 @@ async fn resolve_ci(host: &str) -> Result<(String, String)> {
 async fn resolve_ci_on(host: &str, forge: CiForge) -> Result<(String, String)> {
     let base = credentials::base_url(host);
     let client = reqwest::Client::new();
-    let oidc_token = actions_oidc_token(&client, &base, forge).await?;
-    let minted = mint_ci_token(&client, &base, forge.seed_mint_path(), &oidc_token).await?;
+    let minted = mint_actions_ci_token(&client, &base, forge, forge.seed_mint_path()).await?;
     eprintln!(
         "{}",
         palette::dim(format!(
@@ -669,8 +668,7 @@ pub async fn resolve_ci_document_on(host: &str, forge: CiForge) -> Result<(Strin
     let mint_path = forge.document_mint_path();
     preflight_dns(&base, mint_path)?;
     let client = reqwest::Client::new();
-    let oidc_token = actions_oidc_token(&client, &base, forge).await?;
-    let minted = mint_ci_token(&client, &base, mint_path, &oidc_token).await?;
+    let minted = mint_actions_ci_token(&client, &base, forge, mint_path).await?;
     eprintln!(
         "{}",
         palette::dim(format!(
@@ -815,6 +813,49 @@ async fn actions_oidc_token(
     .await
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("Forgejo Actions OIDC token has already been exchanged")]
+struct ForgejoOidcReplay;
+
+async fn mint_actions_ci_token(
+    client: &reqwest::Client,
+    base: &str,
+    forge: CiForge,
+    mint_path: &str,
+) -> Result<CiSeedTokenResponse> {
+    let token = actions_oidc_token(client, base, forge).await?;
+    let first = mint_ci_token(client, base, mint_path, &token).await;
+    if !first
+        .as_ref()
+        .is_err_and(|error| error.is::<ForgejoOidcReplay>())
+    {
+        return first;
+    }
+
+    // Forgejo signs run claims with second-resolution issue times and no
+    // job identifier. Parallel CD jobs can receive identical tokens.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let refreshed = actions_oidc_token(client, base, forge).await?;
+    let result = if refreshed == token {
+        first
+    } else {
+        mint_ci_token(client, base, mint_path, &refreshed).await
+    };
+    if result
+        .as_ref()
+        .is_err_and(|error| error.is::<ForgejoOidcReplay>())
+    {
+        eprintln!(
+            "{}",
+            mint_refusal_annotation(
+                mint_path,
+                "401 Unauthorized: Forgejo Actions OIDC token has already been exchanged"
+            )
+        );
+    }
+    result
+}
+
 /// Exchange `github_token` for a Navigator session at one `/auth/ci/*` mint
 /// endpoint.
 ///
@@ -875,13 +916,24 @@ async fn mint_ci_token(
                     "CI token mint at {mint_path} failed: {status}: {message}"
                 ));
             }
+            let refusal = anyhow::Error::new(MintRefusal).context(format!(
+                "CI token mint at {mint_path} failed: {status}: {message}"
+            ));
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                && [
+                    CiForge::Forgejo.document_mint_path(),
+                    CiForge::Forgejo.seed_mint_path(),
+                ]
+                .contains(&mint_path)
+                && message == ForgejoOidcReplay.to_string()
+            {
+                return AttemptOutcome::Terminal(refusal.context(ForgejoOidcReplay));
+            }
             eprintln!(
                 "{}",
                 mint_refusal_annotation(mint_path, &format!("{status}: {message}"))
             );
-            AttemptOutcome::Terminal(anyhow::Error::new(MintRefusal).context(format!(
-                "CI token mint at {mint_path} failed: {status}: {message}"
-            )))
+            AttemptOutcome::Terminal(refusal)
         }
     })
     .await
@@ -6886,6 +6938,65 @@ mod tests {
             Some(value) => std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN", value),
             None => std::env::remove_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN"),
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn forgejo_seed_mint_fetches_a_fresh_id_token_after_a_replay_refusal() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let base = server.uri();
+        let previous_url = std::env::var_os("ACTIONS_ID_TOKEN_REQUEST_URL");
+        let previous_token = std::env::var_os("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+        std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_URL", format!("{base}/issue"));
+        std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "forgejo-runtime-token");
+
+        for value in ["parallel-job-oidc", "fresh-oidc"] {
+            Mock::given(method("GET"))
+                .and(path("/issue"))
+                .and(query_param("audience", base.as_str()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "value": value,
+                })))
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let mint_path = super::CiForge::Forgejo.seed_mint_path();
+        Mock::given(method("POST"))
+            .and(path(mint_path))
+            .and(body_json(
+                serde_json::json!({ "token": "parallel-job-oidc" }),
+            ))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "error": "unauthorized",
+                "message": "Forgejo Actions OIDC token has already been exchanged",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(mint_path))
+            .and(body_json(serde_json::json!({ "token": "fresh-oidc" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token": "ci-session",
+                "project_code": "acme",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = super::resolve_ci_on(&base, super::CiForge::Forgejo).await;
+        for (name, previous) in [
+            ("ACTIONS_ID_TOKEN_REQUEST_URL", previous_url),
+            ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", previous_token),
+        ] {
+            match previous {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+        assert_eq!(result.unwrap(), (base, "ci-session".to_owned()));
     }
 
     /// A transient 5xx from the mint door recovers: the third attempt mints

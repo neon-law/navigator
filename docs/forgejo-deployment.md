@@ -132,10 +132,11 @@ event on the merged tree supplies the main-gate alert. The job enables OpenID Co
 verifies the pinned package's SHA-256, installs it from Forgejo, and runs `navigator project gate --ci`.
 
 The CLI tells the runners apart by `FORGEJO_ACTIONS=true`; Forgejo's runner also sets the `GITHUB_*` compatibility
-variables. On Forgejo it requests the ID token from `ACTIONS_ID_TOKEN_REQUEST_URL` and exchanges it only at `POST
-/auth/ci/forgejo/document-token`. It never asks for the seed capability, which has no Forgejo door. Forgejo 15.0.9 runs
-a pull request on `refs/pull/<n>/head`, not GitHub's `/merge` ref, and both the CLI and the verifier accept that ref. A
-fork's pull request gets no ID token from Forgejo, so its live check is inconclusive.
+variables. On Forgejo the CLI requests the ID token from `ACTIONS_ID_TOKEN_REQUEST_URL` and uses the document or seed
+exchange for the command. Parallel jobs can receive the same token when Forgejo signs their run claims in the same
+second. If Navigator reports that the token was already exchanged, the CLI waits one second and requests a fresh token
+once. Each token remains single-use. Forgejo 15.0.9 runs a pull request on `refs/pull/<n>/head`, which the CLI and
+verifier accept. A fork's pull request gets no ID token from Forgejo, so its live check is inconclusive.
 
 Forgejo 15.0.9 signs Actions ID tokens with RS256 by default (`[actions] ID_TOKEN_SIGNING_ALGORITHM`). It uses its own
 key at `<APP_DATA_PATH>/actions_id_token/private.pem`, which it creates on first use, separate from the `[oauth2]` JWT
