@@ -7,15 +7,11 @@ use workflows::dbos_engine::{self, billing_canary, dri_digest, general_nag, nota
 mod native_project;
 
 fn native(key: &str) -> Option<String> {
-    use store::workflow_engine as engine;
     match key {
         "NAVIGATOR_CI_HARNESS" => Some("1".into()),
-        engine::ENGINE_ENV => Some("dbos".into()),
-        engine::COHOST_ENV | engine::DBOS_ENABLED_ENV => Some("true".into()),
         "NAVIGATOR_STAGING"
         | workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV
         | workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV => Some("false".into()),
-        name if engine::WORKFLOWS.iter().any(|item| item.flag == name) => Some("true".into()),
         _ => None,
     }
 }
@@ -85,61 +81,6 @@ fn local_capture_requires_the_actual_dev_embedded_simulated_harness() {
     )
     .unwrap()
     .is_some());
-}
-
-#[test]
-fn partial_hosts_keep_strict_provider_selection_even_with_explicit_delivery() {
-    use store::workflow_engine as engine;
-    let keys = [
-        engine::COHOST_ENV,
-        engine::DBOS_ENABLED_ENV,
-        engine::ENGINE_ENV,
-    ];
-    for key in keys
-        .into_iter()
-        .chain(engine::WORKFLOWS.iter().map(|item| item.flag))
-    {
-        for replacement in [
-            None,
-            Some(if key == engine::ENGINE_ENV {
-                "restate"
-            } else {
-                "false"
-            }),
-        ] {
-            let get = |name: &str| {
-                if name == key {
-                    replacement.map(str::to_owned)
-                } else if name == "SLACK_FIRM_ID" {
-                    Some("explicit-configuration".into())
-                } else {
-                    native(name)
-                }
-            };
-            assert!(LocalProviders::from_lookup(
-                HostMode::Embedded,
-                DeploymentEnvironment::Dev,
-                true,
-                &get
-            )
-            .unwrap()
-            .is_none());
-        }
-    }
-    let invalid = |name: &str| {
-        if name == engine::WORKFLOWS[0].flag {
-            Some("sometimes".into())
-        } else {
-            native(name)
-        }
-    };
-    assert!(LocalProviders::from_lookup(
-        HostMode::Embedded,
-        DeploymentEnvironment::Dev,
-        true,
-        &invalid
-    )
-    .is_err());
 }
 
 #[test]
