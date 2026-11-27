@@ -431,7 +431,7 @@ pub struct AppState {
     /// Embedded Rego policy decision client.
     pub policy: policy::PolicyClient,
     /// Durable runtime for both timelines (workflow + questionnaire).
-    /// In-memory in dev/tests; the `RestateRuntime` adapter is wired
+    /// Tests may inject an in-memory runtime. The hosted app uses DBOS
     /// in production. Callers pick the timeline by passing
     /// [`workflows::MachineKind`] explicitly.
     pub workflow_runtime: Arc<dyn workflows::StateMachineRuntime>,

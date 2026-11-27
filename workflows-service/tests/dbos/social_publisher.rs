@@ -322,11 +322,9 @@ async fn the_reconciler_runs_an_empty_slot_without_provider_requests() {
             fixture.db.clone(),
             publisher(&fixture, &server),
             publisher_workflow,
-            // The reconciler fails closed without a syntactically valid
-            // ingress until InboundMessageAlert has a DBOS twin. An empty
-            // slot never dials it, so a dead origin satisfies the gate.
             |key| match key {
-                "RESTATE_BROKER_URL" => Some("http://restate.invalid".to_owned()),
+                workflows::trigger::DBOS_INGRESS_URL_ENV => Some("http://workflow.invalid".into()),
+                workflows::trigger::DBOS_INGRESS_TOKEN_ENV => Some("synthetic-token".into()),
                 _ => None,
             },
         )
@@ -375,7 +373,11 @@ async fn a_stopped_reconciler_schedule_starts_nothing() {
             fixture.db.clone(),
             publisher(&fixture, &server),
             publisher_workflow,
-            |_| None,
+            |key| match key {
+                workflows::trigger::DBOS_INGRESS_URL_ENV => Some("http://workflow.invalid".into()),
+                workflows::trigger::DBOS_INGRESS_TOKEN_ENV => Some("synthetic-token".into()),
+                _ => None,
+            },
         )
         .expect("build reconciler context"),
     )

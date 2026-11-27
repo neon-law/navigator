@@ -1,6 +1,6 @@
 //! Manual starts from the Cron schedules operations page.
 //!
-//! Each control selects the workflow's configured durable engine. A manual
+//! Each control submits to DBOS. A manual
 //! invocation uses a unique key so an explicit run stays distinct from a scheduled slot.
 
 use axum::{
@@ -48,34 +48,28 @@ impl LocalArchives {
 struct ManualJob {
     slug: &'static str,
     service: &'static str,
-    dbos_flag: &'static str,
 }
 
 const MANUAL_JOBS: &[ManualJob] = &[
     ManualJob {
         slug: "archives",
         service: "Archives",
-        dbos_flag: "NAVIGATOR_DBOS_ARCHIVES_ENABLED",
     },
     ManualJob {
         slug: "billing-canary",
         service: "BillingCanary",
-        dbos_flag: "NAVIGATOR_DBOS_BILLING_CANARY_ENABLED",
     },
     ManualJob {
         slug: "billing-digest",
         service: "BillingDigest",
-        dbos_flag: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
     },
     ManualJob {
         slug: "notation-reset",
         service: "NotationReset",
-        dbos_flag: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
     },
     ManualJob {
         slug: "reconcile-invoices",
         service: "ReconcileInvoices",
-        dbos_flag: "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED",
     },
 ];
 
@@ -84,63 +78,30 @@ pub(crate) async fn run(
     Path(slug): Path<String>,
     local: Option<Extension<LocalArchives>>,
 ) -> Response {
-    let broker = restate_broker_url();
-    let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-    let dbos_ingress = dbos_ingress_url();
-    let dbos_token = std::env::var("NAVIGATOR_DBOS_INGRESS_TOKEN").ok();
-    let Some(job) = MANUAL_JOBS.iter().find(|job| job.slug == slug) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let Ok(dbos_enabled) = workflows::dbos_engine::flag_enabled(
-        job.dbos_flag,
-        std::env::var(job.dbos_flag).ok().as_deref(),
-    ) else {
-        return redirect_with_notice(job.slug, "not_queued");
-    };
-    run_configured_with_dbos(
+    let ingress = workflows::trigger::dbos_ingress_from_env().ok();
+    run_configured(
         &slug,
-        broker.as_deref(),
-        token.as_deref(),
-        dbos_ingress.as_deref(),
-        dbos_token.as_deref(),
-        dbos_enabled,
+        ingress
+            .as_ref()
+            .map(|(url, token)| (url.as_str(), token.as_str())),
         local.as_ref().map(|Extension(local)| local),
     )
     .await
 }
 
-#[cfg(test)]
-async fn run_configured(slug: &str, broker: Option<&str>, token: Option<&str>) -> Response {
-    run_configured_with_dbos(slug, broker, token, None, None, false, None).await
-}
-
-async fn run_configured_with_dbos(
+async fn run_configured(
     slug: &str,
-    broker: Option<&str>,
-    token: Option<&str>,
-    dbos_ingress: Option<&str>,
-    dbos_token: Option<&str>,
-    dbos_enabled: bool,
+    ingress: Option<(&str, &str)>,
     local: Option<&LocalArchives>,
 ) -> Response {
     let Some(job) = MANUAL_JOBS.iter().find(|job| job.slug == slug) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let run_key = format!("manual-{}", Uuid::new_v4());
-    let queued = if dbos_enabled {
-        if let Some(local) = local.filter(|_| job.service == "Archives") {
-            local.start(&run_key).await
-        } else {
-            match (
-                dbos_ingress.filter(|url| !url.trim().is_empty()),
-                dbos_token.filter(|token| !token.trim().is_empty()),
-            ) {
-                (Some(ingress), Some(token)) => trigger_dbos(ingress, token, job, &run_key).await,
-                _ => Err(workflows::TriggerError::Transport),
-            }
-        }
-    } else if let Some(broker) = broker {
-        trigger(broker, token, job, &run_key).await.map(|_| ())
+    let queued = if let Some(local) = local.filter(|_| job.service == "Archives") {
+        local.start(&run_key).await
+    } else if let Some((url, token)) = ingress {
+        workflows::trigger::start_dbos_schedule(url, token, job.service, &run_key).await
     } else {
         Err(workflows::TriggerError::Transport)
     };
@@ -161,59 +122,8 @@ async fn run_configured_with_dbos(
     }
 }
 
-async fn trigger_dbos(
-    ingress: &str,
-    token: &str,
-    job: &ManualJob,
-    run_key: &str,
-) -> Result<(), workflows::TriggerError> {
-    if job.service == "ReconcileInvoices" {
-        workflows::trigger::start_dbos_reconcile(
-            ingress,
-            token,
-            &serde_json::json!({ "workflow_id": format!("{}:{run_key}", job.service) }),
-        )
-        .await
-    } else {
-        workflows::trigger::start_dbos_schedule(ingress, token, job.service, run_key).await
-    }
-}
-
 fn redirect_with_notice(slug: &str, outcome: &str) -> Response {
     Redirect::to(&format!("/app/admin/schedules?notice={outcome}:{slug}")).into_response()
-}
-
-async fn trigger(
-    broker: &str,
-    token: Option<&str>,
-    job: &ManualJob,
-    run_key: &str,
-) -> Result<String, workflows::TriggerError> {
-    workflows::start_workflow(
-        broker,
-        token,
-        job.service,
-        run_key,
-        "run",
-        &serde_json::json!({}),
-        true,
-    )
-    .await
-}
-
-/// The Restate ingress base URL from `RESTATE_BROKER_URL`, trimmed, or `None`
-/// when unset/empty (dev, local, and tests).
-pub(crate) fn restate_broker_url() -> Option<String> {
-    normalize_broker_url(std::env::var("RESTATE_BROKER_URL").ok())
-}
-
-fn dbos_ingress_url() -> Option<String> {
-    normalize_broker_url(std::env::var("NAVIGATOR_DBOS_INGRESS_URL").ok())
-}
-
-fn normalize_broker_url(url: Option<String>) -> Option<String> {
-    url.map(|url| url.trim_end_matches('/').to_string())
-        .filter(|url| !url.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -223,9 +133,7 @@ mod tests {
         http::{header::LOCATION, StatusCode},
     };
 
-    use super::{
-        normalize_broker_url, run, run_configured, run_configured_with_dbos, trigger, MANUAL_JOBS,
-    };
+    use super::{run, run_configured, MANUAL_JOBS};
     use sqlx::ConnectOptions as _;
     use wiremock::{
         matchers::{body_partial_json, header, method, path_regex},
@@ -282,16 +190,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_archive_owner_never_falls_back_to_remote_engines() {
+    async fn local_archive_owner_never_uses_the_remote_ingress() {
         let remote = MockServer::start().await;
         let local = super::LocalArchives::default();
-        let response = run_configured_with_dbos(
+        let response = run_configured(
             "archives",
-            Some(&remote.uri()),
-            Some("synthetic-token"),
-            Some(&remote.uri()),
-            Some("synthetic-token"),
-            true,
+            Some((&remote.uri(), "synthetic-token")),
             Some(&local),
         )
         .await;
@@ -303,60 +207,23 @@ mod tests {
     async fn retired_manual_billing_controls_never_submit() {
         let server = MockServer::start().await;
         for slug in ["billing-canary", "billing-digest", "reconcile-invoices"] {
-            for dbos in [false, true] {
-                let response = run_configured_with_dbos(
-                    slug,
-                    Some(&server.uri()),
-                    Some("token"),
-                    Some(&server.uri()),
-                    Some("token"),
-                    dbos,
-                    None,
-                )
-                .await;
-                assert!(location(&response).contains("notice=not_queued:"));
-            }
+            let response =
+                run_configured(slug, Some((&server.uri(), "synthetic-token")), None).await;
+            assert!(location(&response).contains("notice=not_queued:"));
         }
         assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn trigger_queues_the_selected_workflow_with_a_manual_key() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path_regex(r"^/Archives/manual-[0-9a-f-]+/run/send$"))
-            .and(body_partial_json(serde_json::json!({})))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string("{\"invocationId\":\"inv_x\"}"),
-            )
-            .mount(&server)
-            .await;
-        let job = MANUAL_JOBS
-            .iter()
-            .find(|job| job.slug == "archives")
-            .unwrap();
-        let body = trigger(
-            &server.uri(),
-            None,
-            job,
-            "manual-4dc99f6d-55a4-4408-b8a0-0df5a8437f6e",
-        )
-        .await
-        .expect("ingress accepts invocation");
-        assert!(body.contains("inv_x"));
-    }
-
-    #[tokio::test]
-    async fn every_other_manual_schedule_uses_dbos_without_a_restate_request() {
+    async fn manual_schedules_use_authenticated_dbos_with_a_unique_run_key() {
         for job in MANUAL_JOBS
             .iter()
             .filter(|job| !store::workflow_engine::disabled_billing_service(job.service))
         {
             let dbos = MockServer::start().await;
-            let restate = MockServer::start().await;
             Mock::given(method("POST"))
                 .and(path_regex(r"^/internal/dbos/schedules$"))
-                .and(header("authorization", "Bearer synthetic-dbos-token"))
+                .and(header("authorization", "Bearer synthetic-token"))
                 .and(body_partial_json(
                     serde_json::json!({"service": job.service}),
                 ))
@@ -364,18 +231,9 @@ mod tests {
                 .expect(1)
                 .mount(&dbos)
                 .await;
-            let response = run_configured_with_dbos(
-                job.slug,
-                Some(&restate.uri()),
-                None,
-                Some(&dbos.uri()),
-                Some("synthetic-dbos-token"),
-                true,
-                None,
-            )
-            .await;
+            let response =
+                run_configured(job.slug, Some((&dbos.uri(), "synthetic-token")), None).await;
             assert!(location(&response).contains("notice=queued:"));
-            assert!(restate.received_requests().await.unwrap().is_empty());
             let requests = dbos.received_requests().await.unwrap();
             let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
             let key = body["run_key"]
@@ -388,101 +246,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn selected_manual_dbos_never_falls_back_when_unconfigured_or_rejected() {
-        for job in MANUAL_JOBS {
-            let restate = MockServer::start().await;
-            let dbos = MockServer::start().await;
-            Mock::given(method("POST"))
-                .respond_with(ResponseTemplate::new(503))
-                .mount(&dbos)
-                .await;
-            for (url, token) in [
-                (None, Some("synthetic-token")),
-                (Some(dbos.uri()), None),
-                (Some(dbos.uri()), Some("synthetic-token")),
-            ] {
-                let response = run_configured_with_dbos(
-                    job.slug,
-                    Some(&restate.uri()),
-                    None,
-                    url.as_deref(),
-                    token,
-                    true,
-                    None,
-                )
-                .await;
-                assert!(location(&response).contains("notice=not_queued:"));
-            }
-            assert!(restate.received_requests().await.unwrap().is_empty());
-        }
-    }
-
-    #[tokio::test]
-    async fn run_covers_unknown_unavailable_accepted_and_rejected_jobs() {
+    async fn run_reports_unknown_unconfigured_and_rejected_jobs() {
         let response = run(Path("unknown".to_string()), None).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-        let response = run_configured("archives", None, None).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            location(&response),
-            "/app/admin/schedules?notice=not_queued:archives"
-        );
+        let response = run_configured("notation-reset", None, None).await;
+        assert!(location(&response).contains("notice=not_queued:notation-reset"));
 
-        let server = MockServer::start().await;
+        let dbos = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path_regex(r"^/Archives/manual-[0-9a-f-]+/run/send$"))
-            .and(header("authorization", "Bearer secret"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("accepted"))
+            .respond_with(ResponseTemplate::new(503))
             .expect(1)
-            .mount(&server)
+            .mount(&dbos)
             .await;
-        let broker =
-            normalize_broker_url(Some(format!("{}/", server.uri()))).expect("non-empty broker URL");
-
-        let response = run_configured("archives", Some(&broker), Some("secret")).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            location(&response),
-            "/app/admin/schedules?notice=queued:archives"
-        );
-
-        let rejecting_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
-            .expect(1)
-            .mount(&rejecting_server)
-            .await;
-
-        let response = run_configured("archives", Some(&rejecting_server.uri()), None).await;
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(
-            location(&response),
-            "/app/admin/schedules?notice=not_queued:archives"
-        );
-
-        assert_eq!(
-            normalize_broker_url(Some("https://restate.example.com////".to_string())).as_deref(),
-            Some("https://restate.example.com")
-        );
-        assert!(normalize_broker_url(Some("///".to_string())).is_none());
-        assert!(normalize_broker_url(None).is_none());
-    }
-
-    #[test]
-    fn every_run_now_button_the_console_renders_has_a_handler_here() {
-        // `webapp::schedules` derives its rows from the deployment render, so a
-        // manifest landing in the exports kustomization puts a job on the page
-        // without touching this file. A row carrying a slug this dispatch table
-        // does not know would render a button that answers 404, so bind the two
-        // rather than trusting them to be edited together.
-        for job in webapp::schedules::cron_jobs() {
-            let Some(slug) = job.slug else { continue };
-            assert!(
-                MANUAL_JOBS.iter().any(|manual| manual.slug == slug),
-                "the console offers `Run now` for {} (slug {slug}), which no MANUAL_JOBS entry starts",
-                job.name
-            );
-        }
+        let response = run_configured(
+            "notation-reset",
+            Some((&dbos.uri(), "synthetic-token")),
+            None,
+        )
+        .await;
+        assert!(location(&response).contains("notice=not_queued:notation-reset"));
     }
 }

@@ -24,57 +24,23 @@ const SMS_SIGNATURE: &str = "x-navigator-signature";
 const TRIAGE_QUEUE: &str = "/app/inbox/triage";
 const INBOX: &str = "/app/inbox";
 
-/// Start a message-keyed durable alert after the inbound Message has been
-/// persisted. Repeated provider deliveries attach to the same Slack alert.
-/// The `InboundMessageAlert` switch chooses the worker's DBOS ingress; the
-/// Restate lane remains while it is off, and a deployment with neither
-/// configured is a no-op, as before.
+/// Queue a durable alert for a persisted inbound Message. Redelivery reuses the original alert.
 pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String> {
-    let target = workflows::trigger::service_target(
-        workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
-        std::env::var(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)
-            .ok()
-            .as_deref(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
-        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
+    let Some((ingress, token)) =
+        workflows::trigger::optional_dbos_ingress_from_env().map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
+    workflows::trigger::start_dbos_inbound_message_alert(
+        &ingress,
+        &token,
+        &serde_json::json!({
+            "workflow_id": workflows::trigger::inbound_message_alert_workflow_id(message_id),
+            "request": workflows::InboundMessageAlertRequest { message_id },
+        }),
     )
-    .map_err(|error| error.to_string())?;
-    let request = workflows::InboundMessageAlertRequest { message_id };
-    match &target {
-        workflows::trigger::ServiceTarget::Dbos { ingress, token } => {
-            workflows::trigger::start_dbos_inbound_message_alert(
-                ingress,
-                token,
-                &serde_json::json!({
-                    "workflow_id":
-                        workflows::trigger::inbound_message_alert_workflow_id(message_id),
-                    "request": request,
-                }),
-            )
-            .await
-            .map_err(|error| error.to_string())
-        }
-        workflows::trigger::ServiceTarget::Restate => {
-            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-            else {
-                return Ok(());
-            };
-            workflows::start_workflow(
-                &ingress,
-                std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
-                "InboundMessageAlert",
-                &message_id.to_string(),
-                "run",
-                &request,
-                true,
-            )
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-        }
-    }
+    .await
+    .map_err(|error| error.to_string())
 }
 
 /// Preserve raw provider bytes in the receiving Firm's Inbox archive.
@@ -1308,12 +1274,6 @@ mod tests {
         .await;
         assert_eq!(note.status(), StatusCode::NOT_FOUND);
         });
-    }
-
-    #[tokio::test]
-    async fn start_inbound_message_alert_is_ok_without_a_broker() {
-        std::env::remove_var("RESTATE_BROKER_URL");
-        start_inbound_message_alert(Uuid::now_v7()).await.unwrap();
     }
 
     #[tokio::test]

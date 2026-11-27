@@ -49,7 +49,6 @@ pub mod runtime;
 #[cfg(feature = "dbos")]
 pub mod runtime_dbos;
 pub mod runtime_dispatching;
-pub mod runtime_restate;
 pub mod social_publish;
 pub mod spec;
 pub mod specs;
@@ -117,9 +116,8 @@ pub use runtime::{
     WorkflowRuntimeError,
 };
 #[cfg(feature = "dbos")]
-pub use runtime_dbos::{enabled as dbos_notation_enabled, DbosNotationRuntime, RuntimeConfigError};
+pub use runtime_dbos::{DbosNotationRuntime, RuntimeConfigError};
 pub use runtime_dispatching::DispatchingRuntime;
-pub use runtime_restate::{RestateRuntime, DEFAULT_BROKER_URL, DEFAULT_SERVICE};
 pub use social_publish::{SocialPublishReport, SocialPublishRequest};
 pub use spec::{
     ActorClass, MachineKind, QuestionnaireSpec, StateName, TransitionMap, WorkflowSpec,

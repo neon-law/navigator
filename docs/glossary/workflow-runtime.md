@@ -3,24 +3,12 @@ title: "Workflow Runtime"
 description: "The Workflow Runtime is the trait abstraction over Navigator’s durable executor."
 ---
 
-The trait abstraction over the durable executor — [`workflows::StateMachineRuntime`](../../workflows/src/runtime.rs).
-Application adapters include:
+The [`workflows::StateMachineRuntime`](../../workflows/src/runtime.rs) trait defines how a caller starts a Notation and
+signals a transition. The application uses [`DbosNotationRuntime`](../../workflows/src/runtime_dbos.rs) to submit
+authenticated requests to the DBOS executor. Tests can use `InMemoryRuntime`.
 
-- **`InMemoryRuntime`** — non-durable, in-process. Used by tests and by `cargo run -p neon` when DBOS Notation
-  is disabled and no Restate broker is configured. Reset on each process start.
-- **`RestateRuntime`** — HTTP adapter that talks to a [Restate](restate.md) broker
-  ([`workflows/src/runtime_restate.rs`](../../workflows/src/runtime_restate.rs)). Explicit compatibility selection
-  retains its broker environment contract.
-- **`DbosNotationRuntime`** — HTTP adapter that talks to the worker's DBOS ingress
-  ([`workflows/src/runtime_dbos.rs`](../../workflows/src/runtime_dbos.rs)). Selected only when
-  `NAVIGATOR_DBOS_NOTATION_ENABLED=true`, which takes precedence over the Restate broker and fails the boot when the
-  worker's ingress is not configured.
+The [Notation transport](../../workflows/src/notation_http.rs) handles request serialization, bearer authentication,
+trace propagation, and bodyless reads. Approval uses dedicated handlers that bind a decision to its review revision.
 
-A Workflow Runtime is started once per Notation (`start(notation_id, spec)`) and advanced by external
-`signal(notation_id, spec, condition)` calls. Every transition is recorded as a [Notation Event](notation-event.md) so a
-crash plus replay terminates in the same state.
-
-The HTTP adapters share the internal [Notation transport](../../workflows/src/notation_http.rs). It owns request
-serialization, bearer authentication, trace propagation, bodyless reads, and transport errors. Native DBOS does not
-construct the legacy broker adapter. DBOS approval uses its revision-bound approval and progress handlers; explicit
-legacy callers retain their signal-based approval behavior.
+Each transition records a [Notation Event](notation-event.md). DBOS uses PostgreSQL checkpoints to resume work at the
+correct state after a process restarts.
