@@ -92,6 +92,7 @@ pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Resu
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
+    runtime.block_on(wait_for_native_postgres(&tier.admin))?;
     let resumed = runtime.block_on(async {
         if tier.created.is_some() {
             native_origin::create(tier.admin.clone(), intent.creation, tier.binding.clone())
@@ -236,7 +237,6 @@ fn prepare_native_dependencies(
         }
         align_rauthy_public_url(cfg)?;
     }
-    wait_for_tcp("127.0.0.1", cfg.postgres_port)?;
     let bootstrap = kube
         .secret("navigator-postgres-auth")?
         .and_then(|mut data| data.remove("password"))
@@ -258,6 +258,28 @@ fn prepare_native_dependencies(
         rendered,
         admin,
     })
+}
+
+// Docker can accept TCP on its published NodePort before it can route
+// PostgreSQL traffic to the pod. Wait for the same TLS and login handshake
+// that creation uses, before issuing any database writes.
+async fn wait_for_native_postgres(options: &PgConnectOptions) -> Result<()> {
+    use sqlx::{Connection, PgConnection};
+    use tokio::time::{sleep, timeout};
+
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(Ok(connection)) =
+                timeout(Duration::from_secs(2), PgConnection::connect_with(options)).await
+            {
+                let _ = connection.close().await;
+                return;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for an authenticated connection to native PostgreSQL")
 }
 
 struct NativeEnvironment {
