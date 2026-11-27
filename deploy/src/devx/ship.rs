@@ -6746,7 +6746,8 @@ mod tests {
                 })
                 .expect("synthetic configuration resolves");
             let rendered = render_manifests_with(&subs).expect("manifests render");
-            for path in ["patches/web-env.yaml"] {
+            {
+                let path = "patches/web-env.yaml";
                 let text =
                     fs::read_to_string(rendered.path().join(GKE_KUSTOMIZE_SUBPATH).join(path))
                         .unwrap();
@@ -9594,7 +9595,8 @@ spec:
         let manifests = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))
             .expect("rendered GKE manifests build");
 
-        for (deployment_name, container_name) in [(WEB_DEPLOYMENT, "web")] {
+        {
+            let (deployment_name, container_name) = (WEB_DEPLOYMENT, "web");
             let deployment = manifest_doc(&manifests, "Deployment", deployment_name);
             let container = deployment["spec"]["template"]["spec"]["containers"]
                 .as_sequence()
@@ -10125,7 +10127,8 @@ spec:
         let rendered = render_manifests_with(&subs).expect("render succeeds");
         let manifests = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))
             .expect("rendered GKE manifests build");
-        for (deployment, container) in [(WEB_DEPLOYMENT, "web")] {
+        {
+            let (deployment, container) = (WEB_DEPLOYMENT, "web");
             let container_spec = rendered_container(&manifests, deployment, container);
             let secrets: Vec<&str> = container_spec
                 .get("envFrom")
