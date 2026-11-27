@@ -315,8 +315,8 @@ mod tests {
             flat_fee_cents, resolve_hourly_rate_cents, set_flat_fee, set_hourly_rate,
             FeeStructureError, NewAttorneyRate,
         };
+        use crate::postgres::fixtures::{connect, fresh_schema};
         use crate::postgres::PostgresDb;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
         use crate::time_entries::{create, NewTimeEntry, TimeEntrySource};
         use chrono::{Duration, Utc};
         use sqlx::Row;

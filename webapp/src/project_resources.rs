@@ -713,7 +713,7 @@ pub async fn firm_integrations(firm_id: Option<uuid::Uuid>) -> FirmIntegrations 
 /// Resolve only verified Drive coordinates after matter participation admission.
 #[cfg(feature = "server")]
 pub async fn verified_drive_links(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Option<uuid::Uuid>,
     role: ViewerRole,
     project_id: uuid::Uuid,
@@ -727,7 +727,7 @@ pub async fn verified_drive_links(
         ViewerRole::Client => store::persons::Role::Client,
     };
     if !matches!(
-        store::access::matter_lens(surreal, person_id, store_role, project_id).await,
+        store::access::matter_lens(application_store, person_id, store_role, project_id).await,
         Ok(Some(store::access::ProjectLens::Lawyer))
     ) {
         return (None, None);

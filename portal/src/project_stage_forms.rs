@@ -47,7 +47,7 @@ pub(crate) struct StageSetForm {
 /// the Firm's own vocabulary. The store records nothing when the matter
 /// already holds the stage.
 pub(crate) async fn set(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     session: Option<Extension<SessionData>>,
     Path(code): Path<String>,
     Form(input): Form<StageSetForm>,
@@ -61,7 +61,7 @@ pub(crate) async fn set(
     let Some(person_id) = session.person_id else {
         return not_found_response();
     };
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .ok()
         .flatten()
@@ -73,11 +73,15 @@ pub(crate) async fn set(
     }
     // The JSON door's own admission, verbatim: a firm-side viewer of this
     // matter or the non-disclosing 404.
-    let viewer =
-        store::access::matter_viewer(&surreal, session.person_id, session.role, project.id)
-            .await
-            .ok()
-            .flatten();
+    let viewer = store::access::matter_viewer(
+        &application_store,
+        session.person_id,
+        session.role,
+        project.id,
+    )
+    .await
+    .ok()
+    .flatten();
     match viewer {
         Some(viewer) if viewer.is_firm_side() => {}
         _ => return not_found_response(),
@@ -87,7 +91,8 @@ pub(crate) async fn set(
         return back_to_overview(&code, Some("Choose the stage the matter has moved to."));
     };
     let note = input.note.trim().to_string();
-    let Ok(pg) = crate::project_stages_api::prepared_store(&surreal, "set", project.id).await
+    let Ok(pg) =
+        crate::project_stages_api::prepared_store(&application_store, "set", project.id).await
     else {
         return back_to_overview(
             &code,

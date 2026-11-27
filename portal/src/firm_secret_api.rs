@@ -38,16 +38,25 @@ pub(crate) async fn list(
         return Err(ApiError::Forbidden);
     }
     if FirmCapability::ManageIntegrationSecrets
-        .resolve(&state.surreal, session.role, session.person_id, id)
+        .resolve(
+            &state.application_store,
+            session.role,
+            session.person_id,
+            id,
+        )
         .await
         .map_err(|_| ApiError::Db("Firm capability unavailable".into()))?
         != FirmCapabilityDecision::Allowed
     {
         return Err(ApiError::NotFound);
     }
-    let rows =
-        firm_secrets::list_metadata_for_firm(&state.surreal, session.role, session.person_id, id)
-            .await?;
+    let rows = firm_secrets::list_metadata_for_firm(
+        &state.application_store,
+        session.role,
+        session.person_id,
+        id,
+    )
+    .await?;
     let mut keys = Vec::new();
     for row in rows {
         if let Some((account, kind)) = row.kind.stripe_slot() {
@@ -96,7 +105,7 @@ pub(crate) async fn set(
         .filter(|value| mode.accepts(kind, value))
         .ok_or_else(|| ApiError::from(SecretStoreError::InvalidStripeKey))?;
     firm_secrets::put(
-        &state.surreal,
+        &state.application_store,
         SecretPutRequest {
             firm_id: id,
             provider: Stripe,
@@ -121,7 +130,7 @@ pub(crate) async fn delete(
     }
     check_mode(mode)?;
     firm_secrets::revoke_stripe(
-        &state.surreal,
+        &state.application_store,
         session.role,
         session.person_id,
         id,

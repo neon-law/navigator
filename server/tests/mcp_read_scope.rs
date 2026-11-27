@@ -38,28 +38,28 @@ use uuid::Uuid;
 
 const KEY: &[u8] = b"mcp-read-scope-test-key-0123456789";
 
-async fn build_app() -> (axum::Router, store::surreal::SurrealDb) {
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    store::test_support::seed_firm_with_new_brand(&surreal, "neon").await;
+async fn build_app() -> (axum::Router, store::application_store::ApplicationStore) {
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    store::test_support::seed_firm_with_new_brand(&application_store, "neon").await;
     let state = AppState {
         sessions: SessionStore::new(KEY),
-        ..portal::test_support::app_state(surreal.clone()).await
+        ..portal::test_support::app_state(application_store.clone()).await
     };
     (
         server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
-        surreal,
+        application_store,
     )
 }
 
 /// Mint the credential `site login` writes to `~/.navigator.json`, and
 /// the `persons` row the read resolves it against.
 async fn cli_bearer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     email: &str,
     role: Role,
 ) -> (String, Uuid) {
     let person = store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role(email, email, role),
     )
     .await
@@ -73,10 +73,13 @@ async fn cli_bearer(
     )
 }
 
-async fn seed_matter(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
-    let entity_id = store::test_support::seed_entity_with_parents(surreal).await;
+async fn seed_matter(
+    application_store: &store::application_store::ApplicationStore,
+    name: &str,
+) -> Uuid {
+    let entity_id = store::test_support::seed_entity_with_parents(application_store).await;
     store::projects::create(
-        surreal,
+        application_store,
         &store::projects::NewProject {
             code: format!("m-{}", Uuid::now_v7().simple()),
             name: name.into(),
@@ -91,13 +94,13 @@ async fn seed_matter(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
 }
 
 async fn put_on_matter(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     project_id: Uuid,
     dri: store::participation::DriRequest,
 ) {
     store::participation::add_participant(
-        surreal,
+        application_store,
         &store::participation::AddParticipantCommand {
             project_id,
             person_id,
@@ -157,12 +160,13 @@ fn names(content: &Value) -> Vec<String> {
 #[tokio::test]
 async fn a_lawyer_lists_the_matter_they_are_on_and_not_the_one_they_are_not() {
     store::test_support::with_postgres(async {
-        let (app, surreal) = build_app().await;
-        let theirs = seed_matter(&surreal, "Matter A").await;
-        seed_matter(&surreal, "Matter B").await;
-        let (bearer, person_id) = cli_bearer(&surreal, "lawyer@neonlaw.com", Role::Lawyer).await;
+        let (app, application_store) = build_app().await;
+        let theirs = seed_matter(&application_store, "Matter A").await;
+        seed_matter(&application_store, "Matter B").await;
+        let (bearer, person_id) =
+            cli_bearer(&application_store, "lawyer@neonlaw.com", Role::Lawyer).await;
         put_on_matter(
-            &surreal,
+            &application_store,
             person_id,
             theirs,
             store::participation::DriRequest::Unchanged,
@@ -180,21 +184,21 @@ async fn a_lawyer_lists_the_matter_they_are_on_and_not_the_one_they_are_not() {
 async fn owner_and_admin_list_every_matter_through_the_directory_lens() {
     for role in [Role::Owner, Role::Admin] {
         store::test_support::with_postgres(async {
-            let (app, surreal) = build_app().await;
-            let assigned = seed_matter(&surreal, "Matter A").await;
-            seed_matter(&surreal, "Matter B").await;
+            let (app, application_store) = build_app().await;
+            let assigned = seed_matter(&application_store, "Matter A").await;
+            seed_matter(&application_store, "Matter B").await;
             // A lawyer accountable for one matter, so the directory has a DRI
             // to report and an unassigned matter to report as such.
-            let (_, dri_id) = cli_bearer(&surreal, "dri@neonlaw.com", Role::Lawyer).await;
+            let (_, dri_id) = cli_bearer(&application_store, "dri@neonlaw.com", Role::Lawyer).await;
             put_on_matter(
-                &surreal,
+                &application_store,
                 dri_id,
                 assigned,
                 store::participation::DriRequest::Designate(store::projects::DriSide::Lawyer),
             )
             .await;
             // The oversight caller holds no participation row at all.
-            let (bearer, _) = cli_bearer(&surreal, "overseer@neonlaw.com", role).await;
+            let (bearer, _) = cli_bearer(&application_store, "overseer@neonlaw.com", role).await;
 
             let content = list_projects(&app, &bearer).await;
             assert_eq!(content["lens"], "directory", "{role:?}: {content}");
@@ -219,20 +223,22 @@ async fn owner_and_admin_list_every_matter_through_the_directory_lens() {
 #[tokio::test]
 async fn a_client_lists_only_their_own_matter() {
     store::test_support::with_postgres(async {
-        let (app, surreal) = build_app().await;
-        let theirs = seed_matter(&surreal, "Their Matter").await;
-        let other = seed_matter(&surreal, "Someone Else").await;
-        let (bearer, client_id) = cli_bearer(&surreal, "client@example.com", Role::Client).await;
+        let (app, application_store) = build_app().await;
+        let theirs = seed_matter(&application_store, "Their Matter").await;
+        let other = seed_matter(&application_store, "Someone Else").await;
+        let (bearer, client_id) =
+            cli_bearer(&application_store, "client@example.com", Role::Client).await;
         put_on_matter(
-            &surreal,
+            &application_store,
             client_id,
             theirs,
             store::participation::DriRequest::Unchanged,
         )
         .await;
-        let (_, lawyer_id) = cli_bearer(&surreal, "lawyer@neonlaw.com", Role::Lawyer).await;
+        let (_, lawyer_id) =
+            cli_bearer(&application_store, "lawyer@neonlaw.com", Role::Lawyer).await;
         put_on_matter(
-            &surreal,
+            &application_store,
             lawyer_id,
             other,
             store::participation::DriRequest::Unchanged,
@@ -251,8 +257,8 @@ async fn an_authenticated_stranger_with_no_persons_row_lists_nothing() {
         // Sign-in does not create a Person. A signed session whose email has
         // no row is the caller who must reach no matter — fail-closed, with
         // no privileged exception.
-        let (app, surreal) = build_app().await;
-        seed_matter(&surreal, "Matter A").await;
+        let (app, application_store) = build_app().await;
+        seed_matter(&application_store, "Matter A").await;
         let mut session = SessionData::fresh("stranger@example.com", Role::Lawyer);
         session.email = Some("stranger@example.com".to_string());
         session.source = portal::SessionSource::Cli;

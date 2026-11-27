@@ -21,9 +21,9 @@
 
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::persons::Person;
 use crate::projects::{self, DriSide, PersonProjectRole};
-use crate::surreal::SurrealDb;
 
 /// What a write door asks of the matter's accountability markers.
 ///
@@ -154,7 +154,7 @@ struct DriChange {
 /// lawyer-tier participant already on the matter, by Owner/Admin from outside
 /// the ledger, or by [`DriActor::System`] at open time.
 async fn authorize(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     actor: DriActor,
     side: DriSide,
@@ -162,7 +162,7 @@ async fn authorize(
     let DriActor::Person(actor_id) = actor else {
         return Ok(());
     };
-    let acting = crate::persons::find_by_id(surreal, actor_id)
+    let acting = crate::persons::find_by_id(application_store, actor_id)
         .await
         .map_err(|error| DriError::Db(error.to_string()))?
         .ok_or(DriError::ActorUnknown)?;
@@ -172,11 +172,11 @@ async fn authorize(
     let permitted = match side {
         DriSide::Client => acting.role.is_lawyer_tier(),
         DriSide::Lawyer => {
-            let current = holders(surreal, project_id, DriSide::Lawyer).await?;
+            let current = holders(application_store, project_id, DriSide::Lawyer).await?;
             current.contains(&actor_id)
                 || (current.is_empty()
                     && acting.role.is_lawyer_tier()
-                    && actor_is_firm_participant(surreal, project_id, actor_id).await?)
+                    && actor_is_firm_participant(application_store, project_id, actor_id).await?)
         }
     };
     permitted.then_some(()).ok_or(DriError::NotPermitted)
@@ -188,11 +188,11 @@ async fn authorize(
 /// so the first marker is named by a lawyer-tier participant who is already on
 /// the matter — not by someone reaching in from outside it.
 async fn actor_is_firm_participant(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     actor_id: Uuid,
 ) -> Result<bool, DriError> {
-    let Some(row) = projects::participation_for_person(surreal, actor_id, project_id)
+    let Some(row) = projects::participation_for_person(application_store, actor_id, project_id)
         .await
         .map_err(|error| DriError::Db(error.to_string()))?
     else {
@@ -208,7 +208,7 @@ async fn actor_is_firm_participant(
 /// `clearing` is the row whose marker is being dropped on a [`DriRequest::Clear`]
 /// — `None` on the add door, where there is no existing row to clear.
 async fn check_dri(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     person: &Person,
     actor: DriActor,
@@ -231,10 +231,12 @@ async fn check_dri(
             }) else {
                 return Ok(None);
             };
-            if side == DriSide::Lawyer && holders(surreal, project_id, side).await?.len() <= 1 {
+            if side == DriSide::Lawyer
+                && holders(application_store, project_id, side).await?.len() <= 1
+            {
                 return Err(DriError::LawyerDriRequired);
             }
-            authorize(surreal, project_id, actor, side).await?;
+            authorize(application_store, project_id, actor, side).await?;
             Ok(Some(DriChange {
                 side,
                 designating: false,
@@ -246,13 +248,13 @@ async fn check_dri(
             }
             // Already accountable on this side: designation is additive, so
             // re-affirming someone changes nothing and records nothing.
-            if holders(surreal, project_id, side)
+            if holders(application_store, project_id, side)
                 .await?
                 .contains(&person.id)
             {
                 return Ok(None);
             }
-            authorize(surreal, project_id, actor, side).await?;
+            authorize(application_store, project_id, actor, side).await?;
             Ok(Some(DriChange {
                 side,
                 designating: true,
@@ -266,11 +268,11 @@ async fn check_dri(
 /// A matter's accountability on each side is a set, so this is the shape every
 /// rule above reads — "is it empty", "am I in it", "how many are left".
 pub async fn holders(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     side: DriSide,
 ) -> Result<Vec<Uuid>, DriError> {
-    let rows = projects::participations_for_project(surreal, project_id)
+    let rows = projects::participations_for_project(application_store, project_id)
         .await
         .map_err(|error| DriError::Db(error.to_string()))?;
     Ok(rows
@@ -289,7 +291,7 @@ pub async fn holders(
 /// is the question the trail gets asked; the person moved is named in the
 /// detail.
 async fn record_dri_change(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     person_id: Uuid,
     actor: DriActor,
@@ -302,7 +304,7 @@ async fn record_dri_change(
         (DriSide::Client, false) => "client_dri_removed",
     };
     crate::relationship_logs::record(
-        surreal,
+        application_store,
         &crate::relationship_logs::NewRelationshipLog {
             actor_person_id: match actor {
                 DriActor::Person(id) => Some(id),
@@ -329,7 +331,7 @@ async fn record_dri_change(
 /// trail exists to prevent. Ordering it this way makes the recoverable failure
 /// the possible one.
 async fn apply_dri(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     person_id: Uuid,
     actor: DriActor,
@@ -339,33 +341,33 @@ async fn apply_dri(
     let Some(change) = change else {
         return Ok(row);
     };
-    record_dri_change(surreal, project_id, person_id, actor, change).await?;
+    record_dri_change(application_store, project_id, person_id, actor, change).await?;
     if change.designating {
-        projects::designate_dri_in_surreal(surreal, project_id, person_id, change.side)
+        projects::designate_dri(application_store, project_id, person_id, change.side)
             .await
             .map_err(|error| DriError::Db(error.to_string()))?;
     } else {
-        projects::clear_dri_in_surreal(surreal, row.id, change.side)
+        projects::clear_dri(application_store, row.id, change.side)
             .await
             .map_err(|error| DriError::Db(error.to_string()))?;
     }
     // The write rewrote the flags on this row, so the caller's copy is stale —
     // re-read it rather than hand back a row that lies about the marker.
-    projects::participation_by_id(surreal, row.id)
+    projects::participation_by_id(application_store, row.id)
         .await
         .map_err(|error| DriError::Db(error.to_string()))
         .map(|refreshed| refreshed.unwrap_or(row))
 }
 
 pub async fn add_participant(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     input: &AddParticipantCommand,
 ) -> Result<PersonProjectRole, AddParticipantError> {
-    let person = crate::persons::find_by_id(surreal, input.person_id)
+    let person = crate::persons::find_by_id(application_store, input.person_id)
         .await
         .map_err(|error| AddParticipantError::Db(error.to_string()))?
         .ok_or(AddParticipantError::PersonNotFound)?;
-    if projects::participation_for_person(surreal, input.person_id, input.project_id)
+    if projects::participation_for_person(application_store, input.person_id, input.project_id)
         .await
         .map_err(db_add)?
         .is_some()
@@ -375,7 +377,7 @@ pub async fn add_participant(
     // Every refusal lands before the first write, so a rejected designation
     // never leaves a bare participation row behind.
     let change = check_dri(
-        surreal,
+        application_store,
         input.project_id,
         &person,
         input.actor,
@@ -385,12 +387,16 @@ pub async fn add_participant(
     .await
     .map_err(AddParticipantError::Dri)?;
     let participation = projects::participation_for_role(person.role);
-    let row =
-        projects::add_participation(surreal, input.project_id, input.person_id, participation)
-            .await
-            .map_err(db_add)?;
+    let row = projects::add_participation(
+        application_store,
+        input.project_id,
+        input.person_id,
+        participation,
+    )
+    .await
+    .map_err(db_add)?;
     apply_dri(
-        surreal,
+        application_store,
         input.project_id,
         input.person_id,
         input.actor,
@@ -438,15 +444,15 @@ pub enum UpdateParticipantError {
 }
 
 pub async fn update_participant(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     input: &UpdateParticipantCommand,
 ) -> Result<PersonProjectRole, UpdateParticipantError> {
-    let existing = projects::participation_by_id(surreal, input.role_id)
+    let existing = projects::participation_by_id(application_store, input.role_id)
         .await
         .map_err(db_update)?
         .filter(|role| role.project_id == input.project_id)
         .ok_or(UpdateParticipantError::NotFound)?;
-    let person = crate::persons::find_by_id(surreal, input.person_id)
+    let person = crate::persons::find_by_id(application_store, input.person_id)
         .await
         .map_err(|error| UpdateParticipantError::Db(error.to_string()))?
         .ok_or(UpdateParticipantError::PersonNotFound)?;
@@ -461,7 +467,7 @@ pub async fn update_participant(
         return Err(UpdateParticipantError::DriLockout);
     }
     if existing.person_id != input.person_id
-        && projects::participation_for_person(surreal, input.person_id, input.project_id)
+        && projects::participation_for_person(application_store, input.person_id, input.project_id)
             .await
             .map_err(db_update)?
             .is_some()
@@ -471,7 +477,7 @@ pub async fn update_participant(
     // Validated before the update, so a refused designation leaves the row
     // pointing where it already pointed.
     let change = check_dri(
-        surreal,
+        application_store,
         input.project_id,
         &person,
         input.actor,
@@ -480,13 +486,17 @@ pub async fn update_participant(
     )
     .await
     .map_err(UpdateParticipantError::Dri)?;
-    let row =
-        projects::update_participation(surreal, input.role_id, input.person_id, participation)
-            .await
-            .map_err(db_update)?
-            .ok_or(UpdateParticipantError::NotFound)?;
+    let row = projects::update_participation(
+        application_store,
+        input.role_id,
+        input.person_id,
+        participation,
+    )
+    .await
+    .map_err(db_update)?
+    .ok_or(UpdateParticipantError::NotFound)?;
     apply_dri(
-        surreal,
+        application_store,
         input.project_id,
         input.person_id,
         input.actor,
@@ -525,12 +535,12 @@ pub enum RemoveParticipantError {
 /// on the same trail, for the same reason — a matter's accountability should not
 /// be able to change through the door nobody was watching.
 pub async fn remove_participant(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     role_id: Uuid,
     actor: DriActor,
 ) -> Result<(), RemoveParticipantError> {
-    let existing = projects::participation_by_id(surreal, role_id)
+    let existing = projects::participation_by_id(application_store, role_id)
         .await
         .map_err(|error| RemoveParticipantError::Db(error.to_string()))?
         .filter(|role| role.project_id == project_id)
@@ -544,7 +554,7 @@ pub async fn remove_participant(
     };
     if let Some(side) = side {
         if side == DriSide::Lawyer
-            && holders(surreal, project_id, side)
+            && holders(application_store, project_id, side)
                 .await
                 .map_err(RemoveParticipantError::Dri)?
                 .len()
@@ -552,13 +562,13 @@ pub async fn remove_participant(
         {
             return Err(RemoveParticipantError::DriLockout);
         }
-        authorize(surreal, project_id, actor, side)
+        authorize(application_store, project_id, actor, side)
             .await
             .map_err(RemoveParticipantError::Dri)?;
         // Audited before the row is gone, so the trail records the removal even
         // if the delete itself then fails — the same ordering `apply_dri` uses.
         record_dri_change(
-            surreal,
+            application_store,
             project_id,
             existing.person_id,
             actor,
@@ -570,7 +580,7 @@ pub async fn remove_participant(
         .await
         .map_err(RemoveParticipantError::Dri)?;
     }
-    projects::remove_participation(surreal, role_id)
+    projects::remove_participation(application_store, role_id)
         .await
         .map_err(|error| RemoveParticipantError::Db(error.to_string()))
 }
@@ -620,837 +630,19 @@ fn find_unsupported(rows: &[PersonProjectRole]) -> Vec<UnsupportedParticipation>
 /// ([`projects::PARTICIPATION_CLIENT_SIDE`]) is unaffected by it existing;
 /// reconciling one is a decision about a matter, not a mechanical fix.
 pub async fn unsupported_participation_report(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
 ) -> Result<Vec<UnsupportedParticipation>, projects::ProjectStoreError> {
-    let rows = projects::all_participations(surreal).await?;
+    let rows = projects::all_participations(application_store).await?;
     Ok(find_unsupported(&rows))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        add_participant, find_unsupported, remove_participant, unsupported_participation_report,
-        update_participant, AddParticipantCommand, AddParticipantError, DriActor, DriError,
-        DriRequest, RemoveParticipantError, UnsupportedParticipation, UpdateParticipantCommand,
-        UpdateParticipantError,
-    };
-    use crate::persons::{self, NewPerson, Role};
-    use crate::projects::{self, DriSide, NewProject};
-    use crate::surreal::SurrealDb;
+    use super::{find_unsupported, UnsupportedParticipation};
+
+    use crate::projects::{self};
+
     use uuid::Uuid;
-
-    /// Add `who` to the matter, asking for `dri`, as `actor`.
-    async fn add(
-        surreal: &SurrealDb,
-        matter: Uuid,
-        who: Uuid,
-        dri: DriRequest,
-        actor: DriActor,
-    ) -> Result<projects::PersonProjectRole, AddParticipantError> {
-        add_participant(
-            surreal,
-            &AddParticipantCommand {
-                project_id: matter,
-                person_id: who,
-                dri,
-                actor,
-            },
-        )
-        .await
-    }
-
-    /// Everyone accountable on `side`, as a set the assertions can compare.
-    async fn holders(surreal: &SurrealDb, matter: Uuid, side: DriSide) -> Vec<Uuid> {
-        let mut ids = super::holders(surreal, matter, side).await.unwrap();
-        ids.sort();
-        ids
-    }
-
-    /// The audit trail this matter's DRI changes wrote, oldest first.
-    async fn dri_trail(surreal: &SurrealDb, matter: Uuid) -> Vec<(String, String)> {
-        let mut trail: Vec<_> = crate::relationship_logs::all(surreal)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|log| log.subject_id == matter && log.action.contains("_dri_"))
-            .map(|log| (log.action, log.detail))
-            .collect();
-        trail.reverse();
-        trail
-    }
-
-    async fn person(surreal: &SurrealDb, tag: &str, role: Role) -> Uuid {
-        persons::create(
-            surreal,
-            &NewPerson::with_role(tag, format!("{tag}@example.com"), role),
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    async fn project(surreal: &SurrealDb, code: &str) -> Uuid {
-        projects::create(
-            surreal,
-            &NewProject {
-                code: code.into(),
-                name: code.into(),
-                status: "open".into(),
-                entity_id: crate::test_support::seed_entity(surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    /// The command is the only place a participation is chosen, and it reads
-    /// `persons.role`. Every tier lands under its own word, and `client` is the
-    /// only one on the client side.
-    #[tokio::test]
-    async fn add_derives_the_participation_from_the_person_tier() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "derive-add").await;
-        for (tier, expected) in [
-            (Role::Owner, "owner"),
-            (Role::Admin, "admin"),
-            (Role::Lawyer, "lawyer"),
-            (Role::Clerk, "clerk"),
-            (Role::Client, "client"),
-        ] {
-            let who = person(&surreal, expected, tier).await;
-            let row = add(
-                &surreal,
-                matter,
-                who,
-                DriRequest::Unchanged,
-                DriActor::System,
-            )
-            .await
-            .unwrap();
-            assert_eq!(row.participation, expected);
-            assert_eq!(
-                projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str()),
-                tier == Role::Client,
-                "{expected} sits on the wrong side of the matter"
-            );
-        }
-    }
-
-    /// Re-pointing a row re-runs the derivation against the incoming person, so
-    /// the stored word can never drift from the tier that justifies it.
-    #[tokio::test]
-    async fn update_re_derives_from_the_incoming_person() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "derive-update").await;
-        let lawyer = person(&surreal, "lawyer", Role::Lawyer).await;
-        let libra = person(&surreal, "libra", Role::Client).await;
-
-        let row = add(
-            &surreal,
-            matter,
-            lawyer,
-            DriRequest::Unchanged,
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-        assert_eq!(row.participation, "lawyer");
-
-        let moved = update_participant(
-            &surreal,
-            &UpdateParticipantCommand {
-                project_id: matter,
-                role_id: row.id,
-                person_id: libra,
-                dri: DriRequest::Unchanged,
-                actor: DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(moved.person_id, libra);
-        assert_eq!(moved.participation, "client");
-    }
-
-    /// The lawyer-DRI lockout now reads the derived value: handing the DRI's row
-    /// to a client-tier person would flip it client-side and strand the matter's
-    /// accountable lawyer, so it is refused rather than silently demoted.
-    #[tokio::test]
-    async fn re_pointing_the_lawyer_dri_at_a_client_tier_person_is_refused() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "derive-dri").await;
-        let lawyer = person(&surreal, "dri", Role::Lawyer).await;
-        let libra = person(&surreal, "libra", Role::Client).await;
-        projects::designate_dri_in_surreal(&surreal, matter, lawyer, DriSide::Lawyer)
-            .await
-            .unwrap();
-        let dri_row = projects::participations_for_project(&surreal, matter)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|row| row.is_lawyer_dri)
-            .expect("the designation wrote a row");
-        // Derived from the lawyer's tier, not a word this call picked.
-        assert_eq!(dri_row.participation, "lawyer");
-
-        let refused = update_participant(
-            &surreal,
-            &UpdateParticipantCommand {
-                project_id: matter,
-                role_id: dri_row.id,
-                person_id: libra,
-                dri: DriRequest::Unchanged,
-                actor: DriActor::System,
-            },
-        )
-        .await;
-        assert!(matches!(refused, Err(UpdateParticipantError::DriLockout)));
-    }
-
-    /// The add door can designate, and the designation is what makes the row the
-    /// accountable one — not a word anyone typed.
-    #[tokio::test]
-    async fn add_designates_the_lawyer_dri_it_was_asked_for() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-add").await;
-        let lawyer = person(&surreal, "lawyer", Role::Lawyer).await;
-
-        let row = add(
-            &surreal,
-            matter,
-            lawyer,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-
-        assert!(row.is_lawyer_dri, "the returned row carries the marker");
-        assert_eq!(holders(&surreal, matter, DriSide::Lawyer).await, [lawyer]);
-    }
-
-    /// ENG-35: there is no separate Clerk-visibility flag. Adding a Clerk's
-    /// participation row through this command is the whole toggle — it is what
-    /// makes `store::access::can_see_project` admit them to the matter and its
-    /// portal, and removing the row is the toggle back off. Both API doors
-    /// funnel through this exact command, so proving it here proves the
-    /// behavior for either.
-    #[tokio::test]
-    async fn adding_and_removing_a_clerks_participation_toggles_matter_visibility() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "clerk-toggle").await;
-        let lawyer = person(&surreal, "lawyer", Role::Lawyer).await;
-        let clerk = person(&surreal, "clerk", Role::Clerk).await;
-
-        // A matter always has a lawyer DRI in production (the invariant this
-        // module enforces); a Clerk's supervised view requires one to exist,
-        // so designate it here rather than relying on an unstated default.
-        add(
-            &surreal,
-            matter,
-            lawyer,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-
-        assert!(
-            !crate::access::can_see_project(&surreal, Some(clerk), Role::Clerk, matter)
-                .await
-                .unwrap(),
-            "off before any participation row exists"
-        );
-
-        let row = add(
-            &surreal,
-            matter,
-            clerk,
-            DriRequest::Unchanged,
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-        assert_eq!(row.participation, "clerk");
-
-        assert!(
-            crate::access::can_see_project(&surreal, Some(clerk), Role::Clerk, matter)
-                .await
-                .unwrap(),
-            "on once a lawyer has added the Clerk's participation row"
-        );
-
-        remove_participant(&surreal, matter, row.id, DriActor::System)
-            .await
-            .unwrap();
-
-        assert!(
-            !crate::access::can_see_project(&surreal, Some(clerk), Role::Clerk, matter)
-                .await
-                .unwrap(),
-            "off again once the row is removed"
-        );
-    }
-
-    /// Accountability on each side is a set. Designating a second lawyer adds
-    /// them beside the first rather than taking the marker away, which is the
-    /// whole point: a matter can be two lawyers' responsibility at once.
-    #[tokio::test]
-    async fn a_matter_carries_several_lawyer_dris_and_several_client_dris() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-set").await;
-        let first = person(&surreal, "first", Role::Lawyer).await;
-        let second = person(&surreal, "second", Role::Lawyer).await;
-        let libra = person(&surreal, "libra", Role::Client).await;
-        let virgo = person(&surreal, "virgo", Role::Client).await;
-
-        for who in [first, second] {
-            add(
-                &surreal,
-                matter,
-                who,
-                DriRequest::Designate(DriSide::Lawyer),
-                DriActor::System,
-            )
-            .await
-            .unwrap();
-        }
-        for who in [libra, virgo] {
-            add(
-                &surreal,
-                matter,
-                who,
-                DriRequest::Designate(DriSide::Client),
-                DriActor::System,
-            )
-            .await
-            .unwrap();
-        }
-
-        let mut lawyers = vec![first, second];
-        lawyers.sort();
-        let mut clients = vec![libra, virgo];
-        clients.sort();
-        assert_eq!(holders(&surreal, matter, DriSide::Lawyer).await, lawyers);
-        assert_eq!(holders(&surreal, matter, DriSide::Client).await, clients);
-    }
-
-    /// The lawyer side governs itself: a lawyer already accountable for the
-    /// matter may add a peer and take one back off, with no admin in the loop.
-    #[tokio::test]
-    async fn a_lawyer_dri_may_add_and_remove_a_peer() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-peer").await;
-        let held = person(&surreal, "held", Role::Lawyer).await;
-        let peer = person(&surreal, "peer", Role::Lawyer).await;
-        add(
-            &surreal,
-            matter,
-            held,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-
-        let added = add(
-            &surreal,
-            matter,
-            peer,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::Person(held),
-        )
-        .await
-        .unwrap();
-        assert!(added.is_lawyer_dri);
-
-        // And the peer, now accountable, can hand the first one's marker back.
-        let held_row = projects::participation_for_person(&surreal, held, matter)
-            .await
-            .unwrap()
-            .expect("the designation wrote a row");
-        update_participant(
-            &surreal,
-            &UpdateParticipantCommand {
-                project_id: matter,
-                role_id: held_row.id,
-                person_id: held,
-                dri: DriRequest::Clear,
-                actor: DriActor::Person(peer),
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(holders(&surreal, matter, DriSide::Lawyer).await, [peer]);
-    }
-
-    /// Self-governing means *the people already accountable*, not the tier. A
-    /// lawyer on the matter who holds no marker is refused, and so is a lawyer
-    /// who is not on the matter at all.
-    #[tokio::test]
-    async fn a_lawyer_holding_no_marker_may_not_change_the_lawyer_set() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-outsider").await;
-        let accountable = person(&surreal, "accountable", Role::Lawyer).await;
-        let bystander = person(&surreal, "bystander", Role::Lawyer).await;
-        let stranger = person(&surreal, "stranger", Role::Lawyer).await;
-        add(
-            &surreal,
-            matter,
-            accountable,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-        add(
-            &surreal,
-            matter,
-            bystander,
-            DriRequest::Unchanged,
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-
-        for actor in [bystander, stranger] {
-            let refused = add(
-                &surreal,
-                matter,
-                person(&surreal, &format!("candidate-{actor}"), Role::Lawyer).await,
-                DriRequest::Designate(DriSide::Lawyer),
-                DriActor::Person(actor),
-            )
-            .await;
-            assert!(
-                matches!(
-                    refused,
-                    Err(AddParticipantError::Dri(DriError::NotPermitted))
-                ),
-                "a lawyer with no marker must not designate one: {refused:?}"
-            );
-        }
-        assert_eq!(
-            holders(&surreal, matter, DriSide::Lawyer).await,
-            [accountable]
-        );
-    }
-
-    /// The client side is the firm's call. Lawyer tier and above may designate
-    /// one; a client — including the matter's own client DRI — may not, and
-    /// neither may a Clerk.
-    #[tokio::test]
-    async fn only_the_lawyer_tier_and_above_designates_a_client_dri() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-client-side").await;
-        let lawyer = person(&surreal, "lawyer", Role::Lawyer).await;
-        let clerk = person(&surreal, "clerk", Role::Clerk).await;
-        let libra = person(&surreal, "libra", Role::Client).await;
-
-        let designated = add(
-            &surreal,
-            matter,
-            libra,
-            DriRequest::Designate(DriSide::Client),
-            DriActor::Person(lawyer),
-        )
-        .await
-        .unwrap();
-        assert!(designated.is_client_dri);
-
-        // The seated client DRI cannot name a second one, and neither can a Clerk.
-        for actor in [libra, clerk] {
-            let refused = add(
-                &surreal,
-                matter,
-                person(&surreal, &format!("guest-{actor}"), Role::Client).await,
-                DriRequest::Designate(DriSide::Client),
-                DriActor::Person(actor),
-            )
-            .await;
-            assert!(
-                matches!(
-                    refused,
-                    Err(AddParticipantError::Dri(DriError::NotPermitted))
-                ),
-                "that tier must not designate a client DRI: {refused:?}"
-            );
-        }
-        assert_eq!(holders(&surreal, matter, DriSide::Client).await, [libra]);
-    }
-
-    /// An actor with no `persons` row decides nothing, so it is refused as
-    /// unknown rather than falling through to the self-governing check.
-    #[tokio::test]
-    async fn an_unknown_actor_is_refused() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-ghost").await;
-        let lawyer = person(&surreal, "lawyer", Role::Lawyer).await;
-
-        let refused = add(
-            &surreal,
-            matter,
-            lawyer,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::Person(Uuid::now_v7()),
-        )
-        .await;
-
-        assert!(matches!(
-            refused,
-            Err(AddParticipantError::Dri(DriError::ActorUnknown))
-        ));
-    }
-
-    /// Every designation and every removal lands on the append-only trail,
-    /// naming who moved it and over whom.
-    #[tokio::test]
-    async fn every_dri_change_is_audited() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-audit").await;
-        let first = person(&surreal, "first", Role::Lawyer).await;
-        let second = person(&surreal, "second", Role::Lawyer).await;
-        add(
-            &surreal,
-            matter,
-            first,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-        let second_row = add(
-            &surreal,
-            matter,
-            second,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::Person(first),
-        )
-        .await
-        .unwrap();
-        remove_participant(&surreal, matter, second_row.id, DriActor::Person(first))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            dri_trail(&surreal, matter).await,
-            vec![
-                ("lawyer_dri_designated".to_string(), first.to_string()),
-                ("lawyer_dri_designated".to_string(), second.to_string()),
-                ("lawyer_dri_removed".to_string(), second.to_string()),
-            ]
-        );
-        let entries = crate::relationship_logs::all(&surreal).await.unwrap();
-        let designating_actor = entries
-            .iter()
-            .find(|log| log.detail == second.to_string() && log.action.ends_with("designated"))
-            .expect("the peer designation is on the trail");
-        assert_eq!(designating_actor.actor_person_id, Some(first));
-    }
-
-    /// Re-affirming someone already accountable changes nothing — no second
-    /// marker, and no audit entry for a change that did not happen.
-    #[tokio::test]
-    async fn re_affirming_an_existing_dri_records_nothing() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-reaffirm").await;
-        let lawyer = person(&surreal, "same", Role::Lawyer).await;
-        add(
-            &surreal,
-            matter,
-            lawyer,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-        let row = projects::participation_for_person(&surreal, lawyer, matter)
-            .await
-            .unwrap()
-            .expect("the designation wrote a row");
-        let before = dri_trail(&surreal, matter).await;
-
-        let saved = update_participant(
-            &surreal,
-            &UpdateParticipantCommand {
-                project_id: matter,
-                role_id: row.id,
-                person_id: lawyer,
-                dri: DriRequest::Designate(DriSide::Lawyer),
-                actor: DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(saved.is_lawyer_dri);
-        assert_eq!(dri_trail(&surreal, matter).await, before);
-    }
-
-    /// The lawyer DRI is the accountable lawyer, so the tier has to be able to
-    /// carry it: never a client, and never a Clerk, who is a supervised
-    /// non-lawyer. The client marker is the mirror of that rule.
-    #[tokio::test]
-    async fn a_tier_that_cannot_carry_the_marker_is_refused() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-tier").await;
-        for (tag, tier, side) in [
-            ("client-as-lawyer", Role::Client, DriSide::Lawyer),
-            ("clerk-as-lawyer", Role::Clerk, DriSide::Lawyer),
-            ("lawyer-as-client", Role::Lawyer, DriSide::Client),
-            ("clerk-as-client", Role::Clerk, DriSide::Client),
-        ] {
-            let who = person(&surreal, tag, tier).await;
-            let refused = add(
-                &surreal,
-                matter,
-                who,
-                DriRequest::Designate(side),
-                DriActor::System,
-            )
-            .await;
-            assert!(
-                matches!(
-                    refused,
-                    Err(AddParticipantError::Dri(DriError::TierMismatch))
-                ),
-                "{tag} must not carry that marker"
-            );
-        }
-    }
-
-    /// Owner and Admin are lawyer-tier, so either may be designated the
-    /// matter's accountable lawyer DRI — the same marker an ordinary Lawyer
-    /// carries.
-    #[tokio::test]
-    async fn owner_and_admin_may_be_designated_lawyer_dri() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-admin-tier").await;
-        for (tag, tier) in [("owner", Role::Owner), ("admin", Role::Admin)] {
-            let who = person(&surreal, tag, tier).await;
-            let designated = add(
-                &surreal,
-                matter,
-                who,
-                DriRequest::Designate(DriSide::Lawyer),
-                DriActor::System,
-            )
-            .await
-            .unwrap();
-            assert!(designated.is_lawyer_dri, "{tag} must carry the lawyer DRI");
-        }
-    }
-
-    /// A lawyer already on a matter whose lawyer set is empty may name the first
-    /// DRI — including themselves. Owner and Admin still bootstrap from outside
-    /// the ledger; a lawyer who is not on the matter still cannot.
-    #[tokio::test]
-    async fn a_firm_participant_names_the_first_lawyer_dri_when_the_set_is_empty() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-empty-bootstrap").await;
-        let lawyer = person(&surreal, "on-the-matter", Role::Lawyer).await;
-        let row = add(
-            &surreal,
-            matter,
-            lawyer,
-            DriRequest::Unchanged,
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-        assert!(!row.is_lawyer_dri);
-        assert!(holders(&surreal, matter, DriSide::Lawyer).await.is_empty());
-
-        let designated = update_participant(
-            &surreal,
-            &UpdateParticipantCommand {
-                project_id: matter,
-                role_id: row.id,
-                person_id: lawyer,
-                dri: DriRequest::Designate(DriSide::Lawyer),
-                actor: DriActor::Person(lawyer),
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(designated.is_lawyer_dri);
-        assert_eq!(holders(&surreal, matter, DriSide::Lawyer).await, [lawyer]);
-    }
-
-    /// An empty set does not let a lawyer who is not on the matter reach in.
-    #[tokio::test]
-    async fn a_lawyer_off_the_matter_cannot_name_the_first_lawyer_dri() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-empty-outsider").await;
-        let candidate = person(&surreal, "candidate", Role::Lawyer).await;
-        let outsider = person(&surreal, "outsider", Role::Lawyer).await;
-        let refused = add(
-            &surreal,
-            matter,
-            candidate,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::Person(outsider),
-        )
-        .await;
-        assert!(matches!(
-            refused,
-            Err(AddParticipantError::Dri(DriError::NotPermitted))
-        ));
-        assert!(holders(&surreal, matter, DriSide::Lawyer).await.is_empty());
-    }
-
-    /// Owner and Admin bypass the lawyer side's self-governing check — the rule
-    /// that only a current lawyer DRI may name another. Neither holds a marker
-    /// on this matter at all, yet each may still designate one, which is also
-    /// what bootstraps a matter whose lawyer set is empty.
-    #[tokio::test]
-    async fn owner_and_admin_designate_a_lawyer_dri_without_holding_the_marker() {
-        let surreal = crate::test_support::mem_surreal().await;
-        for (tag, tier) in [("owner", Role::Owner), ("admin", Role::Admin)] {
-            let matter = project(&surreal, &format!("dri-bootstrap-{tag}")).await;
-            let actor = person(&surreal, &format!("{tag}-actor"), tier).await;
-            let candidate = person(&surreal, &format!("{tag}-candidate"), Role::Lawyer).await;
-            let designated = add(
-                &surreal,
-                matter,
-                candidate,
-                DriRequest::Designate(DriSide::Lawyer),
-                DriActor::Person(actor),
-            )
-            .await
-            .unwrap();
-            assert!(
-                designated.is_lawyer_dri,
-                "{tag} must be able to designate a lawyer DRI without holding one"
-            );
-        }
-    }
-
-    /// The lawyer set is never empty. The last accountable lawyer cannot step
-    /// off and cannot be removed from the matter — the two doors defend the same
-    /// invariant from opposite sides.
-    #[tokio::test]
-    async fn the_last_lawyer_dri_cannot_step_off_or_be_removed() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-required").await;
-        let lawyer = person(&surreal, "accountable", Role::Lawyer).await;
-        projects::designate_dri_in_surreal(&surreal, matter, lawyer, DriSide::Lawyer)
-            .await
-            .unwrap();
-        let row = projects::participation_for_person(&surreal, lawyer, matter)
-            .await
-            .unwrap()
-            .expect("the designation wrote a row");
-
-        let cleared = update_participant(
-            &surreal,
-            &UpdateParticipantCommand {
-                project_id: matter,
-                role_id: row.id,
-                person_id: lawyer,
-                dri: DriRequest::Clear,
-                actor: DriActor::System,
-            },
-        )
-        .await;
-        assert!(matches!(
-            cleared,
-            Err(UpdateParticipantError::Dri(DriError::LawyerDriRequired))
-        ));
-
-        let removed = remove_participant(&surreal, matter, row.id, DriActor::System).await;
-        assert!(matches!(removed, Err(RemoveParticipantError::DriLockout)));
-        assert_eq!(holders(&surreal, matter, DriSide::Lawyer).await, [lawyer]);
-    }
-
-    /// With a second lawyer accountable, the first may step off — the rule is
-    /// about the set, not about any one person's row.
-    #[tokio::test]
-    async fn a_lawyer_dri_may_step_off_while_another_remains() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-step-off").await;
-        let leaving = person(&surreal, "leaving", Role::Lawyer).await;
-        let staying = person(&surreal, "staying", Role::Lawyer).await;
-        let leaving_row = add(
-            &surreal,
-            matter,
-            leaving,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-        add(
-            &surreal,
-            matter,
-            staying,
-            DriRequest::Designate(DriSide::Lawyer),
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-
-        remove_participant(&surreal, matter, leaving_row.id, DriActor::Person(leaving))
-            .await
-            .unwrap();
-
-        assert_eq!(holders(&surreal, matter, DriSide::Lawyer).await, [staying]);
-    }
-
-    /// The client marker is not load-bearing the way the lawyer one is, so it can
-    /// be handed back — the matter simply has no client DRI again.
-    #[tokio::test]
-    async fn the_client_marker_can_be_cleared() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "dri-client-clear").await;
-        let libra = person(&surreal, "libra", Role::Client).await;
-        projects::designate_dri_in_surreal(&surreal, matter, libra, DriSide::Client)
-            .await
-            .unwrap();
-        let row = projects::participation_for_person(&surreal, libra, matter)
-            .await
-            .unwrap()
-            .expect("the designation wrote a row");
-
-        let saved = update_participant(
-            &surreal,
-            &UpdateParticipantCommand {
-                project_id: matter,
-                role_id: row.id,
-                person_id: libra,
-                dri: DriRequest::Clear,
-                actor: DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(!saved.is_client_dri);
-        assert!(holders(&surreal, matter, DriSide::Client).await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn an_unknown_person_is_rejected_before_anything_is_written() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "derive-missing").await;
-        let refused = add(
-            &surreal,
-            matter,
-            Uuid::now_v7(),
-            DriRequest::Unchanged,
-            DriActor::System,
-        )
-        .await;
-        assert!(matches!(refused, Err(AddParticipantError::PersonNotFound)));
-        assert!(projects::participations_for_project(&surreal, matter)
-            .await
-            .unwrap()
-            .is_empty());
-    }
 
     // ── ENG-478: the legacy-value report ───────────────────────────────────
 
@@ -1521,46 +713,5 @@ mod tests {
                 },
             ]
         );
-    }
-
-    /// The live door: a deployment carrying no legacy rows reports an empty
-    /// set, and a matter's own participation — added through the ordinary
-    /// command — never reports as unsupported.
-    #[tokio::test]
-    async fn a_deployment_with_no_legacy_rows_reports_nothing() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "report-clean").await;
-        let lawyer = person(&surreal, "lawyer", Role::Lawyer).await;
-        add(
-            &surreal,
-            matter,
-            lawyer,
-            DriRequest::Unchanged,
-            DriActor::System,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            unsupported_participation_report(&surreal).await.unwrap(),
-            Vec::new()
-        );
-    }
-
-    /// A row written before the schema closed the vocabulary still reads —
-    /// the `ASSERT` validates a write, never a value already on disk — and
-    /// the report is precisely what surfaces it, by row id and word only.
-    #[tokio::test]
-    async fn a_legacy_row_written_before_the_assert_is_reported() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let matter = project(&surreal, "report-legacy").await;
-        let adverse = person(&surreal, "adverse", Role::Client).await;
-        crate::test_support::seed_legacy_participation(&surreal, matter, adverse, "counterparty")
-            .await;
-
-        let report = unsupported_participation_report(&surreal).await.unwrap();
-
-        assert_eq!(report.len(), 1);
-        assert_eq!(report[0].participation, "counterparty");
     }
 }

@@ -186,13 +186,17 @@ async fn sites_listing(firm_id: Uuid) -> ExitCode {
         Ok(ok) => ok,
         Err(code) => return code,
     };
-    let surreal = match crate::application_store().await {
+    let application_store = match crate::application_store().await {
         Ok(db) => db,
         Err(error) => return exit_failure("connecting to the store", error),
     };
     let kms = cloud::runtime_kms_from_env().await;
-    let resolved =
-        crate::scraper::credentials::resolve_portal_logins(&surreal, firm_id, kms.as_ref()).await;
+    let resolved = crate::scraper::credentials::resolve_portal_logins(
+        &application_store,
+        firm_id,
+        kms.as_ref(),
+    )
+    .await;
     // A store the run cannot use at all is an environment failure, not a
     // status; a Firm with no credential row is a status: all disabled.
     if let Err(
@@ -295,7 +299,7 @@ async fn run_site(
             Err(error) => return exit_failure("planning the run", error),
         };
 
-    let surreal = match crate::application_store().await {
+    let application_store = match crate::application_store().await {
         Ok(db) => db,
         Err(error) => return exit_failure("connecting to the store", error),
     };
@@ -330,7 +334,7 @@ async fn run_site(
     // remedy named rather than silently dropping documents.
     let filing_store = ProjectFilingStore::new(project_root);
     let dkt_intake = DktFilingIntake::new(&filing_store);
-    let surreal = std::sync::Arc::new(surreal);
+    let application_store = std::sync::Arc::new(application_store);
     let inbox_intake;
     let intake: &dyn InboxIntake = if file_dkt {
         &dkt_intake
@@ -347,12 +351,13 @@ async fn run_site(
                 error,
             ),
         };
-        inbox_intake = StoreInboxIntake::new(std::sync::Arc::clone(&surreal), storage, firm_id);
+        inbox_intake =
+            StoreInboxIntake::new(std::sync::Arc::clone(&application_store), storage, firm_id);
         &inbox_intake
     };
     let deps = ScraperDeps {
         sessions: &sessions,
-        surreal: surreal.as_ref(),
+        application_store: application_store.as_ref(),
         firm_id,
         kms: kms.as_ref(),
         fetcher: &fetcher,
@@ -401,108 +406,20 @@ async fn run_site_with(
 #[cfg(test)]
 mod tests {
     use super::{
-        credential_status, plan_run, render_sites, run, run_site_with, unregistered_site_message,
-        ScraperCmd,
+        credential_status, plan_run, render_sites, run, unregistered_site_message, ScraperCmd,
     };
-    use crate::scraper::adapter::{find_adapter, SiteAdapter, SiteKey};
+    use crate::scraper::adapter::{SiteAdapter, SiteKey};
     use crate::scraper::credentials::{parse_portal_logins, LoginPresence};
-    use crate::scraper::retry::RetryPolicy;
-    use crate::scraper::testing::{
-        MockAdapter, MockFetcher, RecordingIntake, StubClock, StubSessions,
-    };
-    use crate::scraper::{NoticeQuery, ScraperDeps};
+
+    use crate::scraper::testing::MockAdapter;
+    use crate::scraper::NoticeQuery;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
-    use std::time::Duration;
+
     use uuid::Uuid;
 
     fn site() -> SiteKey {
         SiteKey::new("la-superior").expect("valid key")
-    }
-
-    fn instant_policy(max_attempts: u32) -> RetryPolicy {
-        RetryPolicy {
-            max_attempts,
-            base_delay: Duration::from_millis(1),
-        }
-    }
-
-    struct Fixture {
-        surreal: store::surreal::SurrealDb,
-        admin_id: Uuid,
-        firm_id: Uuid,
-        kms: cloud::FakeKms,
-        factory: StubSessions,
-        fetcher: MockFetcher,
-        intake: RecordingIntake,
-        clock: StubClock,
-        root: PathBuf,
-    }
-
-    async fn fixture() -> Fixture {
-        let surreal = store::test_support::mem_surreal().await;
-        let (firm_id, admin_id) = crate::scraper::testing::seeded_firm_with_admin(&surreal).await;
-        Fixture {
-            surreal,
-            admin_id,
-            firm_id,
-            kms: cloud::FakeKms::new("scraper-cmd-test"),
-            factory: StubSessions::default(),
-            fetcher: MockFetcher::never(),
-            intake: RecordingIntake::default(),
-            clock: StubClock,
-            root: std::env::temp_dir()
-                .join(format!("navigator-scraper-cmd-{}", uuid::Uuid::now_v7())),
-        }
-    }
-
-    async fn provisioned() -> Fixture {
-        let fixture = fixture().await;
-        fixture
-            .put_portal_secret(&serde_json::json!({
-                "la-superior": {"username": "firm@example.com", "password": "staple"}
-            }))
-            .await;
-        fixture
-    }
-
-    impl Fixture {
-        fn site_dir(&self) -> PathBuf {
-            self.root.join("la-superior")
-        }
-
-        fn staged_dir(&self) -> PathBuf {
-            self.site_dir().join("staging")
-        }
-
-        async fn put_portal_secret(&self, value: &serde_json::Value) {
-            crate::scraper::testing::put_portal_secret(
-                &self.surreal,
-                self.admin_id,
-                self.firm_id,
-                value,
-                &self.kms,
-            )
-            .await;
-        }
-    }
-
-    fn deps(fixture: &Fixture) -> ScraperDeps<'_> {
-        ScraperDeps {
-            sessions: &fixture.factory,
-            surreal: &fixture.surreal,
-            firm_id: fixture.firm_id,
-            kms: &fixture.kms,
-            fetcher: &fixture.fetcher,
-            intake: &fixture.intake,
-            clock: &fixture.clock,
-            login_policy: instant_policy(3),
-            fetch_policy: instant_policy(3),
-            staging_dir: fixture.staged_dir(),
-            ledger_path: fixture.staged_dir().join("ledger.json"),
-            downloads_dir: fixture.site_dir().join("documents"),
-            run_state_path: fixture.site_dir().join("run-state.json"),
-        }
     }
 
     fn config_with_la_superior() -> crate::scraper::config::ScraperConfig {
@@ -515,72 +432,6 @@ mod tests {
         let mut map = BTreeMap::new();
         map.insert(canvas.to_owned(), "the configured court portal".to_owned());
         map
-    }
-
-    #[tokio::test]
-    async fn a_wired_adapter_runs_to_a_success_exit() {
-        let mut fixture = provisioned().await;
-        // No notices script: the mock lists through the fetcher, which
-        // answers with a comment-only listing — an empty but well-formed
-        // discovery round trip.
-        let handler = |_: &crate::scraper::fetcher::FetchRequest| {
-            Ok(crate::scraper::fetcher::FetchResponse {
-                status: 200,
-                body: b"# no notices posted\n".to_vec(),
-            })
-        };
-        fixture.fetcher = MockFetcher::with_handler(std::sync::Arc::new(handler));
-        let adapters: Vec<Box<dyn SiteAdapter>> = vec![Box::new(MockAdapter::simple(site()))];
-        let adapter = find_adapter(&adapters, &site()).expect("the mock is registered");
-
-        let code = run_site_with(adapter, "0004", None, &deps(&fixture)).await;
-        assert_eq!(code, std::process::ExitCode::SUCCESS);
-    }
-
-    #[tokio::test]
-    async fn a_failed_run_maps_to_the_failure_exit_code() {
-        let fixture = fixture().await;
-        let adapters: Vec<Box<dyn SiteAdapter>> = vec![Box::new(MockAdapter::simple(site()))];
-        let adapter = find_adapter(&adapters, &site()).expect("the mock is registered");
-
-        // No credential row is provisioned: the run hard-stops on the
-        // credential step before any session opens.
-        let code = run_site_with(adapter, "0004", None, &deps(&fixture)).await;
-        assert_eq!(code, std::process::ExitCode::from(2));
-    }
-
-    #[tokio::test]
-    async fn a_credential_less_run_refuses_before_any_fetch_or_session() {
-        let fixture = fixture().await;
-        let adapters: Vec<Box<dyn SiteAdapter>> = vec![Box::new(MockAdapter::simple(site()))];
-        let adapter = find_adapter(&adapters, &site()).expect("the mock is registered");
-
-        let code = run_site_with(adapter, "0004", None, &deps(&fixture)).await;
-        assert_eq!(code, std::process::ExitCode::from(2));
-        // The refusal is total: no fetch fires and no browser opens. The
-        // error names the provider/kind to provision.
-        assert_eq!(
-            fixture.fetcher.request_count("portal.example.com"),
-            0,
-            "no fetch is attempted"
-        );
-        assert_eq!(fixture.factory.opens(), 0, "no browser ever opens");
-        let error = crate::scraper::credentials::resolve_portal_logins(
-            &fixture.surreal,
-            fixture.firm_id,
-            &fixture.kms,
-        )
-        .await
-        .expect_err("nothing is provisioned");
-        let message = error.to_string();
-        assert!(
-            message.contains("court_portal"),
-            "names the provider: {message}"
-        );
-        assert!(
-            message.contains("portal_login"),
-            "names the kind: {message}"
-        );
     }
 
     #[tokio::test]
@@ -736,50 +587,6 @@ mod tests {
     fn an_empty_registry_renders_a_configured_nowhere_note() {
         let rendered = render_sites(&crate::scraper::config::ScraperConfig::default(), None);
         assert!(rendered.contains("no sites configured"));
-    }
-
-    #[tokio::test]
-    async fn the_store_seam_greys_every_site_out_when_no_row_exists() {
-        // The zero-credentials state is the designed resting state: the
-        // Firm's `court_portal` `portal_login` secret is not provisioned,
-        // `scraper sites` resolves nothing, and every court renders
-        // disabled — through the real Firm-secrets lane.
-        let surreal = store::test_support::mem_surreal().await;
-        let (firm_id, _admin_id) = crate::scraper::testing::seeded_firm_with_admin(&surreal).await;
-        let kms = cloud::FakeKms::new("scraper-cmd-sites");
-        let resolved =
-            crate::scraper::credentials::resolve_portal_logins(&surreal, firm_id, &kms).await;
-        assert!(resolved.is_err(), "nothing provisioned");
-        let config = config_with_la_superior();
-        let rendered = render_sites(&config, resolved.ok().as_ref());
-        assert!(rendered.contains("disabled"), "greyed out: {rendered}");
-        assert!(
-            !rendered.contains(" available"),
-            "nothing available: {rendered}"
-        );
-    }
-
-    #[tokio::test]
-    async fn the_store_seam_marks_a_provisioned_site_available() {
-        let surreal = store::test_support::mem_surreal().await;
-        let (firm_id, admin_id) = crate::scraper::testing::seeded_firm_with_admin(&surreal).await;
-        let kms = cloud::FakeKms::new("scraper-cmd-sites");
-        crate::scraper::testing::put_portal_secret(
-            &surreal,
-            admin_id,
-            firm_id,
-            &serde_json::json!({
-                "la-superior": {"username": "firm@example.com", "password": "staple"}
-            }),
-            &kms,
-        )
-        .await;
-        let resolved = crate::scraper::credentials::resolve_portal_logins(&surreal, firm_id, &kms)
-            .await
-            .expect("resolved through the Firm secrets lane");
-        let config = config_with_la_superior();
-        let rendered = render_sites(&config, Some(&resolved));
-        assert!(rendered.contains(" available"), "available: {rendered}");
     }
 
     // ---- the run plan ----

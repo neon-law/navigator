@@ -46,10 +46,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use cloud::StorageService;
 use serde::{Deserialize, Serialize};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::surreal::{record_id, record_uuid, SurrealDb};
+use crate::application_store::ApplicationStore;
 
 pub(crate) const DOCUMENT_TABLE: &str = "notation_document";
 pub(crate) const VERSION_TABLE: &str = "notation_document_version";
@@ -83,34 +82,6 @@ pub struct NotationDocument {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct DocumentRow {
-    id: surrealdb::types::RecordId,
-    notation_id: surrealdb::types::RecordId,
-    original_asset_id: surrealdb::types::RecordId,
-    current_version_id: Option<surrealdb::types::RecordId>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl DocumentRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_document(self) -> Option<NotationDocument> {
-        Some(NotationDocument {
-            id: record_uuid(&self.id)?,
-            notation_id: record_uuid(&self.notation_id)?,
-            original_asset_id: record_uuid(&self.original_asset_id)?,
-            current_version_id: self.current_version_id.as_ref().and_then(record_uuid),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const DOCUMENT_SELECT: &str =
-    "id, notation_id, original_asset_id, current_version_id, inserted_at, updated_at";
-
 /// One immutable Markdown-source version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotationDocumentVersion {
@@ -136,45 +107,6 @@ pub struct NotationDocumentVersion {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct VersionRow {
-    id: surrealdb::types::RecordId,
-    document_id: surrealdb::types::RecordId,
-    parent_version_id: Option<surrealdb::types::RecordId>,
-    markdown_asset_id: surrealdb::types::RecordId,
-    anchor_manifest_asset_id: surrealdb::types::RecordId,
-    parser_version: String,
-    schema_version: i64,
-    authored_by_person_id: surrealdb::types::RecordId,
-    status: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl VersionRow {
-    /// `None` when a record id is not a native UUID key — a row written by
-    /// something that bypassed [`crate::surreal::record_id`].
-    fn into_version(self) -> Option<NotationDocumentVersion> {
-        Some(NotationDocumentVersion {
-            id: record_uuid(&self.id)?,
-            document_id: record_uuid(&self.document_id)?,
-            parent_version_id: self.parent_version_id.as_ref().and_then(record_uuid),
-            markdown_asset_id: record_uuid(&self.markdown_asset_id)?,
-            anchor_manifest_asset_id: record_uuid(&self.anchor_manifest_asset_id)?,
-            parser_version: self.parser_version,
-            schema_version: self.schema_version,
-            authored_by_person_id: record_uuid(&self.authored_by_person_id)?,
-            status: self.status,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const VERSION_SELECT: &str = "id, document_id, parent_version_id, markdown_asset_id, \
-     anchor_manifest_asset_id, parser_version, schema_version, authored_by_person_id, status, \
-     inserted_at, updated_at";
-
 /// Why a `notation_documents` command refused.
 #[derive(Debug, thiserror::Error)]
 pub enum NotationDocumentError {
@@ -182,8 +114,6 @@ pub enum NotationDocumentError {
     Postgres(#[from] sqlx::Error),
     #[error(transparent)]
     Authority(#[from] crate::postgres::matter::MatterAuthorityError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error("notation: {0}")]
     Notation(#[from] crate::notations::NotationError),
     #[error("asset: {0}")]
@@ -229,30 +159,6 @@ pub enum NotationDocumentError {
     NotationEvent(#[from] crate::notation_events::NotationEventError),
 }
 
-fn one_document(
-    mut response: surrealdb::IndexedResults,
-) -> Result<Option<NotationDocument>, NotationDocumentError> {
-    let row: Option<DocumentRow> = response.take(0)?;
-    Ok(row.and_then(DocumentRow::into_document))
-}
-
-fn one_version(
-    mut response: surrealdb::IndexedResults,
-) -> Result<Option<NotationDocumentVersion>, NotationDocumentError> {
-    let row: Option<VersionRow> = response.take(0)?;
-    Ok(row.and_then(VersionRow::into_version))
-}
-
-fn many_versions(
-    mut response: surrealdb::IndexedResults,
-) -> Result<Vec<NotationDocumentVersion>, NotationDocumentError> {
-    let rows: Vec<VersionRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(VersionRow::into_version)
-        .collect())
-}
-
 /// Resolve `notation_id`, asserting it belongs to `project_id`.
 ///
 /// This is the module's one authorization primitive: every public read and
@@ -261,7 +167,7 @@ fn many_versions(
 /// document or version — the same shape [`crate::assets::set_visibility`]
 /// uses for its Project scope.
 async fn resolve_scoped_notation(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
 ) -> Result<crate::notations::Notation, NotationDocumentError> {
@@ -278,26 +184,16 @@ async fn resolve_scoped_notation(
 }
 
 async fn find_document_by_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Option<NotationDocument>, NotationDocumentError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(DOCUMENT_TABLE).await? {
-        return Ok(crate::postgres::matter::find(
-            &pg,
-            DOCUMENT_TABLE,
-            serde_json::json!({"notation_id":notation_id}),
-        )
-        .await?);
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {DOCUMENT_SELECT} FROM {DOCUMENT_TABLE} WHERE notation_id = $notation LIMIT 1"
-        ))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one_document(response)
+    let pg = crate::postgres::matter::authority_for(DOCUMENT_TABLE).await?;
+    Ok(crate::postgres::matter::find(
+        &pg,
+        DOCUMENT_TABLE,
+        serde_json::json!({"notation_id":notation_id}),
+    )
+    .await?)
 }
 
 /// The document identity for a Notation, scoped to `project_id`.
@@ -309,7 +205,7 @@ async fn find_document_by_notation(
 /// # Errors
 /// Propagates any database error, or a project-scope mismatch.
 pub async fn find_document(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
 ) -> Result<Option<NotationDocument>, NotationDocumentError> {
@@ -318,24 +214,14 @@ pub async fn find_document(
 }
 
 async fn find_version_by_id_unscoped(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     version_id: Uuid,
 ) -> Result<Option<NotationDocumentVersion>, NotationDocumentError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
-        return Ok(crate::postgres::matter::find(
-            &pg,
-            VERSION_TABLE,
-            serde_json::json!({"id":version_id}),
-        )
-        .await?);
-    }
-
-    let response = db
-        .query(format!("SELECT {VERSION_SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(VERSION_TABLE, version_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one_version(response)
+    let pg = crate::postgres::matter::authority_for(VERSION_TABLE).await?;
+    Ok(
+        crate::postgres::matter::find(&pg, VERSION_TABLE, serde_json::json!({"id":version_id}))
+            .await?,
+    )
 }
 
 /// The current version of a Notation's document, scoped to `project_id`.
@@ -345,7 +231,7 @@ async fn find_version_by_id_unscoped(
 /// # Errors
 /// Propagates any database error, or a project-scope mismatch.
 pub async fn current_version(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
 ) -> Result<Option<NotationDocumentVersion>, NotationDocumentError> {
@@ -365,35 +251,21 @@ pub async fn current_version(
 /// # Errors
 /// Propagates any database error, or a project-scope mismatch.
 pub async fn history(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
 ) -> Result<Vec<NotationDocumentVersion>, NotationDocumentError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
-        let Some(document) = find_document(db, project_id, notation_id).await? else {
-            return Ok(Vec::new());
-        };
-        return Ok(crate::postgres::matter::select(
-            &pg,
-            VERSION_TABLE,
-            serde_json::json!({"document_id":document.id}),
-            &["inserted_at DESC", "id DESC"],
-        )
-        .await?);
-    }
-
+    let pg = crate::postgres::matter::authority_for(VERSION_TABLE).await?;
     let Some(document) = find_document(db, project_id, notation_id).await? else {
         return Ok(Vec::new());
     };
-    let response = db
-        .query(format!(
-            "SELECT {VERSION_SELECT} FROM {VERSION_TABLE} \
-             WHERE document_id = $document ORDER BY inserted_at DESC, id DESC"
-        ))
-        .bind(("document", record_id(DOCUMENT_TABLE, document.id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many_versions(response)
+    Ok(crate::postgres::matter::select(
+        &pg,
+        VERSION_TABLE,
+        serde_json::json!({"document_id":document.id}),
+        &["inserted_at DESC", "id DESC"],
+    )
+    .await?)
 }
 
 /// Every version of a document identity, oldest first, whatever its
@@ -402,28 +274,17 @@ pub async fn history(
 /// # Errors
 /// Propagates any database error.
 pub async fn versions_of(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     document_id: Uuid,
 ) -> Result<Vec<NotationDocumentVersion>, NotationDocumentError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
-        return Ok(crate::postgres::matter::select(
-            &pg,
-            VERSION_TABLE,
-            serde_json::json!({"document_id":document_id}),
-            &["inserted_at", "id"],
-        )
-        .await?);
-    }
-
-    let response = db
-        .query(format!(
-            "SELECT {VERSION_SELECT} FROM {VERSION_TABLE} \
-             WHERE document_id = $document ORDER BY inserted_at ASC, id ASC"
-        ))
-        .bind(("document", record_id(DOCUMENT_TABLE, document_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many_versions(response)
+    let pg = crate::postgres::matter::authority_for(VERSION_TABLE).await?;
+    Ok(crate::postgres::matter::select(
+        &pg,
+        VERSION_TABLE,
+        serde_json::json!({"document_id":document_id}),
+        &["inserted_at", "id"],
+    )
+    .await?)
 }
 
 /// The document identity a Notation owns, if one was ever imported.
@@ -431,7 +292,7 @@ pub async fn versions_of(
 /// # Errors
 /// Propagates any database error.
 pub async fn document_for_notation(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Option<NotationDocument>, NotationDocumentError> {
     find_document_by_notation(db, notation_id).await
@@ -443,55 +304,11 @@ pub async fn document_for_notation(
 /// # Errors
 /// Propagates any database error.
 pub async fn restore_archived_document(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     document: &NotationDocument,
 ) -> Result<crate::assets::RowRestore, NotationDocumentError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(DOCUMENT_TABLE).await? {
-        return crate::postgres::notation_documents::restore_document(&pg, document).await;
-    }
-
-    let response = db
-        .query(format!("SELECT {DOCUMENT_SELECT} FROM $id"))
-        .bind(("id", record_id(DOCUMENT_TABLE, document.id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    if let Some(existing) = one_document(response)? {
-        return Ok(if &existing == document {
-            crate::assets::RowRestore::Identical
-        } else {
-            crate::assets::RowRestore::Conflict
-        });
-    }
-    let response = crate::surreal::retry::writing(|| {
-        db.query(format!(
-            "CREATE $id SET notation_id = $notation_id, original_asset_id = $original, \
-             current_version_id = $current, inserted_at = $inserted_at, \
-             updated_at = $updated_at RETURN {DOCUMENT_SELECT}"
-        ))
-        .bind(("id", record_id(DOCUMENT_TABLE, document.id)))
-        .bind((
-            "notation_id",
-            record_id(crate::notations::TABLE, document.notation_id),
-        ))
-        .bind(("original", record_id("asset", document.original_asset_id)))
-        .bind((
-            "current",
-            document
-                .current_version_id
-                .map(|id| record_id(VERSION_TABLE, id)),
-        ))
-        .bind((
-            "inserted_at",
-            surrealdb::types::Datetime::from(document.inserted_at),
-        ))
-        .bind((
-            "updated_at",
-            surrealdb::types::Datetime::from(document.updated_at),
-        ))
-    })
-    .await?;
-    one_document(response)?.ok_or(NotationDocumentError::WriteReturnedNothing)?;
-    Ok(crate::assets::RowRestore::Created)
+    let pg = crate::postgres::matter::authority_for(DOCUMENT_TABLE).await?;
+    crate::postgres::notation_documents::restore_document(&pg, document).await
 }
 
 /// Write one archived Markdown-source version back under its original id. An
@@ -500,65 +317,11 @@ pub async fn restore_archived_document(
 /// # Errors
 /// Propagates any database error.
 pub async fn restore_archived_version(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     version: &NotationDocumentVersion,
 ) -> Result<crate::assets::RowRestore, NotationDocumentError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
-        return crate::postgres::notation_documents::restore_version(&pg, version).await;
-    }
-
-    let response = db
-        .query(format!("SELECT {VERSION_SELECT} FROM $id"))
-        .bind(("id", record_id(VERSION_TABLE, version.id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    if let Some(existing) = one_version(response)? {
-        return Ok(if &existing == version {
-            crate::assets::RowRestore::Identical
-        } else {
-            crate::assets::RowRestore::Conflict
-        });
-    }
-    let response = crate::surreal::retry::writing(|| {
-        db.query(format!(
-            "CREATE $id SET document_id = $document_id, parent_version_id = $parent, \
-             markdown_asset_id = $markdown, anchor_manifest_asset_id = $anchor, \
-             parser_version = $parser_version, schema_version = $schema_version, \
-             authored_by_person_id = $author, status = $status, inserted_at = $inserted_at, \
-             updated_at = $updated_at RETURN {VERSION_SELECT}"
-        ))
-        .bind(("id", record_id(VERSION_TABLE, version.id)))
-        .bind((
-            "document_id",
-            record_id(DOCUMENT_TABLE, version.document_id),
-        ))
-        .bind((
-            "parent",
-            version
-                .parent_version_id
-                .map(|id| record_id(VERSION_TABLE, id)),
-        ))
-        .bind(("markdown", record_id("asset", version.markdown_asset_id)))
-        .bind((
-            "anchor",
-            record_id("asset", version.anchor_manifest_asset_id),
-        ))
-        .bind(("parser_version", version.parser_version.clone()))
-        .bind(("schema_version", version.schema_version))
-        .bind(("author", record_id("person", version.authored_by_person_id)))
-        .bind(("status", version.status.clone()))
-        .bind((
-            "inserted_at",
-            surrealdb::types::Datetime::from(version.inserted_at),
-        ))
-        .bind((
-            "updated_at",
-            surrealdb::types::Datetime::from(version.updated_at),
-        ))
-    })
-    .await?;
-    one_version(response)?.ok_or(NotationDocumentError::WriteReturnedNothing)?;
-    Ok(crate::assets::RowRestore::Created)
+    let pg = crate::postgres::matter::authority_for(VERSION_TABLE).await?;
+    crate::postgres::notation_documents::restore_version(&pg, version).await
 }
 
 /// One specific version, scoped to `project_id` through its document's
@@ -567,7 +330,7 @@ pub async fn restore_archived_version(
 /// # Errors
 /// Propagates any database error, or a project-scope mismatch.
 pub async fn find_version(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
     version_id: Uuid,
@@ -588,7 +351,7 @@ pub async fn find_version(
 /// [`NotationDocumentError::Asset`] on a storage or database failure, or
 /// [`NotationDocumentError::NotUtf8`] if the stored bytes are not UTF-8.
 pub async fn markdown_of(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     version: &NotationDocumentVersion,
 ) -> Result<String, NotationDocumentError> {
@@ -604,7 +367,7 @@ pub async fn markdown_of(
 /// # Errors
 /// [`NotationDocumentError::Asset`] on a storage or database failure.
 pub async fn anchor_manifest_of(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     version: &NotationDocumentVersion,
 ) -> Result<Vec<u8>, NotationDocumentError> {
@@ -670,7 +433,7 @@ pub struct ImportRoot<'a> {
 /// top of its root (re-importing cannot rebase a chain that has moved); or
 /// a database/asset error.
 pub async fn import_root(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: ImportRoot<'_>,
 ) -> Result<Saved, NotationDocumentError> {
@@ -767,7 +530,7 @@ pub struct AppendEdit<'a> {
 /// another writer already advanced the document past
 /// `expected_parent_version_id`; or a database/asset error.
 pub async fn append_edit(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     args: AppendEdit<'_>,
 ) -> Result<NotationDocumentVersion, NotationDocumentError> {
@@ -818,38 +581,12 @@ pub async fn append_edit(
 }
 
 async fn create_document(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     notation_id: Uuid,
     original_asset_id: Uuid,
 ) -> Result<NotationDocument, NotationDocumentError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(DOCUMENT_TABLE).await? {
-        return crate::postgres::notation_documents::create(&pg, notation_id, original_asset_id)
-            .await;
-    }
-
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             notation_id = $notation_id, \
-             original_asset_id = $original_asset_id, \
-             current_version_id = NONE \
-             RETURN {DOCUMENT_SELECT}"
-        ))
-        .bind(("id", record_id(DOCUMENT_TABLE, id)))
-        .bind((
-            "notation_id",
-            record_id(crate::notations::TABLE, notation_id),
-        ))
-        .bind((
-            "original_asset_id",
-            record_id(crate::assets::TABLE, original_asset_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<DocumentRow> = response.take(0)?;
-    row.and_then(DocumentRow::into_document)
-        .ok_or(NotationDocumentError::WriteReturnedNothing)
+    let pg = crate::postgres::matter::authority_for(DOCUMENT_TABLE).await?;
+    crate::postgres::notation_documents::create(&pg, notation_id, original_asset_id).await
 }
 
 /// Append one immutable version row, then compare-and-swap the document's
@@ -862,7 +599,7 @@ async fn create_document(
 /// the winner's version remains readable through [`history`].
 #[allow(clippy::too_many_arguments)]
 async fn append_version(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     document: &NotationDocument,
     expected_parent: Option<Uuid>,
     markdown_asset_id: Uuid,
@@ -872,89 +609,19 @@ async fn append_version(
     authored_by_person_id: Uuid,
     status: &str,
 ) -> Result<NotationDocumentVersion, NotationDocumentError> {
-    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
-        return crate::postgres::notation_documents::append(
-            &pg,
-            document,
-            expected_parent,
-            markdown_asset_id,
-            anchor_manifest_asset_id,
-            parser_version,
-            schema_version,
-            authored_by_person_id,
-            status,
-        )
-        .await;
-    }
-
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             document_id = $document_id, \
-             parent_version_id = $parent_version_id, \
-             markdown_asset_id = $markdown_asset_id, \
-             anchor_manifest_asset_id = $anchor_manifest_asset_id, \
-             parser_version = $parser_version, \
-             schema_version = $schema_version, \
-             authored_by_person_id = $authored_by_person_id, \
-             status = $status \
-             RETURN {VERSION_SELECT}"
-        ))
-        .bind(("id", record_id(VERSION_TABLE, id)))
-        .bind(("document_id", record_id(DOCUMENT_TABLE, document.id)))
-        .bind((
-            "parent_version_id",
-            expected_parent.map(|p| record_id(VERSION_TABLE, p)),
-        ))
-        .bind((
-            "markdown_asset_id",
-            record_id(crate::assets::TABLE, markdown_asset_id),
-        ))
-        .bind((
-            "anchor_manifest_asset_id",
-            record_id(crate::assets::TABLE, anchor_manifest_asset_id),
-        ))
-        .bind(("parser_version", parser_version.to_string()))
-        .bind(("schema_version", schema_version))
-        .bind((
-            "authored_by_person_id",
-            record_id("person", authored_by_person_id),
-        ))
-        .bind(("status", status.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<VersionRow> = response.take(0)?;
-    let version = row
-        .and_then(VersionRow::into_version)
-        .ok_or(NotationDocumentError::WriteReturnedNothing)?;
-
-    let mut cas_response = db
-        .query(
-            "UPDATE $document_id SET current_version_id = $new, updated_at = time::now() \
-             WHERE current_version_id = $expected \
-             RETURN VALUE current_version_id",
-        )
-        .bind(("document_id", record_id(DOCUMENT_TABLE, document.id)))
-        .bind(("new", record_id(VERSION_TABLE, version.id)))
-        .bind((
-            "expected",
-            expected_parent.map(|p| record_id(VERSION_TABLE, p)),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let swapped: Vec<surrealdb::types::RecordId> = cas_response.take(0)?;
-    if swapped.is_empty() {
-        let reread = find_document_by_notation(db, document.notation_id)
-            .await?
-            .ok_or(NotationDocumentError::DocumentNotFound(document.id))?;
-        return Err(NotationDocumentError::Conflict {
-            expected: expected_parent,
-            actual: reread.current_version_id,
-        });
-    }
-
-    Ok(version)
+    let pg = crate::postgres::matter::authority_for(VERSION_TABLE).await?;
+    crate::postgres::notation_documents::append(
+        &pg,
+        document,
+        expected_parent,
+        markdown_asset_id,
+        anchor_manifest_asset_id,
+        parser_version,
+        schema_version,
+        authored_by_person_id,
+        status,
+    )
+    .await
 }
 
 /// Journal identifiers only — never Markdown bytes, never the anchor
@@ -963,7 +630,7 @@ async fn append_version(
 /// the shared `notation_events` shape; the payload below is the structured
 /// read.
 async fn journal(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     notation_id: Uuid,
     acting_person_id: Uuid,
     document: &NotationDocument,
@@ -1321,9 +988,7 @@ pub struct NotationDocumentComment {
 }
 
 async fn comment_authority() -> Result<crate::postgres::PostgresDb, NotationDocumentError> {
-    crate::postgres::matter::authority_for(COMMENT_TABLE)
-        .await?
-        .ok_or_else(|| crate::postgres::matter::MatterAuthorityError::Unavailable.into())
+    Ok(crate::postgres::matter::authority_for(COMMENT_TABLE).await?)
 }
 
 /// Attach a comment to `anchor` within `version_id`. Anyone with write
@@ -1336,7 +1001,7 @@ async fn comment_authority() -> Result<crate::postgres::PostgresDb, NotationDocu
 /// `version_id` does not belong to this Notation's document; or a database
 /// error.
 pub async fn add_comment(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
     version_id: Uuid,
@@ -1372,7 +1037,7 @@ pub async fn add_comment(
 /// [`NotationDocumentError::ProjectMismatch`] if `notation_id` is not in
 /// `project_id`, or a database error.
 pub async fn comments_for_version(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
     version_id: Uuid,
@@ -1388,7 +1053,7 @@ pub async fn comments_for_version(
 /// `resolved = false` so the review surface can show the unresolved finding
 /// instead of silently attaching it to nearby text.
 pub async fn carry_comments_to_version(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
     parent_version_id: Uuid,
@@ -1429,7 +1094,7 @@ pub enum DecideCommentError {
 /// # Errors
 /// See [`DecideCommentError`].
 pub async fn decide_comment(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
     comment_id: Uuid,
@@ -1470,7 +1135,7 @@ pub async fn decide_comment(
 /// [`NotationDocumentError::ProjectMismatch`] if `notation_id` is not in
 /// `project_id`, or a database error.
 pub async fn all_comments_decided(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Uuid,
     notation_id: Uuid,
     version_id: Uuid,
@@ -1480,674 +1145,7 @@ pub async fn all_comments_decided(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        anchor_manifest_of, append_edit, current_version, find_document, history, import_root,
-        markdown_of, AppendEdit, ImportRoot, NotationDocumentError, STATUS_EDITED, STATUS_IMPORTED,
-    };
-    use crate::surreal::test_support::mem;
-    use crate::surreal::SurrealDb;
-    use uuid::Uuid;
-
-    async fn fs_storage() -> std::sync::Arc<dyn cloud::StorageService> {
-        let dir =
-            std::env::temp_dir().join(format!("navigator-notation-documents-{}", Uuid::now_v7()));
-        std::sync::Arc::new(cloud::FsStorage::new(dir).await.unwrap())
-    }
-
-    /// One notation, its project, and an "original Word asset" bare content
-    /// asset standing in for a parsed `.docx` package (this module never
-    /// inspects Word bytes, so any content-addressed asset does).
-    async fn fixture(
-        surreal: &SurrealDb,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-    ) -> (Uuid, Uuid, Uuid, Uuid) {
-        let notation_id = crate::test_support::seed_notation(surreal).await;
-        let notation = crate::notations::find_by_id(surreal, notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let original_asset_id = crate::assets::ingest_content(
-            surreal,
-            storage,
-            b"PK\x03\x04 fake docx",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-        .await
-        .unwrap();
-        (
-            notation_id,
-            notation.project_id,
-            notation.person_id,
-            original_asset_id,
-        )
-    }
-
-    fn import_args(
-        project_id: Uuid,
-        notation_id: Uuid,
-        original_asset_id: Uuid,
-        person_id: Uuid,
-        markdown: &[u8],
-    ) -> ImportRoot<'_> {
-        ImportRoot {
-            project_id,
-            notation_id,
-            original_asset_id,
-            markdown,
-            anchor_manifest: b"{\"blocks\":[]}",
-            parser_version: "word-crate-1",
-            schema_version: 1,
-            authored_by_person_id: person_id,
-            recorded_at: "2026-09-19T10:00:00+00:00",
-        }
-    }
-
-    #[tokio::test]
-    async fn import_root_creates_a_document_and_its_first_version() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-
-        let saved = import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap();
-        assert!(saved.was_written());
-        let version = saved.into_model();
-        assert!(version.parent_version_id.is_none());
-        assert_eq!(version.status, STATUS_IMPORTED);
-
-        let document = find_document(&surreal, project_id, notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(document.original_asset_id, original_asset_id);
-        assert_eq!(document.current_version_id, Some(version.id));
-
-        assert_eq!(
-            markdown_of(&surreal, &storage, &version).await.unwrap(),
-            "# Hello"
-        );
-        assert_eq!(
-            anchor_manifest_of(&surreal, &storage, &version)
-                .await
-                .unwrap(),
-            b"{\"blocks\":[]}"
-        );
-    }
-
-    #[tokio::test]
-    async fn reimporting_identical_bytes_is_idempotent() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-
-        let first = import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap()
-        .into_model();
-
-        let again = import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap();
-        assert!(
-            !again.was_written(),
-            "an identical re-import must not fork the chain"
-        );
-        assert_eq!(again.into_model().id, first.id);
-
-        assert_eq!(
-            history(&surreal, project_id, notation_id)
-                .await
-                .unwrap()
-                .len(),
-            1,
-            "one version, not two"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_different_original_asset_is_rejected_as_a_different_baseline() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-        import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap();
-
-        let other_asset = crate::assets::ingest_content(
-            &surreal,
-            &storage,
-            b"a different package",
-            "application/octet-stream",
-        )
-        .await
-        .unwrap();
-        let err = import_root(
-            &surreal,
-            &storage,
-            import_args(project_id, notation_id, other_asset, person_id, b"# Hello"),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            NotationDocumentError::OriginalAssetMismatch { .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn editing_appends_a_child_version_and_both_remain_readable() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-        let root = import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap()
-        .into_model();
-
-        let child = append_edit(
-            &surreal,
-            &storage,
-            AppendEdit {
-                project_id,
-                notation_id,
-                expected_parent_version_id: root.id,
-                markdown: b"# Hello, edited",
-                anchor_manifest: b"{\"blocks\":[]}",
-                parser_version: "word-crate-1",
-                schema_version: 1,
-                authored_by_person_id: person_id,
-                recorded_at: "2026-09-19T11:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(child.parent_version_id, Some(root.id));
-        assert_eq!(child.status, STATUS_EDITED);
-
-        let current = current_version(&surreal, project_id, notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(current.id, child.id);
-
-        let versions = history(&surreal, project_id, notation_id).await.unwrap();
-        assert_eq!(versions.len(), 2, "both versions remain readable");
-        assert_eq!(versions[0].id, child.id, "newest first");
-        assert_eq!(versions[1].id, root.id);
-
-        assert_eq!(
-            markdown_of(&surreal, &storage, &root).await.unwrap(),
-            "# Hello",
-            "the parent version's exact bytes are still readable"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_stale_expected_parent_is_refused_as_a_conflict_not_an_overwrite() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-        let root = import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap()
-        .into_model();
-        let winner = append_edit(
-            &surreal,
-            &storage,
-            AppendEdit {
-                project_id,
-                notation_id,
-                expected_parent_version_id: root.id,
-                markdown: b"# Winner",
-                anchor_manifest: b"{\"blocks\":[]}",
-                parser_version: "word-crate-1",
-                schema_version: 1,
-                authored_by_person_id: person_id,
-                recorded_at: "2026-09-19T11:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap();
-
-        // A second editor who also started from `root` (now stale) must not
-        // silently overwrite the winner.
-        let err = append_edit(
-            &surreal,
-            &storage,
-            AppendEdit {
-                project_id,
-                notation_id,
-                expected_parent_version_id: root.id,
-                markdown: b"# Loser",
-                anchor_manifest: b"{\"blocks\":[]}",
-                parser_version: "word-crate-1",
-                schema_version: 1,
-                authored_by_person_id: person_id,
-                recorded_at: "2026-09-19T11:05:00+00:00",
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            NotationDocumentError::Conflict {
-                expected: Some(expected),
-                actual: Some(actual),
-            } if expected == root.id && actual == winner.id
-        ));
-
-        // The current version is still the winner's — the conflict did not
-        // overwrite it.
-        assert_eq!(
-            current_version(&surreal, project_id, notation_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
-            winner.id
-        );
-        // The loser's write is refused before any version row is created —
-        // the fast-fail check in `append_edit` runs before `append_version`
-        // — so the chain holds only the root and the winner's edit.
-        assert_eq!(
-            history(&surreal, project_id, notation_id)
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-
-    /// A true concurrent race — both writers pass the fast-fail check
-    /// before either's compare-and-swap runs — settles on exactly one
-    /// winner via the CAS in `append_version`, without panicking or
-    /// forking the current pointer. The loser's version row still exists
-    /// (append-only), just never becomes current.
-    #[tokio::test]
-    async fn concurrent_edits_against_the_same_parent_settle_on_one_winner() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-        let root = import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap()
-        .into_model();
-
-        let racers: Vec<_> = (0..6)
-            .map(|n| {
-                let surreal = surreal.clone();
-                let storage = storage.clone();
-                let markdown = format!("# Racer {n}").into_bytes();
-                tokio::spawn(async move {
-                    append_edit(
-                        &surreal,
-                        &storage,
-                        AppendEdit {
-                            project_id,
-                            notation_id,
-                            expected_parent_version_id: root.id,
-                            markdown: &markdown,
-                            anchor_manifest: b"{\"blocks\":[]}",
-                            parser_version: "word-crate-1",
-                            schema_version: 1,
-                            authored_by_person_id: person_id,
-                            recorded_at: "2026-09-19T11:00:00+00:00",
-                        },
-                    )
-                    .await
-                })
-            })
-            .collect();
-
-        let mut winners = 0;
-        let mut conflicts = 0;
-        for racer in racers {
-            match racer.await.expect("task must not panic") {
-                Ok(_) => winners += 1,
-                Err(NotationDocumentError::Conflict { .. }) => conflicts += 1,
-                Err(other) => panic!("unexpected error: {other:?}"),
-            }
-        }
-        assert_eq!(winners, 1, "exactly one racer must win the current pointer");
-        assert_eq!(conflicts, 5);
-
-        let current = current_version(&surreal, project_id, notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(current.parent_version_id, Some(root.id));
-    }
-
-    #[tokio::test]
-    async fn an_unrelated_project_cannot_read_or_write_the_source() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-        import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap();
-
-        let other_project = crate::test_support::seed_project_surreal(&surreal, "unrelated").await;
-
-        assert!(matches!(
-            find_document(&surreal, other_project, notation_id).await,
-            Err(NotationDocumentError::ProjectMismatch { .. })
-        ));
-        assert!(matches!(
-            import_root(
-                &surreal,
-                &storage,
-                import_args(
-                    other_project,
-                    notation_id,
-                    original_asset_id,
-                    person_id,
-                    b"# Hi"
-                ),
-            )
-            .await,
-            Err(NotationDocumentError::ProjectMismatch { .. })
-        ));
-        assert!(matches!(
-            append_edit(
-                &surreal,
-                &storage,
-                AppendEdit {
-                    project_id: other_project,
-                    notation_id,
-                    expected_parent_version_id: Uuid::now_v7(),
-                    markdown: b"# Hi",
-                    anchor_manifest: b"{}",
-                    parser_version: "word-crate-1",
-                    schema_version: 1,
-                    authored_by_person_id: person_id,
-                    recorded_at: "2026-09-19T11:00:00+00:00",
-                },
-            )
-            .await,
-            Err(NotationDocumentError::ProjectMismatch { .. })
-        ));
-    }
-
-    #[tokio::test]
-    async fn document_source_assets_are_internal_and_content_addressed() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-        let version = import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap()
-        .into_model();
-
-        let markdown_asset = crate::assets::find_by_id(&surreal, version.markdown_asset_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            markdown_asset.visibility,
-            crate::documents::visibility::INTERNAL
-        );
-        let manifest_asset = crate::assets::find_by_id(&surreal, version.anchor_manifest_asset_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            manifest_asset.visibility,
-            crate::documents::visibility::INTERNAL
-        );
-
-        // Re-importing the same Markdown bytes for a different notation
-        // dedupes onto the same content-addressed asset.
-        let (other_notation, other_project, other_person, other_original) = {
-            let notation_id = crate::test_support::seed_notation(&surreal).await;
-            let notation = crate::notations::find_by_id(&surreal, notation_id)
-                .await
-                .unwrap()
-                .unwrap();
-            let asset = crate::assets::ingest_content(
-                &surreal,
-                &storage,
-                b"a second fake docx",
-                "application/octet-stream",
-            )
-            .await
-            .unwrap();
-            (notation_id, notation.project_id, notation.person_id, asset)
-        };
-        let other_version = import_root(
-            &surreal,
-            &storage,
-            import_args(
-                other_project,
-                other_notation,
-                other_original,
-                other_person,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap()
-        .into_model();
-        assert_eq!(other_version.markdown_asset_id, version.markdown_asset_id);
-    }
-
-    #[tokio::test]
-    async fn notation_events_carry_only_identifiers_never_document_content() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-        let root = import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"the secret clause text",
-            ),
-        )
-        .await
-        .unwrap()
-        .into_model();
-        append_edit(
-            &surreal,
-            &storage,
-            AppendEdit {
-                project_id,
-                notation_id,
-                expected_parent_version_id: root.id,
-                markdown: b"the edited secret clause text",
-                anchor_manifest: b"{\"blocks\":[]}",
-                parser_version: "word-crate-1",
-                schema_version: 1,
-                authored_by_person_id: person_id,
-                recorded_at: "2026-09-19T11:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap();
-
-        let events: Vec<_> = crate::notation_events::for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|e| e.machine_kind == super::MACHINE_DOCUMENT)
-            .collect();
-        assert_eq!(events.len(), 2);
-        for event in &events {
-            let payload = event.payload.as_deref().unwrap();
-            assert!(!payload.contains("secret clause"));
-            let value: serde_json::Value = serde_json::from_str(payload).unwrap();
-            let keys: std::collections::BTreeSet<_> =
-                value.as_object().unwrap().keys().cloned().collect();
-            assert_eq!(
-                keys,
-                [
-                    "document_id",
-                    "version_id",
-                    "parent_version_id",
-                    "original_asset_id",
-                    "markdown_asset_id",
-                    "anchor_manifest_asset_id",
-                    "parser_version",
-                    "schema_version",
-                    "status",
-                ]
-                .into_iter()
-                .map(str::to_string)
-                .collect()
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn document_source_does_not_disturb_template_pinning_or_custom_clauses() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, original_asset_id) =
-            fixture(&surreal, &storage).await;
-        let notation = crate::notations::find_by_id(&surreal, notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let pinned_template = crate::templates::find_by_id(&surreal, notation.template_id)
-            .await
-            .unwrap()
-            .unwrap();
-
-        crate::notation_clauses::append(&surreal, notation_id, "a custom clause", Some(person_id))
-            .await
-            .unwrap();
-
-        import_root(
-            &surreal,
-            &storage,
-            import_args(
-                project_id,
-                notation_id,
-                original_asset_id,
-                person_id,
-                b"# Hello",
-            ),
-        )
-        .await
-        .unwrap();
-
-        let clauses = crate::notation_clauses::for_notation(&surreal, notation_id)
-            .await
-            .unwrap();
-        assert_eq!(clauses.len(), 1);
-        assert_eq!(clauses[0].body_markdown, "a custom clause");
-
-        let template_again = crate::templates::find_by_id(&surreal, notation.template_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(template_again, pinned_template, "template row untouched");
-    }
-}
+mod tests {}
 
 #[cfg(test)]
 mod diff_tests {

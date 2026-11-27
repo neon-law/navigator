@@ -161,9 +161,6 @@ fn child_command(
         .env("NAVIGATOR_FAKE_SIGNATURE_DIR", root.join("signatures"))
         .env("NAVIGATOR_SIGNATURE_PROVIDER", "fake")
         .env("NAVIGATOR_EMAIL_BACKEND", "capturing")
-        .env("NAVIGATOR_WORKFLOWS_IN_WEB", "true")
-        .env("NAVIGATOR_WORKFLOW_ENGINE", "dbos")
-        .env("NAVIGATOR_DBOS_ENABLED", "true")
         .env("NAVIGATOR_RELEASE_TAG", "synthetic-native-startup")
         .env(
             "NAVIGATOR_DBOS_EXECUTOR_ID",
@@ -178,9 +175,6 @@ fn child_command(
             "WORKFLOWS_SERVICE_HEALTH_LISTEN",
             format!("127.0.0.1:{worker_port}"),
         );
-    for workflow in store::workflow_engine::WORKFLOWS {
-        command.env(workflow.flag, "true");
-    }
     for key in [
         "RESTATE_BROKER_URL",
         "RESTATE_AUTH_TOKEN",
@@ -205,19 +199,8 @@ fn native_startup_profile(key: &str) -> Option<String> {
     match key {
         "NAVIGATOR_CI_HARNESS" => Some("1".into()),
         "NAVIGATOR_ENVIRONMENT" => Some("dev".into()),
-        "NAVIGATOR_WORKFLOW_ENGINE" => Some("dbos".into()),
-        "NAVIGATOR_SIMULATED_MATTERS" | "NAVIGATOR_WORKFLOWS_IN_WEB" | "NAVIGATOR_DBOS_ENABLED" => {
-            Some("true".into())
-        }
-        "NAVIGATOR_STAGING"
-        | workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV
-        | workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV => Some("false".into()),
-        name if store::workflow_engine::WORKFLOWS
-            .iter()
-            .any(|item| item.flag == name) =>
-        {
-            Some("true".into())
-        }
+        "NAVIGATOR_SIMULATED_MATTERS" => Some("true".into()),
+        "NAVIGATOR_STAGING" => Some("false".into()),
         _ => None,
     }
 }

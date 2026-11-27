@@ -2,7 +2,7 @@
 
 use super::fixtures::{firm_for_notation, workflow_fixture};
 use crate::billing_batches::{self as batches, BillingBatchError, MatterBillingBatch};
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 use uuid::Uuid;
 
 #[tokio::test]

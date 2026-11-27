@@ -24,7 +24,7 @@ async fn contract_review_hands_committed_notation_to_native_dbos() {
         let workflow = workflows_service::dbos_notation::register(
             &worker,
             workflows_service::dbos_notation::Context::new(
-                store::surreal::SurrealDb::uninitialized(),
+                store::application_store::ApplicationStore::uninitialized(),
                 pg.clone(),
                 Arc::new(workflows::CapturingEmail::default()),
                 storage.clone(),
@@ -76,7 +76,7 @@ async fn contract_review_hands_committed_notation_to_native_dbos() {
     .await;
 }
 
-async fn seed_matter(db: &store::surreal::SurrealDb) -> (Uuid, Uuid, Uuid) {
+async fn seed_matter(db: &store::application_store::ApplicationStore) -> (Uuid, Uuid, Uuid) {
     let unique = Uuid::now_v7();
     let project = native_project::create(&format!("contract-review-native-{unique}")).await;
     let person = store::persons::create(
@@ -111,11 +111,11 @@ fn sample_positions() -> Vec<Position> {
 }
 
 async fn review(runtime: &DbosNotationRuntime, storage: &Arc<dyn cloud::StorageService>) {
-    let surreal = store::surreal::SurrealDb::uninitialized();
+    let application_store = store::application_store::ApplicationStore::uninitialized();
     let contract_reviewer = portal::contract_review::StubContractReviewer;
-    let (project_id, person_id, entity_id) = seed_matter(&surreal).await;
+    let (project_id, person_id, entity_id) = seed_matter(&application_store).await;
     store::templates::save_version(
-        &surreal,
+        &application_store,
         None,
         "memo__contract_review",
         store::templates::Version {
@@ -131,7 +131,7 @@ async fn review(runtime: &DbosNotationRuntime, storage: &Arc<dyn cloud::StorageS
     .expect("seed the contract-review template");
     no_playbook(
         &ReviewDeps {
-            surreal: &surreal,
+            application_store: &application_store,
             workflow_runtime: runtime,
             storage,
             contract_reviewer: &contract_reviewer,
@@ -141,7 +141,7 @@ async fn review(runtime: &DbosNotationRuntime, storage: &Arc<dyn cloud::StorageS
     )
     .await;
     let scoped_template = store::test_support::seed_unpinned_project_template(
-        &surreal,
+        &application_store,
         project_id,
         "memo__contract_review",
         "Project Contract Review",
@@ -151,7 +151,7 @@ async fn review(runtime: &DbosNotationRuntime, storage: &Arc<dyn cloud::StorageS
     .await;
     let positions = sample_positions();
     let playbook_id = store::playbooks::create(
-        &surreal,
+        &application_store,
         &NewPlaybook {
             entity_id,
             name: "Synthetic contract-review playbook",
@@ -162,7 +162,7 @@ async fn review(runtime: &DbosNotationRuntime, storage: &Arc<dyn cloud::StorageS
     .expect("create playbook");
 
     let deps = ReviewDeps {
-        surreal: &surreal,
+        application_store: &application_store,
         workflow_runtime: runtime,
         storage,
         contract_reviewer: &contract_reviewer,
@@ -182,7 +182,7 @@ async fn review(runtime: &DbosNotationRuntime, storage: &Arc<dyn cloud::StorageS
     .expect("the native worker must read the committed Notation and complete contract intake");
 
     let notation_id = assert_review(
-        &surreal,
+        &application_store,
         review_id,
         project_id,
         entity_id,
@@ -218,7 +218,7 @@ async fn no_playbook(deps: &ReviewDeps<'_>, project_id: Uuid, person_id: Uuid) {
     ));
 
     // No notation was opened — we fail before touching the workflow.
-    let count = store::notations::list_by_project(deps.surreal, project_id)
+    let count = store::notations::list_by_project(deps.application_store, project_id)
         .await
         .unwrap()
         .len();
@@ -226,7 +226,7 @@ async fn no_playbook(deps: &ReviewDeps<'_>, project_id: Uuid, person_id: Uuid) {
 }
 
 async fn assert_review(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     review_id: Uuid,
     project_id: Uuid,
     entity_id: Uuid,

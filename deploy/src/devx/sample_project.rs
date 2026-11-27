@@ -217,12 +217,12 @@ pub(super) fn resolve_repo(project_code: &str, explicit: Option<&str>) -> Result
             .build()
             .context("create tokio runtime")?;
         runtime.block_on(async {
-            let surreal = crate::application_store().await.context(
+            let application_store = crate::application_store().await.context(
                 "verify PostgreSQL application authority to read the Project's repository URL — source \
                  this worktree's `.devx/env` first, or pass `--repo`",
             )?;
             Ok(
-                match store::projects::find_by_code(&surreal, project_code)
+                match store::projects::find_by_code(&application_store, project_code)
                     .await
                     .with_context(|| format!("look up Project `{project_code}`"))?
                 {

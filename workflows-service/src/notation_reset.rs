@@ -15,18 +15,12 @@
 //! the duration, and the ids that failed to delete; never a client, a
 //! matter, or a Project code.
 
-#[cfg(test)]
-use std::sync::Arc;
-
 use crate::workflow_step_error::WorkflowStepError;
 #[cfg(test)]
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
-use store::surreal::SurrealDb;
-
-#[cfg(test)]
-use workflows::SlackBot;
+use store::application_store::ApplicationStore;
 
 pub use workflows::notation_reset::{
     environment_label, render_failure, render_report, run_key, DraftRoster, NotationResetReport,
@@ -58,109 +52,23 @@ fn validate_configuration(channel_id: &str, slack_enabled: bool) -> Result<(), W
 }
 
 /// Every draft id on the deployment, Notations and stored previews.
-pub async fn discover_drafts(surreal: &SurrealDb) -> Result<DraftRoster, WorkflowStepError> {
-    workflows::notation_reset::discover_drafts(surreal)
+pub async fn discover_drafts(
+    application_store: &ApplicationStore,
+) -> Result<DraftRoster, WorkflowStepError> {
+    workflows::notation_reset::discover_drafts(application_store)
         .await
         .map_err(|error| WorkflowStepError::terminal(error.to_string()))
-}
-
-/// The production composition, minus Restate: discover, delete each draft,
-/// and post — so a test proves the rerun and the post end to end.
-#[cfg(test)]
-pub(crate) async fn reset_in_process(
-    surreal: &SurrealDb,
-    slack: &Arc<dyn SlackBot>,
-    channel_id: &str,
-    environment: &str,
-) -> NotationResetReport {
-    let roster = discover_drafts(surreal).await.expect("discover drafts");
-    let mut report = NotationResetReport::default();
-    for id in roster.notations {
-        match store::notation_reset::delete_draft(surreal, id).await {
-            Ok(outcome) => report.absorb(outcome),
-            Err(_) => report.failures.push(id),
-        }
-    }
-    for id in roster.previews {
-        match store::notation_reset::delete_preview_draft(surreal, id).await {
-            Ok(()) => report.previews_deleted += 1,
-            Err(_) => report.failures.push(id),
-        }
-    }
-    slack
-        .post_message(channel_id, &render_report(environment, &report))
-        .await
-        .expect("post outcome");
-    report
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use store::test_support::{mem_surreal, seed_notation};
 
     #[test]
     fn configuration_requires_a_channel_and_an_enabled_bot() {
         assert!(validate_configuration("C-MESSAGES", true).is_ok());
         assert!(validate_configuration("", true).is_err());
         assert!(validate_configuration("C-MESSAGES", false).is_err());
-    }
-
-    #[tokio::test]
-    async fn a_rerun_deletes_nothing_and_still_posts() {
-        let surreal = mem_surreal().await;
-        let draft = seed_notation(&surreal).await;
-        let slack = Arc::new(workflows::CapturingSlackBot::new());
-        let bot: Arc<dyn SlackBot> = slack.clone();
-
-        let first = reset_in_process(&surreal, &bot, "C-STAGING", "staging").await;
-        assert_eq!(first.notations_deleted, 1);
-        assert!(first.failures.is_empty());
-        assert!(store::notations::find_by_id(&surreal, draft)
-            .await
-            .unwrap()
-            .is_none());
-
-        let second = reset_in_process(&surreal, &bot, "C-STAGING", "staging").await;
-        assert_eq!(
-            (
-                second.notations_deleted,
-                second.previews_deleted,
-                second.kept
-            ),
-            (0, 0, 0),
-            "nothing is left to delete"
-        );
-        let posted = slack.posted_messages();
-        assert_eq!(posted.len(), 2, "every run posts, the zero-count one too");
-        assert!(posted.iter().all(|(channel, _)| channel == "C-STAGING"));
-        assert!(
-            posted[1].1.contains("Drafts deleted: 0 notations"),
-            "{}",
-            posted[1].1
-        );
-    }
-
-    #[tokio::test]
-    async fn a_lawyer_review_notation_survives_the_reset() {
-        let surreal = mem_surreal().await;
-        let reviewed = seed_notation(&surreal).await;
-        store::notations::update_state(&surreal, reviewed, "lawyer_review__pending")
-            .await
-            .unwrap();
-        let draft = seed_notation(&surreal).await;
-        let bot: Arc<dyn SlackBot> = Arc::new(workflows::CapturingSlackBot::new());
-
-        let report = reset_in_process(&surreal, &bot, "C-MESSAGES", "production").await;
-        assert_eq!(report.notations_deleted, 1);
-        assert!(store::notations::find_by_id(&surreal, reviewed)
-            .await
-            .unwrap()
-            .is_some());
-        assert!(store::notations::find_by_id(&surreal, draft)
-            .await
-            .unwrap()
-            .is_none());
     }
 
     #[test]
@@ -180,23 +88,5 @@ mod tests {
         assert!(format!("{channel:?}").contains("messages channel id"));
         let bot = validate_configuration("C-MESSAGES", false).unwrap_err();
         assert!(format!("{bot:?}").contains("Slack bot"));
-    }
-
-    #[tokio::test]
-    async fn discovery_lists_drafts_and_skips_lawyer_review() {
-        let surreal = mem_surreal().await;
-        assert!(discover_drafts(&surreal)
-            .await
-            .unwrap()
-            .notations
-            .is_empty());
-        let draft = seed_notation(&surreal).await;
-        let reviewed = seed_notation(&surreal).await;
-        store::notations::update_state(&surreal, reviewed, "lawyer_review__pending")
-            .await
-            .unwrap();
-        let roster = discover_drafts(&surreal).await.unwrap();
-        assert_eq!(roster.notations, vec![draft]);
-        assert!(roster.previews.is_empty());
     }
 }

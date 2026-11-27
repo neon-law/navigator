@@ -406,7 +406,7 @@ async fn structured_copy_records_real_asset_reference_without_claiming_missing_b
         let bytes = b"synthetic external document payload";
         let sha = crate::postgres::sha256_hex(bytes);
         store::assets::ingest_content(
-            &store::surreal::SurrealDb::uninitialized(),
+            &store::application_store::ApplicationStore::uninitialized(),
             &storage,
             bytes,
             "text/plain",

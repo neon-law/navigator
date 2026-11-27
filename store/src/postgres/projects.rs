@@ -532,3 +532,47 @@ pub(crate) async fn open_on(
     tx.commit().await?;
     Ok(project)
 }
+
+/// Restore a Project by its archived UUID and fields. A concurrent writer
+/// remains authoritative when either the UUID or the Project code collides.
+pub(crate) async fn restore_on(
+    pg: &PostgresDb,
+    project: &Project,
+) -> Result<crate::assets::RowRestore, ProjectError> {
+    use crate::assets::RowRestore;
+    let values = serde_json::to_value(project)
+        .map_err(|error| ProjectError::Query(sqlx::Error::Encode(Box::new(error))))?;
+    let inserted = sqlx::query(
+        "INSERT INTO project (id, code, name, status, brand, entity_id, firm_id, jurisdiction_id, description,
+        drive_folder_id, repository_url, git_initialized_at, forge_provisioned_at, closed_at,
+        closure_reason, internal_slack_channel_url, external_slack_channel_url,
+        internal_slack_channel_id, private_notion_page_url, shared_notion_page_url, calendar_timezone,
+        calendar_id, booking_url, onboarding_jurisdiction, client_dri_person_id, legal_plan_id,
+        plan_member_id, plan_case_number, benefit_code, plan_matter_type, plan_state, plan_assigned_on,
+        plan_accepted_on, plan_closed_on, kit_version, inserted_at, updated_at)
+        SELECT id, code, name, status, brand, entity_id, firm_id, jurisdiction_id, description,
+        drive_folder_id, repository_url, git_initialized_at, forge_provisioned_at, closed_at,
+        closure_reason, internal_slack_channel_url, external_slack_channel_url,
+        internal_slack_channel_id, private_notion_page_url, shared_notion_page_url, calendar_timezone,
+        calendar_id, booking_url, onboarding_jurisdiction, client_dri_person_id, legal_plan_id,
+        plan_member_id, plan_case_number, benefit_code, plan_matter_type, plan_state, plan_assigned_on,
+        plan_accepted_on, plan_closed_on, kit_version, inserted_at, updated_at FROM
+        jsonb_populate_record(NULL::project, $1)
+        ON CONFLICT DO NOTHING",
+    )
+    .bind(values)
+    .execute(pg.pool())
+    .await
+    .map_err(write_error)?
+    .rows_affected();
+    if inserted == 1 {
+        return Ok(RowRestore::Created);
+    }
+    Ok(
+        if find_by_id_on(pg, project.id).await?.as_ref() == Some(project) {
+            RowRestore::Identical
+        } else {
+            RowRestore::Conflict
+        },
+    )
+}

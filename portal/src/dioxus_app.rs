@@ -988,8 +988,8 @@ async fn inject_person_id(mut req: Request, next: Next) -> Response {
 /// dependency, so the portal owns this request-layer seam and passes only the
 /// wasm-safe notation id across it.
 async fn inject_pending_client_intake(
-    axum::extract::State((surreal, storage)): axum::extract::State<(
-        store::surreal::SurrealDb,
+    axum::extract::State((application_store, storage)): axum::extract::State<(
+        store::application_store::ApplicationStore,
         std::sync::Arc<dyn cloud::StorageService>,
     )>,
     mut req: Request,
@@ -997,10 +997,13 @@ async fn inject_pending_client_intake(
 ) -> Response {
     let pending = match req.extensions().get::<crate::session::SessionData>() {
         Some(session) if session.role == store::persons::Role::Client => {
-            match project_id_from_path(&surreal, req.uri().path()).await {
+            match project_id_from_path(&application_store, req.uri().path()).await {
                 Some(project_id) => {
                     crate::intake::pending_client_intake_for_project(
-                        &surreal, &storage, session, project_id,
+                        &application_store,
+                        &storage,
+                        session,
+                        project_id,
                     )
                     .await
                 }
@@ -1280,7 +1283,7 @@ async fn reject_unadvertised_projects_sort(request: Request, next: Next) -> Resp
 /// firm tier the workbench), so the retired `/portal` client landing folded into
 /// this one mount rather than needing a second, client-pinned copy.
 pub fn projects_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -1289,7 +1292,7 @@ pub fn projects_router(
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -1326,7 +1329,7 @@ pub const LAWYER_DASHBOARD_PATH: &str = "/app/lawyer";
 /// workload — but without the sort pre-handler, because this page's sort query
 /// is lenient rather than validated.
 pub fn lawyer_dashboard_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -1335,7 +1338,7 @@ pub fn lawyer_dashboard_router(
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -1371,14 +1374,14 @@ pub const NOTATION_OUTLINE_PATH: &str = "/app/projects/{project_code}/{notation_
 /// The gated Dioxus notation outline. Person-scoped like a filed document:
 /// the loader runs `matter_viewer` and hides the letter from a Clerk.
 pub fn notation_outline_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     storage: std::sync::Arc<dyn cloud::StorageService>,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
         Box::new(move || Box::new(storage.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
@@ -1412,7 +1415,7 @@ pub fn notation_outline_router(
 pub fn clause_library_router<C, M>(
     path: &'static str,
     component: C,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     storage: std::sync::Arc<dyn cloud::StorageService>,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
@@ -1423,7 +1426,7 @@ where
     M: 'static,
 {
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
         Box::new(move || Box::new(storage.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
@@ -1456,7 +1459,7 @@ pub const APP_FORMS_PATH: &str = "/app/forms";
 /// uses. The registry is process-lifetime data, so shaping it per request costs
 /// a clone of a handful of short strings.
 pub fn app_forms_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     forms_registry: &[forms::FormMeta],
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
@@ -1466,7 +1469,7 @@ pub fn app_forms_router(
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -1514,21 +1517,21 @@ pub const PROJECT_DETAIL_PATH: &str = "/app/projects/{project_code}";
 /// exist), on top of the auth + embedded Rego policy gate, person-id scoping,
 /// and nonce CSP.
 pub fn project_detail_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     storage: std::sync::Arc<dyn cloud::StorageService>,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let project_visit_surreal = surreal.clone();
-    let pending_intake_state = (surreal.clone(), storage.clone());
+    let project_visit_store = application_store.clone();
+    let pending_intake_state = (application_store.clone(), storage.clone());
     // Both lenses render from this one mount, so it provides the union of what
     // either needs. `storage` is the client view's; the firm view ignores it.
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
         Box::new(move || Box::new(storage.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
@@ -1546,7 +1549,7 @@ pub fn project_detail_router(
                 inject_pending_client_intake,
             ))
             .layer(from_fn_with_state(
-                project_visit_surreal.clone(),
+                project_visit_store.clone(),
                 crate::project_visit::log_project_visit,
             ))
             .layer(from_fn(dioxus_document_head))
@@ -1577,11 +1580,11 @@ pub fn project_tab_paths() -> impl Iterator<Item = String> {
 /// Resolve the project code of `/app/projects/{code}[/{section}]` to its
 /// internal id.
 async fn project_id_from_path(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     path: &str,
 ) -> Option<uuid::Uuid> {
     let code = crate::project_visit::project_code_from_path(path)?;
-    store::projects::find_by_code(surreal, code)
+    store::projects::find_by_code(application_store, code)
         .await
         .ok()
         .flatten()
@@ -1589,10 +1592,10 @@ async fn project_id_from_path(
 }
 
 pub(crate) async fn project_show_path(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
 ) -> String {
-    store::projects::find_by_id(surreal, project_id)
+    store::projects::find_by_id(application_store, project_id)
         .await
         .ok()
         .flatten()
@@ -1636,7 +1639,7 @@ pub const PROJECT_DOCUMENT_PATH: &str = "/app/projects/{project_code}/documents/
 /// carrying the session CSRF token, so they all mount through the shared
 /// [`csrf_page_router`].
 pub fn lawyer_project_forms_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -1644,7 +1647,7 @@ pub fn lawyer_project_forms_router(
     csrf_page_router(
         LAWYER_PROJECT_NEW_PATH,
         webapp::project_new::LawyerProjectNew,
-        surreal.clone(),
+        application_store.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
@@ -1652,7 +1655,7 @@ pub fn lawyer_project_forms_router(
     .merge(csrf_page_router(
         LAWYER_PROJECT_EDIT_PATH,
         webapp::project_edit::LawyerProjectEdit,
-        surreal.clone(),
+        application_store.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
@@ -1660,7 +1663,7 @@ pub fn lawyer_project_forms_router(
     .merge(csrf_page_router(
         LAWYER_PARTICIPATION_NEW_PATH,
         webapp::project_participation::LawyerParticipationNew,
-        surreal.clone(),
+        application_store.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
@@ -1668,7 +1671,7 @@ pub fn lawyer_project_forms_router(
     .merge(csrf_page_router(
         LAWYER_PARTICIPATION_EDIT_PATH,
         webapp::project_participation::LawyerParticipationEdit,
-        surreal.clone(),
+        application_store.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
@@ -1676,7 +1679,7 @@ pub fn lawyer_project_forms_router(
     .merge(csrf_page_router(
         LAWYER_PROJECT_NOTATION_NEW_PATH,
         webapp::project_notation::LawyerProjectNotationNew,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -1690,7 +1693,7 @@ pub fn lawyer_project_forms_router(
 fn project_document_page_router<C, M>(
     path: &'static str,
     component: C,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -1699,7 +1702,7 @@ where
     C: dioxus_core::ComponentFunction<(), M> + Send + Sync + 'static,
     M: 'static,
 {
-    let project_visit_surreal = surreal.clone();
+    let project_visit_store = application_store.clone();
     // The page mints its viewer and Download links with this signer, and the
     // `…/download` handler verifies them with the same session-derived key.
     let link_signer = sessions.document_link_signer();
@@ -1707,7 +1710,7 @@ where
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
         Box::new(move || Box::new(link_signer.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
@@ -1721,7 +1724,7 @@ where
                 .layer(from_fn(inject_app_brand_mark))
                 .layer(from_fn(inject_person_id))
                 .layer(from_fn_with_state(
-                    project_visit_surreal,
+                    project_visit_store,
                     crate::project_visit::log_project_visit,
                 ))
                 .layer(from_fn(dioxus_document_head)),
@@ -1738,7 +1741,7 @@ where
 /// reach the firm view by rewriting a URL; they would have to change their tier,
 /// which is not something a request can assert.
 pub fn project_document_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -1746,7 +1749,7 @@ pub fn project_document_router(
     project_document_page_router(
         PROJECT_DOCUMENT_PATH,
         webapp::project_document_detail::ProjectDocument,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -1762,17 +1765,17 @@ pub const CONVERSATION_PATH: &str = "/app/projects/{project_code}/conversation";
 /// …/conversation/messages` handler stays on Axum because it already redirects
 /// for a native form using PRG.
 pub fn conversation_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let project_visit_surreal = surreal.clone();
+    let project_visit_store = application_store.clone();
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -1783,7 +1786,7 @@ pub fn conversation_router(
             .layer(from_fn(inject_person_id))
             .layer(from_fn(inject_csrf_token))
             .layer(from_fn_with_state(
-                project_visit_surreal.clone(),
+                project_visit_store.clone(),
                 crate::project_visit::log_project_visit,
             ))
             .layer(from_fn(dioxus_document_head))
@@ -1810,15 +1813,15 @@ pub const MATTER_PAGE_PATH: &str = "/app/projects/{project_code}/{page_slug}";
 /// `storage` is where Notation bodies live: `notation_document` reads the
 /// pinned body from it.
 pub fn matter_page_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     storage: std::sync::Arc<dyn cloud::StorageService>,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let project_visit_surreal = surreal.clone();
+    let project_visit_store = application_store.clone();
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
         Box::new(move || Box::new(storage.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
@@ -1834,7 +1837,7 @@ pub fn matter_page_router(
                 .layer(from_fn(inject_app_brand_mark))
                 .layer(from_fn(inject_person_id))
                 .layer(from_fn_with_state(
-                    project_visit_surreal,
+                    project_visit_store,
                     crate::project_visit::log_project_visit,
                 ))
                 .layer(from_fn(dioxus_document_head))
@@ -1881,7 +1884,9 @@ async fn inject_client_intake(
     let Some((project_code, notation_id)) = intake_ids_from_path(&req) else {
         return crate::intake::client_intake_not_found();
     };
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
+    let Some(project_id) =
+        store::projects::id_for_code(&state.application_store, &project_code).await
+    else {
         return crate::intake::client_intake_not_found();
     };
     let session = req
@@ -1945,13 +1950,13 @@ pub fn client_intake_router(
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let project_visit_surreal = state.surreal.clone();
-    let surreal = state.surreal.clone();
+    let project_visit_store = state.application_store.clone();
+    let application_store = state.application_store.clone();
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -1964,7 +1969,7 @@ pub fn client_intake_router(
                 .layer(from_fn(inject_csrf_token))
                 .layer(from_fn_with_state(state, inject_client_intake))
                 .layer(from_fn_with_state(
-                    project_visit_surreal,
+                    project_visit_store,
                     crate::project_visit::log_project_visit,
                 ))
                 .layer(from_fn(dioxus_document_head)),
@@ -2028,12 +2033,12 @@ pub fn clause_editor_router(
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let surreal = state.surreal.clone();
+    let application_store = state.application_store.clone();
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -2101,12 +2106,12 @@ pub fn walker_step_router(
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let surreal = state.surreal.clone();
+    let application_store = state.application_store.clone();
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -2175,12 +2180,12 @@ pub fn intake_review_router(
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let surreal = state.surreal.clone();
+    let application_store = state.application_store.clone();
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -2241,12 +2246,12 @@ pub fn reask_router(
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let surreal = state.surreal.clone();
+    let application_store = state.application_store.clone();
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -2336,17 +2341,17 @@ pub const REVIEW_PATH: &str = "/app/projects/{project_code}/review/{doc_id}";
 /// API), so it carries person-id scoping + the CSRF token on top of the auth +
 /// embedded Rego policy gate and nonce CSP.
 pub fn review_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let project_visit_surreal = surreal.clone();
+    let project_visit_store = application_store.clone();
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -2357,7 +2362,7 @@ pub fn review_router(
                 .layer(from_fn(inject_person_id))
                 .layer(from_fn(inject_csrf_token))
                 .layer(from_fn_with_state(
-                    project_visit_surreal,
+                    project_visit_store,
                     crate::project_visit::log_project_visit,
                 ))
                 .layer(from_fn(dioxus_document_head)),
@@ -2401,7 +2406,7 @@ async fn reject_unadvertised_entity_types_sort(request: Request, next: Next) -> 
 /// database handle is injected for the `list_entity_types` server function; the
 /// sort pre-handler enforces the 400 contract; the nonce CSP allows hydration.
 pub fn entity_types_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2410,7 +2415,7 @@ pub fn entity_types_router(
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -2464,7 +2469,7 @@ pub const FIRM_GRAPH_PATH: &str = "/app/lawyer/firms/{id}/graph";
 /// door), and the islands fetch only the already-gated `GET /app/api/graph/*`
 /// endpoints.
 pub fn graph_views_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2473,7 +2478,7 @@ pub fn graph_views_router(
     // reads the store (matter code → internal id, participation scope); the
     // lawyer and firm loaders run store-free.
     let context = std::sync::Arc::new(vec![Box::new(move || {
-        Box::new(surreal.clone()) as Box<dyn std::any::Any>
+        Box::new(application_store.clone()) as Box<dyn std::any::Any>
     })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]);
     // Each page renders through its own `FullstackState` (one component per
@@ -2534,7 +2539,7 @@ pub fn graph_views_router(
 /// extra [`inject_csrf_token`] layer on top of the usual auth + embedded Rego policy gate and
 /// nonce CSP.
 pub fn expunge_queue_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2543,7 +2548,7 @@ pub fn expunge_queue_router(
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -2584,7 +2589,7 @@ pub const LAWYER_CONTRACT_REVIEW_PATH: &str = "/app/lawyer/contract-reviews/{id}
 /// because the loader enforces the per-matter lawyer row scope
 /// (`can_see_project_as_lawyer`) that keeps an unrelated lawyer out.
 pub fn contract_review_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2593,7 +2598,7 @@ pub fn contract_review_router(
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -2624,14 +2629,14 @@ pub const LAWYER_CONTRACT_DOCUMENT_REVIEW_PATH: &str = "/app/lawyer/contract-rev
 
 /// The gated Dioxus document review screen for one inbound contract review.
 pub fn notation_document_review_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     storage: std::sync::Arc<dyn cloud::StorageService>,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
         Box::new(move || Box::new(storage.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
@@ -2689,7 +2694,7 @@ pub const LAWYER_RETAINER_NEW_PATH: &str = "/app/lawyer/retainers/new";
 pub fn csrf_page_router<C, M>(
     path: &'static str,
     component: C,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2698,7 +2703,16 @@ where
     C: dioxus_core::ComponentFunction<(), M> + Send + Sync + 'static,
     M: 'static,
 {
-    csrf_page_router_providing(path, component, &[], surreal, None, sessions, policy, auth)
+    csrf_page_router_providing(
+        path,
+        component,
+        &[],
+        application_store,
+        None,
+        sessions,
+        policy,
+        auth,
+    )
 }
 
 /// [`csrf_page_router`] that also mounts the page's own client-called
@@ -2709,7 +2723,7 @@ pub fn csrf_page_router_with_endpoints<C, M>(
     path: &'static str,
     component: C,
     endpoints: &'static [&'static str],
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2719,7 +2733,14 @@ where
     M: 'static,
 {
     csrf_page_router_providing(
-        path, component, endpoints, surreal, None, sessions, policy, auth,
+        path,
+        component,
+        endpoints,
+        application_store,
+        None,
+        sessions,
+        policy,
+        auth,
     )
 }
 
@@ -2729,7 +2750,7 @@ where
 pub fn csrf_page_router_with_storage<C, M>(
     path: &'static str,
     component: C,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     storage: std::sync::Arc<dyn cloud::StorageService>,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
@@ -2743,7 +2764,7 @@ where
         path,
         component,
         &[],
-        surreal,
+        application_store,
         Some(storage),
         sessions,
         policy,
@@ -2756,7 +2777,7 @@ fn csrf_page_router_providing<C, M>(
     path: &'static str,
     component: C,
     endpoints: &'static [&'static str],
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     storage: Option<std::sync::Arc<dyn cloud::StorageService>>,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
@@ -2766,14 +2787,14 @@ where
     C: dioxus_core::ComponentFunction<(), M> + Send + Sync + 'static,
     M: 'static,
 {
-    let project_visit_surreal = surreal.clone();
-    let endpoint_surreal = surreal.clone();
+    let project_visit_store = application_store.clone();
+    let endpoint_surreal = application_store.clone();
     // A server fn can only reach what this list provides — a route
     // that renders a person and forgets it 500s at `consume_context`,
     // not at build.
     let mut providers: Vec<Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>> =
         vec![Box::new(move || {
-            Box::new(surreal.clone()) as Box<dyn std::any::Any>
+            Box::new(application_store.clone()) as Box<dyn std::any::Any>
         })];
     if let Some(storage) = storage {
         providers.push(Box::new(move || {
@@ -2812,7 +2833,7 @@ where
                 .layer(from_fn(inject_person_id))
                 .layer(from_fn(inject_csrf_token))
                 .layer(from_fn_with_state(
-                    project_visit_surreal,
+                    project_visit_store,
                     crate::project_visit::log_project_visit,
                 ))
                 .layer(from_fn(dioxus_document_head)),
@@ -2839,7 +2860,7 @@ pub const ADMIN_LEAD_PATH: &str = webapp::admin_leads::LEAD_PATH;
 
 /// Gated Dioxus routers for the lead queue list and row.
 pub fn admin_leads_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2847,7 +2868,7 @@ pub fn admin_leads_router(
     csrf_page_router(
         ADMIN_LEADS_PATH,
         webapp::admin_leads::AdminLeads,
-        surreal.clone(),
+        application_store.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
@@ -2855,7 +2876,7 @@ pub fn admin_leads_router(
     .merge(csrf_page_router(
         ADMIN_LEAD_PATH,
         webapp::admin_leads::AdminLeadShow,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -2885,7 +2906,7 @@ pub const ADMIN_MATTER_DIRECTORY_SORT: &[&str] = webapp::matter_directory::MATTE
 /// CSRF token, keeping the value off the environment so tests set it on state.
 pub fn admin_person_show_router(
     bootstrap_owner_email: Option<String>,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2893,7 +2914,7 @@ pub fn admin_person_show_router(
     csrf_page_router(
         ADMIN_PERSON_PATH,
         webapp::person_show::AdminPersonShow,
-        surreal.clone(),
+        application_store.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
@@ -2901,7 +2922,7 @@ pub fn admin_person_show_router(
     .merge(csrf_page_router(
         ADMIN_PERSON_EDIT_PATH,
         webapp::person_show::AdminPersonShow,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -2944,7 +2965,7 @@ async fn reject_unadvertised_entity_list_sort(request: Request, next: Next) -> R
 /// pre-handler (the `400` contract) and the `inject_csrf_token` layer (for the
 /// delete forms), on top of the usual auth + embedded Rego policy gate and nonce CSP.
 pub fn entity_list_router(
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2953,7 +2974,7 @@ pub fn entity_list_router(
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -2988,7 +3009,7 @@ pub const ADMIN_PEOPLE_PATH: &str = "/app/admin/people";
 /// gate, and nonce CSP. It reuses [`reject_unadvertised_sort`] (name / email).
 pub fn admin_people_router(
     bootstrap_owner_email: Option<String>,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -2997,7 +3018,7 @@ pub fn admin_people_router(
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -3070,7 +3091,7 @@ pub const ADMIN_LANDING_PATH: &str = "/app/admin";
 pub fn admin_listing_router<C, M>(
     path: &'static str,
     component: C,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -3083,7 +3104,7 @@ where
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -3165,7 +3186,7 @@ pub fn sortable_admin_listing_router<C, M>(
     path: &'static str,
     component: C,
     allowed_sort: &'static [&'static str],
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
@@ -3178,7 +3199,7 @@ where
         // A server fn can only reach what this list provides — a route
         // that renders a person and forgets it 500s at `consume_context`,
         // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -3264,7 +3285,7 @@ async fn reject_unadvertised_design_sort(request: Request, next: Next) -> Respon
 /// render context through `ServeConfig::context_providers`, the same seam the
 /// lawyer pages use, so `webapp::blog_index::blog_index_view` reads them back.
 /// Public and Brand-scoped like the team routers.
-pub fn blog_index_router(db: store::surreal::SurrealDb) -> Router {
+pub fn blog_index_router(db: store::application_store::ApplicationStore) -> Router {
     Router::<FullstackState>::new()
         .route(
             BLOG_PATH,
@@ -3286,7 +3307,7 @@ pub fn blog_index_router(db: store::surreal::SurrealDb) -> Router {
 /// `webapp::blog_post::blog_post_view` extracts back. That pre-layer also owns
 /// the legacy underscore→hyphen redirect and the unknown-slug 404. Public and
 /// Brand-scoped.
-pub fn blog_post_router(db: store::surreal::SurrealDb) -> Router {
+pub fn blog_post_router(db: store::application_store::ApplicationStore) -> Router {
     Router::<FullstackState>::new()
         .route(
             BLOG_POST_PATH,
@@ -3306,7 +3327,7 @@ pub fn blog_post_router(db: store::surreal::SurrealDb) -> Router {
 /// canonical kebab-case URL, 404 an unknown slug, or inject the matched post for
 /// the render.
 async fn inject_blog_post(
-    axum::extract::State(db): axum::extract::State<store::surreal::SurrealDb>,
+    axum::extract::State(db): axum::extract::State<store::application_store::ApplicationStore>,
     mut req: Request,
     next: Next,
 ) -> Response {
@@ -3360,7 +3381,7 @@ async fn inject_blog_post(
 }
 
 async fn inject_brand_blog_index(
-    axum::extract::State(db): axum::extract::State<store::surreal::SurrealDb>,
+    axum::extract::State(db): axum::extract::State<store::application_store::ApplicationStore>,
     mut request: Request,
     next: Next,
 ) -> Response {
@@ -3642,10 +3663,10 @@ pub const FIRM_SERVICES_PATH: &str = "/services";
 pub fn catalog_index_router(
     path: &str,
     content: webapp::catalog_index::CatalogIndexContent,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
-        Box::new(surreal.clone()) as Box<dyn std::any::Any>
+        Box::new(application_store.clone()) as Box<dyn std::any::Any>
     })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
     Router::<FullstackState>::new()
@@ -4156,7 +4177,7 @@ pub const NOTATION_PREVIEW_PATH: &str = "/notations/{slug}";
 pub fn notation_preview_router(
     docs: Vec<webapp::notation_preview::PreviewDoc>,
     mode: webapp::notation_preview::NotationPreviewMode,
-    surreal: Option<store::surreal::SurrealDb>,
+    application_store: Option<store::application_store::ApplicationStore>,
 ) -> Router {
     let router = Router::<FullstackState>::new().route(
         NOTATION_PREVIEW_PATH,
@@ -4165,13 +4186,13 @@ pub fn notation_preview_router(
             .layer(from_fn(inject_public_utility))
             .layer(from_fn_with_state((docs, mode), inject_notation_preview)),
     );
-    let router = match surreal {
-        Some(surreal) => router.route(
+    let router = match application_store {
+        Some(application_store) => router.route(
             NOTATION_DRAFT_PATH,
             get(render_handler)
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility))
-                .layer(from_fn_with_state(surreal, inject_notation_draft)),
+                .layer(from_fn_with_state(application_store, inject_notation_draft)),
         ),
         None => router,
     };
@@ -4241,7 +4262,9 @@ pub const NOTATION_DRAFT_PATH: &str = "/notations/drafts/{id}";
 /// alike (an unknown id, an expired one, or a read failure); the page
 /// renders the same not-found body for all three.
 async fn inject_notation_draft(
-    axum::extract::State(surreal): axum::extract::State<store::surreal::SurrealDb>,
+    axum::extract::State(application_store): axum::extract::State<
+        store::application_store::ApplicationStore,
+    >,
     mut req: Request,
     next: Next,
 ) -> Response {
@@ -4252,7 +4275,7 @@ async fn inject_notation_draft(
         .next()
         .and_then(|segment| segment.parse::<uuid::Uuid>().ok());
     let draft = match id {
-        Some(id) => match store::notation_drafts::find_live(&surreal, id).await {
+        Some(id) => match store::notation_drafts::find_live(&application_store, id).await {
             Ok(Some(draft)) => Some(draft),
             Ok(None) => None,
             Err(e) => {
@@ -4801,10 +4824,10 @@ pub fn app_brands_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
-        Box::new(surreal.clone()) as Box<dyn std::any::Any>
+        Box::new(application_store.clone()) as Box<dyn std::any::Any>
     })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
     Router::<FullstackState>::new()
@@ -4832,10 +4855,10 @@ pub fn app_brands_edit_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
-        Box::new(surreal.clone()) as Box<dyn std::any::Any>
+        Box::new(application_store.clone()) as Box<dyn std::any::Any>
     })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
     Router::<FullstackState>::new()
@@ -4868,12 +4891,12 @@ pub fn app_brand_blog_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     csrf_page_router(
         APP_BRAND_BLOG_PATH,
         webapp::brand_blog_posts::BrandBlogCatalog,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -4884,12 +4907,12 @@ pub fn social_dashboard_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     csrf_page_router(
         "/app/social",
         webapp::brand_blog_posts::SocialDashboard,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -4900,12 +4923,12 @@ pub fn social_calendar_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     csrf_page_router(
         "/app/social/calendar",
         webapp::brand_blog_posts::SocialCalendar,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -4959,7 +4982,7 @@ pub fn app_brands_edit_post_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     Router::new()
         .route(
@@ -4978,7 +5001,7 @@ pub fn app_brands_edit_post_router(
             APP_BRAND_LETTERHEAD_PATH,
             axum::routing::post(crate::brand_edit::post_brand_letterhead),
         )
-        .with_state(surreal)
+        .with_state(application_store)
         .layer(from_fn_with_state(
             (sessions.clone(), crate::csrf::CsrfMode::Form),
             crate::csrf::require_csrf,
@@ -5040,10 +5063,10 @@ pub fn app_owner_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
-        Box::new(surreal.clone()) as Box<dyn std::any::Any>
+        Box::new(application_store.clone()) as Box<dyn std::any::Any>
     })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
     Router::<FullstackState>::new()
@@ -5076,12 +5099,12 @@ pub fn owner_inbox_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     csrf_page_router(
         webapp::communication_dashboard::PARKED_CALLS_PATH,
         webapp::communication_dashboard::Communications,
-        surreal.clone(),
+        application_store.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
@@ -5089,7 +5112,7 @@ pub fn owner_inbox_router(
     .merge(csrf_page_router(
         webapp::communication_dashboard::BRAND_COMMUNICATIONS_PATH,
         webapp::communication_dashboard::Communications,
-        surreal.clone(),
+        application_store.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
@@ -5099,7 +5122,7 @@ pub fn owner_inbox_router(
             webapp::inbox::INBOX_PATH,
             webapp::inbox::OwnerInbox,
             &[webapp::inbox::INBOX_PANE_ENDPOINT],
-            surreal.clone(),
+            application_store.clone(),
             sessions.clone(),
             policy.clone(),
             auth.clone(),
@@ -5107,7 +5130,7 @@ pub fn owner_inbox_router(
         .merge(csrf_page_router(
             OWNER_INBOX_PATH,
             webapp::inbox::OwnerInbox,
-            surreal,
+            application_store,
             sessions,
             policy,
             auth,
@@ -5122,12 +5145,12 @@ pub fn triage_queue_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     csrf_page_router(
         webapp::inbox_triage::TRIAGE_QUEUE_PATH,
         webapp::inbox_triage::TriageQueue,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -5139,12 +5162,12 @@ pub fn plan_intake_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     csrf_page_router(
         webapp::plan_intake::PLAN_INTAKE_PATH,
         webapp::plan_intake::PlanIntake,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -5156,12 +5179,12 @@ pub fn owner_inbox_thread_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     csrf_page_router(
         webapp::inbox::INBOX_THREAD_PATH,
         webapp::inbox::OwnerInboxThread,
-        surreal.clone(),
+        application_store.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
@@ -5169,7 +5192,7 @@ pub fn owner_inbox_thread_router(
     .merge(csrf_page_router(
         OWNER_INBOX_THREAD_PATH,
         webapp::inbox::OwnerInboxThread,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -5181,13 +5204,13 @@ pub fn project_inbox_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     csrf_page_router_with_endpoints(
         PROJECT_INBOX_PATH,
         webapp::inbox::ProjectInbox,
         &[webapp::inbox::PROJECT_INBOX_PANE_ENDPOINT],
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -5199,12 +5222,12 @@ pub fn project_inbox_thread_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     csrf_page_router(
         PROJECT_INBOX_THREAD_PATH,
         webapp::inbox::ProjectInboxThread,
-        surreal,
+        application_store,
         sessions,
         policy,
         auth,
@@ -5224,10 +5247,10 @@ pub fn app_profile_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
-        Box::new(surreal.clone()) as Box<dyn std::any::Any>
+        Box::new(application_store.clone()) as Box<dyn std::any::Any>
     })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
     Router::<FullstackState>::new()
@@ -5262,10 +5285,10 @@ pub fn firm_show_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 ) -> Router {
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
-        Box::new(surreal.clone()) as Box<dyn std::any::Any>
+        Box::new(application_store.clone()) as Box<dyn std::any::Any>
     })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
     Router::<FullstackState>::new()
@@ -5320,12 +5343,15 @@ async fn inject_glossary(mut req: Request, next: Next) -> Response {
 
 /// The public testimonials page. Its page shell is static, but its published
 /// rows are read from the store for the request's resolved house brand.
-pub fn testimonials_router(path: &str, surreal: store::surreal::SurrealDb) -> Router {
+pub fn testimonials_router(
+    path: &str,
+    application_store: store::application_store::ApplicationStore,
+) -> Router {
     let injected = webapp::testimonials_page::InjectedTestimonials::default();
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         Box::new(move || Box::new(injected.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -5399,7 +5425,7 @@ pub async fn guieb_shook_public_override(
 pub fn home_router(
     path: &str,
     content: webapp::home::HomeContent,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     lead_capture: Option<webapp::lead_capture::LeadCaptureCopy>,
     sessions: crate::SessionStore,
     secure_cookies: bool,
@@ -5412,7 +5438,7 @@ pub fn home_router(
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
         Box::new(move || Box::new(injected.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
+        Box::new(move || Box::new(application_store.clone()) as Box<dyn std::any::Any>)
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
@@ -5709,69 +5735,6 @@ mod tests {
                 "`{path}` still routes on a row id; the code is the matter's public name"
             );
         }
-    }
-
-    /// The matter show page is keyed by the Project **code**, always.
-    ///
-    /// The code is a matter's whole public identity: `/app/projects/{code}` is
-    /// its show page, and the same string names its shared-drive folder and its object-storage
-    /// prefix. So the internal row id must never surface in a URL — a link a
-    /// client is sent, bookmarks, and quotes back over email should name the
-    /// matter, not a row.
-    ///
-    /// What actually guarantees it is the *lookup*, not the shape of the
-    /// segment: a lowercase UUID is a perfectly well-formed code, so nothing
-    /// could refuse one on sight. Both directions go through the `code` column
-    /// and neither consults the id, which is the claim asserted below —
-    /// `project_show_path` writes a code into every link Navigator renders, and
-    /// `project_id_from_path` reads one back. A row id in that segment names no
-    /// Project.
-    #[tokio::test]
-    async fn the_matter_show_page_is_keyed_by_code_and_never_by_row_id() {
-        assert_eq!(PROJECT_DETAIL_PATH, "/app/projects/{project_code}");
-        let segments: Vec<&str> = PROJECT_DETAIL_PATH.split('/').skip(1).collect();
-        assert_eq!(
-            segments,
-            ["app", "projects", "{project_code}"],
-            "the show page is two literal segments and the code; a deeper path \
-             or a differently named parameter is a different page"
-        );
-
-        let surreal = store::test_support::mem_surreal().await;
-        let project = store::projects::create(
-            &surreal,
-            &store::projects::NewProject {
-                code: "libra-formation".into(),
-                name: "Libra formation".into(),
-                status: "open".into(),
-                entity_id: store::test_support::seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("a seeded Project");
-
-        // Out: every link Navigator renders spells the code.
-        assert_eq!(
-            project_show_path(&surreal, project.id).await,
-            "/app/projects/libra-formation",
-        );
-
-        // Back in: the code resolves and the row id does not.
-        assert_eq!(
-            project_id_from_path(&surreal, "/app/projects/libra-formation").await,
-            Some(project.id),
-        );
-        assert_eq!(
-            project_id_from_path(&surreal, &format!("/app/projects/{}", project.id)).await,
-            None,
-            "a row id in the show-page segment must name no Project"
-        );
-        // A built-in section's path names the same matter, never its segment.
-        assert_eq!(
-            project_id_from_path(&surreal, "/app/projects/libra-formation/testimonial").await,
-            Some(project.id),
-        );
     }
 
     fn guarded_router() -> Router {
@@ -6939,137 +6902,6 @@ mod tests {
         let html = String::from_utf8(bytes.to_vec()).unwrap();
         assert!(html.contains(r#"href="/team/nick""#), "{html}");
         assert!(html.contains("Nick Shook"), "{html}");
-    }
-
-    /// End-to-end through the real mount: `notation_preview_router`'s draft
-    /// route, `inject_notation_draft`'s awaited store lookup, and
-    /// `webapp::App`'s draft branch, together — the same router the `neon`
-    /// binary serves, not a hand-built stand-in. Exercises the two things a
-    /// props-driven page test cannot: the live `{id}` resolution and the
-    /// shared `FullstackState` actually carrying both mounts. The draft is
-    /// linked to the run its push opened (LAW-203), so the page renders the
-    /// hand-off to that run in place of the demo questionnaire.
-    #[tokio::test]
-    async fn the_draft_route_resolves_a_live_draft_through_the_shared_router() {
-        let surreal = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "draft-e2e").await;
-        let run_id = store::test_support::seed_notation(&surreal).await;
-        let draft = store::notation_drafts::create(
-            &surreal,
-            &store::notation_drafts::NewNotationDraft {
-                project_id,
-                slug: "sample-letter",
-                title: "Sample Letter",
-                source: "---\ntitle: Sample Letter\ncode: sample__letter\nquestionnaire:\n  \
-                    BEGIN:\n    _: custom_text__client_name\n  \
-                    custom_text__client_name:\n    _: END\n  END: \
-                    {}\nprompts:\n  client_name: What \
-                    is your name?\nworkflow:\n  BEGIN:\n    intake_submitted: \
-                    lawyer_review\n  lawyer_review:\n    approved: END\n  END: \
-                    {}\n---\n\n# Sample Letter\n\nBody prose.\n",
-                notation_id: Some(run_id),
-            },
-        )
-        .await
-        .expect("draft is stored");
-
-        let router = notation_preview_router(
-            Vec::new(),
-            webapp::notation_preview::NotationPreviewMode::Published,
-            Some(surreal),
-        );
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/notations/drafts/{}", draft.id))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), MAX_RENDER_BYTES)
-            .await
-            .unwrap();
-        let html = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(html.contains("Sample Letter"), "{html}");
-        assert!(html.contains("Draft"), "{html}");
-        let handoff_at = html
-            .find("Open the real questionnaire")
-            .expect("the hand-off renders: {html}");
-        let body_at = html
-            .find("Body prose")
-            .expect("the document body renders: {html}");
-        assert!(
-            handoff_at < body_at,
-            "the questionnaire hand-off must render before the body: {html}"
-        );
-        // The run the push opened is the only questionnaire (LAW-319).
-        assert!(!html.contains("Try answering this"), "{html}");
-        assert!(
-            html.contains(&format!("href=\"/app/lawyer/notations/{run_id}/step\"")),
-            "the hand-off links the run's step page: {html}"
-        );
-        assert!(html.contains("Draft — run open"), "{html}");
-        assert!(html.contains("Open the real questionnaire"), "{html}");
-    }
-
-    /// An unknown draft id 404-shapes to "not found" rather than 500ing or
-    /// falling through to the generic placeholder.
-    #[tokio::test]
-    async fn an_unknown_draft_id_renders_not_found() {
-        let surreal = store::surreal::test_support::mem().await;
-        let router = notation_preview_router(
-            Vec::new(),
-            webapp::notation_preview::NotationPreviewMode::Published,
-            Some(surreal),
-        );
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/notations/drafts/{}", uuid::Uuid::now_v7()))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), MAX_RENDER_BYTES)
-            .await
-            .unwrap();
-        let html = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(html.contains("Draft not found"), "{html}");
-    }
-
-    /// A path segment that isn't even a UUID is the same "not found" as a
-    /// well-formed but unknown one — `inject_notation_draft` never panics
-    /// or 500s on a malformed id, it just finds nothing to inject.
-    #[tokio::test]
-    async fn a_non_uuid_draft_segment_also_renders_not_found() {
-        let surreal = store::surreal::test_support::mem().await;
-        let router = notation_preview_router(
-            Vec::new(),
-            webapp::notation_preview::NotationPreviewMode::Published,
-            Some(surreal),
-        );
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .uri("/notations/drafts/not-a-uuid")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), MAX_RENDER_BYTES)
-            .await
-            .unwrap();
-        let html = String::from_utf8(bytes.to_vec()).unwrap();
-        assert!(html.contains("Draft not found"), "{html}");
     }
 
     fn projected(slug: &str, at: chrono::DateTime<chrono::Utc>) -> store::posts::Post {

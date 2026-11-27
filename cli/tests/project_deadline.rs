@@ -338,12 +338,13 @@ async fn cli_api_round_trip_cancels_refuses_replay_and_reopens_the_same_row() {
 #[allow(clippy::too_many_lines)]
 async fn deadline_lifecycle() {
     let pg = store::postgres::PostgresDb::application().await.unwrap();
-    let surreal = store::surreal::SurrealDb::uninitialized();
+    let application_store = store::application_store::ApplicationStore::uninitialized();
     let project =
-        store::test_support::seed_project_on_firm(&surreal, None, "Synthetic deadline").await;
+        store::test_support::seed_project_on_firm(&application_store, None, "Synthetic deadline")
+            .await;
     let project_id = project.id;
     let person = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role(
             "Synthetic Lawyer",
             "lawyer@example.com",
@@ -353,7 +354,7 @@ async fn deadline_lifecycle() {
     .await
     .unwrap();
     store::participation::add_participant(
-        &surreal,
+        &application_store,
         &store::participation::AddParticipantCommand {
             project_id,
             person_id: person.id,
@@ -363,10 +364,10 @@ async fn deadline_lifecycle() {
     )
     .await
     .unwrap();
-    let state = portal::test_support::app_state(surreal.clone()).await;
+    let state = portal::test_support::app_state(application_store.clone()).await;
     let app = portal::api::routes()
         .with_state(portal::api::ApiState {
-            surreal: state.surreal,
+            application_store: state.application_store,
             email: state.email,
             bootstrap_owner_email: state.bootstrap_owner_email,
             bootstrap_company: "Synthetic Firm".into(),
@@ -475,7 +476,7 @@ async fn deadline_lifecycle() {
         .failure()
         .stderr(predicates::str::contains("complete"));
     assert_eq!(
-        store::project_deadlines::list(&surreal, project_id)
+        store::project_deadlines::list(&application_store, project_id)
             .await
             .unwrap()
             .len(),

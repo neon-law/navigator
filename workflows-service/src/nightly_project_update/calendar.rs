@@ -2,14 +2,14 @@
 //! on-demand mirror and scheduled membership repair.
 
 use cloud::CalendarService;
-use store::{deadline_calendar, project_calendar, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, deadline_calendar, project_calendar};
 use uuid::Uuid;
 
 use super::TagOutcome;
 use crate::dbos_nightly_project_update::NightlyError;
 
 pub(crate) async fn reconcile(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     portal_origin: Option<&str>,
 ) -> Result<TagOutcome, NightlyError> {
@@ -18,7 +18,7 @@ pub(crate) async fn reconcile(
         .await
         .map_err(|_| failed("locking the Project"))?
         .ok_or_else(|| failed("locking the Project"))?;
-    let project = store::projects::find_by_id(surreal, project_id)
+    let project = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|_| failed("reading the Project"))?
         .ok_or_else(|| failed("reading the Project"))?;
@@ -37,7 +37,7 @@ pub(crate) async fn reconcile(
     let calendar = cloud::GoogleCalendar::for_owner(&owner)
         .await
         .map_err(|_| failed("opening the Firm calendar"))?;
-    let ensured = project_calendar::ensure(surreal, project_id, &calendar)
+    let ensured = project_calendar::ensure(application_store, project_id, &calendar)
         .await
         .map_err(|_| failed("provisioning the calendar"))?;
     match ensured.outcome {
@@ -49,7 +49,7 @@ pub(crate) async fn reconcile(
         }
         _ => {}
     }
-    let calendar_id = store::projects::find_by_id(surreal, project_id)
+    let calendar_id = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|_| failed("reading the recorded calendar"))?
         .and_then(|project| project.calendar_id)
@@ -65,16 +65,22 @@ pub(crate) async fn reconcile(
         .verify_private_acl(&calendar_id)
         .await
         .map_err(|_| failed("checking calendar privacy"))?;
-    let mirror = deadline_calendar::reconcile(surreal, &calendar, project_id, portal_origin, false)
-        .await
-        .map_err(|_| failed("mirroring Deadlines"))?;
+    let mirror = deadline_calendar::reconcile(
+        application_store,
+        &calendar,
+        project_id,
+        portal_origin,
+        false,
+    )
+    .await
+    .map_err(|_| failed("mirroring Deadlines"))?;
     if mirror.outcome == deadline_calendar::MirrorOutcome::SkippedClosed {
         return Ok(TagOutcome::Calendar { synced: false });
     }
     if mirror.outcome != deadline_calendar::MirrorOutcome::Mirrored {
         return Err(failed("locating the recorded calendar"));
     }
-    project_calendar::sync_membership(surreal, project_id, &calendar)
+    project_calendar::sync_membership(application_store, project_id, &calendar)
         .await
         .map_err(|_| failed("verifying calendar membership"))?;
     if !mirror.failures.is_empty() {

@@ -252,14 +252,14 @@ pub fn sweep(person: Option<&str>, dry_run: bool) -> Result<()> {
                 cloud::forgejo_user_keys::NAVIGATOR_FORGEJO_KEY_SYNC_TOKEN_ENV,
             )
         })?;
-        let surreal = crate::application_store()
+        let application_store = crate::application_store()
             .await
             .map_err(|error| anyhow!("postgres: {error}"))?;
         let pg = store::postgres::PostgresDb::from_env()
             .await
             .map_err(|error| anyhow!("{error}"))?;
         let people = match person {
-            Some(spec) => vec![resolve_person(&surreal, spec).await?],
+            Some(spec) => vec![resolve_person(&application_store, spec).await?],
             None => keys::person_ids_with_keys(&pg)
                 .await
                 .map_err(|error| anyhow!("{error}"))?,
@@ -267,7 +267,7 @@ pub fn sweep(person: Option<&str>, dry_run: bool) -> Result<()> {
         let mut drifted = 0usize;
         let mut failed = 0usize;
         for person_id in &people {
-            match keys::sync_person(&surreal, &pg, Some(&client), *person_id, dry_run).await {
+            match keys::sync_person(&application_store, &pg, Some(&client), *person_id, dry_run).await {
                 Ok(SyncOutcome::Synced(report)) => {
                     let verb = if dry_run { "would add" } else { "added" };
                     println!(
@@ -305,11 +305,14 @@ pub fn sweep(person: Option<&str>, dry_run: bool) -> Result<()> {
     })
 }
 
-async fn resolve_person(surreal: &store::surreal::SurrealDb, spec: &str) -> Result<uuid::Uuid> {
+async fn resolve_person(
+    application_store: &store::application_store::ApplicationStore,
+    spec: &str,
+) -> Result<uuid::Uuid> {
     if let Ok(id) = spec.parse::<uuid::Uuid>() {
         return Ok(id);
     }
-    store::persons::find_by_any_email(surreal, spec)
+    store::persons::find_by_any_email(application_store, spec)
         .await
         .map_err(|error| anyhow!("{error}"))?
         .map(|person| person.id)

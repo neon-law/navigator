@@ -398,14 +398,20 @@ pub trait DigestSource: Send + Sync {
 /// assumptions, SurrealDB for the Firm list, the authored financial and
 /// trust lanes, and the Owner lookup.
 pub struct StoreDigestSource {
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     pg: store::postgres::PostgresDb,
 }
 
 impl StoreDigestSource {
     #[must_use]
-    pub fn new(surreal: store::surreal::SurrealDb, pg: store::postgres::PostgresDb) -> Self {
-        Self { surreal, pg }
+    pub fn new(
+        application_store: store::application_store::ApplicationStore,
+        pg: store::postgres::PostgresDb,
+    ) -> Self {
+        Self {
+            application_store,
+            pg,
+        }
     }
 
     fn failed(what: &'static str) -> DigestError {
@@ -417,7 +423,7 @@ impl StoreDigestSource {
 #[async_trait::async_trait]
 impl DigestSource for StoreDigestSource {
     async fn firms(&self) -> Result<Vec<FirmRef>, DigestError> {
-        Ok(store::firms::all(&self.surreal)
+        Ok(store::firms::all(&self.application_store)
             .await
             .map_err(|error| Self::failed_firm(&error))?
             .into_iter()
@@ -445,9 +451,9 @@ impl DigestSource for StoreDigestSource {
             ))
             .ok_or(DigestError::Source)?;
         let pg = &self.pg;
-        let surreal = &self.surreal;
+        let application_store = &self.application_store;
 
-        let firm_name = store::firms::all(surreal)
+        let firm_name = store::firms::all(application_store)
             .await
             .map_err(|error| Self::failed_firm(&error))?
             .into_iter()
@@ -458,12 +464,13 @@ impl DigestSource for StoreDigestSource {
         let open_matters = rollups::open_matters_by_line(pg, firm_id)
             .await
             .map_err(|_| Self::failed("open matters"))?;
-        let money = rollups::line_money(pg, surreal, firm_id)
+        let money = rollups::line_money(pg, application_store, firm_id)
             .await
             .map_err(|_| Self::failed("line money"))?;
-        let deadlines = rollups::deadlines(pg, surreal, firm_id, now, DEADLINE_HORIZON_DAYS)
-            .await
-            .map_err(|_| Self::failed("deadlines"))?;
+        let deadlines =
+            rollups::deadlines(pg, application_store, firm_id, now, DEADLINE_HORIZON_DAYS)
+                .await
+                .map_err(|_| Self::failed("deadlines"))?;
         let needs_you = rollups::needs_you(pg, firm_id, now)
             .await
             .map_err(|_| Self::failed("needs-you"))?;
@@ -471,7 +478,7 @@ impl DigestSource for StoreDigestSource {
             rollups::minutes_by_attorney_and_stage(pg, firm_id, minutes_from, now.date_naive())
                 .await
                 .map_err(|_| Self::failed("minutes"))?;
-        let last_activity = rollups::last_activity(pg, surreal, firm_id)
+        let last_activity = rollups::last_activity(pg, application_store, firm_id)
             .await
             .map_err(|_| Self::failed("last activity"))?;
         let economics = store::plan_metrics::margin_by_matter_type(
@@ -515,9 +522,10 @@ impl DigestSource for StoreDigestSource {
 
     async fn owners(&self, firm_id: Uuid) -> Result<Vec<OwnerContact>, DigestError> {
         use store::persons::Role;
-        let owners = store::persons::find_by_role_and_firm(&self.surreal, Role::Owner, firm_id)
-            .await
-            .map_err(|error| Self::failed_person(&error))?;
+        let owners =
+            store::persons::find_by_role_and_firm(&self.application_store, Role::Owner, firm_id)
+                .await
+                .map_err(|error| Self::failed_person(&error))?;
         Ok(owners
             .into_iter()
             .map(|person| OwnerContact {

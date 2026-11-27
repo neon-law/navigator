@@ -73,7 +73,7 @@ async fn try_send_confirm(
     }
     let now = Utc::now();
     if store::email_tokens::has_live_token_since(
-        &s.surreal,
+        &s.application_store,
         person_id,
         PURPOSE_EMAIL_CONFIRM,
         now - Duration::seconds(THROTTLE_SECS),
@@ -86,7 +86,7 @@ async fn try_send_confirm(
 
     let plaintext = random_token_32();
     store::email_tokens::mint(
-        &s.surreal,
+        &s.application_store,
         person_id,
         email,
         PURPOSE_EMAIL_CONFIRM,
@@ -134,20 +134,25 @@ struct TokenQuery {
 /// Identity Platform, spend the token, and send the user to sign in.
 async fn confirm(State(s): State<AuthState>, Query(q): Query<TokenQuery>) -> Response {
     let now = Utc::now();
-    let token_row =
-        match store::email_tokens::validate(&s.surreal, &q.token, PURPOSE_EMAIL_CONFIRM, now).await
-        {
-            Ok(Some(row)) => row,
-            Ok(None) => return webapp::auth_pages::invalid_link().into_response(),
-            Err(e) => {
-                tracing::warn!(error = %e, "email-confirm: validate failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    webapp::error_pages::server_error(),
-                )
-                    .into_response();
-            }
-        };
+    let token_row = match store::email_tokens::validate(
+        &s.application_store,
+        &q.token,
+        PURPOSE_EMAIL_CONFIRM,
+        now,
+    )
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return webapp::auth_pages::invalid_link().into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "email-confirm: validate failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response();
+        }
+    };
 
     let Some(admin) = s.identity_admin.as_ref() else {
         tracing::warn!("email-confirm: no admin config; cannot mark verified");
@@ -181,12 +186,13 @@ async fn confirm(State(s): State<AuthState>, Query(q): Query<TokenQuery>) -> Res
 
     // Best-effort, same as the OIDC callback's own write: a failure here
     // must not block the confirmation the person just completed.
-    if let Err(e) = store::persons::set_email_confirmed(&s.surreal, token_row.person_id, true).await
+    if let Err(e) =
+        store::persons::set_email_confirmed(&s.application_store, token_row.person_id, true).await
     {
         tracing::warn!(error = %e, person_id = %token_row.person_id, "email-confirm: set_email_confirmed failed");
     }
 
-    if let Err(e) = store::email_tokens::consume(&s.surreal, token_row.id, now).await {
+    if let Err(e) = store::email_tokens::consume(&s.application_store, token_row.id, now).await {
         tracing::warn!(error = %e, "email-confirm: token consume failed (email was verified)");
     }
     tracing::info!(person_id = %token_row.person_id, "email-confirm: email verified");
@@ -214,7 +220,7 @@ async fn resend(
     cookies.add(expired_cookie(ACCOUNT_CSRF_COOKIE_NAME));
 
     let email = form.email.trim();
-    match crate::password_reset::find_person_by_email(&s.surreal, email).await {
+    match crate::password_reset::find_person_by_email(&s.application_store, email).await {
         Ok(Some(person)) => {
             if let Err(e) = try_send_confirm(&s, person.id, &person.name, &person.email).await {
                 tracing::warn!(error = %e, "email-confirm: resend failed");

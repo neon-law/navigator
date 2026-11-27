@@ -385,13 +385,13 @@ pub struct LawyerDetailView {
 /// the whole side: the other names are still the answer to "who is accountable".
 #[cfg(feature = "server")]
 async fn dri_names(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_ids: &[uuid::Uuid],
 ) -> Result<Vec<String>, ServerFnError> {
     if person_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut names: Vec<String> = store::persons::find_by_ids(surreal, person_ids)
+    let mut names: Vec<String> = store::persons::find_by_ids(application_store, person_ids)
         .await
         .map_err(server_error)?
         .into_iter()
@@ -404,7 +404,7 @@ async fn dri_names(
 /// Resolve the browser link and activity for the same Project source.
 #[cfg(feature = "server")]
 async fn project_source(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project: &store::projects::Project,
 ) -> (Option<String>, Option<String>) {
     use cloud::forge::ForgeService;
@@ -420,7 +420,7 @@ async fn project_source(
         std::env::var(NAVIGATOR_FORGEJO_ROOT_URL_ENV),
         project.firm_id,
     ) {
-        (Ok(root), Some(firm_id)) => store::firms::find_by_id(surreal, firm_id)
+        (Ok(root), Some(firm_id)) => store::firms::find_by_id(application_store, firm_id)
             .await
             .ok()
             .flatten()
@@ -430,7 +430,7 @@ async fn project_source(
     if let Some(url) = forgejo_url {
         let kms = cloud::runtime_kms_from_env().await;
         let activity = match store::project_surfaces::forgejo_for_project(
-            surreal,
+            application_store,
             project.id,
             kms.as_ref(),
             |key| std::env::var(key).ok(),
@@ -543,9 +543,9 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         ViewerRole::Client => store::persons::Role::Client,
     };
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let storage = consume_context::<std::sync::Arc<dyn cloud::StorageService>>();
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .map_err(server_error)?
     else {
@@ -559,30 +559,31 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // `store::projects` predicate still carries the privileged short-circuit
     // its own remaining callers depend on, and reaching for it here is what
     // silently handed the workbench to an unassigned Owner.
-    let viewer = store::access::matter_viewer(&surreal, person_id, store_role, id)
+    let viewer = store::access::matter_viewer(&application_store, person_id, store_role, id)
         .await
         .map_err(server_error)?;
     let Some(viewer) = viewer else {
         return Ok(not_found(id, role, logo, csrf_token));
     };
-    let entity = store::entities::find_by_id(&surreal, project.entity_id)
+    let entity = store::entities::find_by_id(&application_store, project.entity_id)
         .await
         .map_err(server_error)?;
     let entity_name = entity.map(|entity| entity.name);
-    let (repository_url, last_committed_at) = project_source(&surreal, &project).await;
-    let onboarding_status = store::projects::onboarding_status(&surreal, id, &project.code)
+    let (repository_url, last_committed_at) = project_source(&application_store, &project).await;
+    let onboarding_status =
+        store::projects::onboarding_status(&application_store, id, &project.code)
+            .await
+            .map_err(server_error)?;
+    let onboarding_runs = crate::sections::engagement::onboarding_runs(&application_store, id)
         .await
         .map_err(server_error)?;
-    let onboarding_runs = crate::sections::engagement::onboarding_runs(&surreal, id)
-        .await
-        .map_err(server_error)?;
-    let onboarding_files = store::assets::for_project(&surreal, id)
+    let onboarding_files = store::assets::for_project(&application_store, id)
         .await
         .map_err(server_error)?;
     let onboarding_notation_ids: Vec<_> =
         onboarding_runs.iter().map(|run| run.notation_id).collect();
     let completed_signatures =
-        store::signatures::completed_for_notations(&surreal, &onboarding_notation_ids)
+        store::signatures::completed_for_notations(&application_store, &onboarding_notation_ids)
             .await
             .map_err(|error| server_error(error.to_string()))?
             .into_iter()
@@ -605,7 +606,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         onboarding_status == store::projects::OnboardingStatus::Official,
     );
     let (has_engagement, has_closing) =
-        store::projects::matter_lifecycle_sets(&surreal, std::slice::from_ref(&project))
+        store::projects::matter_lifecycle_sets(&application_store, std::slice::from_ref(&project))
             .await
             .map_err(server_error)?;
     let (_, missing_offboarding_letter) = store::projects::matter_flags(
@@ -615,12 +616,12 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     );
 
     let trust = if active_tab == MatterTab::Billing {
-        let position = store::trust::position_for_project(&surreal, id)
+        let position = store::trust::position_for_project(&application_store, id)
             .await
             .map_err(server_error)?;
         crate::portal_project_detail::trust_view(
             &position,
-            &store::iolta_withdrawals::for_project(&surreal, id)
+            &store::iolta_withdrawals::for_project(&application_store, id)
                 .await
                 .map_err(server_error)?,
         )
@@ -638,7 +639,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let pg = dashboard_postgres().await.map_err(server_error)?;
     let financials = match pg.as_ref().filter(|_| active_tab == MatterTab::Overview) {
         Some(pg) => Some(
-            store::matter_financials::for_project(&surreal, pg, id)
+            store::matter_financials::for_project(&application_store, pg, id)
                 .await
                 .map_err(server_error)?,
         ),
@@ -657,7 +658,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // same absence rule as the financial projections; a read failure inside a
     // configured deployment is a 500.
     let tasks = match pg.as_ref() {
-        Some(pg) => crate::project_tasks::read_rows(&surreal, pg, id).await?,
+        Some(pg) => crate::project_tasks::read_rows(&application_store, pg, id).await?,
         None => Vec::new(),
     };
 
@@ -677,7 +678,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // PostgreSQL renders the workbench without a stage; a read failure
     // inside a configured deployment is a 500.
     let stage = match pg.as_ref().filter(|_| active_tab == MatterTab::Overview) {
-        Some(pg) => crate::project_stages::read_stage(&surreal, pg, &project).await?,
+        Some(pg) => crate::project_stages::read_stage(&application_store, pg, &project).await?,
         None => MatterStageView::default(),
     };
 
@@ -691,7 +692,8 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         match (active_tab, pg.as_ref()) {
             (MatterTab::Billing, Some(pg)) => {
                 let reads =
-                    crate::project_billing::read_billing(&surreal, pg, id, person_id).await?;
+                    crate::project_billing::read_billing(&application_store, pg, id, person_id)
+                        .await?;
                 (
                     reads.annotations,
                     reads.entry_rows,
@@ -708,7 +710,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                 // workbench keeps showing them (and their payment state) even in
                 // a deployment that has not configured the time and expense
                 // store. Only the PostgreSQL-only reads degrade to empty.
-                crate::project_billing::mirrored_invoice_rows(&surreal, id).await?,
+                crate::project_billing::mirrored_invoice_rows(&application_store, id).await?,
                 Vec::new(),
             ),
             _ => Default::default(),
@@ -716,7 +718,12 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let billing_claims = match pg.as_ref().filter(|_| active_tab == MatterTab::Billing) {
         Some(pg) => {
             crate::project_billing::read_claims(
-                &surreal, pg, &project, viewer, store_role, person_id,
+                &application_store,
+                pg,
+                &project,
+                viewer,
+                store_role,
+                person_id,
             )
             .await?
         }
@@ -724,19 +731,19 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     };
     let running_timer = match (pg.as_ref(), person_id) {
         (Some(pg), Some(person_id)) => {
-            crate::project_billing::read_timer(&surreal, pg, person_id, id).await?
+            crate::project_billing::read_timer(&application_store, pg, person_id, id).await?
         }
         _ => None,
     };
     let invoice_generate = match pg.as_ref().filter(|_| active_tab == MatterTab::Billing) {
-        Some(pg) => crate::project_billing::read_generate(&surreal, pg, &project).await?,
+        Some(pg) => crate::project_billing::read_generate(&application_store, pg, &project).await?,
         None => GenerateInvoiceView::default(),
     };
     let today = chrono::Utc::now().date_naive().to_string();
 
     // The two DRIs — a read failure is a 500, never a silently-blank DRI on an
     // accountability surface.
-    let participation_rows = store::projects::participations_for_project(&surreal, id)
+    let participation_rows = store::projects::participations_for_project(&application_store, id)
         .await
         .map_err(server_error)?;
     // Who a task on this matter can name as assignee: the matter's own
@@ -746,7 +753,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let task_assignees = {
         let person_ids: Vec<uuid::Uuid> =
             participation_rows.iter().map(|row| row.person_id).collect();
-        let mut people = store::persons::find_by_ids(&surreal, &person_ids)
+        let mut people = store::persons::find_by_ids(&application_store, &person_ids)
             .await
             .map_err(server_error)?;
         people.sort_by(|a, b| a.name.cmp(&b.name));
@@ -769,28 +776,32 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // than from their tier: a lawyer who is not a DRI on this matter does not
     // govern its lawyer side.
     let viewer_is_lawyer_dri = person_id.is_some_and(|me| lawyer_dri_ids.contains(&me));
-    let lawyer_dris = dri_names(&surreal, &lawyer_dri_ids).await?;
-    let client_dris = dri_names(&surreal, &client_dri_ids).await?;
+    let lawyer_dris = dri_names(&application_store, &lawyer_dri_ids).await?;
+    let client_dris = dri_names(&application_store, &client_dri_ids).await?;
     let testimonial = if role.is_admin_tier() {
         match client_dri_ids.first().copied() {
-            Some(client_id) => store::testimonials::for_person_project(&surreal, client_id, id)
-                .await
-                .map_err(server_error)?
-                .map(|testimonial| AdminTestimonialView {
-                    quote: testimonial.quote,
-                    attribution: testimonial.attribution_label.unwrap_or_default(),
-                    public_requested: testimonial.consented_at.is_some(),
-                    published: testimonial.consented_at.is_some()
-                        && testimonial.published_at.is_some(),
-                }),
+            Some(client_id) => {
+                store::testimonials::for_person_project(&application_store, client_id, id)
+                    .await
+                    .map_err(server_error)?
+                    .map(|testimonial| AdminTestimonialView {
+                        quote: testimonial.quote,
+                        attribution: testimonial.attribution_label.unwrap_or_default(),
+                        public_requested: testimonial.consented_at.is_some(),
+                        published: testimonial.consented_at.is_some()
+                            && testimonial.published_at.is_some(),
+                    })
+            }
             None => None,
         }
     } else {
         None
     };
 
-    let service_lines = service_lines(&surreal, id).await.map_err(server_error)?;
-    let documents = store::assets::grouped_for_project(&surreal, id)
+    let service_lines = service_lines(&application_store, id)
+        .await
+        .map_err(server_error)?;
+    let documents = store::assets::grouped_for_project(&application_store, id)
         .await
         .map_err(server_error)?
         .into_iter()
@@ -852,7 +863,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         None => Vec::new(),
     };
     let notations = if active_tab == MatterTab::Documents {
-        project_notation_board(&surreal, &storage, id)
+        project_notation_board(&application_store, &storage, id)
             .await
             .map_err(server_error)?
     } else {
@@ -863,7 +874,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // query so the system tier is visible without conflating it with
     // participation.
     let people = store::persons::find_by_ids(
-        &surreal,
+        &application_store,
         &participation_rows
             .iter()
             .map(|r| r.person_id)
@@ -875,10 +886,10 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
 
     // The matter timeline: every docket entry joined with every open
     // deadline, in date order, through the calendar the page already carries.
-    let stored_deadlines = store::project_deadlines::list(&surreal, id)
+    let stored_deadlines = store::project_deadlines::list(&application_store, id)
         .await
         .map_err(server_error)?;
-    let docket = store::cases::docket_for_project(&surreal, id)
+    let docket = store::cases::docket_for_project(&application_store, id)
         .await
         .map_err(server_error)?;
     let calendar_events = crate::project_timeline::timeline_events(
@@ -895,7 +906,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // firm-visible thread once; the projection splits notes from
     // correspondence so the render never matches channel discriminators.
     let (notes, correspondence) = if active_tab == MatterTab::Communications {
-        let thread = store::communications::for_project(&surreal, id)
+        let thread = store::communications::for_project(&application_store, id)
             .await
             .map_err(server_error)?;
         let author_ids: Vec<uuid::Uuid> = thread
@@ -903,7 +914,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
             .filter_map(|row| row.author_person_id)
             .collect();
         let authors: std::collections::HashMap<uuid::Uuid, String> =
-            store::persons::find_by_ids(&surreal, &author_ids)
+            store::persons::find_by_ids(&application_store, &author_ids)
                 .await
                 .map_err(server_error)?
                 .into_iter()
@@ -918,15 +929,17 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // this matter, a read-only count over the Inbox's own read-state. The
     // reader's participation is already resolved by the `matter_viewer` seam
     // above.
-    let unread_inbox = store::inbox::unread_count_for_project(&surreal, id)
+    let unread_inbox = store::inbox::unread_count_for_project(&application_store, id)
         .await
         .map_err(server_error)?;
 
     let code_for_resources = project.code.clone();
     let page_tabs =
-        crate::sections::page::stored_page_tabs(&surreal, id, &project.code, viewer).await;
+        crate::sections::page::stored_page_tabs(&application_store, id, &project.code, viewer)
+            .await;
     let (verified_drive_root, verified_submissions) =
-        crate::project_resources::verified_drive_links(&surreal, person_id, role, id).await;
+        crate::project_resources::verified_drive_links(&application_store, person_id, role, id)
+            .await;
     let integrations = crate::project_resources::firm_integrations(project.firm_id).await;
 
     Ok(LawyerDetailView {

@@ -101,7 +101,7 @@ struct Args {
 }
 
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&std::sync::Arc<dyn cloud::StorageService>>,
     principal: Option<&Principal>,
@@ -116,14 +116,14 @@ pub async fn call(
         ));
     }
 
-    let project = store::projects::find_by_id(surreal, args.project_id)
+    let project = store::projects::find_by_id(application_store, args.project_id)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?
         .ok_or_else(|| ToolError::NotFound(format!("project_id={}", args.project_id)))?;
     if let Some(principal) = principal {
-        let actor = resolve_person(surreal, &principal.email).await?;
-        if !store::projects::can_access_as_lawyer_in_surreal(
-            surreal,
+        let actor = resolve_person(application_store, &principal.email).await?;
+        if !store::projects::can_access_as_lawyer(
+            application_store,
             Some(actor.id),
             actor.role,
             project.id,
@@ -147,12 +147,13 @@ pub async fn call(
     // row the scan returned first: an arbitrary pick would send the same
     // questionnaire to a different client contact on different days. Letting the
     // caller name a respondent among them is a separate decision.
-    let mut client_dris: Vec<_> = store::projects::participations_for_project(surreal, project.id)
-        .await
-        .map_err(|error| ToolError::Database(error.to_string()))?
-        .into_iter()
-        .filter(|row| row.is_client_dri)
-        .collect();
+    let mut client_dris: Vec<_> =
+        store::projects::participations_for_project(application_store, project.id)
+            .await
+            .map_err(|error| ToolError::Database(error.to_string()))?
+            .into_iter()
+            .filter(|row| row.is_client_dri)
+            .collect();
     client_dris.sort_by(|a, b| {
         a.inserted_at
             .cmp(&b.inserted_at)
@@ -166,7 +167,7 @@ pub async fn call(
         })?;
 
     let outcome = notation_session::start_notation(
-        surreal,
+        application_store,
         runtime,
         storage,
         template_code,
@@ -212,10 +213,10 @@ pub async fn call(
 
 /// Look up the unique person matching `email` case-insensitively.
 async fn resolve_person(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     email: &str,
 ) -> Result<store::persons::Person, ToolError> {
-    store::persons::find_by_email_ci(surreal, email)
+    store::persons::find_by_email_ci(application_store, email)
         .await?
         .ok_or_else(|| ToolError::NotFound(format!("person with email `{email}`")))
 }
@@ -309,9 +310,12 @@ mod tests {
     /// it is what resolves with no project repo and no stored body. `kind`
     /// is the axis under test: a matter's first notation may declare any
     /// kind, so a caller passing `filing` here is asserting exactly that.
-    async fn seed_template(surreal: &store::surreal::SurrealDb, kind: &str) {
+    async fn seed_template(
+        application_store: &store::application_store::ApplicationStore,
+        kind: &str,
+    ) {
         store::templates::save_version(
-            surreal,
+            application_store,
             None,
             "onboarding__letter",
             store::templates::Version {
@@ -327,31 +331,31 @@ mod tests {
         .unwrap();
         // The retainer's leading entity / principal-office questions.
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("entity", "Which entity?", "entity"),
         )
         .await
         .unwrap();
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("address", "What is the address?", "address"),
         )
         .await
         .unwrap();
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("person", "Who is the person?", "person"),
         )
         .await
         .unwrap();
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("project", "What is the project?", "project"),
         )
         .await
         .unwrap();
         store::questions::create(
-            surreal,
+            application_store,
             &store::questions::NewQuestion::new("custom_text", "Prompt for custom text", "string"),
         )
         .await
@@ -362,9 +366,9 @@ mod tests {
     /// outright (`store::projects::can_access_as_lawyer`), so this is only
     /// for the bypass test — a scope test seeded with an admin can never
     /// observe a refusal.
-    async fn seed_admin(surreal: &store::surreal::SurrealDb) -> Uuid {
+    async fn seed_admin(application_store: &store::application_store::ApplicationStore) -> Uuid {
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Firm Principal",
                 "principal@example.com",
@@ -379,9 +383,12 @@ mod tests {
     /// Seed a `Role::Lawyer` person — the tier project scoping actually
     /// constrains. Lawyer reach a matter only through a firm-side participation
     /// row; the `lawyer_dri` participation names the accountable lawyer.
-    async fn seed_lawyer(surreal: &store::surreal::SurrealDb, email: &str) -> Uuid {
+    async fn seed_lawyer(
+        application_store: &store::application_store::ApplicationStore,
+        email: &str,
+    ) -> Uuid {
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(email, email, store::persons::Role::Lawyer),
         )
         .await
@@ -389,9 +396,12 @@ mod tests {
         .id
     }
 
-    async fn seed_person(surreal: &store::surreal::SurrealDb, email: &str) -> Uuid {
+    async fn seed_person(
+        application_store: &store::application_store::ApplicationStore,
+        email: &str,
+    ) -> Uuid {
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(email, email, store::persons::Role::Client),
         )
         .await
@@ -400,25 +410,25 @@ mod tests {
     }
 
     async fn seed_project(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         client_dri: Uuid,
         lawyer_dri: Option<Uuid>,
     ) -> Uuid {
-        crate::test_fixtures::seed_brands(surreal).await;
+        crate::test_fixtures::seed_brands(application_store).await;
         let project = store::projects::create(
-            surreal,
+            application_store,
             &store::projects::NewProject {
                 code: format!("notation-matter-{}", Uuid::now_v7()),
                 name: "Matter".into(),
                 status: "open".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: store::test_support::seed_entity(application_store).await,
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        store::projects::designate_dri_in_surreal(
-            surreal,
+        store::projects::designate_dri(
+            application_store,
             project.id,
             client_dri,
             store::projects::DriSide::Client,
@@ -426,18 +436,18 @@ mod tests {
         .await
         .unwrap();
         if let Some(lawyer_dri) = lawyer_dri {
-            link_lawyer_dri(surreal, lawyer_dri, project.id).await;
+            link_lawyer_dri(application_store, lawyer_dri, project.id).await;
         }
         project.id
     }
 
     async fn link_lawyer_dri(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         person_id: Uuid,
         project_id: Uuid,
     ) {
-        store::projects::designate_dri_in_surreal(
-            surreal,
+        store::projects::designate_dri(
+            application_store,
             project_id,
             person_id,
             store::projects::DriSide::Lawyer,
@@ -481,15 +491,15 @@ mod tests {
     async fn creates_a_notation_on_an_explicit_project() {
         store::test_support::with_postgres(async {
             // The lawyer names the matter; Navigator MCP opens no Project of its own.
-            let surreal = crate::test_fixtures::handle();
-            seed_template(&surreal, "onboarding").await;
-            let client = seed_person(&surreal, "libra@example.com").await;
-            let project_id = seed_project(&surreal, client, None).await;
+            let application_store = crate::test_fixtures::handle();
+            seed_template(&application_store, "onboarding").await;
+            let client = seed_person(&application_store, "libra@example.com").await;
+            let project_id = seed_project(&application_store, client, None).await;
             let runtime = InMemoryRuntime::new();
             let storage = storage().await;
 
             let out = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 Some(&storage),
                 None,
@@ -515,15 +525,15 @@ mod tests {
             // policy-free primitive, so the engagement-first rule that governs
             // the `web`/CLI create path does not apply here: a filing on a
             // fresh matter is the agent's ordinary use, not an error.
-            let surreal = crate::test_fixtures::handle();
-            seed_template(&surreal, "filing").await;
-            let client = seed_person(&surreal, "libra@example.com").await;
-            let project_id = seed_project(&surreal, client, None).await;
+            let application_store = crate::test_fixtures::handle();
+            seed_template(&application_store, "filing").await;
+            let client = seed_person(&application_store, "libra@example.com").await;
+            let project_id = seed_project(&application_store, client, None).await;
             let runtime = InMemoryRuntime::new();
             let storage = storage().await;
 
             let out = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 Some(&storage),
                 None,
@@ -544,18 +554,18 @@ mod tests {
         store::test_support::with_postgres(async {
             // A `Role::Lawyer` actor is in scope through the disclosed lawyer-DRI
             // participation — not admin, so the scope check admits this call.
-            let surreal = crate::test_fixtures::handle();
-            seed_template(&surreal, "onboarding").await;
-            let client = seed_person(&surreal, "libra@example.com").await;
-            let lawyer = seed_lawyer(&surreal, "dri@example.com").await;
-            let project_id = seed_project(&surreal, client, Some(lawyer)).await;
-            link_lawyer_dri(&surreal, lawyer, project_id).await;
+            let application_store = crate::test_fixtures::handle();
+            seed_template(&application_store, "onboarding").await;
+            let client = seed_person(&application_store, "libra@example.com").await;
+            let lawyer = seed_lawyer(&application_store, "dri@example.com").await;
+            let project_id = seed_project(&application_store, client, Some(lawyer)).await;
+            link_lawyer_dri(&application_store, lawyer, project_id).await;
             let runtime = InMemoryRuntime::new();
             let principal = Principal::new("dri@example.com");
             let storage = storage().await;
 
             let out = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 Some(&storage),
                 Some(&principal),
@@ -570,7 +580,7 @@ mod tests {
 
             // The authenticated lawyer is the actor, not the respondent.
             let row = store::notations::find_by_id(
-                &surreal,
+                &application_store,
                 serde_json::from_value::<Uuid>(out["structuredContent"]["notation_id"].clone())
                     .unwrap(),
             )
@@ -585,15 +595,15 @@ mod tests {
     #[tokio::test]
     async fn authenticated_principal_with_unknown_email_is_not_found() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed_template(&surreal, "onboarding").await;
-            let client = seed_person(&surreal, "libra@example.com").await;
-            let project_id = seed_project(&surreal, client, None).await;
+            let application_store = crate::test_fixtures::handle();
+            seed_template(&application_store, "onboarding").await;
+            let client = seed_person(&application_store, "libra@example.com").await;
+            let project_id = seed_project(&application_store, client, None).await;
             let runtime = InMemoryRuntime::new();
             let principal = Principal::new("ghost@example.com");
             let storage = storage().await;
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 Some(&storage),
                 Some(&principal),
@@ -615,16 +625,16 @@ mod tests {
             // The actor is `Role::Lawyer` and the matter is someone else's: not
             // has no firm-side participation row. Seeding an admin here would
             // prove nothing — admin bypasses scoping entirely.
-            let surreal = crate::test_fixtures::handle();
-            seed_template(&surreal, "onboarding").await;
-            let client = seed_person(&surreal, "libra@example.com").await;
-            let dri = seed_lawyer(&surreal, "dri@example.com").await;
-            let _outsider = seed_lawyer(&surreal, "outsider@example.com").await;
-            let project_id = seed_project(&surreal, client, Some(dri)).await;
+            let application_store = crate::test_fixtures::handle();
+            seed_template(&application_store, "onboarding").await;
+            let client = seed_person(&application_store, "libra@example.com").await;
+            let dri = seed_lawyer(&application_store, "dri@example.com").await;
+            let _outsider = seed_lawyer(&application_store, "outsider@example.com").await;
+            let project_id = seed_project(&application_store, client, Some(dri)).await;
             let runtime = InMemoryRuntime::new();
             let storage = storage().await;
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 Some(&storage),
                 Some(&Principal::new("outsider@example.com")),
@@ -646,18 +656,19 @@ mod tests {
             // Admin deliberately bypasses project scoping (see
             // `docs/access-model.md`); the matter names a different lawyer DRI
             // and the admin still opens the notation.
-            let surreal = crate::test_fixtures::handle();
-            seed_template(&surreal, "onboarding").await;
-            let client = seed_person(&surreal, "libra@example.com").await;
-            let dri = seed_lawyer(&surreal, "dri@example.com").await;
-            let admin = seed_admin(&surreal).await;
-            let project_id = seed_project(&surreal, client, Some(dri)).await;
-            store::test_support::grant_project_firm_admin(&surreal, project_id, admin).await;
+            let application_store = crate::test_fixtures::handle();
+            seed_template(&application_store, "onboarding").await;
+            let client = seed_person(&application_store, "libra@example.com").await;
+            let dri = seed_lawyer(&application_store, "dri@example.com").await;
+            let admin = seed_admin(&application_store).await;
+            let project_id = seed_project(&application_store, client, Some(dri)).await;
+            store::test_support::grant_project_firm_admin(&application_store, project_id, admin)
+                .await;
             let runtime = InMemoryRuntime::new();
             let storage = storage().await;
 
             let out = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 Some(&storage),
                 Some(&Principal::new("principal@example.com")),
@@ -676,11 +687,11 @@ mod tests {
     #[tokio::test]
     async fn project_must_exist() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed_template(&surreal, "onboarding").await;
+            let application_store = crate::test_fixtures::handle();
+            seed_template(&application_store, "onboarding").await;
             let runtime = InMemoryRuntime::new();
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,
@@ -699,13 +710,13 @@ mod tests {
     #[tokio::test]
     async fn unknown_template_is_not_found() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let client = seed_person(&surreal, "libra@example.com").await;
-            let project_id = seed_project(&surreal, client, None).await;
+            let application_store = crate::test_fixtures::handle();
+            let client = seed_person(&application_store, "libra@example.com").await;
+            let project_id = seed_project(&application_store, client, None).await;
             let runtime = InMemoryRuntime::new();
             let storage = storage().await;
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 Some(&storage),
                 None,
@@ -727,12 +738,12 @@ mod tests {
     #[tokio::test]
     async fn project_without_client_dri_is_rejected() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed_template(&surreal, "onboarding").await;
-            let entity_id = store::test_support::seed_entity(&surreal).await;
-            crate::test_fixtures::seed_brands(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            seed_template(&application_store, "onboarding").await;
+            let entity_id = store::test_support::seed_entity(&application_store).await;
+            crate::test_fixtures::seed_brands(&application_store).await;
             let project_id = store::projects::create(
-                &surreal,
+                &application_store,
                 &store::projects::NewProject {
                     code: format!("unassigned-matter-{}", Uuid::now_v7()),
                     name: "Unassigned matter".into(),
@@ -746,7 +757,7 @@ mod tests {
             .id;
             let runtime = InMemoryRuntime::new();
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,
@@ -768,10 +779,10 @@ mod tests {
     #[tokio::test]
     async fn missing_project_id_is_invalid_arguments() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             let runtime = InMemoryRuntime::new();
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,
@@ -790,10 +801,10 @@ mod tests {
     #[tokio::test]
     async fn blank_template_code_is_invalid_arguments() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             let runtime = InMemoryRuntime::new();
             let err = call(
-                &surreal,
+                &application_store,
                 &runtime,
                 None,
                 None,
@@ -954,7 +965,7 @@ mod tests {
     }
 
     struct CodeCase<'a> {
-        surreal: &'a store::surreal::SurrealDb,
+        application_store: &'a store::application_store::ApplicationStore,
         runtime: &'a InMemoryRuntime,
         storage: &'a std::sync::Arc<dyn cloud::StorageService>,
         state: &'a crate::server::McpState,
@@ -978,7 +989,7 @@ mod tests {
         )
         .await;
         let direct = call(
-            case.surreal,
+            case.application_store,
             case.runtime,
             Some(case.storage),
             Some(case.principal),
@@ -988,7 +999,14 @@ mod tests {
         match expect {
             CodeExpect::Create => {
                 assert!(schema_ok, "{label} schema rejected {arguments}");
-                created_from_success(case.surreal, case.project_id, label, outcome, direct).await
+                created_from_success(
+                    case.application_store,
+                    case.project_id,
+                    label,
+                    outcome,
+                    direct,
+                )
+                .await
             }
             CodeExpect::Blank => {
                 assert!(
@@ -1029,7 +1047,7 @@ mod tests {
     }
 
     async fn created_from_success(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         project_id: Uuid,
         label: &str,
         outcome: Result<Value, ToolError>,
@@ -1054,7 +1072,7 @@ mod tests {
                 .unwrap()
                 .parse::<Uuid>()
                 .unwrap();
-            let row = store::notations::find_by_id(surreal, id)
+            let row = store::notations::find_by_id(application_store, id)
                 .await
                 .unwrap()
                 .unwrap();
@@ -1070,12 +1088,12 @@ mod tests {
     }
 
     async fn refuse_unauthorized_spellings(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         state: &crate::server::McpState,
         project_id: Uuid,
     ) {
-        let _ = seed_lawyer(surreal, "outsider@example.com").await;
-        let before = store::notations::list_by_project(surreal, project_id)
+        let _ = seed_lawyer(application_store, "outsider@example.com").await;
+        let before = store::notations::list_by_project(application_store, project_id)
             .await
             .unwrap()
             .len();
@@ -1101,7 +1119,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, ToolError::Forbidden(_)), "{err:?}");
         assert_eq!(
-            store::notations::list_by_project(surreal, project_id)
+            store::notations::list_by_project(application_store, project_id)
                 .await
                 .unwrap()
                 .len(),
@@ -1109,13 +1127,16 @@ mod tests {
         );
     }
 
-    async fn refuse_unsupervised_mcp(surreal: &store::surreal::SurrealDb, project_id: Uuid) {
-        let before = store::notations::list_by_project(surreal, project_id)
+    async fn refuse_unsupervised_mcp(
+        application_store: &store::application_store::ApplicationStore,
+        project_id: Uuid,
+    ) {
+        let before = store::notations::list_by_project(application_store, project_id)
             .await
             .unwrap()
             .len();
         let router = crate::server::build_router(crate::server::McpState::new(
-            surreal.clone(),
+            application_store.clone(),
             std::sync::Arc::new(InMemoryRuntime::new()),
         ));
         let response = router
@@ -1151,7 +1172,7 @@ mod tests {
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("approval"), "{text}");
         assert_eq!(
-            store::notations::list_by_project(surreal, project_id)
+            store::notations::list_by_project(application_store, project_id)
                 .await
                 .unwrap()
                 .len(),
@@ -1162,12 +1183,12 @@ mod tests {
     #[tokio::test]
     async fn code_spellings_match_the_schema_and_write_only_when_exactly_one_is_valid() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            seed_template(&surreal, "onboarding").await;
-            let client = seed_person(&surreal, "libra@example.com").await;
-            let lawyer = seed_lawyer(&surreal, "dri@example.com").await;
-            let project_id = seed_project(&surreal, client, Some(lawyer)).await;
-            link_lawyer_dri(&surreal, lawyer, project_id).await;
+            let application_store = crate::test_fixtures::handle();
+            seed_template(&application_store, "onboarding").await;
+            let client = seed_person(&application_store, "libra@example.com").await;
+            let lawyer = seed_lawyer(&application_store, "dri@example.com").await;
+            let project_id = seed_project(&application_store, client, Some(lawyer)).await;
+            link_lawyer_dri(&application_store, lawyer, project_id).await;
             let runtime = InMemoryRuntime::new();
             let storage = storage().await;
             let principal = Principal::new("dri@example.com");
@@ -1178,7 +1199,7 @@ mod tests {
                 .expect("full catalog publishes create_notation");
             assert_eq!(catalog["inputSchema"], schema);
             let mut state = crate::server::McpState::new(
-                surreal.clone(),
+                application_store.clone(),
                 std::sync::Arc::new(InMemoryRuntime::new()),
             );
             state.storage = Some(storage.clone());
@@ -1192,7 +1213,7 @@ mod tests {
                 created.extend(
                     record_code_case(
                         &CodeCase {
-                            surreal: &surreal,
+                            application_store: &application_store,
                             runtime: &runtime,
                             storage: &storage,
                             state: &state,
@@ -1212,8 +1233,8 @@ mod tests {
             let ids: std::collections::BTreeSet<_> = created.iter().map(|row| row.id).collect();
             assert_eq!(ids.len(), created.len());
 
-            refuse_unauthorized_spellings(&surreal, &state, project_id).await;
-            refuse_unsupervised_mcp(&surreal, project_id).await;
+            refuse_unauthorized_spellings(&application_store, &state, project_id).await;
+            refuse_unsupervised_mcp(&application_store, project_id).await;
         })
         .await;
     }

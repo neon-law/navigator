@@ -1,11 +1,11 @@
 //! Compose court paper for the PDF that counsel approves for signature.
 
 use crate::retainer_walk::WorkflowDriveError;
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use uuid::Uuid;
 
 pub(crate) async fn source(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project: Uuid,
     draft: &str,
     mut body: String,

@@ -37,13 +37,13 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::case_stages::StageDefaultOdds;
 use crate::contingency_terms::{CostsDeducted, BASIS_POINTS};
 use crate::matter_financials::MatterFinancials;
 use crate::matter_outcomes::MatterResult;
 use crate::outcome_estimates::{Outcome, OutcomeSet};
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MatterProjectionError {
@@ -473,7 +473,7 @@ pub fn costs_advanced_cents(costs: &[crate::project_costs::ProjectCost]) -> i64 
 /// [`MatterProjectionError::NotFirmSide`] for a reader who is not a
 /// firm-side participant, or the failed underlying read.
 pub async fn for_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     viewer_person_id: Uuid,
     project_id: Uuid,
@@ -483,7 +483,8 @@ pub async fn for_project(
         return Err(MatterProjectionError::NotFirmSide);
     }
     let Some(term) = crate::contingency_terms::resolve_unchecked(pg, project_id, on).await? else {
-        let financials = crate::matter_financials::for_project(surreal, pg, project_id).await?;
+        let financials =
+            crate::matter_financials::for_project(application_store, pg, project_id).await?;
         return Ok(MatterProjection::Certain((&financials).into()));
     };
     let (projection, _) = for_contingency_term(pg, &term).await?;
@@ -748,17 +749,17 @@ mod tests {
         use crate::contingency_terms::tests::database::{fee_agreement, standard};
         use crate::firm_side::tests::matter;
         use crate::outcome_estimates::NewOutcomeEstimate;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
+        use crate::postgres::fixtures::{connect, fresh_schema};
         use chrono::NaiveDate;
 
         /// The lawyer's view of a matter that has a Contingency Term.
         async fn contingent(
-            surreal: &crate::surreal::SurrealDb,
+            application_store: &crate::application_store::ApplicationStore,
             pg: &crate::postgres::PostgresDb,
             m: &crate::firm_side::tests::Matter,
             on: NaiveDate,
         ) -> super::super::ContingentProjection {
-            match for_project(surreal, pg, m.lawyer, m.project_id, on)
+            match for_project(application_store, pg, m.lawyer, m.project_id, on)
                 .await
                 .unwrap()
             {
@@ -773,19 +774,19 @@ mod tests {
                 return;
             };
             let pg = connect(&options, &database).await;
-            let surreal = crate::surreal::SurrealDb::uninitialized();
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
             let m = matter(&pg).await;
             let on = NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
             for outsider in [m.client, m.clerk, m.outside_lawyer] {
                 assert!(matches!(
-                    for_project(&surreal, &pg, outsider, m.project_id, on).await,
+                    for_project(&application_store, &pg, outsider, m.project_id, on).await,
                     Err(MatterProjectionError::NotFirmSide)
                 ));
             }
             // No term: an hourly matter, certain money only.
             let certain = crate::postgres::accounting::with_test_db(
                 pg.clone(),
-                for_project(&surreal, &pg, m.lawyer, m.project_id, on),
+                for_project(&application_store, &pg, m.lawyer, m.project_id, on),
             )
             .await
             .unwrap();
@@ -800,7 +801,7 @@ mod tests {
             )
             .await
             .unwrap();
-            let unset = contingent(&surreal, &pg, &m, on).await;
+            let unset = contingent(&application_store, &pg, &m, on).await;
             assert_eq!(unset.source, None, "no estimate, no stage, no odds");
 
             crate::case_stages::set_stage(&pg, m.project_id, m.lawyer, m.intake, None)
@@ -817,7 +818,7 @@ mod tests {
             )
             .await
             .unwrap();
-            let defaulted = contingent(&surreal, &pg, &m, on).await;
+            let defaulted = contingent(&application_store, &pg, &m, on).await;
             assert_eq!(defaulted.source, Some(OddsSource::StageDefault));
             assert_eq!(defaulted.expected_net_cents, None);
 
@@ -833,7 +834,7 @@ mod tests {
             )
             .await
             .unwrap();
-            let estimated = contingent(&surreal, &pg, &m, on).await;
+            let estimated = contingent(&application_store, &pg, &m, on).await;
             assert_eq!(estimated.source, Some(OddsSource::Lawyer));
             assert_eq!(estimated.estimate_recorded_at, Some(estimate.recorded_at));
             assert!(!estimated.stale);
@@ -845,7 +846,7 @@ mod tests {
             crate::case_stages::set_stage(&pg, m.project_id, m.lawyer, m.trial, None)
                 .await
                 .unwrap();
-            let moved = contingent(&surreal, &pg, &m, on).await;
+            let moved = contingent(&application_store, &pg, &m, on).await;
             assert!(moved.stale);
             assert_eq!(moved.outcomes[1].fee_bps, 4_000);
 
@@ -864,7 +865,7 @@ mod tests {
             )
             .await
             .unwrap();
-            let actual = contingent(&surreal, &pg, &m, on).await;
+            let actual = contingent(&application_store, &pg, &m, on).await;
             assert_eq!(actual.source, Some(OddsSource::Actual));
             assert_eq!(actual.expected_net_cents, Some(16_000_000));
             assert!(!actual.stale, "an actual figure is never stale");

@@ -6,36 +6,13 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use crate::scraper::adapter::{AdapterError, NoticeQuery, NoticeRef, SiteAdapter, SiteKey};
 use crate::scraper::credentials::SiteLogin;
 use crate::scraper::download::{DownloadError, DownloadSink};
 use crate::scraper::fetcher::{FetchError, FetchRequest, FetchResponse, HttpFetcher};
 use crate::scraper::intake::{InboxIntake, IntakeError, IntakeReceipt, ScrapedDocument};
-use crate::scraper::retry::RetryClock;
 use crate::scraper::session::{BrowserSession, SessionError, SessionFactory};
-
-/// One scripted login attempt.
-#[derive(Debug)]
-pub(crate) enum LoginStep {
-    /// The login fails transiently (portal restarted, network blip).
-    Transient,
-    /// The login fails because the portal's structure drifted.
-    Structure,
-    /// The login succeeds.
-    Succeed,
-}
-
-/// One scripted download attempt: a sequence of writes and failures.
-#[derive(Debug)]
-pub(crate) enum DownloadStep {
-    /// Write these bytes to the sink.
-    Chunk(Vec<u8>),
-    /// Fail the whole attempt transiently (bytes already written stay
-    /// staged in the part file).
-    Fail(AdapterError),
-}
 
 /// A canned listing body the mock adapter's fetch path parses:
 /// `entry|title|url|extension` per line, `#` lines are comments.
@@ -72,9 +49,7 @@ pub(crate) fn parse_listing(body: &[u8]) -> Result<Vec<NoticeRef>, AdapterError>
 }
 
 struct MockAdapterCore {
-    login_script: VecDeque<LoginStep>,
     notices_script: VecDeque<Result<Vec<NoticeRef>, AdapterError>>,
-    download_script: VecDeque<Vec<DownloadStep>>,
     login_calls: u32,
     notices_calls: u32,
     download_calls: u32,
@@ -98,62 +73,13 @@ impl MockAdapter {
         Self {
             site,
             core: Arc::new(Mutex::new(MockAdapterCore {
-                login_script: VecDeque::new(),
                 notices_script: VecDeque::new(),
-                download_script: VecDeque::new(),
                 login_calls: 0,
                 notices_calls: 0,
                 download_calls: 0,
                 seen_logins: Vec::new(),
             })),
         }
-    }
-
-    /// Replace the login script; consumed front-to-back, one step per
-    /// call, and an exhausted script means success.
-    pub(crate) fn login_script(&mut self, steps: Vec<LoginStep>) {
-        if let Ok(mut core) = self.core.lock() {
-            core.login_script = steps.into();
-        }
-    }
-
-    /// Replace the notices script; entries are returned verbatim, one per
-    /// call, without touching the fetcher.
-    pub(crate) fn notices_script(&mut self, results: Vec<Result<Vec<NoticeRef>, AdapterError>>) {
-        if let Ok(mut core) = self.core.lock() {
-            core.notices_script = results.into();
-        }
-    }
-
-    /// Replace the download script; each download call consumes one
-    /// attempt (a Vec of steps), and an exhausted script falls through to
-    /// the fetch path.
-    pub(crate) fn download_script(&mut self, attempts: Vec<Vec<DownloadStep>>) {
-        if let Ok(mut core) = self.core.lock() {
-            core.download_script = attempts.into();
-        }
-    }
-
-    /// How many times `login` ran.
-    #[must_use]
-    pub(crate) fn login_calls(&self) -> u32 {
-        self.core.lock().map_or(0, |core| core.login_calls)
-    }
-
-    /// How many times `download` ran.
-    #[must_use]
-    pub(crate) fn download_calls(&self) -> u32 {
-        self.core.lock().map_or(0, |core| core.download_calls)
-    }
-
-    /// The `(username, password)` every login attempt saw, in order —
-    /// the proof the framework resolved and handed over the Firm secret.
-    #[must_use]
-    pub(crate) fn seen_logins(&self) -> Vec<(String, String)> {
-        self.core
-            .lock()
-            .map(|core| core.seen_logins.clone())
-            .unwrap_or_default()
     }
 }
 
@@ -179,26 +105,13 @@ impl SiteAdapter for MockAdapter {
         _session: &BrowserSession,
         login: Option<&SiteLogin>,
     ) -> Result<(), AdapterError> {
-        let step = {
-            let mut core = self.core.lock().expect("mock adapter lock");
-            core.login_calls += 1;
-            if let Some(login) = login {
-                core.seen_logins
-                    .push((login.username().to_owned(), login.password().to_owned()));
-            }
-            core.login_script.pop_front()
-        };
-        match step {
-            Some(LoginStep::Transient) => Err(AdapterError::Transient {
-                step: "login".to_owned(),
-                detail: "scripted transient login failure".to_owned(),
-            }),
-            Some(LoginStep::Succeed) | None => Ok(()),
-            Some(LoginStep::Structure) => Err(AdapterError::StructureDrift {
-                step: "login form".to_owned(),
-                detail: "the sign-in button moved".to_owned(),
-            }),
+        let mut core = self.core.lock().expect("mock adapter lock");
+        core.login_calls += 1;
+        if let Some(login) = login {
+            core.seen_logins
+                .push((login.username().to_owned(), login.password().to_owned()));
         }
+        Ok(())
     }
 
     async fn notices(
@@ -238,23 +151,7 @@ impl SiteAdapter for MockAdapter {
         notice: &NoticeRef,
         sink: &mut DownloadSink,
     ) -> Result<(), AdapterError> {
-        let attempt = {
-            let mut core = self.core.lock().expect("mock adapter lock");
-            core.download_calls += 1;
-            core.download_script.pop_front()
-        };
-        let scripted = attempt.unwrap_or_default();
-        for step in &scripted {
-            match step {
-                DownloadStep::Chunk(bytes) => sink
-                    .extend(bytes)
-                    .map_err(|error| transient("sink write", error.to_string()))?,
-                DownloadStep::Fail(error) => return Err(error.clone()),
-            }
-        }
-        if !scripted.is_empty() {
-            return Ok(());
-        }
+        self.core.lock().expect("mock adapter lock").download_calls += 1;
         // No script: download for real through the injected fetcher, the
         // same way a production adapter must.
         fetch_into(sink, fetcher, &notice.url)
@@ -275,15 +172,6 @@ pub(crate) struct MockFetcher {
 }
 
 impl MockFetcher {
-    /// A fetcher whose handler panics if used — for tests where no fetch
-    /// should happen at all.
-    #[must_use]
-    pub(crate) fn never() -> Self {
-        Self::with_handler(Arc::new(|request: &FetchRequest| {
-            panic!("MockFetcher::never was asked to fetch {}", request.url);
-        }))
-    }
-
     /// A fetcher backed by an arbitrary handler.
     #[must_use]
     pub(crate) fn with_handler(handler: MockHandler) -> Self {
@@ -331,13 +219,7 @@ pub(crate) struct StubSessions {
     opens: Arc<AtomicU32>,
 }
 
-impl StubSessions {
-    /// How many sessions were opened.
-    #[must_use]
-    pub(crate) fn opens(&self) -> u32 {
-        self.opens.load(Ordering::SeqCst)
-    }
-}
+impl StubSessions {}
 
 #[async_trait::async_trait]
 impl SessionFactory for StubSessions {
@@ -348,75 +230,6 @@ impl SessionFactory for StubSessions {
             std::env::temp_dir().join(format!("navigator-session-{}", uuid::Uuid::now_v7())),
         ))
     }
-}
-
-/// A clock that sleeps zero: retry loops in tests run instantly, and the
-/// recorded delays (see `retry.rs`) are what tests assert on.
-#[derive(Debug, Default)]
-pub(crate) struct StubClock;
-
-#[async_trait::async_trait]
-impl RetryClock for StubClock {
-    async fn sleep(&self, _delay: Duration) {}
-}
-
-/// Seed a Firm whose Admin DRI may write Firm secrets, and return the
-/// Firm id with the admin person's id. Only an Admin DRI member holds
-/// the `ManageIntegrationSecrets` capability (`store::firm_secrets`'s
-/// authorize step), so fixtures that provision portal logins need the
-/// admin's handle — which `test_support::seed_firm_with_brand` does not
-/// return.
-pub(crate) async fn seeded_firm_with_admin(
-    surreal: &store::surreal::SurrealDb,
-) -> (uuid::Uuid, uuid::Uuid) {
-    let admin = store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(
-            "Scraper Admin",
-            format!("scraper-admin-{}@example.com", uuid::Uuid::now_v7()),
-            store::persons::Role::Admin,
-        ),
-    )
-    .await
-    .expect("seed the firm admin");
-    let firm = store::firms::create(
-        surreal,
-        &store::firms::NewFirm {
-            name: format!("Scraper Firm {}", uuid::Uuid::now_v7()),
-            status: "active".to_owned(),
-            entity_id: store::test_support::seed_entity(surreal).await,
-            admin_dri_person_id: admin.id,
-        },
-    )
-    .await
-    .expect("seed the firm");
-    (firm.id, admin.id)
-}
-
-/// Store the Firm's `CourtPortal`/`PortalLogin` secret — one JSON body
-/// keyed by site — through the real `store::firm_secrets` lane with the
-/// in-process KMS fake. No new secrets mechanism, in tests or out.
-pub(crate) async fn put_portal_secret(
-    surreal: &store::surreal::SurrealDb,
-    admin_id: uuid::Uuid,
-    firm_id: uuid::Uuid,
-    value: &serde_json::Value,
-    kms: &cloud::FakeKms,
-) {
-    store::firm_secrets::put(
-        surreal,
-        store::firm_secrets::SecretPutRequest {
-            actor_role: store::persons::Role::Admin,
-            actor_person_id: Some(admin_id),
-            firm_id,
-            provider: store::firm_secrets::IntegrationProvider::CourtPortal,
-            kind: store::firm_secrets::IntegrationSecretKind::PortalLogin,
-            value: &serde_json::to_string(value).expect("the payload serializes"),
-        },
-        kms,
-    )
-    .await
-    .expect("provision the portal login secret");
 }
 
 /// Fetch `url` into `sink`, resuming: the first request carries no `Range`
@@ -500,21 +313,6 @@ impl InboxIntake for RecordingIntake {
         Ok(IntakeReceipt {
             message_id: uuid::Uuid::now_v7(),
             deduped: false,
-        })
-    }
-}
-
-/// An intake double that always fails with a transient error — for tests
-/// of the retry budget and of the boundary between staging and enqueue.
-#[derive(Debug, Default)]
-pub(crate) struct FailingIntake;
-
-#[async_trait::async_trait]
-impl InboxIntake for FailingIntake {
-    async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError> {
-        let _ = document;
-        Err(IntakeError::Transient {
-            detail: "the inbox service is restarting".to_owned(),
         })
     }
 }

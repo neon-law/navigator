@@ -81,14 +81,14 @@ pub fn descriptor() -> Value {
 /// Validate the caller's tier, then apply the payload via the shared
 /// engine and return a per-row report.
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     principal: Option<&Principal>,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
-    require_lawyer(surreal, principal).await?;
+    require_lawyer(application_store, principal).await?;
 
     let payload: import::Payload = super::decode_args(arguments)?;
-    let report = import::apply(surreal, &payload)
+    let report = import::apply(application_store, &payload)
         .await
         .map_err(|e| ToolError::Internal(e.to_string()))?;
 
@@ -122,7 +122,7 @@ pub async fn call(
 /// tier. Writing clients into the system of record is not something an
 /// anonymous or client-tier caller may do.
 async fn require_lawyer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     principal: Option<&Principal>,
 ) -> Result<(), ToolError> {
     let email = principal
@@ -132,7 +132,7 @@ async fn require_lawyer(
             ToolError::Forbidden("bulk import requires an authenticated caller".into())
         })?;
 
-    match store::persons::find_by_email_ci(surreal, email).await? {
+    match store::persons::find_by_email_ci(application_store, email).await? {
         Some(p) if p.role.is_lawyer_tier() => Ok(()),
         Some(_) => Err(ToolError::Forbidden(format!(
             "{email} is not lawyer or admin; bulk import is restricted"
@@ -150,23 +150,26 @@ mod tests {
     use crate::tools::ToolError;
     use serde_json::json;
 
-    async fn db_with_refs() -> store::surreal::SurrealDb {
-        let surreal = crate::test_fixtures::handle();
-        store::entity_types::create(&surreal, "501(c)(3) Non-Profit")
+    async fn db_with_refs() -> store::application_store::ApplicationStore {
+        let application_store = crate::test_fixtures::handle();
+        store::entity_types::create(&application_store, "501(c)(3) Non-Profit")
             .await
             .unwrap();
         store::jurisdictions::create(
-            &surreal,
+            &application_store,
             &store::jurisdictions::NewJurisdiction::new("Washington", "WA", "state"),
         )
         .await
         .unwrap();
-        surreal
+        application_store
     }
 
-    async fn seed_lawyer(surreal: &store::surreal::SurrealDb, email: &str) {
+    async fn seed_lawyer(
+        application_store: &store::application_store::ApplicationStore,
+        email: &str,
+    ) {
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Lawyer",
                 email.to_string(),
@@ -205,11 +208,13 @@ mod tests {
     #[tokio::test]
     async fn lawyer_caller_imports_and_canonicalizes() {
         store::test_support::with_postgres(async {
-            let surreal = db_with_refs().await;
-            seed_lawyer(&surreal, "lawyer@neonlaw.com").await;
+            let application_store = db_with_refs().await;
+            seed_lawyer(&application_store, "lawyer@neonlaw.com").await;
             let principal = Principal::new("lawyer@neonlaw.com");
 
-            let result = call(&surreal, Some(&principal), &payload()).await.unwrap();
+            let result = call(&application_store, Some(&principal), &payload())
+                .await
+                .unwrap();
             assert_eq!(
                 result["structuredContent"]["organizations"][0]["status"],
                 "created"
@@ -220,12 +225,12 @@ mod tests {
             );
 
             // The org landed with a canonicalized URL, and the link exists.
-            let ejp = store::entities::find_by_name(&surreal, "Example Justice Project")
+            let ejp = store::entities::find_by_name(&application_store, "Example Justice Project")
                 .await
                 .unwrap()
                 .unwrap();
             assert_eq!(ejp.url.as_deref(), Some("https://justice.example"));
-            let links = store::entity_roles::all(&surreal).await.unwrap();
+            let links = store::entity_roles::all(&application_store).await.unwrap();
             assert_eq!(links.len(), 1);
             assert_eq!(links[0].role, "client_contact");
         })
@@ -240,13 +245,15 @@ mod tests {
             // would read as a message-less non-result; the text Part must
             // carry the diagnostic so a text-only client (Gemini Enterprise)
             // surfaces the reason.
-            let surreal = db_with_refs().await;
-            seed_lawyer(&surreal, "lawyer@neonlaw.com").await;
+            let application_store = db_with_refs().await;
+            seed_lawyer(&application_store, "lawyer@neonlaw.com").await;
             let principal = Principal::new("lawyer@neonlaw.com");
             let mut bad = payload();
             bad["version"] = json!(2);
 
-            let result = call(&surreal, Some(&principal), &bad).await.unwrap();
+            let result = call(&application_store, Some(&principal), &bad)
+                .await
+                .unwrap();
             let text = result["content"][0]["text"].as_str().unwrap();
             assert!(text.contains("Problems:"), "no problems block: {text}");
             assert!(
@@ -263,8 +270,8 @@ mod tests {
             // An unknown jurisdiction passes structural validation (ZZ is
             // two letters) but fails at apply time as a per-row failure. The
             // reason must reach the rendered text, not just structuredContent.
-            let surreal = db_with_refs().await;
-            seed_lawyer(&surreal, "lawyer@neonlaw.com").await;
+            let application_store = db_with_refs().await;
+            seed_lawyer(&application_store, "lawyer@neonlaw.com").await;
             let principal = Principal::new("lawyer@neonlaw.com");
             let bad = json!({
                 "version": 1,
@@ -278,7 +285,9 @@ mod tests {
                 ]
             });
 
-            let result = call(&surreal, Some(&principal), &bad).await.unwrap();
+            let result = call(&application_store, Some(&principal), &bad)
+                .await
+                .unwrap();
             let text = result["content"][0]["text"].as_str().unwrap();
             assert!(text.contains("Problems:"), "no problems block: {text}");
             assert!(
@@ -297,11 +306,16 @@ mod tests {
     #[tokio::test]
     async fn anonymous_caller_is_forbidden() {
         store::test_support::with_postgres(async {
-            let surreal = db_with_refs().await;
-            let err = call(&surreal, None, &payload()).await.unwrap_err();
+            let application_store = db_with_refs().await;
+            let err = call(&application_store, None, &payload())
+                .await
+                .unwrap_err();
             assert!(matches!(err, ToolError::Forbidden(_)));
             // Nothing was written.
-            assert!(store::entities::all(&surreal).await.unwrap().is_empty());
+            assert!(store::entities::all(&application_store)
+                .await
+                .unwrap()
+                .is_empty());
         })
         .await;
     }
@@ -309,16 +323,16 @@ mod tests {
     #[tokio::test]
     async fn client_tier_caller_is_forbidden() {
         store::test_support::with_postgres(async {
-            let surreal = db_with_refs().await;
+            let application_store = db_with_refs().await;
             // A client-tier person (the default role) may not bulk-import.
             store::persons::create(
-                &surreal,
+                &application_store,
                 &store::persons::NewPerson::new("Aries", "aries@example.com"),
             )
             .await
             .unwrap();
             let principal = Principal::new("aries@example.com");
-            let err = call(&surreal, Some(&principal), &payload())
+            let err = call(&application_store, Some(&principal), &payload())
                 .await
                 .unwrap_err();
             assert!(matches!(err, ToolError::Forbidden(_)));

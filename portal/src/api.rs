@@ -90,14 +90,14 @@ fn project_payload(
 }
 
 /// State the `/app/api/*` router runs against. Read handlers extract just
-/// `State<SurrealDb>` via the [`FromRef`] below; the People command
+/// `State<ApplicationStore>` via the [`FromRef`] below; the People command
 /// handlers (delete/update guard the bootstrap Owner, welcome dispatches
 /// email) reach the extra seams through `State<ApiState>`.
 #[derive(Clone)]
 pub struct ApiState {
     /// The store. `persons` lives here, so the `/app/api/people*` surface and
     /// every participant reference read it.
-    pub surreal: store::surreal::SurrealDb,
+    pub application_store: store::application_store::ApplicationStore,
     pub email: Arc<dyn crate::email::EmailService>,
     pub bootstrap_owner_email: Option<String>,
     /// The operator's firm Entity name (`NAVIGATOR_BOOTSTRAP_COMPANY`),
@@ -149,9 +149,9 @@ pub struct ApiState {
     pub jev: Option<typesafe::JevClient>,
 }
 
-impl FromRef<ApiState> for store::surreal::SurrealDb {
+impl FromRef<ApiState> for store::application_store::ApplicationStore {
     fn from_ref(s: &ApiState) -> Self {
-        s.surreal.clone()
+        s.application_store.clone()
     }
 }
 
@@ -1530,14 +1530,17 @@ async fn openapi_json(headers: axum::http::HeaderMap) -> Json<serde_json::Value>
 /// `GET /app/api/people`: one keyset page of the directory, filtered and
 /// sorted per [`store::firms::PEOPLE_DIRECTORY`] ([`crate::list_api`]).
 async fn list_people(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let params = crate::list_api::parse(raw.as_deref(), &store::firms::PEOPLE_DIRECTORY)?;
-    let page =
-        store::firms::people_directory(&surreal, &params, store::firms::DirectoryScope::Everyone)
-            .await
-            .map_err(|e| ApiError::Db(e.to_string()))?;
+    let page = store::firms::people_directory(
+        &application_store,
+        &params,
+        store::firms::DirectoryScope::Everyone,
+    )
+    .await
+    .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok(crate::list_api::document(
         "/app/api/people",
         &params,
@@ -1554,7 +1557,7 @@ struct CreatePersonRequest {
 }
 
 async fn create_person(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     LawyerSession(session): LawyerSession,
     JsonOrForm(input): JsonOrForm<CreatePersonRequest>,
 ) -> Response {
@@ -1562,7 +1565,7 @@ async fn create_person(
         return ApiError::Forbidden.into_response();
     }
     match store::people_commands::create_person_for_actor(
-        &surreal,
+        &application_store,
         input.person,
         session.role,
         session.person_id,
@@ -1582,12 +1585,12 @@ struct MailSignatureQuery {
 }
 
 async fn mail_signature(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     LawyerSession(session): LawyerSession,
     Query(query): Query<MailSignatureQuery>,
 ) -> Result<Json<store::mail_signatures::MailSignature>, ApiError> {
     let person_id = session.person_id.ok_or(ApiError::Forbidden)?;
-    let account = store::persons::find_by_any_email(&surreal, &query.account)
+    let account = store::persons::find_by_any_email(&application_store, &query.account)
         .await
         .map_err(|_| ApiError::Db("Person lookup failed".into()))?;
     if account.is_none_or(|person| person.id != person_id) {
@@ -1596,7 +1599,7 @@ async fn mail_signature(
     let pg = store::postgres::PostgresDb::from_env()
         .await
         .map_err(|_| ApiError::Db("Signature storage unavailable".into()))?;
-    let signature = store::mail_signatures::for_person(&surreal, &pg, person_id)
+    let signature = store::mail_signatures::for_person(&application_store, &pg, person_id)
         .await
         .map_err(|_| ApiError::Db("Signature read failed".into()))?
         .ok_or(ApiError::NotFound)?;
@@ -1639,19 +1642,19 @@ pub(crate) fn may_create_person_role(
 }
 
 async fn create_firm_person(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     AdminSession(session): AdminSession,
     Path(firm_id): Path<Uuid>,
     Json(mut command): Json<crate::people_commands::CreatePersonCommand>,
 ) -> Result<(StatusCode, Json<store::persons::Person>), ApiError> {
-    require_firm_administration(&surreal, &session, firm_id).await?;
+    require_firm_administration(&application_store, &session, firm_id).await?;
     if crate::people_commands::parse_role(&command.role)
         .is_some_and(|role| !may_create_person_role(session.role, role))
     {
         return Err(ApiError::Forbidden);
     }
     command.firm_id = Some(firm_id);
-    let person = crate::people_commands::create_person(&surreal, &command)
+    let person = crate::people_commands::create_person(&application_store, &command)
         .await
         .map_err(|error| match error {
             PeopleCommandError::Db(_) => ApiError::Db("Person storage failed".into()),
@@ -1674,7 +1677,7 @@ async fn update_person(
         actor_role: session.role,
         may_change_roles: may_change_roles(&session),
     };
-    match crate::people_commands::update_person(&state.surreal, id, &input, &ctx).await {
+    match crate::people_commands::update_person(&state.application_store, id, &input, &ctx).await {
         Ok(updated) => Json(updated).into_response(),
         Err(e) => mutation_error(e),
     }
@@ -1686,7 +1689,7 @@ async fn delete_person(
     Path(id): Path<Uuid>,
 ) -> Response {
     match crate::people_commands::delete_person(
-        &state.surreal,
+        &state.application_store,
         id,
         state.bootstrap_owner_email.as_deref(),
     )
@@ -1717,7 +1720,7 @@ async fn merge_people(
             .into_response();
     }
     match store::person_merge::merge_by_email_as_actor(
-        &state.surreal,
+        &state.application_store,
         &input.keep,
         &input.drop,
         session.role,
@@ -1737,9 +1740,7 @@ async fn merge_people(
                 PersonMergeError::RetainedClaimHistory => {
                     (StatusCode::CONFLICT, "retained_claim_history")
                 }
-                PersonMergeError::Person(_)
-                | PersonMergeError::Db(_)
-                | PersonMergeError::Project(_) => {
+                PersonMergeError::Person(_) | PersonMergeError::Project(_) => {
                     (StatusCode::INTERNAL_SERVER_ERROR, "merge_failed")
                 }
             };
@@ -1765,8 +1766,13 @@ async fn send_welcome(
     Path(id): Path<Uuid>,
 ) -> Response {
     let base_url = workflows::email::base_url_from_env();
-    match crate::people_commands::send_welcome(&state.surreal, state.email.as_ref(), &base_url, id)
-        .await
+    match crate::people_commands::send_welcome(
+        &state.application_store,
+        state.email.as_ref(),
+        &base_url,
+        id,
+    )
+    .await
     {
         Ok(_) => (
             StatusCode::OK,
@@ -1895,7 +1901,7 @@ pub enum BrandPresentationError {
 /// exactly as before, catalog validation included, so `PATCH
 /// /app/api/brands/{key}` is unaffected: it always sends `Some`.
 pub async fn apply_brand_presentation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     actor_role: store::persons::Role,
     actor_person_id: Option<uuid::Uuid>,
     key: &str,
@@ -1903,17 +1909,22 @@ pub async fn apply_brand_presentation(
     primary_color: &str,
     font_family: Option<&str>,
 ) -> Result<store::brands::Brand, BrandPresentationError> {
-    let brand =
-        match store::brands::find_by_key_for_actor(surreal, actor_role, actor_person_id, key).await
-        {
-            Ok(brand) => brand,
-            Err(
-                store::brands::BrandError::NotAuthorized
-                | store::brands::BrandError::NoSuchBrand(_)
-                | store::brands::BrandError::NoSuchFirm(_),
-            ) => return Err(BrandPresentationError::NotFound),
-            Err(error) => return Err(BrandPresentationError::Internal(error.to_string())),
-        };
+    let brand = match store::brands::find_by_key_for_actor(
+        application_store,
+        actor_role,
+        actor_person_id,
+        key,
+    )
+    .await
+    {
+        Ok(brand) => brand,
+        Err(
+            store::brands::BrandError::NotAuthorized
+            | store::brands::BrandError::NoSuchBrand(_)
+            | store::brands::BrandError::NoSuchFirm(_),
+        ) => return Err(BrandPresentationError::NotFound),
+        Err(error) => return Err(BrandPresentationError::Internal(error.to_string())),
+    };
     if let Some(typeface) = typeface {
         if typeface != "uploaded" && views::brand::typeface_by_id(typeface).is_none() {
             return Err(BrandPresentationError::UnknownChoice(format!(
@@ -1927,7 +1938,7 @@ pub async fn apply_brand_presentation(
         }
     }
     match store::brands::update(
-        surreal,
+        application_store,
         actor_role,
         actor_person_id,
         brand.id,
@@ -1961,7 +1972,7 @@ async fn update_brand_presentation(
     JsonOrForm(input): JsonOrForm<UpdateBrandPresentation>,
 ) -> Response {
     match apply_brand_presentation(
-        &state.surreal,
+        &state.application_store,
         session.role,
         session.person_id,
         &key,
@@ -2001,7 +2012,7 @@ async fn brand_letterhead_door(
     let pg = store::postgres::PostgresDb::from_env()
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
-    match store::brand_letterheads::for_brand_key(&state.surreal, &pg, &key).await {
+    match store::brand_letterheads::for_brand_key(&state.application_store, &pg, &key).await {
         Ok(Some(row)) => Ok((StatusCode::OK, Json(row)).into_response()),
         // An unknown key is the same bare 404 whether the stores answer
         // None or the typed NotFound.
@@ -2059,10 +2070,10 @@ where
 }
 
 async fn get_person(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<store::persons::Person>, ApiError> {
-    store::persons::find_by_id(&surreal, id)
+    store::persons::find_by_id(&application_store, id)
         .await?
         .map(Json)
         .ok_or(ApiError::NotFound)
@@ -2108,7 +2119,7 @@ async fn reconcile_project_repositories_door(
     if !authed.0.role.is_admin_tier() {
         return Err(ApiError::Forbidden);
     }
-    let projects = store::projects::all(&state.surreal)
+    let projects = store::projects::all(&state.application_store)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     let rows: Vec<store::project_reconcile::RowUnderReview<'_>> =
@@ -2151,10 +2162,10 @@ async fn project_lifecycle_door(
     if !authed.0.role.is_admin_tier() {
         return Err(ApiError::Forbidden);
     }
-    let projects = store::projects::all(&state.surreal)
+    let projects = store::projects::all(&state.application_store)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
-    let official = store::projects::onboarding_official_sets(&state.surreal, &projects)
+    let official = store::projects::onboarding_official_sets(&state.application_store, &projects)
         .await
         .map_err(ApiError::Db)?;
     let lifecycle = projects
@@ -2195,7 +2206,7 @@ async fn reconcile_project_surfaces_door(
     if !authed.0.role.is_admin_tier() {
         return Err(ApiError::Forbidden);
     }
-    let surfaces = store::project_surfaces::reconcile_from_env(&state.surreal, id)
+    let surfaces = store::project_surfaces::reconcile_from_env(&state.application_store, id)
         .await
         .map_err(surface_error)?;
     Ok((StatusCode::OK, Json(surfaces)).into_response())
@@ -2213,7 +2224,7 @@ async fn repair_project_forgejo_mirror_door(
     if session.scope.is_some() {
         return Err(ApiError::NotFound);
     }
-    let project = store::projects::find_by_id(&state.surreal, id)
+    let project = store::projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
@@ -2268,7 +2279,7 @@ async fn read_project_handles_door(
             _ => return Err(ApiError::NotFound),
         }
     }
-    let handles = store::project_surfaces::read_handles(&state.surreal, id)
+    let handles = store::project_surfaces::read_handles(&state.application_store, id)
         .await
         .map_err(surface_error)?;
     Ok((StatusCode::OK, Json(handles)).into_response())
@@ -2291,7 +2302,7 @@ async fn list_projects_door(
     authed: AuthedSession,
 ) -> Result<Response, ApiError> {
     if let Some(SessionScope::Document(scope)) = &authed.0.scope {
-        let project = store::projects::find_by_id(&state.surreal, scope.project_id)
+        let project = store::projects::find_by_id(&state.application_store, scope.project_id)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?
             .filter(|project| project.code == scope.project_code)
@@ -2307,7 +2318,7 @@ async fn list_projects_door(
         return Ok((StatusCode::OK, Json(lookup)).into_response());
     }
     let projects = crate::client_portal::access()
-        .visible_projects(&state.surreal, authed.0.person_id, authed.0.role)
+        .visible_projects(&state.application_store, authed.0.person_id, authed.0.role)
         .await
         .map_err(ApiError::Db)?;
     let projects = projects
@@ -2343,7 +2354,7 @@ async fn get_project_door(
     if !can_see(&state, &authed, id).await {
         return Err(ApiError::NotFound);
     }
-    let project = store::projects::find_by_id(&state.surreal, id)
+    let project = store::projects::find_by_id(&state.application_store, id)
         .await
         .ok()
         .flatten()
@@ -2428,10 +2439,9 @@ async fn firm_forgejo_parity_door(
     }
     let page_size = 8_u16;
     let max_projects = usize::from(page_size);
-    let pg = store::postgres::PostgresDb::configured()
+    let pg = store::postgres::PostgresDb::application()
         .await
-        .map_err(|error| ApiError::Db(error.to_string()))?
-        .ok_or_else(|| ApiError::Db("Project storage is unavailable".into()))?;
+        .map_err(|error| ApiError::Db(error.to_string()))?;
     let mut projects = store::postgres::projects::firm_project_sources_on(
         &pg,
         firm,
@@ -2541,7 +2551,7 @@ async fn may_use_mirror(
     firm_id: Uuid,
 ) -> Result<bool, ApiError> {
     store::firm_capability::resolve(
-        &state.surreal,
+        &state.application_store,
         viewer.role,
         viewer.person_id,
         firm_id,
@@ -2564,7 +2574,7 @@ async fn connect_project_mirror(
         .filter(|root| !root.trim().is_empty())
         .ok_or_else(MirrorIssue::root_configuration)?;
     let kms = crate::integrations::runtime_kms_from_env().await;
-    store::project_surfaces::forgejo_for_firm(&state.surreal, Some(firm_id), kms.as_ref(), |key| {
+    store::project_surfaces::forgejo_for_firm(&state.application_store, Some(firm_id), kms.as_ref(), |key| {
         (key == NAVIGATOR_FORGEJO_ROOT_URL_ENV).then(|| root.clone())
     })
     .await
@@ -2802,7 +2812,7 @@ async fn onboarding_agreements(
     lawyer: LawyerSession,
 ) -> Result<Response, ApiError> {
     let projects = store::access::visible_projects_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
     )
@@ -2838,18 +2848,20 @@ async fn lawyer_deadline_projects(
     Query(query): Query<DeadlineProjectQuery>,
 ) -> Result<Response, ApiError> {
     let mut projects = store::access::visible_projects_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
     )
     .await
     .map_err(ApiError::Db)?;
-    let firm_id =
-        store::firms::firm_id_for_brand_key(&state.surreal, views::brand::brand_key().as_str())
-            .await
-            .map_err(|error| ApiError::Db(error.to_string()))?;
+    let firm_id = store::firms::firm_id_for_brand_key(
+        &state.application_store,
+        views::brand::brand_key().as_str(),
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?;
     let firm_id = firm_id.ok_or_else(|| ApiError::Db("host brand has no Firm".into()))?;
-    let firm_brands = store::firms::brand_keys_for_firm(&state.surreal, firm_id)
+    let firm_brands = store::firms::brand_keys_for_firm(&state.application_store, firm_id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     projects.retain(|project| {
@@ -2928,18 +2940,22 @@ async fn project_status_door(
     if !participates_as_firm(&state, &lawyer, id).await {
         return Err(ApiError::NotFound);
     }
-    let project = store::projects::find_by_id(&state.surreal, id)
+    let project = store::projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
-    let (project, history) = store::projects::status_with_history(&state.surreal, project).await?;
-    let (opening, closing) =
-        store::projects::matter_lifecycle_sets(&state.surreal, std::slice::from_ref(&project))
+    let (project, history) =
+        store::projects::status_with_history(&state.application_store, project).await?;
+    let (opening, closing) = store::projects::matter_lifecycle_sets(
+        &state.application_store,
+        std::slice::from_ref(&project),
+    )
+    .await
+    .map_err(ApiError::Db)?;
+    let onboarding_status =
+        store::projects::onboarding_status(&state.application_store, id, &project.code)
             .await
             .map_err(ApiError::Db)?;
-    let onboarding_status = store::projects::onboarding_status(&state.surreal, id, &project.code)
-        .await
-        .map_err(ApiError::Db)?;
     let lifecycle = store::projects::project_lifecycle(
         &project.code,
         if project.status == "archived" {
@@ -2950,7 +2966,7 @@ async fn project_status_door(
         onboarding_status != store::projects::OnboardingStatus::Official,
         !closing.contains(&id),
     );
-    let documents = store::assets::for_project(&state.surreal, id)
+    let documents = store::assets::for_project(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .into_iter()
@@ -3029,7 +3045,7 @@ async fn stored_project_envelopes(
 ) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>), ApiError> {
     let mut adopted_envelopes = Vec::new();
     let mut envelopes = Vec::new();
-    for notation in store::notations::list_by_project(&state.surreal, id).await? {
+    for notation in store::notations::list_by_project(&state.application_store, id).await? {
         if let Some(envelope) =
             crate::signature_adoption::evidence(state.storage.as_ref(), notation.id).await?
         {
@@ -3038,7 +3054,7 @@ async fn stored_project_envelopes(
             adopted_envelopes.push(entry);
         } else {
             let mut signature = crate::signature_status::status_for_notation(
-                &state.surreal,
+                &state.application_store,
                 &state.storage,
                 &notation,
             )
@@ -3046,7 +3062,7 @@ async fn stored_project_envelopes(
             if signature.signature_request_id.is_some() {
                 crate::signature_status::read_signer_identities(
                     &mut signature,
-                    &state.surreal,
+                    &state.application_store,
                     notation.project_id,
                     state.signature_provider.as_ref(),
                 )
@@ -3068,10 +3084,10 @@ async fn stored_project_envelopes(
             }
         }
     }
-    if let Some(pg) = store::postgres::PostgresDb::configured()
-        .await
-        .map_err(crate::signature_adoption::internal)?
     {
+        let pg = store::postgres::PostgresDb::application()
+            .await
+            .map_err(crate::signature_adoption::internal)?;
         for observed in store::project_envelopes::for_project(&pg, id)
             .await
             .map_err(crate::signature_adoption::internal)?
@@ -3115,7 +3131,7 @@ async fn project_portal_invitation_door(
     if !participates_as_firm(&state, &lawyer, id).await {
         return Err(ApiError::NotFound);
     }
-    let project = store::projects::find_by_id(&state.surreal, id)
+    let project = store::projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
@@ -3129,19 +3145,19 @@ async fn project_portal_invitation_door(
     {
         return conflict("This Project has no active, confirmed Legal Plan acceptance.");
     }
-    let participants = store::projects::participations_for_project(&state.surreal, id)
+    let participants = store::projects::participations_for_project(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     let Some(client_id) = project_client_dri(project.client_dri_person_id, &participants) else {
         return conflict("Designate the member as the Project's client DRI first.");
     };
-    if !store::access::can_see_project_as_client(&state.surreal, Some(client_id), id)
+    if !store::access::can_see_project_as_client(&state.application_store, Some(client_id), id)
         .await
         .map_err(ApiError::Db)?
     {
         return conflict("The member needs client participation on this Project.");
     }
-    let client = store::persons::find_by_id(&state.surreal, client_id)
+    let client = store::persons::find_by_id(&state.application_store, client_id)
         .await?
         .ok_or(ApiError::NotFound)?;
     if client.role != store::persons::Role::Client {
@@ -3205,7 +3221,7 @@ async fn save_testimonial_door(
         return Err(ApiError::NotFound);
     }
     let result = store::testimonials::save_for_client_dri(
-        &state.surreal,
+        &state.application_store,
         person_id,
         project_id,
         &store::testimonials::TestimonialSubmission {
@@ -3225,7 +3241,7 @@ async fn publish_testimonial_door(
 ) -> Result<Response, ApiError> {
     Ok(testimonial_response(
         store::testimonials::publish(
-            &state.surreal,
+            &state.application_store,
             session.person_id,
             session.role,
             testimonial_id,
@@ -3241,7 +3257,7 @@ async fn unpublish_testimonial_door(
 ) -> Result<Response, ApiError> {
     Ok(testimonial_response(
         store::testimonials::unpublish(
-            &state.surreal,
+            &state.application_store,
             session.person_id,
             session.role,
             testimonial_id,
@@ -3259,7 +3275,7 @@ async fn list_participants_door(
     if !can_see(&state, &authed, id).await {
         return Err(ApiError::NotFound);
     }
-    let rows = store::projects::participations_for_project(&state.surreal, id)
+    let rows = store::projects::participations_for_project(&state.application_store, id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok((StatusCode::OK, Json(rows)).into_response())
@@ -3292,25 +3308,29 @@ async fn private_terms_door(
     authed: AuthedSession,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let viewer =
-        store::access::matter_viewer(&state.surreal, authed.0.person_id, authed.0.role, id)
-            .await
-            .map_err(ApiError::Db)?;
+    let viewer = store::access::matter_viewer(
+        &state.application_store,
+        authed.0.person_id,
+        authed.0.role,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
         return Err(ApiError::NotFound);
     }
-    let project = store::projects::find_by_id(&state.surreal, id)
+    let project = store::projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
-    let terms = private_terms_for_project(&state.surreal, project).await?;
+    let terms = private_terms_for_project(&state.application_store, project).await?;
     Ok((StatusCode::OK, Json(terms)).into_response())
 }
 
 /// Resolve only parties attached to this authorized Project. A dangling
 /// attachment refuses the response instead of claiming a complete check.
 async fn private_terms_for_project(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     project: store::projects::Project,
 ) -> Result<PrivateTerms, ApiError> {
     let resolution = store::private_terms::resolve(db, &project)
@@ -3409,12 +3429,12 @@ async fn reconcile_private_terms_door(
     State(state): State<ApiState>,
     _authed: AdminSession,
 ) -> Result<Response, ApiError> {
-    let projects = store::projects::all(&state.surreal)
+    let projects = store::projects::all(&state.application_store)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     let mut findings = Vec::new();
     for project in projects {
-        let resolution = store::private_terms::resolve(&state.surreal, &project)
+        let resolution = store::private_terms::resolve(&state.application_store, &project)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?;
         if resolution.findings.is_empty() {
@@ -3447,7 +3467,7 @@ async fn get_finance_door(
     if !can_see(&state, &authed, id).await {
         return Err(ApiError::NotFound);
     }
-    match store::finance_aggregate::latest_for_project(&state.surreal, id).await {
+    match store::finance_aggregate::latest_for_project(&state.application_store, id).await {
         Ok(Some(report)) => Ok((StatusCode::OK, Json(report)).into_response()),
         Ok(None) => Err(ApiError::NotFound),
         Err(e) => Err(ApiError::Db(e.to_string())),
@@ -3466,7 +3486,7 @@ async fn run_finance_door(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -3476,7 +3496,7 @@ async fn run_finance_door(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    let project = store::projects::find_by_id(&state.surreal, id)
+    let project = store::projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
@@ -3593,7 +3613,7 @@ async fn main_push_event_door(
     if let Err(message) = event.validate() {
         return Ok(bad_request("invalid_event", message));
     }
-    store::projects::find_by_id(&state.surreal, id)
+    store::projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
@@ -3602,7 +3622,11 @@ async fn main_push_event_door(
     // credential is resolved here first: a Firm that has not connected Slack,
     // or a deployment that cannot unseal Firm credentials, is refused with a
     // body the CI step prints instead of a 202 the lane would later drop.
-    if let Err(error) = state.integration_providers.slack(&state.surreal, id).await {
+    if let Err(error) = state
+        .integration_providers
+        .slack(&state.application_store, id)
+        .await
+    {
         tracing::warn!(project_id = %id, short_sha = %event.short_sha, outcome = error.slug(), "main push notice refused: Slack is not connected for the Project's Firm");
         return Ok((
             StatusCode::CONFLICT,
@@ -3704,18 +3728,22 @@ async fn list_notations_door(
     if !can_see(&state, &authed, id).await {
         return Err(ApiError::NotFound);
     }
-    let mut notations = store::notations::list_by_project(&state.surreal, id).await?;
-    let lawyer_lens =
-        store::access::matter_lens(&state.surreal, authed.0.person_id, authed.0.role, id)
-            .await
-            .map_err(|error| ApiError::Db(error.clone()))?
-            == Some(store::access::ProjectLens::Lawyer);
+    let mut notations = store::notations::list_by_project(&state.application_store, id).await?;
+    let lawyer_lens = store::access::matter_lens(
+        &state.application_store,
+        authed.0.person_id,
+        authed.0.role,
+        id,
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.clone()))?
+        == Some(store::access::ProjectLens::Lawyer);
     if !lawyer_lens {
         let template_ids: Vec<_> = notations
             .iter()
             .map(|notation| notation.template_id)
             .collect();
-        let templates = store::templates::find_by_ids(&state.surreal, &template_ids)
+        let templates = store::templates::find_by_ids(&state.application_store, &template_ids)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?;
         notations.retain(|notation| {
@@ -3746,7 +3774,7 @@ async fn notation_inventory_door(
     }
 
     let rows = webapp::lawyer_project_notations::project_notation_board(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         id,
     )
@@ -3761,14 +3789,14 @@ async fn get_notation_door(
     authed: AuthedSession,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let notation = store::notations::find_by_id(&state.surreal, id)
+    let notation = store::notations::find_by_id(&state.application_store, id)
         .await?
         .ok_or(ApiError::NotFound)?;
     if !can_see(&state, &authed, notation.project_id).await {
         return Err(ApiError::NotFound);
     }
     let lawyer_lens = store::access::matter_lens(
-        &state.surreal,
+        &state.application_store,
         authed.0.person_id,
         authed.0.role,
         notation.project_id,
@@ -3788,7 +3816,7 @@ async fn notation_client_visible(
     state: &ApiState,
     notation: &store::notations::Notation,
 ) -> Result<bool, ApiError> {
-    let template = store::templates::find_by_id(&state.surreal, notation.template_id)
+    let template = store::templates::find_by_id(&state.application_store, notation.template_id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     let Some(template) = template else {
@@ -3814,7 +3842,7 @@ async fn list_notation_answers_door(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let notation = notation_in_firm_participation(&state, &lawyer, id).await?;
-    let answers = store::answers::for_notation(&state.surreal, notation.id)
+    let answers = store::answers::for_notation(&state.application_store, notation.id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     Ok((StatusCode::OK, Json(answers)).into_response())
@@ -3825,7 +3853,7 @@ async fn list_playbooks_door(
     State(state): State<ApiState>,
     _lawyer: LawyerSession,
 ) -> Result<Response, ApiError> {
-    let playbooks = store::playbooks::all(&state.surreal)
+    let playbooks = store::playbooks::all(&state.application_store)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok((StatusCode::OK, Json(playbooks)).into_response())
@@ -3837,7 +3865,7 @@ async fn get_playbook_door(
     _lawyer: LawyerSession,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let playbook = store::playbooks::by_id(&state.surreal, id)
+    let playbook = store::playbooks::by_id(&state.application_store, id)
         .await
         .ok()
         .flatten()
@@ -3852,16 +3880,16 @@ async fn get_contract_review_door(
     lawyer: LawyerSession,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let review = store::contract_reviews::by_id(&state.surreal, id)
+    let review = store::contract_reviews::by_id(&state.application_store, id)
         .await
         .ok()
         .flatten()
         .ok_or(ApiError::NotFound)?;
-    let notation = store::notations::find_by_id(&state.surreal, review.notation_id)
+    let notation = store::notations::find_by_id(&state.application_store, review.notation_id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         notation.project_id,
@@ -3889,13 +3917,13 @@ async fn put_project_jurisdiction(
     if !participates_as_firm(&state, &lawyer, id).await {
         return Err(ApiError::NotFound);
     }
-    let jurisdiction = store::jurisdictions::find_by_code(&state.surreal, &input.code)
+    let jurisdiction = store::jurisdictions::find_by_code(&state.application_store, &input.code)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(store::projects::ProjectCommandError::Invalid(
             "unknown jurisdiction code",
         ))?;
-    store::projects::set_jurisdiction(&state.surreal, id, Some(jurisdiction.id))
+    store::projects::set_jurisdiction(&state.application_store, id, Some(jurisdiction.id))
         .await?
         .ok_or(ApiError::NotFound)?;
     Ok(StatusCode::NO_CONTENT)
@@ -3914,7 +3942,7 @@ async fn put_project_jurisdiction(
 /// matter in the client lens rather than handing them the firm's notes.
 async fn participates_as_firm(state: &ApiState, lawyer: &LawyerSession, project_id: Uuid) -> bool {
     store::access::matter_viewer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         project_id,
@@ -3929,7 +3957,7 @@ async fn participates_as_firm(state: &ApiState, lawyer: &LawyerSession, project_
 async fn can_see(state: &ApiState, authed: &AuthedSession, project_id: Uuid) -> bool {
     crate::client_portal::access()
         .matter_viewer(
-            &state.surreal,
+            &state.application_store,
             authed.0.person_id,
             authed.0.role,
             project_id,
@@ -3960,15 +3988,20 @@ async fn list_documents_door(
     Path(id): Path<Uuid>,
     Query(query): Query<ListDocumentsQuery>,
 ) -> Result<Response, ApiError> {
-    let lens = store::access::matter_lens(&state.surreal, authed.0.person_id, authed.0.role, id)
-        .await
-        .map_err(ApiError::Db)?
-        .ok_or(ApiError::NotFound)?;
+    let lens = store::access::matter_lens(
+        &state.application_store,
+        authed.0.person_id,
+        authed.0.role,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?
+    .ok_or(ApiError::NotFound)?;
     let client_lens = matches!(lens, store::access::ProjectLens::Client);
     let mut docs = if query.include_deleted && !client_lens {
-        store::assets::for_project_including_deleted(&state.surreal, id).await
+        store::assets::for_project_including_deleted(&state.application_store, id).await
     } else {
-        store::assets::for_project(&state.surreal, id).await
+        store::assets::for_project(&state.application_store, id).await
     }
     .map_err(|e| ApiError::Db(e.to_string()))?;
     if client_lens {
@@ -3994,9 +4027,9 @@ async fn get_conversation_door(
         return Err(ApiError::NotFound);
     }
     let messages = if matches!(authed.0.role, store::persons::Role::Client) {
-        store::communications::for_project_client_visible(&state.surreal, id).await
+        store::communications::for_project_client_visible(&state.application_store, id).await
     } else {
-        store::communications::for_project(&state.surreal, id).await
+        store::communications::for_project(&state.application_store, id).await
     }
     .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok((StatusCode::OK, Json(messages)).into_response())
@@ -4009,11 +4042,11 @@ async fn list_review_documents_door(
     lawyer: LawyerSession,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let notation = store::notations::find_by_id(&state.surreal, id)
+    let notation = store::notations::find_by_id(&state.application_store, id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         notation.project_id,
@@ -4023,7 +4056,7 @@ async fn list_review_documents_door(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    let docs = store::review_documents::for_notation(&state.surreal, id)
+    let docs = store::review_documents::for_notation(&state.application_store, id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok((StatusCode::OK, Json(docs)).into_response())
@@ -4035,7 +4068,7 @@ async fn list_expunge_requests_door(
     State(state): State<ApiState>,
     _lawyer: LawyerSession,
 ) -> Result<Response, ApiError> {
-    let requests = store::expunge_requests::list_pending(&state.surreal)
+    let requests = store::expunge_requests::list_pending(&state.application_store)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok((StatusCode::OK, Json(requests)).into_response())
@@ -4053,9 +4086,12 @@ async fn create_entity(
     _lawyer: LawyerSession,
     JsonOrForm(input): JsonOrForm<store::entity_commands::CreateEntityCommand>,
 ) -> Result<Response, ApiError> {
-    let created =
-        store::entity_commands::create_entity(&state.surreal, &state.bootstrap_company, &input)
-            .await?;
+    let created = store::entity_commands::create_entity(
+        &state.application_store,
+        &state.bootstrap_company,
+        &input,
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(created)).into_response())
 }
 
@@ -4088,7 +4124,7 @@ pub(crate) const SEED_ENDPOINT: &str = "/app/api/seed";
 
 /// Scope Project API routes to the Admin's Firm access or the client's Brand and participation.
 pub(crate) async fn scope_project_request(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     params: Result<axum::extract::RawPathParams, axum::extract::rejection::RawPathParamsRejection>,
     request: Request,
     next: Next,
@@ -4102,20 +4138,18 @@ pub(crate) async fn scope_project_request(
             });
             if let Some(project_id) = project_id {
                 let result = match session.role {
-                    store::persons::Role::Admin => {
-                        store::projects::can_access_as_lawyer_in_surreal(
-                            &surreal,
-                            session.person_id,
-                            session.role,
-                            project_id,
-                        )
-                        .await
-                        .map_err(|error| error.to_string())
-                    }
+                    store::persons::Role::Admin => store::projects::can_access_as_lawyer(
+                        &application_store,
+                        session.person_id,
+                        session.role,
+                        project_id,
+                    )
+                    .await
+                    .map_err(|error| error.to_string()),
                     store::persons::Role::Client if session.scope.is_none() => {
                         crate::client_portal::access()
                             .can_see_project_as_client(
-                                &surreal,
+                                &application_store,
                                 session.person_id,
                                 session.role,
                                 project_id,
@@ -4173,7 +4207,7 @@ async fn reconcile_seed(
             .await;
         }
         let report = store::seed::reconcile_yaml(
-            &state.surreal,
+            &state.application_store,
             model,
             &input.yaml,
             &state.bootstrap_company,
@@ -4302,7 +4336,7 @@ async fn reconcile_attorney_rate_seed(
             ));
         }
     }
-    let project = store::projects::find_by_code(&state.surreal, project_code)
+    let project = store::projects::find_by_code(&state.application_store, project_code)
         .await?
         .ok_or_else(|| {
             anyhow::Error::new(store::seed::ScopeViolation::UnknownProject(
@@ -4311,7 +4345,7 @@ async fn reconcile_attorney_rate_seed(
         })?;
     if !input.as_ci {
         let viewer = store::access::matter_viewer(
-            &state.surreal,
+            &state.application_store,
             session.person_id,
             session.role,
             project.id,
@@ -4325,7 +4359,7 @@ async fn reconcile_attorney_rate_seed(
         }
     }
     let pg = crate::time_tracking_api::prepared_store(
-        &state.surreal,
+        &state.application_store,
         "import_attorney_rates",
         project.id,
     )
@@ -4356,9 +4390,13 @@ async fn update_entity(
     Path(id): Path<Uuid>,
     JsonOrForm(input): JsonOrForm<store::entity_commands::EntityPatch>,
 ) -> Result<Json<store::entities::Entity>, ApiError> {
-    let updated =
-        store::entity_commands::patch_entity(&state.surreal, id, &state.bootstrap_company, &input)
-            .await?;
+    let updated = store::entity_commands::patch_entity(
+        &state.application_store,
+        id,
+        &state.bootstrap_company,
+        &input,
+    )
+    .await?;
     Ok(Json(updated))
 }
 
@@ -4373,8 +4411,12 @@ async fn delete_entity(
     _lawyer: LawyerSession,
     Path(id): Path<Uuid>,
 ) -> Result<Json<store::entities::Entity>, ApiError> {
-    let deleted =
-        store::entity_commands::delete_entity(&state.surreal, id, &state.bootstrap_company).await?;
+    let deleted = store::entity_commands::delete_entity(
+        &state.application_store,
+        id,
+        &state.bootstrap_company,
+    )
+    .await?;
     Ok(Json(deleted))
 }
 
@@ -4489,8 +4531,8 @@ async fn open_project(
         acting_person_id: acting,
         closed_at: input.closed_at,
     };
-    let matter = store::projects::open_matter(&state.surreal, &command).await?;
-    store::project_surfaces::reconcile_after_open(&state.surreal, matter.id).await;
+    let matter = store::projects::open_matter(&state.application_store, &command).await?;
+    store::project_surfaces::reconcile_after_open(&state.application_store, matter.id).await;
     Ok((StatusCode::CREATED, Json(matter)).into_response())
 }
 
@@ -4509,8 +4551,8 @@ async fn selected_project_brand(
         ));
     }
     if let (Some(firm_id), Some(brand)) = (firm_id, brand.as_deref()) {
-        require_firm_administration(&state.surreal, session, firm_id).await?;
-        let wearing = store::firms::firm_id_for_brand_key(&state.surreal, brand)
+        require_firm_administration(&state.application_store, session, firm_id).await?;
+        let wearing = store::firms::firm_id_for_brand_key(&state.application_store, brand)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?;
         if wearing != Some(firm_id) {
@@ -4526,7 +4568,7 @@ async fn selected_project_brand(
 
 /// Authorize administration of one explicitly selected Firm.
 pub(crate) async fn require_firm_administration(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     session: &SessionData,
     firm_id: Uuid,
 ) -> Result<(), ApiError> {
@@ -4534,7 +4576,7 @@ pub(crate) async fn require_firm_administration(
         return Err(ApiError::Forbidden);
     }
     let decision = store::firm_capability::resolve(
-        surreal,
+        application_store,
         session.role,
         session.person_id,
         firm_id,
@@ -4569,7 +4611,7 @@ async fn update_project(
     JsonOrForm(input): JsonOrForm<store::projects::UpdateProjectCommand>,
 ) -> Result<Response, ApiError> {
     if let Some(firm_id) = input.firm_id {
-        require_firm_administration(&state.surreal, &session, firm_id).await?;
+        require_firm_administration(&state.application_store, &session, firm_id).await?;
     }
     let drive_folder_check = match input.drive_folder_id.as_deref().map(str::trim) {
         Some(folder) if store::projects::is_valid_drive_folder_id(folder) => Some(
@@ -4579,7 +4621,7 @@ async fn update_project(
         ),
         _ => None,
     };
-    let updated = store::projects::update_project(&state.surreal, id, &input).await?;
+    let updated = store::projects::update_project(&state.application_store, id, &input).await?;
     let mut response = Json(updated).into_response();
     if let Some(check) = drive_folder_check {
         response.headers_mut().insert(
@@ -4643,18 +4685,19 @@ async fn generate_pitch_offboarding_if_needed(
     }
 
     let client_name = if let Some(entity) =
-        store::entities::find_by_id(&state.surreal, project.entity_id).await?
+        store::entities::find_by_id(&state.application_store, project.entity_id).await?
     {
         entity.name
     } else {
-        let dri_id = store::projects::participations_for_project(&state.surreal, project.id)
-            .await
-            .map_err(|error| ApiError::Db(error.to_string()))?
-            .into_iter()
-            .find(|participant| participant.is_client_dri)
-            .map(|participant| participant.person_id)
-            .ok_or_else(|| ApiError::Db("Pitch has no client Entity or DRI Person.".into()))?;
-        store::persons::find_by_id(&state.surreal, dri_id)
+        let dri_id =
+            store::projects::participations_for_project(&state.application_store, project.id)
+                .await
+                .map_err(|error| ApiError::Db(error.to_string()))?
+                .into_iter()
+                .find(|participant| participant.is_client_dri)
+                .map(|participant| participant.person_id)
+                .ok_or_else(|| ApiError::Db("Pitch has no client Entity or DRI Person.".into()))?;
+        store::persons::find_by_id(&state.application_store, dri_id)
             .await?
             .map(|person| person.name)
             .ok_or_else(|| ApiError::Db("Pitch client DRI Person was not found.".into()))?
@@ -4680,7 +4723,7 @@ async fn generate_pitch_offboarding_if_needed(
         project.id, PITCH_OFFBOARDING_FILENAME
     );
     store::documents::ingest_bytes_with_idempotency_key(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         &args,
         &idempotency_key,
@@ -4743,14 +4786,14 @@ async fn transition_matter(
     // close and every required handoff's acknowledgment; a repeat of an
     // archive already done is not gated again.
     if input.transition == store::projects::Transition::Archive {
-        let already = store::projects::find_by_id(&state.surreal, id)
+        let already = store::projects::find_by_id(&state.application_store, id)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?
             .is_some_and(|project| project.status == "archived");
         if !already {
             let pg = store::postgres::PostgresDb::from_env().await.ok();
             let readiness = store::project_closeout::readiness(
-                &state.surreal,
+                &state.application_store,
                 pg.as_ref(),
                 id,
                 store::project_closeout::Closeout::Archive,
@@ -4782,7 +4825,7 @@ async fn transition_matter(
         prepare_pitch_close(&state, id, input.effective_at).await?;
     }
     let updated = store::projects::transition_project_attested(
-        &state.surreal,
+        &state.application_store,
         id,
         input.transition,
         reason,
@@ -4819,7 +4862,7 @@ async fn prepare_pitch_close(
     id: Uuid,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<(), ApiError> {
-    let Some(project) = store::projects::find_by_id(&state.surreal, id)
+    let Some(project) = store::projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .filter(|project| project.status == "open")
@@ -4827,15 +4870,16 @@ async fn prepare_pitch_close(
         return Ok(());
     };
     let projects = std::slice::from_ref(&project);
-    let official = store::projects::onboarding_official_sets(&state.surreal, projects)
+    let official = store::projects::onboarding_official_sets(&state.application_store, projects)
         .await
         .map_err(ApiError::Db)?;
     if official.contains(&id) {
         return Ok(());
     }
-    let (_, offboarding) = store::projects::matter_lifecycle_sets(&state.surreal, projects)
-        .await
-        .map_err(ApiError::Db)?;
+    let (_, offboarding) =
+        store::projects::matter_lifecycle_sets(&state.application_store, projects)
+            .await
+            .map_err(ApiError::Db)?;
     if offboarding.contains(&id) {
         return Ok(());
     }
@@ -4853,16 +4897,16 @@ async fn close_project_calendar(
 ) -> store::projects::Project {
     let result = match state
         .integration_providers
-        .calendar(&state.surreal, project.id)
+        .calendar(&state.application_store, project.id)
         .await
     {
         Ok(calendar) => {
-            store::project_calendar::close(&state.surreal, project.id, calendar.as_ref())
+            store::project_calendar::close(&state.application_store, project.id, calendar.as_ref())
                 .await
                 .map(|_| ())
                 .map_err(|error| error.to_string())
         }
-        Err(_) => store::projects::clear_booking_url(&state.surreal, project.id)
+        Err(_) => store::projects::clear_booking_url(&state.application_store, project.id)
             .await
             .map(|_| ())
             .map_err(|error| error.to_string()),
@@ -4874,7 +4918,7 @@ async fn close_project_calendar(
             "Project calendar close failed; retry with navigator project setup"
         );
     }
-    store::projects::find_by_id(&state.surreal, project.id)
+    store::projects::find_by_id(&state.application_store, project.id)
         .await
         .ok()
         .flatten()
@@ -4893,7 +4937,7 @@ async fn delete_project(
     _lawyer: LawyerSession,
     Path(id): Path<Uuid>,
 ) -> Result<Json<store::projects::Project>, ApiError> {
-    let deleted = store::projects::delete_project_with_surreal(&state.surreal, id).await?;
+    let deleted = store::projects::delete_project(&state.application_store, id).await?;
     Ok(Json(deleted))
 }
 
@@ -4925,7 +4969,7 @@ async fn add_participant(
     JsonOrForm(input): JsonOrForm<AddParticipantRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -4936,7 +4980,7 @@ async fn add_participant(
         return Err(ApiError::NotFound);
     }
     let row = store::participation::add_participant(
-        &state.surreal,
+        &state.application_store,
         &store::participation::AddParticipantCommand {
             project_id: id,
             person_id: input.person_id,
@@ -4975,7 +5019,7 @@ impl RecordAdversityRequest {
     /// refused as unreferenced rather than as a bare `404`.
     async fn party(
         &self,
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
     ) -> Result<store::project_references::Party, ApiError> {
         let named = [
             self.person_id.is_some(),
@@ -5000,14 +5044,14 @@ impl RecordAdversityRequest {
         let unreferenced =
             || ApiError::from(store::project_references::AdversityError::PartyNotReferenced);
         if let Some(email) = self.person_email.as_deref() {
-            let person = store::persons::find_by_email_ci(surreal, email)
+            let person = store::persons::find_by_email_ci(application_store, email)
                 .await
                 .map_err(|error| ApiError::Db(error.to_string()))?
                 .ok_or_else(unreferenced)?;
             return Ok(store::project_references::Party::person(person.id));
         }
         let name = self.entity_name.as_deref().unwrap_or_default();
-        let entity = store::entities::find_by_name(surreal, name)
+        let entity = store::entities::find_by_name(application_store, name)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?
             .ok_or_else(unreferenced)?;
@@ -5031,7 +5075,7 @@ async fn record_adversity(
     JsonOrForm(input): JsonOrForm<RecordAdversityRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -5041,9 +5085,9 @@ async fn record_adversity(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    let party = input.party(&state.surreal).await?;
+    let party = input.party(&state.application_store).await?;
     let edge = store::project_references::record_adversity(
-        &state.surreal,
+        &state.application_store,
         &store::project_references::RecordAdversityCommand {
             project_id: id,
             party,
@@ -5106,17 +5150,18 @@ async fn can_view_lawyer_graph(state: &ApiState, lawyer: &LawyerSession, person_
     if lawyer.0.person_id.is_some_and(|viewer| viewer == person_id) {
         return true;
     }
-    let memberships = match store::firms::memberships_for_person(&state.surreal, person_id).await {
-        Ok(memberships) => memberships,
-        Err(error) => {
-            tracing::error!(%error, %person_id, "api: lawyer-graph membership read failed");
-            return false;
-        }
-    };
+    let memberships =
+        match store::firms::memberships_for_person(&state.application_store, person_id).await {
+            Ok(memberships) => memberships,
+            Err(error) => {
+                tracing::error!(%error, %person_id, "api: lawyer-graph membership read failed");
+                return false;
+            }
+        };
     for membership in memberships {
         let decision = store::firm_capability::FirmCapability::ViewDirectory
             .resolve(
-                &state.surreal,
+                &state.application_store,
                 lawyer.0.role,
                 lawyer.0.person_id,
                 membership.firm_id,
@@ -5146,10 +5191,14 @@ async fn project_graph(
         Ok(depth) => depth,
         Err(response) => return Ok(response),
     };
-    let in_scope =
-        store::access::can_see_project(&state.surreal, lawyer.0.person_id, lawyer.0.role, id)
-            .await
-            .unwrap_or(false);
+    let in_scope = store::access::can_see_project(
+        &state.application_store,
+        lawyer.0.person_id,
+        lawyer.0.role,
+        id,
+    )
+    .await
+    .unwrap_or(false);
     if !in_scope {
         return Err(ApiError::NotFound);
     }
@@ -5162,7 +5211,7 @@ async fn project_graph(
         .map_err(|error| ApiError::Db(error.to_string()))?;
     let viewer = lawyer.0.person_id.filter(|_| lawyer.0.scope.is_none());
     let observe = if viewer.is_some() {
-        let project = store::projects::find_by_id(&state.surreal, id)
+        let project = store::projects::find_by_id(&state.application_store, id)
             .await
             .map_err(|e| ApiError::Db(e.to_string()))?;
         if let Some(firm_id) = project.and_then(|project| project.firm_id) {
@@ -5283,7 +5332,7 @@ async fn update_participant(
     JsonOrForm(input): JsonOrForm<UpdateParticipantRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -5294,7 +5343,7 @@ async fn update_participant(
         return Err(ApiError::NotFound);
     }
     let row = store::participation::update_participant(
-        &state.surreal,
+        &state.application_store,
         &store::participation::UpdateParticipantCommand {
             project_id: id,
             role_id,
@@ -5324,7 +5373,7 @@ async fn remove_participant(
 ) -> Result<Response, ApiError> {
     let acting = lawyer.0.person_id.ok_or(ApiError::Forbidden)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -5335,7 +5384,7 @@ async fn remove_participant(
         return Err(ApiError::NotFound);
     }
     store::participation::remove_participant(
-        &state.surreal,
+        &state.application_store,
         id,
         role_id,
         store::participation::DriActor::Person(acting),
@@ -5357,8 +5406,8 @@ async fn designate_participant_dri(
     Path((id, role_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     let acting = lawyer.0.person_id.ok_or(ApiError::Forbidden)?;
-    let row = participation_on_matter(&state.surreal, id, role_id).await?;
-    let person = store::persons::find_by_id(&state.surreal, row.person_id)
+    let row = participation_on_matter(&state.application_store, id, role_id).await?;
+    let person = store::persons::find_by_id(&state.application_store, row.person_id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let side = if person.role.is_lawyer_tier() {
@@ -5367,7 +5416,7 @@ async fn designate_participant_dri(
         store::projects::DriSide::Client
     };
     store::participation::update_participant(
-        &state.surreal,
+        &state.application_store,
         &store::participation::UpdateParticipantCommand {
             project_id: id,
             role_id,
@@ -5392,9 +5441,9 @@ async fn remove_participant_dri(
     Path((id, role_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     let acting = lawyer.0.person_id.ok_or(ApiError::Forbidden)?;
-    let row = participation_on_matter(&state.surreal, id, role_id).await?;
+    let row = participation_on_matter(&state.application_store, id, role_id).await?;
     store::participation::update_participant(
-        &state.surreal,
+        &state.application_store,
         &store::participation::UpdateParticipantCommand {
             project_id: id,
             role_id,
@@ -5412,11 +5461,11 @@ async fn remove_participant_dri(
 /// a `role_id` from another matter must not disclose that it exists, so a
 /// mismatch — like a missing row or a lookup failure — collapses to 404.
 async fn participation_on_matter(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     role_id: Uuid,
 ) -> Result<store::projects::PersonProjectRole, ApiError> {
-    store::projects::participation_by_id(surreal, role_id)
+    store::projects::participation_by_id(application_store, role_id)
         .await
         .ok()
         .flatten()
@@ -5437,7 +5486,7 @@ async fn close_matter(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -5447,7 +5496,9 @@ async fn close_matter(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    match crate::retainer_walk::open_closing_notation(&state.surreal, &state.storage, id).await {
+    match crate::retainer_walk::open_closing_notation(&state.application_store, &state.storage, id)
+        .await
+    {
         Ok(notation_id) => Ok((
             StatusCode::CREATED,
             Json(serde_json::json!({ "notation_id": notation_id })),
@@ -5495,7 +5546,7 @@ async fn post_conversation_message_door(
     JsonOrForm(input): JsonOrForm<PostConversationMessageRequest>,
 ) -> Result<Response, ApiError> {
     match crate::conversation::post_conversation_message(
-        &state.surreal,
+        &state.application_store,
         authed.0.person_id,
         authed.0.role,
         id,
@@ -5557,7 +5608,7 @@ async fn create_notation(
     JsonOrForm(input): JsonOrForm<CreateNotationRequest>,
 ) -> Result<Response, ApiError> {
     let outcome = crate::project_notation::create_project_notation(
-        &state.surreal,
+        &state.application_store,
         state.questionnaire_runtime.as_ref(),
         &state.storage,
         lawyer.0.person_id,
@@ -5597,7 +5648,7 @@ async fn lookup_project_envelope(
     }
     let (envelope, notation) = read_project_envelope(&state, id, envelope_id).await?;
     let envelope = crate::signature_status::project_envelope_json(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         notation.as_ref(),
         &envelope,
@@ -5620,7 +5671,7 @@ async fn read_project_envelope(
 > {
     use crate::signature::SignatureProvider as _;
     use crate::signature_adoption::internal;
-    let db = &state.surreal;
+    let db = &state.application_store;
     let firm = store::projects::find_by_id(db, id)
         .await
         .map_err(internal)?
@@ -5691,7 +5742,7 @@ async fn refresh_project_envelopes(
     }
     let scoped = state
         .signature_provider
-        .for_project(&state.surreal, id)
+        .for_project(&state.application_store, id)
         .await
         .map_err(ApiError::SignatureUnavailable)?;
     let provider =
@@ -5701,7 +5752,7 @@ async fn refresh_project_envelopes(
         let pg = store::postgres::PostgresDb::from_env()
             .await
             .map_err(internal)?;
-        let firm = store::projects::find_by_id(&state.surreal, id)
+        let firm = store::projects::find_by_id(&state.application_store, id)
             .await
             .map_err(internal)?
             .and_then(|project| project.firm_id)
@@ -5712,10 +5763,11 @@ async fn refresh_project_envelopes(
         None
     };
     let mut refreshed = Vec::new();
-    for notation in store::notations::list_by_project(&state.surreal, id).await? {
-        let Some(signature) = store::signatures::latest_for_notation(&state.surreal, notation.id)
-            .await
-            .map_err(internal)?
+    for notation in store::notations::list_by_project(&state.application_store, id).await? {
+        let Some(signature) =
+            store::signatures::latest_for_notation(&state.application_store, notation.id)
+                .await
+                .map_err(internal)?
         else {
             continue;
         };
@@ -5738,7 +5790,7 @@ async fn refresh_project_envelopes(
             continue;
         }
         reconcile(
-            &state.surreal,
+            &state.application_store,
             &state.storage,
             provider,
             notation.id,
@@ -5751,7 +5803,7 @@ async fn refresh_project_envelopes(
                 .map_err(internal)?;
         }
         let envelope = crate::signature_status::project_envelope_json(
-            &state.surreal,
+            &state.application_store,
             &state.storage,
             Some(&notation),
             &envelope,
@@ -5795,7 +5847,7 @@ async fn adopt_envelope(
     if !participates_as_firm(&state, &lawyer, id).await {
         return Err(ApiError::NotFound);
     }
-    let db = &state.surreal;
+    let db = &state.application_store;
     let project = store::projects::find_by_id(db, id)
         .await
         .map_err(internal)?
@@ -5874,7 +5926,7 @@ async fn adopt_envelope(
                 .as_ref()
                 .and_then(|provider| provider.account_id().parse().ok()),
         ) {
-            if let Ok(Some(pg)) = store::postgres::PostgresDb::configured().await {
+            if let Ok(pg) = store::postgres::PostgresDb::application().await {
                 if store::docusign_completion::resume_adopted(&pg, firm, account, envelope_id, id)
                     .await
                     .is_err()
@@ -5901,7 +5953,7 @@ async fn resolve_adoption_notation(
     use crate::signature_adoption::internal;
     use store::signatures::SignatureProvider::DocuSign;
 
-    let db = &state.surreal;
+    let db = &state.application_store;
     let id = project.id;
     let envelope_key = input.envelope_id.to_string();
     let linked = store::signatures::by_provider(db, DocuSign, &envelope_key)
@@ -6039,11 +6091,11 @@ async fn answer_notation_step(
     // touching the questionnaire. A miss (no notation, or out of scope)
     // collapses to 404 so the door never discloses a notation the caller
     // cannot see.
-    let notation = store::notations::find_by_id(&state.surreal, id)
+    let notation = store::notations::find_by_id(&state.application_store, id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         notation.project_id,
@@ -6055,7 +6107,7 @@ async fn answer_notation_step(
     }
 
     let next = workflows::answer_step_with_reference(
-        &state.surreal,
+        &state.application_store,
         state.questionnaire_runtime.as_ref(),
         Some(&state.storage),
         id,
@@ -6072,7 +6124,7 @@ async fn answer_notation_step(
     // reached `lawyer_review`.
     if matches!(next, workflows::NextStep::QuestionnaireComplete) {
         let deps = crate::retainer_walk::RenderDeps {
-            surreal: &state.surreal,
+            application_store: &state.application_store,
             runtime: state.workflow_runtime.as_ref(),
             storage: &state.storage,
             assets_storage: &state.assets_storage,
@@ -6098,7 +6150,7 @@ async fn notation_in_firm_participation(
     lawyer: &LawyerSession,
     notation_id: Uuid,
 ) -> Result<store::notations::Notation, ApiError> {
-    let notation = store::notations::find_by_id(&state.surreal, notation_id)
+    let notation = store::notations::find_by_id(&state.application_store, notation_id)
         .await?
         .ok_or(ApiError::NotFound)?;
     if !participates_as_firm(state, lawyer, notation.project_id).await {
@@ -6116,11 +6168,11 @@ async fn notation_in_lawyer_scope(
     lawyer: &LawyerSession,
     notation_id: Uuid,
 ) -> Result<store::notations::Notation, ApiError> {
-    let notation = store::notations::find_by_id(&state.surreal, notation_id)
+    let notation = store::notations::find_by_id(&state.application_store, notation_id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         notation.project_id,
@@ -6163,7 +6215,7 @@ async fn request_notation_changes_door(
         .map(str::trim)
         .filter(|s| !s.is_empty());
     match crate::retainer_walk::request_notation_changes(
-        &state.surreal,
+        &state.application_store,
         state.workflow_runtime.as_ref(),
         Some(&state.storage),
         id,
@@ -6232,7 +6284,7 @@ async fn resubmit_reask_door(
     let acting = lawyer.0.person_id.ok_or(ApiError::Forbidden)?;
     notation_in_lawyer_scope(&state, &lawyer, id).await?;
     match crate::retainer_walk::resubmit_reask(
-        &state.surreal,
+        &state.application_store,
         state.workflow_runtime.as_ref(),
         Some(&state.storage),
         id,
@@ -6317,7 +6369,7 @@ async fn transcript_coverage_door(
         ));
     }
     match crate::retainer_walk::record_transcript_coverage(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         id,
         transcript,
@@ -6375,11 +6427,11 @@ async fn send_notation_intake(
     // Resolve the notation and enforce matter scope on its project before
     // dispatching anything. A miss collapses to 404 so the door never
     // discloses a notation the caller cannot see.
-    let notation = store::notations::find_by_id(&state.surreal, id)
+    let notation = store::notations::find_by_id(&state.application_store, id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         notation.project_id,
@@ -6391,7 +6443,8 @@ async fn send_notation_intake(
     }
 
     let recipient =
-        crate::retainer_walk::send_intake(&state.surreal, state.email.as_ref(), id).await?;
+        crate::retainer_walk::send_intake(&state.application_store, state.email.as_ref(), id)
+            .await?;
     Ok((
         StatusCode::OK,
         Json(SendIntakeResponse {
@@ -6426,11 +6479,11 @@ async fn approve_notation(
     // Resolve the notation and enforce matter scope on its project first. A
     // miss collapses to 404 so the door never discloses a notation the caller
     // cannot see.
-    let notation = store::notations::find_by_id(&state.surreal, id)
+    let notation = store::notations::find_by_id(&state.application_store, id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         notation.project_id,
@@ -6442,7 +6495,7 @@ async fn approve_notation(
     }
 
     let deps = crate::retainer_walk::RenderDeps {
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         runtime: state.workflow_runtime.as_ref(),
         storage: &state.storage,
         assets_storage: &state.assets_storage,
@@ -6502,11 +6555,11 @@ async fn lawyer_scoped_notation(
     lawyer: &LawyerSession,
     id: Uuid,
 ) -> Result<store::notations::Notation, ApiError> {
-    let notation = store::notations::find_by_id(&state.surreal, id)
+    let notation = store::notations::find_by_id(&state.application_store, id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         notation.project_id,
@@ -6540,7 +6593,7 @@ async fn send_notation_signature(
     lawyer_scoped_notation(&state, &lawyer, id).await?;
 
     let ctx = crate::signature_flow::SendFlowContext {
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         runtime: state.workflow_runtime.as_ref(),
         storage: &state.storage,
         acting: lawyer.0.person_id,
@@ -6595,12 +6648,15 @@ async fn status_notation_signature(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let notation = lawyer_scoped_notation(&state, &lawyer, id).await?;
-    let mut report =
-        crate::signature_status::status_for_notation(&state.surreal, &state.storage, &notation)
-            .await;
+    let mut report = crate::signature_status::status_for_notation(
+        &state.application_store,
+        &state.storage,
+        &notation,
+    )
+    .await;
     crate::signature_status::read_signer_identities(
         &mut report,
-        &state.surreal,
+        &state.application_store,
         notation.project_id,
         state.signature_provider.as_ref(),
     )
@@ -6649,7 +6705,7 @@ async fn add_review_comment(
     JsonOrForm(input): JsonOrForm<AddReviewCommentRequest>,
 ) -> Result<Response, ApiError> {
     let created = crate::review::create_review_comment(
-        &state.surreal,
+        &state.application_store,
         authed.0.role,
         authed.0.person_id,
         id,
@@ -6692,7 +6748,7 @@ async fn create_deletion_request(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let outcome = crate::expunge_request_route::request_document_deletion(
-        &state.surreal,
+        &state.application_store,
         &authed.0,
         id,
         None,
@@ -6751,11 +6807,11 @@ async fn add_clause(
     }
 
     // Resolve the notation and enforce matter scope before appending.
-    let notation = store::notations::find_by_id(&state.surreal, id)
+    let notation = store::notations::find_by_id(&state.application_store, id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         notation.project_id,
@@ -6766,9 +6822,10 @@ async fn add_clause(
         return Err(ApiError::NotFound);
     }
 
-    let clause_id = store::notation_clauses::append(&state.surreal, id, body, lawyer.0.person_id)
-        .await
-        .map_err(|e| ApiError::Db(e.to_string()))?;
+    let clause_id =
+        store::notation_clauses::append(&state.application_store, id, body, lawyer.0.person_id)
+            .await
+            .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok((StatusCode::CREATED, Json(AddClauseResponse { clause_id })).into_response())
 }
 
@@ -6781,11 +6838,11 @@ async fn clause_in_scope(
     notation_id: Uuid,
     clause_id: Uuid,
 ) -> Result<(), ApiError> {
-    let notation = store::notations::find_by_id(&state.surreal, notation_id)
+    let notation = store::notations::find_by_id(&state.application_store, notation_id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.person_id,
         lawyer.role,
         notation.project_id,
@@ -6795,7 +6852,7 @@ async fn clause_in_scope(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    let clause = store::notation_clauses::find_by_id(&state.surreal, clause_id)
+    let clause = store::notation_clauses::find_by_id(&state.application_store, clause_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
@@ -6827,7 +6884,7 @@ async fn edit_clause(
             .into_response());
     }
     clause_in_scope(&state, &lawyer.0, id, clause_id).await?;
-    store::notation_clauses::update_body(&state.surreal, clause_id, body)
+    store::notation_clauses::update_body(&state.application_store, clause_id, body)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok((StatusCode::OK, Json(AddClauseResponse { clause_id })).into_response())
@@ -6841,7 +6898,7 @@ async fn delete_clause(
     Path((id, clause_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     clause_in_scope(&state, &lawyer.0, id, clause_id).await?;
-    store::notation_clauses::delete(&state.surreal, clause_id)
+    store::notation_clauses::delete(&state.application_store, clause_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -6866,7 +6923,7 @@ async fn move_clause(
 ) -> Result<Response, ApiError> {
     clause_in_scope(&state, &lawyer.0, id, clause_id).await?;
     let up = input.direction == "up";
-    store::notation_clauses::move_clause(&state.surreal, clause_id, up)
+    store::notation_clauses::move_clause(&state.application_store, clause_id, up)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -6907,16 +6964,17 @@ async fn upload_contract_review(
     // Matter scope through either lens — the firm reviews its client's
     // contract, and the client may submit one. A non-participant sees 404.
     let lawyer_ok = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         Some(person_id),
         authed.0.role,
         id,
     )
     .await
     .unwrap_or(false);
-    let client_ok = store::access::can_see_project_as_client(&state.surreal, Some(person_id), id)
-        .await
-        .unwrap_or(false);
+    let client_ok =
+        store::access::can_see_project_as_client(&state.application_store, Some(person_id), id)
+            .await
+            .unwrap_or(false);
     if !lawyer_ok && !client_ok {
         return Err(ApiError::NotFound);
     }
@@ -6940,7 +6998,7 @@ async fn upload_contract_review(
     let filename = artifact.default_filename();
 
     let deps = crate::contract_review_walk::ReviewDeps {
-        surreal: &state.surreal,
+        application_store: &state.application_store,
         workflow_runtime: state.workflow_runtime.as_ref(),
         storage: &state.storage,
         contract_reviewer: state.contract_reviewer.as_ref(),
@@ -6962,9 +7020,9 @@ async fn upload_contract_review(
 }
 
 async fn list_entities(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
 ) -> Result<Json<Vec<store::entities::Entity>>, ApiError> {
-    let rows = store::entities::all(&surreal).await?;
+    let rows = store::entities::all(&application_store).await?;
     Ok(Json(rows))
 }
 
@@ -6975,26 +7033,26 @@ async fn list_entities(
 /// a Firm name into the internal id accepted by Project creation and update,
 /// and to discover the brand keys that Firm wears.
 async fn list_firms(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     AuthedSession(session): AuthedSession,
 ) -> Result<Json<Vec<FirmDirectoryEntry>>, ApiError> {
     if !session.role.is_admin_tier() {
         return Err(ApiError::Forbidden);
     }
     let visible = store::firm_capability::allowed_firm_ids(
-        &surreal,
+        &application_store,
         session.role,
         session.person_id,
         store::firm_capability::FirmCapability::ManageMembership,
     )
     .await
     .map_err(|error| ApiError::Db(error.to_string()))?;
-    let firms = store::firms::all(&surreal)
+    let firms = store::firms::all(&application_store)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     let mut entries = Vec::new();
     for firm in firms.into_iter().filter(|firm| visible.contains(&firm.id)) {
-        let brands = store::firms::brand_keys_for_firm(&surreal, firm.id)
+        let brands = store::firms::brand_keys_for_firm(&application_store, firm.id)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?;
         entries.push(FirmDirectoryEntry {
@@ -7017,26 +7075,26 @@ struct FirmDirectoryEntry {
 }
 
 async fn get_entity(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<store::entities::Entity>, ApiError> {
-    store::entities::find_by_id(&surreal, id)
+    store::entities::find_by_id(&application_store, id)
         .await?
         .map(Json)
         .ok_or(ApiError::NotFound)
 }
 
 async fn list_jurisdictions(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
 ) -> Result<Json<Vec<store::jurisdictions::Jurisdiction>>, ApiError> {
-    let rows = store::jurisdictions::list_all(&surreal).await?;
+    let rows = store::jurisdictions::list_all(&application_store).await?;
     Ok(Json(rows))
 }
 
 async fn list_entity_types(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
 ) -> Result<Json<Vec<store::entity_types::EntityType>>, ApiError> {
-    let rows = store::entity_types::list(&surreal, &[]).await?;
+    let rows = store::entity_types::list(&application_store, &[]).await?;
     Ok(Json(rows))
 }
 
@@ -7175,7 +7233,7 @@ async fn verified_upload_metadata(
     let Some(id) = envelope_id else {
         return Ok(metadata);
     };
-    let db = &state.surreal;
+    let db = &state.application_store;
     let scoped = state
         .signature_provider
         .for_project(db, project_id)
@@ -7238,6 +7296,7 @@ struct IngestProviderMessageRequest {
 /// filed in this Project (`In-Reply-To`, `References`, or Gmail's
 /// `X-GM-THRID`) joins that message's Conversation, so one email thread is
 /// one Conversation; a thread filed in another Project is never joined.
+#[allow(clippy::too_many_lines)] // Keep the authorization checks beside the effect.
 async fn ingest_provider_message_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -7246,7 +7305,7 @@ async fn ingest_provider_message_door(
 ) -> Result<Response, ApiError> {
     use base64::Engine as _;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -7256,7 +7315,7 @@ async fn ingest_provider_message_door(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    let Some(project) = store::projects::find_by_id(&state.surreal, id)
+    let Some(project) = store::projects::find_by_id(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
     else {
@@ -7290,10 +7349,15 @@ async fn ingest_provider_message_door(
         .filter(|value| !value.is_empty())
         .unwrap_or("cli-ingest")
         .to_string();
-    let attachments =
-        crate::inbox::ingest_attachments(&state.surreal, &state.storage, &email, firm_id, Some(id))
-            .await
-            .map_err(ApiError::Db)?;
+    let attachments = crate::inbox::ingest_attachments(
+        &state.application_store,
+        &state.storage,
+        &email,
+        firm_id,
+        Some(id),
+    )
+    .await
+    .map_err(ApiError::Db)?;
     let provider_message_id = email
         .message_id
         .clone()
@@ -7302,7 +7366,7 @@ async fn ingest_provider_message_door(
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     let thread = crate::inbound_email::thread_keys_from_raw(&raw);
     let ingested = store::inbox::ingest_inbound_threaded(
-        &state.surreal,
+        &state.application_store,
         &store::inbox::IngestInbound {
             raw_storage_key: None,
             firm_id,
@@ -7362,7 +7426,7 @@ async fn upload_document_door(
     JsonOrForm(input): JsonOrForm<UploadDocumentRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -7449,9 +7513,10 @@ async fn upload_document_door(
                 "The source revision needs a positive version and a lowercase SHA-256 digest.",
             ));
         }
-        let Some(source_asset) = store::assets::find_by_id(&state.surreal, source.document_id)
-            .await
-            .map_err(ApiError::Asset)?
+        let Some(source_asset) =
+            store::assets::find_by_id(&state.application_store, source.document_id)
+                .await
+                .map_err(ApiError::Asset)?
         else {
             return Ok(bad_request(
                 "invalid_derived_from",
@@ -7468,7 +7533,7 @@ async fn upload_document_door(
                 "The source revision is not a current document on this matter.",
             ));
         };
-        let revisions = store::assets::revisions(&state.surreal, id, source_slug)
+        let revisions = store::assets::revisions(&state.application_store, id, source_slug)
             .await
             .map_err(ApiError::Asset)?;
         if revisions.first().map(|current| current.id) != Some(source.document_id)
@@ -7513,7 +7578,7 @@ async fn upload_document_door(
     if let Some(response) = invalid_document_slug_response(filename, slug) {
         return Ok(response);
     }
-    if store::assets::revisions(&state.surreal, id, slug)
+    if store::assets::revisions(&state.application_store, id, slug)
         .await
         .map_err(ApiError::Asset)?
         .iter()
@@ -7528,7 +7593,7 @@ async fn upload_document_door(
         && input.transcript_quality.as_deref() == Some("proofread")
         && input.derived_from.is_none()
     {
-        store::assets::revisions(&state.surreal, id, slug)
+        store::assets::revisions(&state.application_store, id, slug)
             .await
             .map_err(ApiError::Asset)?
             .first()
@@ -7585,10 +7650,11 @@ async fn upload_document_door(
         .is_some_and(|provenance| !provenance.attachment)
     {
         let sha_hex = store::assets::sha256_hex(&bytes);
-        match store::assets::find_filed_copy(&state.surreal, id, filename, &sha_hex).await {
+        match store::assets::find_filed_copy(&state.application_store, id, filename, &sha_hex).await
+        {
             Ok(Some(existing)) => {
                 let pointer = document_pointer(
-                    &state.surreal,
+                    &state.application_store,
                     id,
                     existing.slug.as_deref().unwrap_or(slug),
                     existing.kind.as_deref().unwrap_or(kind),
@@ -7638,7 +7704,7 @@ async fn upload_document_door(
         match mail_provenance.as_ref() {
             Some(provenance) => {
                 store::assets::file_revision_with_provenance_and_expected_head(
-                    &state.surreal,
+                    &state.application_store,
                     &state.storage,
                     &args,
                     &identity,
@@ -7650,7 +7716,7 @@ async fn upload_document_door(
             }
             None => {
                 store::assets::file_revision_with_expected_head(
-                    &state.surreal,
+                    &state.application_store,
                     &state.storage,
                     &args,
                     &identity,
@@ -7672,7 +7738,7 @@ async fn upload_document_door(
         store::assets::Filed::Revision(_) => StatusCode::CREATED,
         store::assets::Filed::Unchanged { .. } => StatusCode::OK,
     };
-    let pointer = document_pointer(&state.surreal, id, slug, kind).await?;
+    let pointer = document_pointer(&state.application_store, id, slug, kind).await?;
     Ok((status, Json(pointer)).into_response())
 }
 
@@ -7804,9 +7870,10 @@ async fn streaming_source_revision(
             "The source revision needs a positive version and a lowercase SHA-256 digest.",
         ));
     }
-    let Some(source_asset) = store::assets::find_by_id(&state.surreal, source.document_id)
-        .await
-        .map_err(|error| ApiError::Asset(error).into_response())?
+    let Some(source_asset) =
+        store::assets::find_by_id(&state.application_store, source.document_id)
+            .await
+            .map_err(|error| ApiError::Asset(error).into_response())?
     else {
         return Err(bad_request(
             "invalid_derived_from",
@@ -7823,7 +7890,7 @@ async fn streaming_source_revision(
             "The source revision is not a current document on this matter.",
         ));
     };
-    let revisions = store::assets::revisions(&state.surreal, id, source_slug)
+    let revisions = store::assets::revisions(&state.application_store, id, source_slug)
         .await
         .map_err(|error| ApiError::Asset(error).into_response())?;
     if revisions.first().map(|current| current.id) != Some(source.document_id)
@@ -7977,7 +8044,7 @@ async fn create_upload_session_door(
     JsonOrForm(input): JsonOrForm<CreateUploadSessionRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -8043,7 +8110,7 @@ async fn create_upload_session_door(
         folder.map(store::document_pointers::MatterFolder::as_str),
     );
     args.metadata = metadata;
-    match store::documents::create_upload_session(&state.surreal, &args).await {
+    match store::documents::create_upload_session(&state.application_store, &args).await {
         Ok(session) => {
             let status = if session.received_bytes > 0 {
                 StatusCode::OK
@@ -8069,7 +8136,7 @@ async fn upload_session_status_door(
 ) -> Result<Response, ApiError> {
     let session_id = input.session_id;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -8079,7 +8146,7 @@ async fn upload_session_status_door(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    match store::documents::find_upload_session(&state.surreal, id, session_id).await {
+    match store::documents::find_upload_session(&state.application_store, id, session_id).await {
         Ok(Some(session)) => {
             Ok((StatusCode::OK, Json(UploadSessionResponse::from(&session))).into_response())
         }
@@ -8105,7 +8172,7 @@ async fn append_upload_chunk_door(
 ) -> Result<Response, ApiError> {
     let session_id = input.session_id;
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -8128,7 +8195,7 @@ async fn append_upload_chunk_door(
         }
     };
     match store::documents::append_upload_chunk(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         id,
         session_id,
@@ -8143,7 +8210,7 @@ async fn append_upload_chunk_door(
         // A replayed last chunk is not an error: the client may not have
         // seen the first acknowledgement.
         Err(store::documents::UploadSessionError::AlreadyComplete) => {
-            match store::documents::find_upload_session(&state.surreal, id, session_id).await {
+            match store::documents::find_upload_session(&state.application_store, id, session_id).await {
                 Ok(Some(session)) => Ok((
                     StatusCode::OK,
                     Json(UploadSessionResponse::from(&session)),
@@ -8200,7 +8267,7 @@ async fn complete_upload_session_door(
         return Ok(response);
     }
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -8210,19 +8277,20 @@ async fn complete_upload_session_door(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    let session = match store::documents::find_upload_session(&state.surreal, id, session_id).await
-    {
-        Ok(Some(session)) => session,
-        Ok(None) => return Err(ApiError::NotFound),
-        Err(error) => return Err(ApiError::UploadSession(error)),
-    };
+    let session =
+        match store::documents::find_upload_session(&state.application_store, id, session_id).await
+        {
+            Ok(Some(session)) => session,
+            Ok(None) => return Err(ApiError::NotFound),
+            Err(error) => return Err(ApiError::UploadSession(error)),
+        };
     let slug = session
         .slug
         .clone()
         .unwrap_or_else(|| session.filename.clone());
     let kind = session.kind.clone();
     match store::documents::complete_upload(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         id,
         session_id,
@@ -8235,7 +8303,7 @@ async fn complete_upload_session_door(
                 store::assets::Filed::Revision(_) => StatusCode::CREATED,
                 store::assets::Filed::Unchanged { .. } => StatusCode::OK,
             };
-            let pointer = document_pointer(&state.surreal, id, &slug, &kind).await?;
+            let pointer = document_pointer(&state.application_store, id, &slug, &kind).await?;
             Ok((status, Json(pointer)).into_response())
         }
         Err(store::documents::UploadSessionError::NoSuchSession(_)) => Err(ApiError::NotFound),
@@ -8260,12 +8328,12 @@ async fn complete_upload_session_door(
 }
 
 async fn document_pointer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     slug: &str,
     kind: &str,
 ) -> Result<store::document_pointers::DocumentPointer, ApiError> {
-    let revisions = store::assets::revisions(surreal, project_id, slug)
+    let revisions = store::assets::revisions(application_store, project_id, slug)
         .await
         .map_err(ApiError::Asset)?;
     let current = revisions.first().ok_or_else(|| {
@@ -8382,7 +8450,7 @@ async fn mail_file_door(
     Json(input): Json<MailFileRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -8412,10 +8480,11 @@ async fn mail_file_door(
         store::documents::visibility::INTERNAL
     };
 
-    let message = store::email_conversations::message_by_id(&state.surreal, input.message_id)
-        .await
-        .map_err(|e| ApiError::Db(e.to_string()))?
-        .ok_or(ApiError::NotFound)?;
+    let message =
+        store::email_conversations::message_by_id(&state.application_store, input.message_id)
+            .await
+            .map_err(|e| ApiError::Db(e.to_string()))?
+            .ok_or(ApiError::NotFound)?;
     let Some(raw_key) = message.raw_storage_key.as_deref() else {
         return Ok(bad_request(
             "no_raw_message",
@@ -8558,7 +8627,7 @@ pub(crate) async fn file_mail_attachments(
         };
         if source.exactly_once {
             store::documents::ingest_bytes_with_mail_provenance_once(
-                &state.surreal,
+                &state.application_store,
                 &state.storage,
                 &args,
                 &identity,
@@ -8569,7 +8638,7 @@ pub(crate) async fn file_mail_attachments(
             .map_err(|error| ApiError::Revision(store::assets::RevisionError::Ingest(error)))?;
         } else {
             store::assets::file_revision_with_provenance(
-                &state.surreal,
+                &state.application_store,
                 &state.storage,
                 &args,
                 &identity,
@@ -8579,7 +8648,7 @@ pub(crate) async fn file_mail_attachments(
             .await
             .map_err(ApiError::Revision)?;
         }
-        filed.push(document_pointer(&state.surreal, project_id, &slug, kind).await?);
+        filed.push(document_pointer(&state.application_store, project_id, &slug, kind).await?);
     }
     Ok(filed)
 }
@@ -8708,7 +8777,7 @@ async fn eml_upload_door(
     Json(input): Json<EmlUploadRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         id,
@@ -8787,7 +8856,7 @@ async fn file_raw_eml(
     }
     let mailbox = match input.mailbox {
         Some(mailbox) => Some(mailbox),
-        None => filing_lawyer_mailbox(&state.surreal, lawyer).await?,
+        None => filing_lawyer_mailbox(&state.application_store, lawyer).await?,
     };
     let mut parsed = match crate::eml_filing::parse_eml(&raw, mailbox.as_deref()) {
         Ok(parsed) => parsed,
@@ -8881,7 +8950,7 @@ fn gmail_source_ref(
 /// The signed-in lawyer's own address, the mailbox a request without one
 /// files from: the Person's email, else the session's sign-in email.
 async fn filing_lawyer_mailbox(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     lawyer: &LawyerSession,
 ) -> Result<Option<String>, ApiError> {
     if let Some(person_id) = lawyer.0.person_id {
@@ -8935,7 +9004,7 @@ async fn file_parsed_eml(
     };
     // Keep the request future small while the raw source is ingested.
     let raw_asset = Box::pin(store::assets::ingest_content(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         raw,
         "message/rfc822",
@@ -8944,7 +9013,7 @@ async fn file_parsed_eml(
     .map_err(|error| ApiError::Db(error.to_string()))?;
     let author_person_id = lawyer.0.person_id.ok_or(ApiError::NotFound)?;
     let ingested = store::communications::ingest_email(
-        &state.surreal,
+        &state.application_store,
         &store::communications::IngestArgs {
             project_id,
             channel,
@@ -9100,7 +9169,7 @@ async fn file_validated_eml_reference(
     occurred_at: &str,
     mailbox: Option<String>,
 ) -> Result<Response, ApiError> {
-    let source = store::assets::find_by_id(&state.surreal, source_document)
+    let source = store::assets::find_by_id(&state.application_store, source_document)
         .await
         .map_err(ApiError::Asset)?;
     let Some(source) = source else {
@@ -9116,9 +9185,10 @@ async fn file_validated_eml_reference(
         ));
     }
     if !attachment_documents.is_empty() {
-        let attachments = store::assets::find_by_ids(&state.surreal, &attachment_documents)
-            .await
-            .map_err(ApiError::Asset)?;
+        let attachments =
+            store::assets::find_by_ids(&state.application_store, &attachment_documents)
+                .await
+                .map_err(ApiError::Asset)?;
         if attachments.len() != attachment_documents.len()
             || attachments
                 .iter()
@@ -9132,7 +9202,7 @@ async fn file_validated_eml_reference(
     }
     let mailbox = match mailbox {
         Some(mailbox) => Some(mailbox),
-        None => filing_lawyer_mailbox(&state.surreal, lawyer).await?,
+        None => filing_lawyer_mailbox(&state.application_store, lawyer).await?,
     };
     let outbound = mailbox.as_deref().map(str::trim) == Some(from);
     let (channel, direction) = if outbound {
@@ -9149,7 +9219,7 @@ async fn file_validated_eml_reference(
     let counterparty = if outbound { to.unwrap_or("") } else { from };
     let author_person_id = lawyer.0.person_id.ok_or(ApiError::NotFound)?;
     let ingested = store::communications::ingest_email(
-        &state.surreal,
+        &state.application_store,
         &store::communications::IngestArgs {
             project_id,
             channel,
@@ -9242,7 +9312,7 @@ async fn attachments_on_file(
     parsed: &crate::eml_filing::ParsedEml,
     skipped: &mut Vec<EmlSkippedAttachment>,
 ) -> Result<Vec<usize>, ApiError> {
-    let live = store::assets::for_project(&state.surreal, project_id)
+    let live = store::assets::for_project(&state.application_store, project_id)
         .await
         .map_err(ApiError::Asset)?;
     let mut skip = Vec::new();
@@ -9334,15 +9404,20 @@ async fn list_document_revisions_door(
     Path(id): Path<Uuid>,
     Query(query): Query<RevisionsQuery>,
 ) -> Result<Response, ApiError> {
-    let lens = store::access::matter_lens(&state.surreal, authed.0.person_id, authed.0.role, id)
-        .await
-        .map_err(ApiError::Db)?
-        .ok_or(ApiError::NotFound)?;
+    let lens = store::access::matter_lens(
+        &state.application_store,
+        authed.0.person_id,
+        authed.0.role,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?
+    .ok_or(ApiError::NotFound)?;
     let slug = query.slug.trim();
     if slug.is_empty() {
         return Err(ApiError::NotFound);
     }
-    let mut revisions = store::assets::revisions(&state.surreal, id, slug)
+    let mut revisions = store::assets::revisions(&state.application_store, id, slug)
         .await
         .map_err(ApiError::Asset)?;
     if matches!(lens, store::access::ProjectLens::Client) {
@@ -9490,11 +9565,16 @@ async fn document_integrity_door(
     Query(query): Query<IntegrityQuery>,
 ) -> Result<Response, ApiError> {
     let started = std::time::Instant::now();
-    let lens = store::access::matter_lens(&state.surreal, session.person_id, session.role, id)
-        .await
-        .map_err(ApiError::Db)?
-        .ok_or(ApiError::NotFound)?;
-    let mut assets = store::assets::for_project(&state.surreal, id)
+    let lens = store::access::matter_lens(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?
+    .ok_or(ApiError::NotFound)?;
+    let mut assets = store::assets::for_project(&state.application_store, id)
         .await
         .map_err(ApiError::Asset)?;
     if matches!(lens, store::access::ProjectLens::Client) {
@@ -9516,7 +9596,7 @@ async fn document_integrity_door(
     let page = &assets[start..end];
 
     let (current_by_slug, version_by_id) = integrity_chains(
-        &state.surreal,
+        &state.application_store,
         id,
         page,
         matches!(lens, store::access::ProjectLens::Client),
@@ -9581,7 +9661,7 @@ async fn document_integrity_door(
 /// one-based position in its chain. A client lens counts only the revisions
 /// it can see.
 async fn integrity_chains(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     id: Uuid,
     page: &[store::assets::Asset],
     client_lens: bool,
@@ -9600,7 +9680,7 @@ async fn integrity_chains(
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
-    let revisions = store::assets::revisions_for_slugs(surreal, id, &slugs)
+    let revisions = store::assets::revisions_for_slugs(application_store, id, &slugs)
         .await
         .map_err(ApiError::Asset)?;
     let mut revisions_by_slug =
@@ -9640,7 +9720,7 @@ async fn populate_docket_name_checks(
     {
         return Ok(());
     }
-    let entries = store::cases::docket_for_project(&state.surreal, id)
+    let entries = store::cases::docket_for_project(&state.application_store, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     for row in rows
@@ -9949,13 +10029,13 @@ async fn reslug_document_door(
     let Some(new_slug) = input.slug.as_deref() else {
         return Ok(bad_request("invalid_request", "`reslug` requires `slug`."));
     };
-    let previous_slug = match store::assets::find_by_id(&state.surreal, asset_id).await {
+    let previous_slug = match store::assets::find_by_id(&state.application_store, asset_id).await {
         Ok(Some(asset)) if asset.project_id == Some(project_id) => asset.slug,
         Ok(_) => None,
         Err(error) => return Err(ApiError::Asset(error)),
     };
     match store::assets::reslug(
-        &state.surreal,
+        &state.application_store,
         project_id,
         asset_id,
         new_slug,
@@ -9985,7 +10065,7 @@ async fn set_folder_door(
     asset_id: Uuid,
     folder: Option<&str>,
 ) -> Result<Response, ApiError> {
-    match store::assets::set_folder(&state.surreal, project_id, asset_id, folder).await {
+    match store::assets::set_folder(&state.application_store, project_id, asset_id, folder).await {
         Ok(Some(changed)) => Ok(Json(serde_json::json!({ "changed": changed })).into_response()),
         Ok(None) => Err(ApiError::NotFound),
         Err(store::assets::SetFolderError::UnknownFolder(error)) => {
@@ -10001,6 +10081,7 @@ async fn set_folder_door(
 /// records the actor, scoped path, method, status, and request id for every
 /// attempt. Lawyer or admin, and both the matter and asset are scoped
 /// (out-of-scope → 404).
+#[allow(clippy::too_many_lines)] // Keep the authorization checks beside the effect.
 async fn update_document_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -10008,7 +10089,7 @@ async fn update_document_door(
     JsonOrForm(input): JsonOrForm<UpdateDocumentRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         project_id,
@@ -10042,10 +10123,14 @@ async fn update_document_door(
                     "visibility must be `internal` or `client`.",
                 ));
             }
-            let Some(changed) =
-                store::assets::set_visibility(&state.surreal, project_id, asset_id, visibility)
-                    .await
-                    .map_err(ApiError::Asset)?
+            let Some(changed) = store::assets::set_visibility(
+                &state.application_store,
+                project_id,
+                asset_id,
+                visibility,
+            )
+            .await
+            .map_err(ApiError::Asset)?
             else {
                 return Err(ApiError::NotFound);
             };
@@ -10053,7 +10138,7 @@ async fn update_document_door(
         }
         (None, Some(slug)) => {
             match store::assets::assign_slug(
-                &state.surreal,
+                &state.application_store,
                 project_id,
                 asset_id,
                 store::assets::AssignSlug {
@@ -10080,7 +10165,7 @@ async fn update_document_door(
         )),
         (None, None) => match input.kind.as_deref() {
             Some(kind) => match store::assets::reclassify_kind(
-                &state.surreal,
+                &state.application_store,
                 project_id,
                 asset_id,
                 kind,
@@ -10158,7 +10243,7 @@ async fn reclassify_document_door(
     JsonOrForm(input): JsonOrForm<ReclassifyDocumentRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         project_id,
@@ -10169,7 +10254,7 @@ async fn reclassify_document_door(
         return Err(ApiError::NotFound);
     }
     match store::assets::reclassify_accepted_kind(
-        &state.surreal,
+        &state.application_store,
         project_id,
         asset_id,
         &input.kind,
@@ -10222,7 +10307,7 @@ async fn delete_document_door(
     JsonOrForm(input): JsonOrForm<DeleteDocumentRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         project_id,
@@ -10245,7 +10330,7 @@ async fn delete_document_door(
     let started = std::time::Instant::now();
     tracing::info!(%project_id, %asset_id, "document delete started");
     match store::assets::soft_delete(
-        &state.surreal,
+        &state.application_store,
         project_id,
         asset_id,
         deleted_by,
@@ -10282,7 +10367,7 @@ async fn restore_document_door(
     Path((project_id, asset_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         project_id,
@@ -10295,7 +10380,7 @@ async fn restore_document_door(
     let pg = store::postgres::PostgresDb::from_env().await.ok();
     let archive = cloud::archived_projects_from_env().await.ok();
     match store::document_retention::restore_chain(
-        &state.surreal,
+        &state.application_store,
         pg.as_ref(),
         &state.storage,
         archive.as_ref(),
@@ -10352,7 +10437,7 @@ async fn hold_document_door(
     JsonOrForm(input): JsonOrForm<HoldDocumentRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         lawyer.0.person_id,
         lawyer.0.role,
         project_id,
@@ -10363,7 +10448,7 @@ async fn hold_document_door(
         return Err(ApiError::NotFound);
     }
     let Some(revisions) = store::assets::set_legal_hold(
-        &state.surreal,
+        &state.application_store,
         project_id,
         asset_id,
         input.held,
@@ -10399,7 +10484,7 @@ async fn purge_documents_door(
     let pg = store::postgres::PostgresDb::from_env().await.ok();
     let archive = cloud::archived_projects_from_env().await.ok();
     let report = crate::expunge::purge::purge_expired_documents_with(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         crate::expunge::purge::RetentionLanes {
             pg: pg.as_ref(),
@@ -10427,7 +10512,7 @@ async fn repair_document_storage_door(
     JsonOrForm(input): JsonOrForm<RepairDocumentStorageRequest>,
 ) -> Result<Response, ApiError> {
     let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         admin.0.person_id,
         admin.0.role,
         project_id,
@@ -10438,7 +10523,7 @@ async fn repair_document_storage_door(
         return Err(ApiError::NotFound);
     }
     match store::assets::repair_missing_object(
-        &state.surreal,
+        &state.application_store,
         state.storage.as_ref(),
         project_id,
         asset_id,
@@ -10528,7 +10613,7 @@ async fn save_review_finding_door(
     JsonOrForm(input): JsonOrForm<SaveReviewFindingRequest>,
 ) -> Result<Response, ApiError> {
     let result = crate::admin_contract_reviews::save_review_finding(
-        &state.surreal,
+        &state.application_store,
         review_id,
         idx,
         lawyer.0.person_id,
@@ -10560,7 +10645,7 @@ async fn save_review_summary_door(
     JsonOrForm(input): JsonOrForm<SaveReviewSummaryRequest>,
 ) -> Result<Response, ApiError> {
     let result = crate::admin_contract_reviews::save_review_summary(
-        &state.surreal,
+        &state.application_store,
         review_id,
         lawyer.0.person_id,
         lawyer.0.role,
@@ -10581,7 +10666,7 @@ async fn approve_review_door(
     Path(review_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let result = crate::admin_contract_reviews::approve_review(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         state.workflow_runtime.as_ref(),
         review_id,
@@ -10602,7 +10687,7 @@ async fn reject_review_door(
     Path(review_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let result = crate::admin_contract_reviews::reject_review(
-        &state.surreal,
+        &state.application_store,
         state.workflow_runtime.as_ref(),
         review_id,
         lawyer.0.person_id,
@@ -10646,7 +10731,7 @@ async fn create_playbook_door(
         ));
     }
     match store::playbooks::create(
-        &state.surreal,
+        &state.application_store,
         &store::playbooks::NewPlaybook {
             entity_id: input.entity_id,
             name: input.name.trim(),
@@ -10692,7 +10777,7 @@ async fn update_playbook_door(
     Path(id): Path<Uuid>,
     JsonOrForm(input): JsonOrForm<UpdatePlaybookRequest>,
 ) -> Result<Response, ApiError> {
-    if store::playbooks::by_id(&state.surreal, id)
+    if store::playbooks::by_id(&state.application_store, id)
         .await
         .ok()
         .flatten()
@@ -10706,7 +10791,7 @@ async fn update_playbook_door(
             "Enter at least one negotiating position.",
         ));
     }
-    match store::playbooks::update_positions(&state.surreal, id, &input.positions).await {
+    match store::playbooks::update_positions(&state.application_store, id, &input.positions).await {
         Ok(()) => Ok(StatusCode::NO_CONTENT.into_response()),
         Err(e) => {
             tracing::error!(error = %e, %id, "api update playbook: failed");
@@ -10742,7 +10827,7 @@ async fn authorize_expunge_door(
     }
     let authorizer = authed.0.person_id.ok_or(ApiError::Forbidden)?;
     match crate::expunge_request_route::authorize_expunge_request(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         id,
         authorizer,
@@ -10780,7 +10865,9 @@ async fn deny_expunge_door(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let resolver = lawyer.0.person_id.ok_or(ApiError::Forbidden)?;
-    match crate::expunge_request_route::deny_expunge_request(&state.surreal, id, resolver).await {
+    match crate::expunge_request_route::deny_expunge_request(&state.application_store, id, resolver)
+        .await
+    {
         Ok(()) => Ok(StatusCode::NO_CONTENT.into_response()),
         Err(crate::expunge_request_route::ExpungeRequestActionError::NotFound) => {
             Err(ApiError::NotFound)
@@ -12202,7 +12289,7 @@ async fn project_section_counts_door(
             return Err(ApiError::NotFound);
         }
     } else if !store::access::can_see_project_as_lawyer(
-        &state.surreal,
+        &state.application_store,
         authed.0.person_id,
         authed.0.role,
         id,
@@ -12212,7 +12299,7 @@ async fn project_section_counts_door(
     {
         return Err(ApiError::NotFound);
     }
-    let counts = store::project_section_counts::for_project(&state.surreal, id)
+    let counts = store::project_section_counts::for_project(&state.application_store, id)
         .await
         .map_err(ApiError::Db)?;
     Ok(Json(counts).into_response())
@@ -12221,21 +12308,11 @@ async fn project_section_counts_door(
 #[cfg(test)]
 mod tests {
     use super::NotationStepResponse;
-    use super::{
-        api_operation_table, can_see, document_integrity_door, documented_api_operations,
-        eml_upload_door, get_notation_door, integrity_chains, list_document_revisions_door,
-        list_firms, list_notations_door, mail_file_door, routes, ApiError, ApiState, AuthedSession,
-        EmlUploadRequest, IntegrityQuery, LawyerSession, MailFileRequest, RevisionsQuery,
-    };
-    use super::{
-        append_upload_chunk_door, complete_upload_session_door, create_upload_session_door,
-        upload_document_door, upload_session_status_door, CreateUploadSessionRequest, JsonOrForm,
-        UploadChunkRequest, UploadDocumentRequest, UploadSessionRefRequest,
-    };
-    use axum::extract::{Path, Query, State};
+    use super::{api_operation_table, documented_api_operations, routes, ApiError};
+
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use axum::Json;
+
     use std::collections::BTreeSet;
     use uuid::Uuid;
 
@@ -12410,504 +12487,6 @@ mod tests {
         assert!(super::client_may_read_notation_kind("unknown_legacy_kind"));
     }
 
-    #[tokio::test]
-    async fn client_notation_routes_hide_trial_prep_and_keep_agreements() {
-        let db = store::surreal::test_support::mem().await;
-        let agreement_id =
-            store::test_support::seed_notation_with_kind(&db, Some("agreement")).await;
-        let trial_prep_id =
-            store::test_support::seed_notation_with_kind(&db, Some("trial_prep")).await;
-        let agreement = store::notations::find_by_id(&db, agreement_id)
-            .await
-            .expect("query agreement")
-            .expect("agreement exists");
-        let trial_prep = store::notations::find_by_id(&db, trial_prep_id)
-            .await
-            .expect("query TrialPrep")
-            .expect("TrialPrep exists");
-        let client_dri = store::test_support::dri_person(&db).await;
-        store::persons::set_role(&db, client_dri, store::persons::Role::Lawyer)
-            .await
-            .expect("promote client participant for mixed-role lens test");
-        let app = crate::test_support::app_state(db.clone()).await;
-        let state = ApiState {
-            surreal: app.surreal.clone(),
-            email: app.email.clone(),
-            canonical_base_url: None,
-            jev: None,
-            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
-            bootstrap_company: "Test Firm".to_string(),
-            questionnaire_runtime: app.questionnaire_runtime.clone(),
-            storage: app.storage.clone(),
-            workflow_runtime: app.workflow_runtime.clone(),
-            assets_storage: app.assets_storage.clone(),
-            forms_registry: app.forms_registry.clone(),
-            signature_provider: app.signature_provider.clone(),
-            contract_reviewer: app.contract_reviewer.clone(),
-            integration_providers: app.integration_providers.clone(),
-            billing_provider: app.billing_provider.clone(),
-        };
-        let client = |person_id| {
-            AuthedSession(crate::SessionData {
-                person_id: Some(person_id),
-                ..crate::SessionData::fresh("trial-prep-client", store::persons::Role::Lawyer)
-            })
-        };
-        assert_eq!(
-            store::access::matter_lens(
-                &db,
-                Some(client_dri),
-                store::persons::Role::Lawyer,
-                agreement.project_id,
-            )
-            .await
-            .expect("resolve agreement lens"),
-            Some(store::access::ProjectLens::Client)
-        );
-        assert!(can_see(&state, &client(client_dri), agreement.project_id).await);
-
-        let agreement_response =
-            get_notation_door(State(state.clone()), client(client_dri), Path(agreement_id))
-                .await
-                .expect("client can read agreement metadata");
-        assert_eq!(agreement_response.status(), axum::http::StatusCode::OK);
-        let hidden_response = get_notation_door(
-            State(state.clone()),
-            client(client_dri),
-            Path(trial_prep_id),
-        )
-        .await
-        .expect_err("client cannot resolve TrialPrep by id");
-        assert!(matches!(hidden_response, ApiError::NotFound));
-
-        let list_response = list_notations_door(
-            State(state),
-            client(client_dri),
-            Path(trial_prep.project_id),
-        )
-        .await
-        .expect("client can read the matter notation list")
-        .into_response();
-        assert_eq!(list_response.status(), axum::http::StatusCode::OK);
-        let body = axum::body::to_bytes(list_response.into_body(), usize::MAX)
-            .await
-            .expect("read notation list body");
-        let listed: Vec<store::notations::Notation> =
-            serde_json::from_slice(&body).expect("decode notation list");
-        assert!(
-            listed.iter().all(|notation| notation.id != trial_prep_id),
-            "TrialPrep metadata must not be serialized to client"
-        );
-    }
-
-    async fn ingest_integrity_revision(
-        surreal: &store::surreal::SurrealDb,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-        project_id: uuid::Uuid,
-        slug: &str,
-        visibility: &str,
-        published_at: Option<&str>,
-        bytes: &[u8],
-    ) -> uuid::Uuid {
-        store::documents::ingest_bytes_as(
-            surreal,
-            storage,
-            &store::documents::IngestArgs {
-                project_id,
-                source: store::documents::source::UPLOAD,
-                filename: "agreement.pdf",
-                kind: "unclassified",
-                content_type: "application/pdf",
-                description: None,
-                visibility,
-                secondary_storage_key: None,
-            },
-            &store::documents::DocumentIdentity {
-                slug: Some(slug),
-                published_at,
-                ..Default::default()
-            },
-            bytes,
-        )
-        .await
-        .unwrap()
-        .asset_id
-    }
-
-    #[tokio::test]
-    async fn integrity_chain_batch_preserves_lawyer_and_client_revision_lenses() {
-        let surreal = store::surreal::test_support::mem().await;
-        let project_id =
-            store::test_support::seed_project_surreal(&surreal, "integrity-batch").await;
-        let temp = tempfile::tempdir().unwrap();
-        let storage: std::sync::Arc<dyn cloud::StorageService> = std::sync::Arc::new(
-            cloud::FsStorage::new(temp.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-        let client_oldest = ingest_integrity_revision(
-            &surreal,
-            &storage,
-            project_id,
-            "agreement",
-            store::documents::visibility::CLIENT,
-            Some("2026-10-01T00:00:00Z"),
-            b"client-published",
-        )
-        .await;
-        let client_deleted = ingest_integrity_revision(
-            &surreal,
-            &storage,
-            project_id,
-            "agreement",
-            store::documents::visibility::CLIENT,
-            Some("2020-01-01T00:00:00Z"),
-            b"client-deleted",
-        )
-        .await;
-        let internal_unpublished = ingest_integrity_revision(
-            &surreal,
-            &storage,
-            project_id,
-            "agreement",
-            store::documents::visibility::INTERNAL,
-            None,
-            b"internal-unpublished",
-        )
-        .await;
-        surreal
-            .query("UPDATE $asset SET deleted_at = time::now()")
-            .bind(("asset", store::surreal::record_id("asset", client_deleted)))
-            .await
-            .expect("stamp one row in the revision chain as deleted");
-        let second_slug = ingest_integrity_revision(
-            &surreal,
-            &storage,
-            project_id,
-            "notice",
-            store::documents::visibility::CLIENT,
-            Some("2026-02-01T00:00:00Z"),
-            b"notice",
-        )
-        .await;
-        let page = store::assets::for_project(&surreal, project_id)
-            .await
-            .unwrap();
-
-        let (lawyer_current, lawyer_versions) =
-            integrity_chains(&surreal, project_id, &page, false)
-                .await
-                .unwrap();
-        assert_eq!(lawyer_current["agreement"], Some(internal_unpublished));
-        assert_eq!(lawyer_versions[&internal_unpublished], 3);
-        assert_eq!(lawyer_versions[&client_deleted], 2);
-        assert_eq!(lawyer_versions[&client_oldest], 1);
-        assert_eq!(lawyer_current["notice"], Some(second_slug));
-        assert_eq!(lawyer_versions[&second_slug], 1);
-
-        let (client_current, client_versions) = integrity_chains(&surreal, project_id, &page, true)
-            .await
-            .unwrap();
-        assert_eq!(client_current["agreement"], Some(client_deleted));
-        assert_eq!(client_versions.get(&client_deleted), Some(&2));
-        assert_eq!(client_versions.get(&client_oldest), Some(&1));
-        assert!(!client_versions.contains_key(&internal_unpublished));
-        assert_eq!(client_current["notice"], Some(second_slug));
-    }
-
-    /// Every page of the integrity route for `session`, fetched `limit` rows
-    /// at a time, and the rows concatenated in the order they arrived.
-    async fn integrity_pages(
-        state: &ApiState,
-        session: &crate::SessionData,
-        project_id: uuid::Uuid,
-        deep: bool,
-        limit: Option<usize>,
-    ) -> (Vec<serde_json::Value>, usize) {
-        let mut rows = Vec::new();
-        let mut offset = 0;
-        let mut pages = 0;
-        loop {
-            let started = std::time::Instant::now();
-            let response = document_integrity_door(
-                State(state.clone()),
-                LawyerSession(session.clone()),
-                Path(project_id),
-                Query(IntegrityQuery {
-                    deep,
-                    offset,
-                    limit,
-                }),
-            )
-            .await
-            .expect("integrity page");
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            pages += 1;
-            let assets = page["assets"].as_array().unwrap();
-            eprintln!(
-                "integrity page offset={offset} rows={} total={} deep={deep} elapsed_ms={}",
-                assets.len(),
-                page["total"],
-                started.elapsed().as_millis()
-            );
-            rows.extend(assets.iter().cloned());
-            let Some(next) = page["next_offset"].as_u64() else {
-                let total = usize::try_from(page["total"].as_u64().unwrap()).unwrap();
-                assert_eq!(rows.len(), total);
-                return (rows, pages);
-            };
-            let next = usize::try_from(next).unwrap();
-            assert!(next > offset, "paging advances");
-            offset = next;
-        }
-    }
-
-    fn integrity_row_key(row: &serde_json::Value) -> (String, String) {
-        (
-            row["slug"].as_str().unwrap().to_string(),
-            row["asset_id"].as_str().unwrap().to_string(),
-        )
-    }
-
-    /// Seeds 380 document identities: every seventh has an older
-    /// client-visible revision, every thirteenth's newest revision is
-    /// lawyer-only, and a few revisions are soft-deleted — including the
-    /// newest revision of `d-0021.pdf`. Returns the lawyer-only and deleted ids.
-    async fn seed_380_documents(
-        db: &store::surreal::SurrealDb,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-        project_id: uuid::Uuid,
-    ) -> (BTreeSet<uuid::Uuid>, BTreeSet<uuid::Uuid>) {
-        let mut internal = BTreeSet::new();
-        let mut deleted = BTreeSet::new();
-        for index in 0..380 {
-            let slug = format!("d-{index:04}.pdf");
-            if index % 7 == 0 {
-                let older = ingest_integrity_revision(
-                    db,
-                    storage,
-                    project_id,
-                    &slug,
-                    store::documents::visibility::CLIENT,
-                    Some("2026-01-01T00:00:00Z"),
-                    format!("{slug} v1").as_bytes(),
-                )
-                .await;
-                if index % 49 == 0 {
-                    deleted.insert(older);
-                }
-            }
-            let lawyer_only = index % 13 == 0;
-            let newest = ingest_integrity_revision(
-                db,
-                storage,
-                project_id,
-                &slug,
-                if lawyer_only {
-                    store::documents::visibility::INTERNAL
-                } else {
-                    store::documents::visibility::CLIENT
-                },
-                (!lawyer_only).then_some("2026-02-01T00:00:00Z"),
-                format!("{slug} v2").as_bytes(),
-            )
-            .await;
-            if lawyer_only {
-                internal.insert(newest);
-            }
-            if index == 21 {
-                deleted.insert(newest);
-            }
-        }
-        for asset_id in &deleted {
-            db.query("UPDATE $asset SET deleted_at = time::now()")
-                .bind(("asset", store::surreal::record_id("asset", *asset_id)))
-                .await
-                .expect("soft-delete a revision");
-        }
-        (internal, deleted)
-    }
-
-    /// A Lawyer-role session participating on `project_id` from `side`.
-    async fn integrity_participant(
-        db: &store::surreal::SurrealDb,
-        project_id: uuid::Uuid,
-        email: &str,
-        side: store::projects::DriSide,
-    ) -> crate::SessionData {
-        let person = store::test_support::ensure_person(
-            db,
-            &store::persons::NewPerson {
-                email: email.to_string(),
-                name: email.to_string(),
-                role: store::persons::Role::Lawyer,
-                ..Default::default()
-            },
-        )
-        .await;
-        store::projects::designate_dri_in_surreal(db, project_id, person.id, side)
-            .await
-            .expect("seed participation");
-        crate::SessionData {
-            person_id: Some(person.id),
-            ..crate::SessionData::fresh("integrity-380", store::persons::Role::Lawyer)
-        }
-    }
-
-    /// The client lens over the 380-document Project: only client-visible
-    /// rows, in the same order, numbered over the revisions it may see.
-    async fn assert_client_lens(
-        state: &ApiState,
-        client: &crate::SessionData,
-        project_id: uuid::Uuid,
-        live: &[store::assets::Asset],
-        internal: &BTreeSet<uuid::Uuid>,
-    ) {
-        let (client_rows, _) = integrity_pages(state, client, project_id, false, Some(50)).await;
-        assert!(client_rows
-            .iter()
-            .all(|row| row.get("filename").is_none() && row.get("revision").is_none()));
-        let client_ids: BTreeSet<String> = client_rows
-            .iter()
-            .map(|row| row["asset_id"].as_str().unwrap().to_string())
-            .collect();
-        let visible: BTreeSet<String> = live
-            .iter()
-            .filter(|asset| asset.visibility == store::documents::visibility::CLIENT)
-            .map(|asset| asset.id.to_string())
-            .collect();
-        assert_eq!(client_ids, visible);
-        assert!(internal
-            .iter()
-            .all(|asset_id| !client_ids.contains(&asset_id.to_string())));
-        let client_keys: Vec<_> = client_rows.iter().map(integrity_row_key).collect();
-        assert!(client_keys.windows(2).all(|pair| pair[0] < pair[1]));
-        let lawyer_only_head = client_rows
-            .iter()
-            .find(|row| row["slug"] == "d-0013.pdf")
-            .is_none();
-        assert!(
-            lawyer_only_head,
-            "a slug whose only row is lawyer-only is absent"
-        );
-        let older_under_internal = client_rows
-            .iter()
-            .find(|row| row["slug"] == "d-0091.pdf")
-            .unwrap();
-        assert_eq!(older_under_internal["operative"], true);
-        assert_eq!(older_under_internal["version"], 1);
-    }
-
-    /// LAW-157: a Project with 380 document identities, some with history,
-    /// soft-deleted revisions and lawyer-only revisions, is checked in
-    /// bounded pages. The rows arrive in one slug-then-id order with no gap or
-    /// repeat, and each row's operative flag and version match its full chain
-    /// whichever page boundary splits that chain.
-    #[tokio::test]
-    async fn a_380_document_project_pages_in_order_with_whole_chain_revisions() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "integrity-380").await;
-        let app = crate::test_support::app_state(db.clone()).await;
-        let (internal, deleted) = seed_380_documents(&db, &app.storage, project_id).await;
-        let state = ApiState {
-            surreal: app.surreal.clone(),
-            email: app.email.clone(),
-            canonical_base_url: None,
-            jev: None,
-            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
-            bootstrap_company: "Test Firm".to_string(),
-            questionnaire_runtime: app.questionnaire_runtime.clone(),
-            storage: app.storage.clone(),
-            workflow_runtime: app.workflow_runtime.clone(),
-            assets_storage: app.assets_storage.clone(),
-            forms_registry: app.forms_registry.clone(),
-            signature_provider: app.signature_provider.clone(),
-            contract_reviewer: app.contract_reviewer.clone(),
-            integration_providers: app.integration_providers.clone(),
-            billing_provider: app.billing_provider.clone(),
-        };
-        let lawyer = integrity_participant(
-            &db,
-            project_id,
-            "aries-380@neonlaw.com",
-            store::projects::DriSide::Lawyer,
-        )
-        .await;
-        let client = integrity_participant(
-            &db,
-            project_id,
-            "libra-380@example.com",
-            store::projects::DriSide::Client,
-        )
-        .await;
-
-        let live = store::assets::for_project(&db, project_id).await.unwrap();
-        assert_eq!(live.len(), 380 + 55 - deleted.len());
-
-        let (rows, pages) = integrity_pages(&state, &lawyer, project_id, false, Some(50)).await;
-        assert_eq!(pages, live.len().div_ceil(50));
-        assert!(rows.iter().all(|row| row["filename"] == "agreement.pdf"));
-        assert!(rows.iter().all(|row| {
-            row["revision"]["filename"] == row["filename"]
-                && row["revision"]["asset_id"] == row["asset_id"]
-                && row["revision"]["version"] == row["version"]
-                && row["revision"]["operative"] == row["operative"]
-        }));
-        let keys: Vec<_> = rows.iter().map(integrity_row_key).collect();
-        assert!(
-            keys.windows(2).all(|pair| pair[0] < pair[1]),
-            "rows arrive in strict slug-then-id order across pages"
-        );
-        let live_ids: BTreeSet<String> = live.iter().map(|asset| asset.id.to_string()).collect();
-        let row_ids: BTreeSet<String> = keys.iter().map(|(_, id)| id.clone()).collect();
-        assert_eq!(row_ids, live_ids, "every live row exactly once");
-        let mut chains = std::collections::BTreeMap::<String, Vec<uuid::Uuid>>::new();
-        for asset in store::assets::for_project_including_deleted(&db, project_id)
-            .await
-            .unwrap()
-        {
-            chains
-                .entry(asset.slug.unwrap())
-                .or_default()
-                .push(asset.id);
-        }
-        for row in &rows {
-            assert_eq!(row["exists"], true, "{row}");
-            assert_eq!(row["size_bytes"], row["recorded_size"], "{row}");
-            let chain = &chains[row["slug"].as_str().unwrap()];
-            let position = chain
-                .iter()
-                .position(|revision| revision.to_string() == row["asset_id"])
-                .unwrap();
-            assert_eq!(row["operative"], position == 0, "{row}");
-            assert_eq!(row["version"], chain.len() - position, "{row}");
-        }
-        let deleted_newest_chain = rows.iter().find(|row| row["slug"] == "d-0021.pdf").unwrap();
-        assert_eq!(
-            deleted_newest_chain["operative"], false,
-            "a soft-deleted newest revision still heads the chain"
-        );
-        assert_eq!(deleted_newest_chain["version"], 1);
-
-        for limit in [None, Some(7), Some(100), Some(1000)] {
-            let (other, other_pages) =
-                integrity_pages(&state, &lawyer, project_id, false, limit).await;
-            assert_eq!(other, rows, "page size {limit:?} changes no row");
-            if limit == Some(1000) {
-                assert_eq!(other_pages, live.len().div_ceil(100), "pages cap at 100");
-            }
-        }
-
-        let (deep_rows, _) = integrity_pages(&state, &lawyer, project_id, true, Some(10)).await;
-        assert_eq!(deep_rows.len(), rows.len());
-        assert!(deep_rows.iter().all(|row| row["sha256_matches"] == true));
-
-        assert_client_lens(&state, &client, project_id, &live, &internal).await;
-    }
-
     #[test]
     fn pitch_offboarding_letter_uses_the_effective_date_and_exact_client_sentence() {
         let source = super::pitch_offboarding_typst("Acme LLC", "October 15, 2026");
@@ -12919,163 +12498,6 @@ mod tests {
     fn pitch_offboarding_artifact_mismatch_is_a_conflict() {
         let response = ApiError::PitchArtifactConflict.into_response();
         assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
-    }
-
-    #[tokio::test]
-    #[allow(clippy::too_many_lines)]
-    async fn the_firm_directory_lists_only_firms_the_session_can_administer() {
-        let surreal = store::test_support::mem_surreal().await;
-        let admin_a = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Admin A",
-                "admin-a@example.com",
-                store::persons::Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let admin_b = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Admin B",
-                "admin-b@example.com",
-                store::persons::Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let firm_a = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: "Practice A".into(),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(&surreal).await,
-                admin_dri_person_id: admin_a.id,
-            },
-        )
-        .await
-        .unwrap();
-        let firm_b = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: "Practice B".into(),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(&surreal).await,
-                admin_dri_person_id: admin_b.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::firms::attach_brand(
-            &surreal,
-            store::persons::Role::Owner,
-            None,
-            firm_a.id,
-            "neon",
-        )
-        .await
-        .unwrap();
-        let owner = crate::SessionData::fresh("owner", store::persons::Role::Owner);
-        let axum::Json(owner_firms) = list_firms(State(surreal.clone()), AuthedSession(owner))
-            .await
-            .unwrap();
-        assert_eq!(owner_firms.len(), 2);
-
-        let admin = crate::SessionData {
-            person_id: Some(admin_a.id),
-            ..crate::SessionData::fresh("admin-a", store::persons::Role::Admin)
-        };
-        let axum::Json(admin_firms) = list_firms(State(surreal.clone()), AuthedSession(admin))
-            .await
-            .unwrap();
-        assert_eq!(admin_firms.len(), 1);
-        assert_eq!(admin_firms[0].id, firm_a.id);
-        assert_eq!(admin_firms[0].name, "Practice A");
-        assert_eq!(admin_firms[0].brands, vec!["neon"]);
-
-        let state = router_api_state(surreal.clone()).await;
-        let admin_session = crate::SessionData {
-            person_id: Some(admin_a.id),
-            ..crate::SessionData::fresh("admin-a", store::persons::Role::Admin)
-        };
-        let client = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Sample Client",
-                "sample-client@example.com",
-                store::persons::Role::Client,
-            ),
-        )
-        .await
-        .unwrap();
-        let mut body = serde_json::json!({
-            "name":"Sample Matter", "code":"sample-explicit-brand", "client_id":client.id,
-            "entity_id":store::test_support::seed_entity(&surreal).await,
-            "attestation":true, "firm_id":firm_a.id, "brand":"delete-your-data"
-        });
-        let lawyer_session = crate::SessionData {
-            person_id: Some(admin_a.id),
-            ..crate::SessionData::fresh("lawyer", store::persons::Role::Lawyer)
-        };
-        let (status, _) = call(
-            &state,
-            Some(&lawyer_session),
-            "POST",
-            "/app/api/projects",
-            Some(body.clone()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        let mut incomplete = body.clone();
-        incomplete.as_object_mut().unwrap().remove("brand");
-        let (status, _) = call(
-            &state,
-            Some(&admin_session),
-            "POST",
-            "/app/api/projects",
-            Some(incomplete),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        let (status, _) = call(
-            &state,
-            Some(&admin_session),
-            "POST",
-            "/app/api/projects",
-            Some(body.clone()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        body["brand"] = serde_json::json!("neon");
-        body["firm_id"] = serde_json::json!(firm_b.id);
-        let (status, _) = call(
-            &state,
-            Some(&admin_session),
-            "POST",
-            "/app/api/projects",
-            Some(body.clone()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        body["firm_id"] = serde_json::json!(firm_a.id);
-        let (status, opened) = call(
-            &state,
-            Some(&admin_session),
-            "POST",
-            "/app/api/projects",
-            Some(body),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{opened}");
-        assert_eq!(opened["firm_id"], firm_a.id.to_string());
-        assert_eq!(opened["brand"], "neon");
-
-        let lawyer = crate::SessionData::fresh("lawyer", store::persons::Role::Lawyer);
-        assert!(matches!(
-            list_firms(State(surreal), AuthedSession(lawyer)).await,
-            Err(ApiError::Forbidden)
-        ));
     }
 
     #[test]
@@ -13195,1640 +12617,6 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_slice(&body).expect("the conflict response should be JSON");
         assert_eq!(json["message"], "That email is already in use.");
-    }
-
-    /// Seed one slug with three revisions: an internal draft, a published
-    /// client-visible copy, then a newer internal redline — the shape ENG-497
-    /// calls normal ("an internal draft and a shared executed copy under one
-    /// slug") extended with one more lawyer-only row on top, so the test can
-    /// prove a client learns about neither internal revision.
-    async fn seed_three_revisions(
-        surreal: &store::surreal::SurrealDb,
-        project_id: uuid::Uuid,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-    ) {
-        let args = |visibility: &'static str| store::documents::IngestArgs {
-            project_id,
-            source: store::documents::source::UPLOAD,
-            filename: "agreement.pdf",
-            kind: "agreement",
-            content_type: "application/pdf",
-            description: None,
-            secondary_storage_key: None,
-            visibility,
-        };
-        let identity = |published_at: Option<&'static str>| store::documents::DocumentIdentity {
-            slug: Some("agreement.pdf"),
-            published_at,
-            metadata: None,
-            derived_from: None,
-            transcript_quality: None,
-            signing: None,
-            notarization: Vec::new(),
-            evidence: None,
-            folder: None,
-        };
-        store::documents::ingest_bytes_as(
-            surreal,
-            storage,
-            &args(store::documents::visibility::INTERNAL),
-            &identity(None),
-            b"v1 internal draft",
-        )
-        .await
-        .expect("seed v1");
-        store::documents::ingest_bytes_as(
-            surreal,
-            storage,
-            &args(store::documents::visibility::CLIENT),
-            &identity(Some("2026-01-01T00:00:00Z")),
-            b"v2 executed copy",
-        )
-        .await
-        .expect("seed v2");
-        store::documents::ingest_bytes_as(
-            surreal,
-            storage,
-            &args(store::documents::visibility::INTERNAL),
-            &identity(None),
-            b"v3 newer redline",
-        )
-        .await
-        .expect("seed v3");
-    }
-
-    #[tokio::test]
-    async fn a_client_side_mixed_role_sees_only_the_published_client_visible_revision_renumbered() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id =
-            store::test_support::seed_project_surreal(&db, "revisions-lens-client").await;
-        let app = crate::test_support::app_state(db.clone()).await;
-        seed_three_revisions(&db, project_id, &app.storage).await;
-
-        let mixed_role_person = store::test_support::ensure_person(
-            &db,
-            &store::persons::NewPerson {
-                email: "libra@example.com".to_string(),
-                name: "Libra Mixed Role".to_string(),
-                role: store::persons::Role::Lawyer,
-                ..Default::default()
-            },
-        )
-        .await;
-        store::projects::designate_dri_in_surreal(
-            &db,
-            project_id,
-            mixed_role_person.id,
-            store::projects::DriSide::Client,
-        )
-        .await
-        .expect("seed the client's participation row");
-
-        let state = ApiState {
-            surreal: app.surreal.clone(),
-            email: app.email.clone(),
-            canonical_base_url: None,
-            jev: None,
-            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
-            bootstrap_company: "Test Firm".to_string(),
-            questionnaire_runtime: app.questionnaire_runtime.clone(),
-            storage: app.storage.clone(),
-            workflow_runtime: app.workflow_runtime.clone(),
-            assets_storage: app.assets_storage.clone(),
-            forms_registry: app.forms_registry.clone(),
-            signature_provider: app.signature_provider.clone(),
-            contract_reviewer: app.contract_reviewer.clone(),
-            integration_providers: app.integration_providers.clone(),
-            billing_provider: app.billing_provider.clone(),
-        };
-        let session = crate::SessionData {
-            person_id: Some(mixed_role_person.id),
-            ..crate::SessionData::fresh("mixed-role-sub", store::persons::Role::Lawyer)
-        };
-
-        let response = list_document_revisions_door(
-            State(state),
-            AuthedSession(session),
-            Path(project_id),
-            Query(RevisionsQuery {
-                slug: "agreement.pdf".to_string(),
-            }),
-        )
-        .await
-        .expect("a client on the matter can read the chain under their lens");
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let revisions = json["revisions"].as_array().expect("revisions array");
-        assert_eq!(
-            revisions.len(),
-            1,
-            "the client sees only the one published, client-visible revision: {json}"
-        );
-        assert_eq!(revisions[0]["version"], 1, "renumbered to 1 of 1: {json}");
-        assert_eq!(revisions[0]["operative"], true, "{json}");
-        assert_eq!(
-            revisions[0]["sha256"],
-            store::documents::sha256_hex(b"v2 executed copy"),
-            "{json}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_lawyer_sees_every_revision_newest_first_with_the_newest_operative() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id =
-            store::test_support::seed_project_surreal(&db, "revisions-lens-lawyer").await;
-        let app = crate::test_support::app_state(db.clone()).await;
-        seed_three_revisions(&db, project_id, &app.storage).await;
-
-        let state = ApiState {
-            surreal: app.surreal.clone(),
-            email: app.email.clone(),
-            canonical_base_url: None,
-            jev: None,
-            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
-            bootstrap_company: "Test Firm".to_string(),
-            questionnaire_runtime: app.questionnaire_runtime.clone(),
-            storage: app.storage.clone(),
-            workflow_runtime: app.workflow_runtime.clone(),
-            assets_storage: app.assets_storage.clone(),
-            forms_registry: app.forms_registry.clone(),
-            signature_provider: app.signature_provider.clone(),
-            contract_reviewer: app.contract_reviewer.clone(),
-            integration_providers: app.integration_providers.clone(),
-            billing_provider: app.billing_provider.clone(),
-        };
-        // Owner/Admin bypass project-scoping only at route admission; a
-        // matter-content route like this one still applies the participation
-        // gate (`docs/glossary/role.md`), so the lawyer lens needs a real
-        // participation row like the client test above.
-        let lawyer_person = store::test_support::ensure_person(
-            &db,
-            &store::persons::NewPerson {
-                email: "aries@neonlaw.com".to_string(),
-                name: "Aries Attorney".to_string(),
-                role: store::persons::Role::Lawyer,
-                ..Default::default()
-            },
-        )
-        .await;
-        store::projects::designate_dri_in_surreal(
-            &db,
-            project_id,
-            lawyer_person.id,
-            store::projects::DriSide::Lawyer,
-        )
-        .await
-        .expect("seed the lawyer's participation row");
-        let session = crate::SessionData {
-            person_id: Some(lawyer_person.id),
-            ..crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer)
-        };
-
-        let response = list_document_revisions_door(
-            State(state),
-            AuthedSession(session),
-            Path(project_id),
-            Query(RevisionsQuery {
-                slug: "agreement.pdf".to_string(),
-            }),
-        )
-        .await
-        .expect("a lawyer on the matter can read the full chain");
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let revisions = json["revisions"].as_array().expect("revisions array");
-        assert_eq!(revisions.len(), 3, "every revision is visible: {json}");
-        assert_eq!(revisions[0]["version"], 3, "newest first: {json}");
-        assert_eq!(revisions[0]["operative"], true, "{json}");
-        assert_eq!(revisions[1]["operative"], false, "{json}");
-        assert_eq!(revisions[2]["operative"], false, "{json}");
-        assert_eq!(
-            revisions[0]["sha256"],
-            store::documents::sha256_hex(b"v3 newer redline"),
-            "{json}"
-        );
-    }
-
-    async fn streaming_fixture() -> (ApiState, crate::SessionData, Uuid) {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "stream-up").await;
-        let app = crate::test_support::app_state(db.clone()).await;
-        let lawyer_person = store::test_support::ensure_person(
-            &db,
-            &store::persons::NewPerson {
-                email: "aries@neonlaw.com".to_string(),
-                name: "Aries Attorney".to_string(),
-                role: store::persons::Role::Lawyer,
-                ..Default::default()
-            },
-        )
-        .await;
-        store::projects::designate_dri_in_surreal(
-            &db,
-            project_id,
-            lawyer_person.id,
-            store::projects::DriSide::Lawyer,
-        )
-        .await
-        .expect("seed the lawyer's participation row");
-        let state = ApiState {
-            surreal: app.surreal.clone(),
-            canonical_base_url: None,
-            jev: None,
-            email: app.email.clone(),
-            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
-            bootstrap_company: "Test Firm".to_string(),
-            questionnaire_runtime: app.questionnaire_runtime.clone(),
-            storage: app.storage.clone(),
-            workflow_runtime: app.workflow_runtime.clone(),
-            assets_storage: app.assets_storage.clone(),
-            forms_registry: app.forms_registry.clone(),
-            signature_provider: app.signature_provider.clone(),
-            contract_reviewer: app.contract_reviewer.clone(),
-            integration_providers: app.integration_providers.clone(),
-            billing_provider: app.billing_provider.clone(),
-        };
-        let session_data = crate::SessionData {
-            person_id: Some(lawyer_person.id),
-            ..crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer)
-        };
-
-        (state, session_data, project_id)
-    }
-
-    async fn streaming_json(response: axum::response::Response) -> serde_json::Value {
-        serde_json::from_slice(
-            &axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap()
-    }
-
-    async fn open_streaming_session(
-        state: &ApiState,
-        session: &crate::SessionData,
-        project_id: Uuid,
-        filename: &str,
-        bytes: &[u8],
-    ) -> serde_json::Value {
-        let response = create_upload_session_door(
-            State(state.clone()),
-            LawyerSession(session.clone()),
-            Path(project_id),
-            JsonOrForm(CreateUploadSessionRequest {
-                filename: filename.into(),
-                slug: None,
-                content_type: Some("audio/mpeg".into()),
-                kind: Some("transcript".into()),
-                visibility: None,
-                description: None,
-                metadata: None,
-                derived_from: None,
-                transcript_quality: Some("machine".into()),
-                signing: None,
-                envelope_id: None,
-                notarization: vec![],
-                folder: None,
-                declared_size: bytes.len(),
-                declared_sha256: store::documents::sha256_hex(bytes),
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        streaming_json(response).await
-    }
-
-    #[tokio::test]
-    async fn streaming_session_rejects_invalid_metadata_as_bad_request() {
-        let (state, session, project_id) = streaming_fixture().await;
-        for (kind, digest) in [
-            ("unsupported", store::documents::sha256_hex(b"audio")),
-            ("transcript", "not-a-sha".to_owned()),
-        ] {
-            let request = serde_json::from_value(serde_json::json!({
-                "filename": "hearing.mp3", "kind": kind,
-                "declared_size": 5, "declared_sha256": digest
-            }))
-            .unwrap();
-            let result = create_upload_session_door(
-                State(state.clone()),
-                LawyerSession(session.clone()),
-                Path(project_id),
-                JsonOrForm(request),
-            )
-            .await;
-            let response = match result {
-                Ok(response) => response,
-                Err(error) => error.into_response(),
-            };
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        }
-    }
-
-    /// The streaming doors carry one small upload end to end: open a
-    /// session, stage a chunk, replay its lost acknowledgement, resume
-    /// from the status door, and complete with the original digest in the
-    /// source-safe pointer.
-    /// A tiny file fits in one server chunk, so the replay of the *first*
-    /// chunk doubles as the replay of the *last* one.
-    #[tokio::test]
-    async fn streaming_doors_resume_a_dropped_chunk_and_file_the_pointer() {
-        let (state, session_data, project_id) = streaming_fixture().await;
-
-        let bytes = b"streamed court audio bytes".to_vec();
-        let sha = store::documents::sha256_hex(&bytes);
-        let encode = |chunk: &[u8]| -> String {
-            use base64::Engine as _;
-            base64::engine::general_purpose::STANDARD.encode(chunk)
-        };
-
-        // Open the session: 201, with the chunk size and the resume point.
-        let body =
-            open_streaming_session(&state, &session_data, project_id, "hearing.mp3", &bytes).await;
-        let session_id: uuid::Uuid = body["id"].as_str().unwrap().parse().unwrap();
-        let chunk_size = body["chunk_size"].as_i64().unwrap();
-        assert!(
-            chunk_size > i64::try_from(bytes.len()).unwrap(),
-            "the fixture fits one chunk: {chunk_size}"
-        );
-        assert_eq!(body["received_bytes"], 0);
-        assert_eq!(body["complete"], false);
-
-        // The advertised chunk size covers the whole fixture, so the file
-        // is one append. The client sends it; the acknowledgement names
-        // the full resume point.
-        let appended = append_upload_chunk_door(
-            State(state.clone()),
-            LawyerSession(session_data.clone()),
-            Path(project_id),
-            JsonOrForm(UploadChunkRequest {
-                session_id,
-                offset: 0,
-                content_base64: encode(&bytes),
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(appended.status(), axum::http::StatusCode::OK);
-        let status: serde_json::Value = streaming_json(appended).await;
-        assert_eq!(
-            status["received_bytes"],
-            bytes.len(),
-            "the acknowledgement names the resume point"
-        );
-
-        // The connection drops before the client sees the acknowledgement,
-        // so it re-sends the same chunk. The server recognises the replay:
-        // it answers with the session's standing state and never applies
-        // the bytes twice.
-        let replayed = append_upload_chunk_door(
-            State(state.clone()),
-            LawyerSession(session_data.clone()),
-            Path(project_id),
-            JsonOrForm(UploadChunkRequest {
-                session_id,
-                offset: 0,
-                content_base64: encode(&bytes),
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(replayed.status(), axum::http::StatusCode::OK);
-        let replay: serde_json::Value = streaming_json(replayed).await;
-        assert_eq!(
-            replay["received_bytes"],
-            bytes.len(),
-            "the replay does not double-apply: {replay}"
-        );
-
-        // The status door is the resume probe: the bytes stand
-        // acknowledged once, with no restart.
-        let resumed = upload_session_status_door(
-            State(state.clone()),
-            LawyerSession(session_data.clone()),
-            Path(project_id),
-            JsonOrForm(UploadSessionRefRequest {
-                session_id,
-                expected_head: None,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(resumed.status(), axum::http::StatusCode::OK);
-        let resumed: serde_json::Value = streaming_json(resumed).await;
-        assert_eq!(resumed["received_bytes"], bytes.len(), "{resumed}");
-
-        let completed = complete_upload_session_door(
-            State(state.clone()),
-            LawyerSession(session_data.clone()),
-            Path(project_id),
-            JsonOrForm(UploadSessionRefRequest {
-                session_id,
-                expected_head: None,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(completed.status(), StatusCode::CREATED);
-        let pointer = streaming_json(completed).await;
-        assert_eq!(pointer["current_version"]["sha256"], sha);
-    }
-
-    #[tokio::test]
-    async fn streaming_doors_refuse_wrong_offsets_and_incomplete_uploads() {
-        use base64::Engine as _;
-        let (state, session_data, project_id) = streaming_fixture().await;
-        let bytes = b"streamed court audio bytes".to_vec();
-        let encode = |chunk: &[u8]| base64::engine::general_purpose::STANDARD.encode(chunk);
-        // Completing with nothing staged is a 409: a second session that
-        // never received a chunk cannot file a pointer.
-        let empty_body = open_streaming_session(
-            &state,
-            &session_data,
-            project_id,
-            "empty-hearing.mp3",
-            &bytes,
-        )
-        .await;
-        let empty_id: uuid::Uuid = empty_body["id"].as_str().unwrap().parse().unwrap();
-        // A chunk at the wrong offset is refused with the offset the
-        // session stands at — the client resyncs through the status door.
-        let misaligned = append_upload_chunk_door(
-            State(state.clone()),
-            LawyerSession(session_data.clone()),
-            Path(project_id),
-            JsonOrForm(UploadChunkRequest {
-                session_id: empty_id,
-                offset: 5,
-                content_base64: encode(&bytes),
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(misaligned.status(), axum::http::StatusCode::CONFLICT);
-        let misaligned: serde_json::Value = streaming_json(misaligned).await;
-        assert_eq!(misaligned["error"], "chunk_offset_mismatch", "{misaligned}");
-        let early = complete_upload_session_door(
-            State(state.clone()),
-            LawyerSession(session_data.clone()),
-            Path(project_id),
-            JsonOrForm(UploadSessionRefRequest {
-                session_id: empty_id,
-                expected_head: None,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(early.status(), axum::http::StatusCode::CONFLICT);
-    }
-
-    /// A raw MIME fixture carrying exactly one attachment — the same shape
-    /// `portal::inbound_email`'s own tests use — plus the
-    /// `email_conversation_message` row and its raw storage object
-    /// `mail_file_door` reads.
-    async fn seed_inbound_message(
-        db: &store::surreal::SurrealDb,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-    ) -> uuid::Uuid {
-        let raw: &[u8] = b"From: pisces@example.com\r\nTo: support@example.com\r\nSubject: Intake\r\n\
-Content-Type: multipart/mixed; boundary=nav\r\n\r\n--nav\r\nContent-Type: text/plain\r\n\r\nhello\r\n\
---nav\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; \
-filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjc=\r\n\
---nav--\r\n";
-        let raw_key = "inbound/mail-file-test.eml";
-        storage
-            .put(raw_key, raw, "message/rfc822")
-            .await
-            .expect("seed the raw MIME object");
-
-        let conversation_id = store::email_conversations::open(
-            db,
-            &store::email_conversations::NewConversation {
-                token: "tok-mail-file-test",
-                external_email: "pisces@example.com",
-                external_name: None,
-                subject: "Intake",
-                person_id: None,
-                notation_id: None,
-            },
-        )
-        .await
-        .expect("open a conversation");
-
-        store::email_conversations::append(
-            db,
-            &store::email_conversations::NewMessage {
-                conversation_id,
-                direction: store::email_conversations::DIRECTION_FROM_EXTERNAL,
-                from_addr: "pisces@example.com",
-                to_addr: "support@example.com",
-                subject: "Intake",
-                body_text: "hello",
-                raw_storage_key: Some(raw_key),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("append the inbound hop")
-    }
-
-    #[tokio::test]
-    async fn mail_file_door_files_the_attachment_with_provenance() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "mail-file").await;
-        let app = crate::test_support::app_state(db.clone()).await;
-        let message_id = seed_inbound_message(&db, &app.storage).await;
-
-        let lawyer_person = store::test_support::ensure_person(
-            &db,
-            &store::persons::NewPerson {
-                email: "aries@neonlaw.com".to_string(),
-                name: "Aries Attorney".to_string(),
-                role: store::persons::Role::Lawyer,
-                ..Default::default()
-            },
-        )
-        .await;
-        store::projects::designate_dri_in_surreal(
-            &db,
-            project_id,
-            lawyer_person.id,
-            store::projects::DriSide::Lawyer,
-        )
-        .await
-        .expect("seed the lawyer's participation row");
-
-        let state = ApiState {
-            surreal: app.surreal.clone(),
-            email: app.email.clone(),
-            canonical_base_url: None,
-            jev: None,
-            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
-            bootstrap_company: "Test Firm".to_string(),
-            questionnaire_runtime: app.questionnaire_runtime.clone(),
-            storage: app.storage.clone(),
-            workflow_runtime: app.workflow_runtime.clone(),
-            assets_storage: app.assets_storage.clone(),
-            forms_registry: app.forms_registry.clone(),
-            signature_provider: app.signature_provider.clone(),
-            contract_reviewer: app.contract_reviewer.clone(),
-            integration_providers: app.integration_providers.clone(),
-            billing_provider: app.billing_provider.clone(),
-        };
-        let session = crate::SessionData {
-            person_id: Some(lawyer_person.id),
-            ..crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer)
-        };
-
-        let response = mail_file_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            Json(MailFileRequest {
-                message_id,
-                kind: Some("exhibit".to_string()),
-                visibility: None,
-                dry_run: false,
-            }),
-        )
-        .await
-        .expect("a lawyer on the matter can file the message's attachments");
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let filed = json["filed"].as_array().expect("filed array");
-        assert_eq!(filed.len(), 1, "one attachment, one pointer: {json}");
-        assert_eq!(filed[0]["kind"], "exhibit", "{json}");
-        assert_eq!(filed[0]["visibility"], "internal", "{json}");
-
-        let asset_id: uuid::Uuid = filed[0]["current_version"]["asset_id"]
-            .as_str()
-            .and_then(|s| s.parse().ok())
-            .expect("asset_id is a uuid");
-        let asset = store::assets::find_by_id(&db, asset_id)
-            .await
-            .expect("read the filed asset")
-            .expect("the asset exists");
-        assert_eq!(asset.filename.as_deref(), Some("signed intake.pdf"));
-        assert_eq!(
-            asset.source_message_id.as_deref(),
-            Some(message_id.to_string().as_str()),
-            "provenance is readable back"
-        );
-        assert_eq!(asset.source_sender.as_deref(), Some("pisces@example.com"));
-        assert_eq!(asset.source_subject.as_deref(), Some("Intake"));
-        assert!(asset.source_received_at.is_some());
-    }
-
-    #[tokio::test]
-    async fn mail_file_door_dry_run_lists_without_writing() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "mail-file-dry").await;
-        let app = crate::test_support::app_state(db.clone()).await;
-        let message_id = seed_inbound_message(&db, &app.storage).await;
-
-        let lawyer_person = store::test_support::ensure_person(
-            &db,
-            &store::persons::NewPerson {
-                email: "aries2@neonlaw.com".to_string(),
-                name: "Aries Attorney".to_string(),
-                role: store::persons::Role::Lawyer,
-                ..Default::default()
-            },
-        )
-        .await;
-        store::projects::designate_dri_in_surreal(
-            &db,
-            project_id,
-            lawyer_person.id,
-            store::projects::DriSide::Lawyer,
-        )
-        .await
-        .expect("seed the lawyer's participation row");
-
-        let state = ApiState {
-            surreal: app.surreal.clone(),
-            email: app.email.clone(),
-            canonical_base_url: None,
-            jev: None,
-            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
-            bootstrap_company: "Test Firm".to_string(),
-            questionnaire_runtime: app.questionnaire_runtime.clone(),
-            storage: app.storage.clone(),
-            workflow_runtime: app.workflow_runtime.clone(),
-            assets_storage: app.assets_storage.clone(),
-            forms_registry: app.forms_registry.clone(),
-            signature_provider: app.signature_provider.clone(),
-            contract_reviewer: app.contract_reviewer.clone(),
-            integration_providers: app.integration_providers.clone(),
-            billing_provider: app.billing_provider.clone(),
-        };
-        let session = crate::SessionData {
-            person_id: Some(lawyer_person.id),
-            ..crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer)
-        };
-
-        let response = mail_file_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            Json(MailFileRequest {
-                message_id,
-                kind: Some("exhibit".to_string()),
-                visibility: None,
-                dry_run: true,
-            }),
-        )
-        .await
-        .expect("a dry run still succeeds");
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["dry_run"], true, "{json}");
-        let attachments = json["attachments"].as_array().expect("attachments array");
-        assert_eq!(attachments.len(), 1, "{json}");
-        assert_eq!(attachments[0]["filename"], "signed intake.pdf", "{json}");
-        assert!(
-            json["filed"].as_array().unwrap().is_empty(),
-            "a dry run files nothing: {json}"
-        );
-        assert!(
-            store::assets::for_project(&db, project_id)
-                .await
-                .unwrap()
-                .is_empty(),
-            "a dry run writes no asset row"
-        );
-    }
-
-    const EML_PLAIN: &str = "Message-ID: <abc-123@example.test>\r\n\
-From: Client <client@example.test>\r\n\
-To: lawyer@neonlaw.test\r\n\
-Subject: Retainer questions\r\n\
-Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
-Content-Type: text/plain; charset=utf-8\r\n\
-\r\n\
-Can I sign electronically?\r\n";
-
-    const EML_WITH_ATTACHMENT: &str = "Message-ID: <order-1@example.test>\r\n\
-From: client@example.test\r\n\
-To: lawyer@neonlaw.test\r\n\
-Subject: The signed order\r\n\
-Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
-MIME-Version: 1.0\r\n\
-Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
-\r\n\
---BOUND\r\n\
-Content-Type: text/plain\r\n\
-\r\n\
-See the attached order.\r\n\
---BOUND\r\n\
-Content-Type: application/pdf\r\n\
-Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
-\r\n\
-%PDF-1.4\r\n\
---BOUND--\r\n";
-
-    /// A lawyer participating in the seeded matter, plus that matter's
-    /// `ApiState` — the .eml door's test rig.
-    async fn eml_lawyer_state(
-        db: &store::surreal::SurrealDb,
-        project_id: Uuid,
-        email: &str,
-    ) -> (ApiState, crate::SessionData) {
-        let app = crate::test_support::app_state(db.clone()).await;
-        let lawyer_person = store::test_support::ensure_person(
-            db,
-            &store::persons::NewPerson {
-                email: email.to_string(),
-                name: "Aries Attorney".to_string(),
-                role: store::persons::Role::Lawyer,
-                ..Default::default()
-            },
-        )
-        .await;
-        store::projects::designate_dri_in_surreal(
-            db,
-            project_id,
-            lawyer_person.id,
-            store::projects::DriSide::Lawyer,
-        )
-        .await
-        .expect("seed the lawyer's participation row");
-        let state = ApiState {
-            surreal: app.surreal.clone(),
-            email: app.email.clone(),
-            canonical_base_url: None,
-            jev: None,
-            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
-            bootstrap_company: "Test Firm".to_string(),
-            questionnaire_runtime: app.questionnaire_runtime.clone(),
-            storage: app.storage.clone(),
-            workflow_runtime: app.workflow_runtime.clone(),
-            assets_storage: app.assets_storage.clone(),
-            forms_registry: app.forms_registry.clone(),
-            signature_provider: app.signature_provider.clone(),
-            contract_reviewer: app.contract_reviewer.clone(),
-            integration_providers: app.integration_providers.clone(),
-            billing_provider: app.billing_provider.clone(),
-        };
-        let session = crate::SessionData {
-            person_id: Some(lawyer_person.id),
-            ..crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer)
-        };
-        (state, session)
-    }
-
-    async fn ingest_address_match_fixture(
-        db: &store::surreal::SurrealDb,
-        firm: Uuid,
-        email: &str,
-    ) -> Uuid {
-        let message = store::inbox::ingest_inbound(
-            db,
-            &store::inbox::IngestInbound {
-                firm_id: firm,
-                project_id: None,
-                brand_key: None,
-                interaction_type: None,
-                provider_post_id: None,
-                parent_provider_message_id: None,
-                visibility: None,
-                channel: store::inbox::channel::EMAIL,
-                provider_account: "test-inbox",
-                provider_message_id: email,
-                provider_thread_ref: None,
-                external_address: email,
-                external_name: None,
-                subject: None,
-                body: "Test message",
-                source_page: None,
-                source_channel: None,
-                matter_consent: true,
-                promotional_opt_in: false,
-                email_conversation_id: None,
-                attachments: Vec::new(),
-                occurred_at: "2026-01-01T12:00:00Z",
-                raw_storage_key: None,
-            },
-        )
-        .await
-        .unwrap();
-        message.conversation_id
-    }
-
-    /// The ingest-only import body: a `.eml` payload previewed (never
-    /// attributed) against an optional Firm and matter code.
-    fn import_body(payload: &str, firm: Option<Uuid>, project: Option<&str>) -> serde_json::Value {
-        serde_json::json!({
-            "source": "email",
-            "mailbox": "mailbox@example.test",
-            "payload_base64": payload,
-            "project": project,
-            "firm": firm,
-            "dry_run": true,
-        })
-    }
-
-    #[tokio::test]
-    async fn inbox_import_names_the_firm_when_the_operator_belongs_to_more_than_one() {
-        // Run 43930109007: the ingest-only door died with `firm_ambiguous`
-        // because the staging operator belongs to more than one Firm, and
-        // naming a `project` would pre-attribute the very threads Jev must
-        // propose against. A named Firm resolves only through membership.
-        // Driven through the router (`call`): `resolve_import_target`'s
-        // composite future is far larger than the 2 MB libtest stack in a
-        // debug build when materialized unboxed, and the door boxes it.
-        use base64::Engine as _;
-        // The embedded-engine ratchet (cli/tests/embedded_surreal_ratchet.rs)
-        // forbids new `mem()` sites, and the PostgreSQL fixture cannot back
-        // `ApiState` — the router and the import door run on a SurrealDB
-        // handle. Ride the server-mode lane on a database of this test's own
-        // naming: CI requires it (`NAV_REQUIRE_SURREAL=1`), a bare laptop
-        // skips, and the unique name keeps shards isolated.
-        let Some(lane) = store::test_support::server_surreal(&format!(
-            "inbox_import_firm_{}",
-            Uuid::new_v4().simple()
-        ))
-        .await
-        else {
-            return;
-        };
-        let db = lane.db;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other_firm = store::test_support::seed_firm_with_brand(&db, "vesta").await;
-        let project =
-            store::test_support::seed_project_on_firm(&db, Some(firm), "E2E Firm Test").await;
-        let (state, session) = eml_lawyer_state(&db, project.id, "aries@neonlaw.com").await;
-        let person = session.person_id.unwrap();
-        for target in [firm, other_firm] {
-            store::firms::add_membership(
-                &db,
-                &store::firms::NewPersonFirmRole {
-                    person_id: person,
-                    firm_id: target,
-                    membership: store::firms::FirmMembership::Lawyer,
-                    is_dri: false,
-                },
-            )
-            .await
-            .unwrap();
-        }
-        // Driven through the router (`call`) — see the test's opening note.
-        let payload = base64::engine::general_purpose::STANDARD.encode(EML_PLAIN);
-        let body = |firm: Option<Uuid>, project: Option<&str>| import_body(&payload, firm, project);
-        let import = "/app/api/inbox/import";
-
-        // Two memberships, nothing named: the door names the ambiguity.
-        let (status, json) = call(
-            &state,
-            Some(&session),
-            "POST",
-            import,
-            Some(body(None, None)),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
-        assert_eq!(json["error"], "firm_ambiguous", "{json}");
-
-        // The caller's own named membership lands, threads unattributed.
-        let (status, json) = call(
-            &state,
-            Some(&session),
-            "POST",
-            import,
-            Some(body(Some(firm), None)),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        assert_eq!(json["firm"], serde_json::json!(firm), "{json}");
-        assert!(json["project"].is_null(), "{json}");
-        assert_eq!(json["would_import"], 1, "{json}");
-
-        // A stranger Firm is refused: naming one grants nothing.
-        let (status, json) = call(
-            &state,
-            Some(&session),
-            "POST",
-            import,
-            Some(body(Some(Uuid::now_v7()), None)),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
-        assert_eq!(json["error"], "firm_not_member", "{json}");
-
-        // A matter's Firm and a named Firm must agree with each other.
-        let (status, json) = call(
-            &state,
-            Some(&session),
-            "POST",
-            import,
-            Some(body(Some(other_firm), Some(project.code.as_str()))),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
-        assert_eq!(json["error"], "firm_mismatch", "{json}");
-
-        // The Gmail path keeps its canonical-mailbox Firm resolution.
-        let gmail = serde_json::json!({
-            "source": "gmail",
-            "mailbox": "mailbox@example.test",
-            "payload_base64": payload,
-            "firm": firm,
-            "dry_run": true,
-        });
-        let (status, json) = call(&state, Some(&session), "POST", import, Some(gmail)).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
-        assert_eq!(json["error"], "firm_not_supported", "{json}");
-    }
-
-    #[tokio::test]
-    async fn inbox_address_matches_are_confined_to_the_conversations_firm() {
-        let db = store::surreal::test_support::mem().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other_firm = store::test_support::seed_firm_with_brand(&db, "vesta").await;
-        let local =
-            store::test_support::seed_project_on_firm(&db, Some(firm), "Local Project").await;
-        let other =
-            store::test_support::seed_project_on_firm(&db, Some(other_firm), "Other Project").await;
-        let (state, session) = eml_lawyer_state(&db, local.id, "aries@neonlaw.com").await;
-        store::firms::add_membership(
-            &db,
-            &store::firms::NewPersonFirmRole {
-                person_id: session.person_id.unwrap(),
-                firm_id: firm,
-                membership: store::firms::FirmMembership::Lawyer,
-                is_dri: false,
-            },
-        )
-        .await
-        .unwrap();
-
-        let mut conversations = Vec::new();
-        for (email, local_participation) in [
-            ("both@example.test", true),
-            ("other-only@example.test", false),
-        ] {
-            let sender = store::test_support::ensure_person(
-                &db,
-                &store::persons::NewPerson::with_role(
-                    "Test Sender".to_string(),
-                    email.to_string(),
-                    store::persons::Role::Client,
-                ),
-            )
-            .await;
-            store::projects::add_participation(&db, other.id, sender.id, "client")
-                .await
-                .unwrap();
-            if local_participation {
-                store::projects::add_participation(&db, local.id, sender.id, "client")
-                    .await
-                    .unwrap();
-            }
-            conversations.push(ingest_address_match_fixture(&db, firm, email).await);
-        }
-
-        let rejected = crate::inbox_api::assign_matches(
-            State(state.clone()),
-            LawyerSession(session.clone()),
-            Json(crate::inbox_api::AssignMatchesRequest {
-                apply: true,
-                scheduled: false,
-                after: None,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
-
-        let response = crate::inbox_api::assign_matches(
-            State(state.clone()),
-            LawyerSession(session.clone()),
-            Json(crate::inbox_api::AssignMatchesRequest {
-                apply: false,
-                scheduled: false,
-                after: None,
-            }),
-        )
-        .await
-        .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rows.len(), 2);
-        for (index, id) in conversations.into_iter().enumerate() {
-            let row = rows
-                .iter()
-                .find(|row| row["conversation_id"] == serde_json::json!(id))
-                .unwrap();
-            let stored = store::inbox::conversation_by_id(&db, id)
-                .await
-                .unwrap()
-                .unwrap();
-            if index == 0 {
-                assert_eq!(row["decision"]["project_id"], serde_json::json!(local.id));
-            } else {
-                assert_eq!(row["decision"]["reason"], "no_match");
-            }
-            assert_eq!(row["applied"], false);
-            assert_eq!(stored.project_id, None);
-            assert!(store::inbox::assignments(&db, id).await.unwrap().is_empty());
-        }
-
-        assert!(!store::communications::exists_for_project(&db, local.id)
-            .await
-            .unwrap());
-        assert_jev_roster_is_confined_to_the_firm(state, session, local.id, other.id).await;
-    }
-
-    async fn assert_jev_roster_is_confined_to_the_firm(
-        mut state: ApiState,
-        session: crate::SessionData,
-        local: Uuid,
-        other: Uuid,
-    ) {
-        let provider = wiremock::MockServer::start().await;
-        state.jev = Some(typesafe::JevClient::new(&provider.uri(), "test-key"));
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/v1/systemone"))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200)
-                    .set_body_json(jev_answer(&local.to_string(), 0.95)),
-            )
-            .expect(1)
-            .mount(&provider)
-            .await;
-        let response = crate::inbox_api::assign_matches(
-            State(state),
-            LawyerSession(session),
-            Json(crate::inbox_api::AssignMatchesRequest {
-                apply: false,
-                scheduled: false,
-                after: None,
-            }),
-        )
-        .await
-        .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rows.len(), 2);
-        for row in rows {
-            assert_eq!(row["decision"]["project_id"], serde_json::json!(local));
-            assert_eq!(row["applied"], false);
-        }
-        let requests = provider.received_requests().await.unwrap();
-        assert_eq!(requests.len(), 1);
-        let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
-        let criteria = payload["questions"][typesafe::QUESTION_ID]["criteria"]
-            .as_object()
-            .unwrap();
-        assert_eq!(criteria.len(), 2);
-        assert!(criteria.contains_key(&local.to_string()));
-        assert!(criteria.contains_key(typesafe::NONE_OPTION));
-        assert!(!criteria.contains_key(&other.to_string()));
-    }
-
-    fn jev_answer(choice: &str, confidence: f64) -> serde_json::Value {
-        serde_json::json!({
-            "model": typesafe::MODEL_ID,
-            "answers": { typesafe::QUESTION_ID: {
-                "type": "choice",
-                "choice": choice,
-                "confidence": confidence,
-                "probabilities": {
-                    choice: confidence,
-                    typesafe::NONE_OPTION: 1.0 - confidence,
-                },
-            }}
-        })
-    }
-
-    #[tokio::test]
-    async fn mail_signature_refuses_another_person_before_reading_signature_storage() {
-        let db = store::surreal::test_support::mem().await;
-        let actor = store::test_support::ensure_person(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Signature owner",
-                "owner@example.test",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await;
-        let other = store::test_support::ensure_person(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Other lawyer",
-                "other@example.test",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await;
-        let mut session =
-            crate::SessionData::fresh("signature-owner", store::persons::Role::Lawyer);
-        session.person_id = Some(actor.id);
-        let response = super::mail_signature(
-            State(db),
-            LawyerSession(session),
-            Query(super::MailSignatureQuery {
-                account: other.email,
-            }),
-        )
-        .await;
-        assert!(matches!(response, Err(ApiError::NotFound)));
-    }
-
-    fn eml_request(
-        raw: &[u8],
-        mailbox: Option<String>,
-        kind: Option<String>,
-        dry_run: bool,
-    ) -> EmlUploadRequest {
-        EmlUploadRequest {
-            gmail_message_id: None,
-            gmail_sent: None,
-            raw_base64: Some(base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                raw,
-            )),
-            mailbox,
-            kind,
-            visibility: None,
-            dry_run,
-            source_document: None,
-            attachment_documents: Vec::new(),
-            source_ref: None,
-            from: None,
-            to: None,
-            subject: None,
-            text_body: None,
-            occurred_at: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn eml_door_files_raw_eml_without_any_gmail_grant() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "eml-door").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-        let storage = state.storage.clone();
-        // The request carries only bytes and a session — no Gmail OAuth
-        // account, client id, or Keychain refresh token anywhere in the
-        // flow, which is the point of the door.
-        let response = eml_upload_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            Json(eml_request(EML_PLAIN.as_bytes(), None, None, false)),
-        )
-        .await
-        .expect("a lawyer on the matter can file a raw .eml");
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["source_ref"], "eml:abc-123@example.test");
-        assert_eq!(json["direction"], "inbound");
-        assert_eq!(json["deduped"], false);
-        assert!(json["communication_id"].is_string());
-        let filed = store::communications::for_project(&db, project_id)
-            .await
-            .unwrap();
-        assert_eq!(filed.len(), 1);
-        let asset_id = filed[0]
-            .asset_id
-            .expect("raw source is linked to the Communication");
-        let asset = store::assets::find_by_id(&db, asset_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            storage.get(&asset.storage_key).await.unwrap().bytes,
-            EML_PLAIN.as_bytes()
-        );
-        assert_eq!(
-            filed[0].source_ref.as_deref(),
-            Some("eml:abc-123@example.test")
-        );
-        assert_eq!(
-            filed[0].channel,
-            store::communications::channel::EMAIL_INBOUND
-        );
-    }
-
-    #[tokio::test]
-    async fn eml_door_replay_dedupes_on_channel_and_source_ref() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-dup").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-        for expected_status in [StatusCode::CREATED, StatusCode::OK] {
-            let mut request = eml_request(
-                EML_PLAIN.as_bytes(),
-                Some("lawyer@example.test".into()),
-                None,
-                false,
-            );
-            request.gmail_message_id = Some("message-123".into());
-            request.gmail_sent = Some(false);
-            let response = eml_upload_door(
-                State(state.clone()),
-                LawyerSession(session.clone()),
-                Path(project_id),
-                Json(request),
-            )
-            .await
-            .expect("each upload of the same message succeeds");
-            assert_eq!(response.status(), expected_status);
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(
-                json["deduped"],
-                expected_status == StatusCode::OK,
-                "the replay is the deduped one"
-            );
-        }
-        let filed = store::communications::for_project(&db, project_id)
-            .await
-            .unwrap();
-        assert_eq!(filed.len(), 1, "the replay wrote no second row");
-        assert_eq!(
-            filed[0].source_ref.as_deref(),
-            Some("gmail:lawyer@example.test:message-123")
-        );
-        assert!(filed[0].asset_id.is_some());
-    }
-
-    #[tokio::test]
-    async fn eml_door_files_attachments_as_linked_documents_and_replays_without_duplicates() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-att").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-        let raw = EML_WITH_ATTACHMENT.as_bytes();
-        let mut first = None;
-        for round in 0..2 {
-            let response = eml_upload_door(
-                State(state.clone()),
-                LawyerSession(session.clone()),
-                Path(project_id),
-                Json(eml_request(raw, None, Some("exhibit".to_string()), false)),
-            )
-            .await
-            .expect("an attachment-bearing .eml files");
-            let status = response.status();
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            let filed = json["filed"].as_array().expect("filed array");
-            assert_eq!(filed.len(), 1, "one pointer per attachment");
-            assert_eq!(
-                filed[0]["current_version"]["version"], 1,
-                "the replay filed no second revision"
-            );
-            assert_eq!(json["attachments"][0]["filename"], "order.pdf");
-            if round == 0 {
-                assert_eq!(status, StatusCode::CREATED);
-                first = Some(filed[0]["current_version"]["asset_id"].clone());
-            } else {
-                assert_eq!(status, StatusCode::OK);
-                assert_eq!(
-                    json["deduped"], true,
-                    "the replay dedupes the communication"
-                );
-                assert_eq!(
-                    filed[0]["current_version"]["asset_id"],
-                    first.clone().expect("the first round filed an asset"),
-                    "the replay reads back the same asset"
-                );
-            }
-        }
-        let filed = store::communications::for_project(&db, project_id)
-            .await
-            .unwrap();
-        assert_eq!(filed.len(), 1, "the replay wrote no second row");
-    }
-
-    #[tokio::test]
-    async fn eml_door_skips_an_attachment_already_on_file_and_names_the_document() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-on-file").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-        let args = store::documents::IngestArgs {
-            project_id,
-            source: store::documents::source::UPLOAD,
-            filename: "2026.10.30_order.pdf",
-            kind: "exhibit",
-            content_type: "application/pdf",
-            description: None,
-            secondary_storage_key: None,
-            visibility: store::documents::visibility::INTERNAL,
-        };
-        let identity = store::documents::DocumentIdentity {
-            slug: Some("2026.10.30_order.pdf"),
-            published_at: None,
-            metadata: None,
-            derived_from: None,
-            transcript_quality: None,
-            signing: None,
-            notarization: Vec::new(),
-            evidence: None,
-            folder: None,
-        };
-        store::assets::file_revision(&db, &state.storage, &args, &identity, b"%PDF-1.4")
-            .await
-            .expect("the lawyer uploaded the attachment first");
-
-        let response = eml_upload_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            Json(eml_request(
-                EML_WITH_ATTACHMENT.as_bytes(),
-                None,
-                Some("letter".to_string()),
-                false,
-            )),
-        )
-        .await
-        .expect("the message files");
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["communication_id"].is_string(), "the message files");
-        assert!(
-            json["filed"].as_array().unwrap().is_empty(),
-            "the attachment is not filed a second time"
-        );
-        assert_eq!(
-            json["skipped"],
-            serde_json::json!([{
-                "filename": "order.pdf",
-                "reason": "already_on_file",
-                "document_slug": "2026.10.30_order.pdf",
-            }])
-        );
-        let assets = store::assets::for_project(&db, project_id).await.unwrap();
-        assert_eq!(assets.len(), 1, "no second document chain");
-    }
-
-    #[tokio::test]
-    async fn eml_door_files_the_message_and_skips_an_inline_signature_logo() {
-        const SIGNED: &str = "Message-ID: <signed-1@example.test>\r\n\
-From: Clerk <clerk@example.test>\r\n\
-To: lawyer@neonlaw.test\r\n\
-Subject: Hearing confirmed\r\n\
-Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
-MIME-Version: 1.0\r\n\
-Content-Type: multipart/related; boundary=\"REL\"\r\n\
-\r\n\
---REL\r\n\
-Content-Type: multipart/alternative; boundary=\"ALT\"\r\n\
-\r\n\
---ALT\r\n\
-Content-Type: text/plain\r\n\
-\r\n\
-The hearing is confirmed.\r\n\
---ALT\r\n\
-Content-Type: text/html\r\n\
-\r\n\
-<p>The hearing is confirmed.</p><img src=\"cid:image001.png@01DB0000.00000000\">\r\n\
---ALT--\r\n\
---REL\r\n\
-Content-Type: image/png; name=\"image001.png\"\r\n\
-Content-Disposition: inline; filename=\"image001.png\"\r\n\
-Content-ID: <image001.png@01DB0000.00000000>\r\n\
-\r\n\
-PNG\r\n\
---REL--\r\n";
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-logo").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-        let response = eml_upload_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            Json(eml_request(SIGNED.as_bytes(), None, None, false)),
-        )
-        .await
-        .expect("a message whose only part is a signature logo files");
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["communication_id"].is_string(), "the message files");
-        assert!(json["filed"].as_array().unwrap().is_empty());
-        assert_eq!(
-            json["skipped"],
-            serde_json::json!([{
-                "filename": "image001.png",
-                "reason": "inline_image",
-                "document_slug": null,
-            }])
-        );
-        assert!(
-            store::assets::for_project(&db, project_id)
-                .await
-                .unwrap()
-                .is_empty(),
-            "the logo files no document"
-        );
-    }
-
-    #[tokio::test]
-    async fn eml_door_dry_run_lists_attachments_without_writing() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-dry").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-        let response = eml_upload_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            Json(eml_request(
-                EML_WITH_ATTACHMENT.as_bytes(),
-                None,
-                None,
-                true,
-            )),
-        )
-        .await
-        .expect("a dry run succeeds");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["communication_id"], serde_json::Value::Null);
-        assert_eq!(json["attachments"][0]["filename"], "order.pdf");
-        assert!(
-            json["filed"].as_array().unwrap().is_empty(),
-            "a dry run files nothing"
-        );
-        assert!(
-            store::communications::for_project(&db, project_id)
-                .await
-                .unwrap()
-                .is_empty(),
-            "a dry run writes no communication"
-        );
-        assert!(
-            store::assets::for_project(&db, project_id)
-                .await
-                .unwrap()
-                .is_empty(),
-            "a dry run writes no asset row"
-        );
-    }
-
-    #[tokio::test]
-    async fn eml_door_requires_a_kind_to_file_attachments() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-kind").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-        let response = eml_upload_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            Json(eml_request(
-                EML_WITH_ATTACHMENT.as_bytes(),
-                None,
-                None,
-                false,
-            )),
-        )
-        .await
-        .expect("the request is well-formed; the refusal is the body");
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"], "kind_required");
-    }
-
-    /// A message the filing lawyer sent to someone outside the Project — not
-    /// a client, opposing counsel, or court — with a PDF attached.
-    const EML_OUTBOUND_TO_OUTSIDER: &str = "Message-ID: <sent-1@neonlaw.com>\r\n\
-From: Aries Attorney <aries@neonlaw.com>\r\n\
-To: Records Desk <records@example.test>\r\n\
-Subject: Requested records\r\n\
-Date: Mon, 02 Nov 2026 09:15:00 +0000\r\n\
-MIME-Version: 1.0\r\n\
-Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
-\r\n\
---BOUND\r\n\
-Content-Type: text/plain\r\n\
-\r\n\
-The records you asked for are attached.\r\n\
---BOUND\r\n\
-Content-Type: application/pdf\r\n\
-Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
-\r\n\
-%PDF-1.4\r\n\
---BOUND--\r\n";
-
-    #[tokio::test]
-    async fn eml_door_files_the_lawyers_own_message_to_a_non_participant_as_outbound() {
-        for from_alias in [false, true] {
-            let db = store::surreal::test_support::mem().await;
-            let project_id = store::test_support::seed_project_surreal(&db, "eml-door-out").await;
-            let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-            let raw = if from_alias {
-                EML_OUTBOUND_TO_OUTSIDER.replace("aries@neonlaw.com", "sender-alias@example.test")
-            } else {
-                EML_OUTBOUND_TO_OUTSIDER.to_owned()
-            };
-            let mut request = eml_request(raw.as_bytes(), None, Some("letter".to_string()), false);
-            if from_alias {
-                request.gmail_message_id = Some("sent-alias-123".into());
-                request.gmail_sent = Some(true);
-            }
-            let response = eml_upload_door(
-                State(state),
-                LawyerSession(session),
-                Path(project_id),
-                Json(request),
-            )
-            .await
-            .expect("the lawyer's sent message files");
-
-            assert_eq!(response.status(), StatusCode::CREATED);
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(json["direction"], "outbound");
-            assert_eq!(json["filed"].as_array().map(Vec::len), Some(1));
-            let filed = store::communications::for_project(&db, project_id)
-                .await
-                .unwrap();
-            assert_eq!(filed.len(), 1);
-            assert_eq!(
-                filed[0].channel,
-                store::communications::channel::EMAIL_OUTBOUND
-            );
-            assert_eq!(
-                store::assets::for_project(&db, project_id)
-                    .await
-                    .unwrap()
-                    .len(),
-                1,
-                "the PDF files as an Asset"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn eml_door_refuses_out_of_scope_lawyers() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-scope").await;
-        // A lawyer with no participation row on this matter.
-        let (state, session) = eml_lawyer_state(&db, project_id, "outside@neonlaw.com").await;
-        let other = store::test_support::seed_project_surreal(&db, "eml-door-other").await;
-
-        let response = eml_upload_door(
-            State(state),
-            LawyerSession(session),
-            Path(other),
-            Json(eml_request(EML_PLAIN.as_bytes(), None, None, false)),
-        )
-        .await;
-
-        assert!(matches!(response, Err(ApiError::NotFound)));
     }
 
     #[test]
@@ -16397,1464 +14185,6 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
         assert!(super::may_change_roles(&admin));
     }
 
-    async fn router_api_state(db: store::surreal::SurrealDb) -> ApiState {
-        let app = crate::test_support::app_state(db).await;
-        ApiState {
-            surreal: app.surreal.clone(),
-            email: app.email.clone(),
-            canonical_base_url: None,
-            jev: None,
-            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
-            bootstrap_company: "Test Firm".to_string(),
-            questionnaire_runtime: app.questionnaire_runtime.clone(),
-            storage: app.storage.clone(),
-            workflow_runtime: app.workflow_runtime.clone(),
-            assets_storage: app.assets_storage.clone(),
-            forms_registry: app.forms_registry.clone(),
-            signature_provider: app.signature_provider.clone(),
-            contract_reviewer: app.contract_reviewer.clone(),
-            integration_providers: app.integration_providers.clone(),
-            billing_provider: app.billing_provider.clone(),
-        }
-    }
-
-    /// `navigator project set --drive-folder` records the folder through this
-    /// patch. A deployment with no Drive provider records the id and says the
-    /// check was skipped; a malformed id is refused before any Drive call.
-    #[tokio::test]
-    async fn a_drive_folder_patch_records_the_id_and_names_its_check() {
-        let db = store::test_support::mem_surreal().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "drive-adopt").await;
-        let state = router_api_state(db.clone()).await;
-        let session = crate::SessionData::fresh("l", store::persons::Role::Lawyer);
-        let patch = |value: &str| {
-            serde_json::from_value::<store::projects::UpdateProjectCommand>(
-                serde_json::json!({ "drive_folder_id": value }),
-            )
-            .expect("a drive folder patch")
-        };
-
-        let response = super::update_project(
-            State(state.clone()),
-            LawyerSession(session.clone()),
-            Path(project_id),
-            JsonOrForm(patch("1SyntheticFolderId")),
-        )
-        .await
-        .expect("the patch applies");
-        assert_eq!(
-            response
-                .headers()
-                .get(store::project_surfaces::DRIVE_FOLDER_CHECK_HEADER)
-                .and_then(|value| value.to_str().ok()),
-            Some("skipped"),
-            "no Drive provider is configured in tests"
-        );
-        let stored = store::projects::find_by_id(&db, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            stored.drive_folder_id.as_deref(),
-            Some("1SyntheticFolderId")
-        );
-
-        let refused = super::update_project(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            JsonOrForm(patch("https://drive.google.com/drive/folders/1Other")),
-        )
-        .await
-        .expect_err("the API takes the id; the CLI and the form resolve links");
-        assert_eq!(refused.into_response().status(), StatusCode::BAD_REQUEST);
-    }
-
-    /// Drive one request through the real `/app/api` router with `session`
-    /// injected the way the auth layers would.
-    async fn call(
-        state: &ApiState,
-        session: Option<&crate::SessionData>,
-        method: &str,
-        path: &str,
-        body: Option<serde_json::Value>,
-    ) -> (StatusCode, serde_json::Value) {
-        use tower::ServiceExt;
-        let mut router = routes().with_state(state.clone());
-        if let Some(session) = session {
-            router = router.layer(axum::Extension(session.clone()));
-        }
-        let mut request = axum::http::Request::builder().method(method).uri(path);
-        let body = match body {
-            Some(json) => {
-                request = request.header("content-type", "application/json");
-                axum::body::Body::from(json.to_string())
-            }
-            None => axum::body::Body::empty(),
-        };
-        let response = router
-            .oneshot(request.body(body).expect("build the request"))
-            .await
-            .expect("the router answers");
-        let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read the body");
-        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-        (status, json)
-    }
-
-    /// One seeded matter (with a notation on it) plus a lawyer who does not
-    /// participate in it.
-    struct DoorFixture {
-        db: store::surreal::SurrealDb,
-        state: ApiState,
-        project: Uuid,
-        notation: Uuid,
-        lawyer: crate::SessionData,
-    }
-
-    async fn door_fixture() -> DoorFixture {
-        let db = store::surreal::test_support::mem().await;
-        let state = router_api_state(db.clone()).await;
-        let notation = store::test_support::seed_notation(&db).await;
-        let project = store::notations::find_by_id(&db, notation)
-            .await
-            .expect("read the seeded notation")
-            .expect("the seeded notation exists")
-            .project_id;
-        let outsider = store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role(
-                "Outside Lawyer",
-                "outside-lawyer@example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .expect("seed the outside lawyer");
-        let lawyer = crate::SessionData {
-            person_id: Some(outsider.id),
-            ..crate::SessionData::fresh("outside-lawyer", store::persons::Role::Lawyer)
-        };
-        DoorFixture {
-            db,
-            state,
-            project,
-            notation,
-            lawyer,
-        }
-    }
-
-    /// A lawyer with no participation on a matter learns nothing about it:
-    /// every matter-scoped door answers the same bare `404` an unknown id
-    /// would, whether it reads or writes, and whatever valid body it sent.
-    #[tokio::test]
-    #[allow(clippy::too_many_lines)]
-    async fn an_outside_lawyer_gets_a_non_disclosing_404_from_every_matter_door() {
-        let f = door_fixture().await;
-        let (p, n, r) = (f.project, f.notation, Uuid::now_v7());
-        let doors: Vec<(&str, String, Option<serde_json::Value>)> = vec![
-            ("GET", format!("/app/api/projects/{p}"), None),
-            ("GET", format!("/app/api/projects/{p}/status"), None),
-            ("GET", format!("/app/api/projects/{p}/participants"), None),
-            ("GET", format!("/app/api/projects/{p}/private-terms"), None),
-            ("GET", format!("/app/api/projects/{p}/section-counts"), None),
-            ("GET", format!("/app/api/projects/{p}/notations"), None),
-            (
-                "GET",
-                format!("/app/api/projects/{p}/notation-inventory"),
-                None,
-            ),
-            ("GET", format!("/app/api/projects/{p}/finance"), None),
-            ("GET", format!("/app/api/projects/{p}/documents"), None),
-            (
-                "GET",
-                format!("/app/api/projects/{p}/documents/revisions?slug=a.pdf"),
-                None,
-            ),
-            (
-                "GET",
-                format!("/app/api/projects/{p}/documents/integrity"),
-                None,
-            ),
-            ("GET", format!("/app/api/projects/{p}/conversation"), None),
-            ("GET", format!("/app/api/project-surfaces/{p}"), None),
-            ("GET", format!("/app/api/notations/{n}"), None),
-            (
-                "GET",
-                format!("/app/api/notations/{n}/review-documents"),
-                None,
-            ),
-            ("GET", format!("/app/api/notations/{n}/answers"), None),
-            ("GET", format!("/app/api/playbooks/{r}"), None),
-            ("GET", format!("/app/api/contract-reviews/{r}"), None),
-            ("GET", format!("/app/api/graph/project/{p}"), None),
-            ("GET", format!("/app/api/graph/lawyer/{r}"), None),
-            ("GET", format!("/app/api/graph/firm/{r}"), None),
-            ("GET", format!("/app/api/entities/{r}"), None),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/testimonial"),
-                Some(serde_json::json!({ "quote": "Great.", "request_public": false })),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/documents/upload-session/status"),
-                Some(serde_json::json!({ "session_id": r })),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/documents/upload-session/complete"),
-                Some(serde_json::json!({ "session_id": r })),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/documents/upload-session"),
-                Some(serde_json::json!({
-                    "filename": "a.pdf",
-                    "declared_size": 4,
-                    "declared_sha256": "0".repeat(64),
-                })),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/close"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/finance/run"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/conversation/messages"),
-                Some(serde_json::json!({ "body": "hello" })),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/participants"),
-                Some(serde_json::json!({ "person_id": r })),
-            ),
-            (
-                "PATCH",
-                format!("/app/api/projects/{p}/participants/{r}"),
-                Some(serde_json::json!({ "person_id": r })),
-            ),
-            (
-                "DELETE",
-                format!("/app/api/projects/{p}/participants/{r}"),
-                None,
-            ),
-            (
-                "PUT",
-                format!("/app/api/projects/{p}/participants/{r}/dri"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "DELETE",
-                format!("/app/api/projects/{p}/participants/{r}/dri"),
-                None,
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/relationships/adverse"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/notations"),
-                Some(
-                    serde_json::json!({ "template_code": "nda", "client_email": "c@example.com" }),
-                ),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/envelopes/refresh"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/envelope-adoptions"),
-                Some(serde_json::json!({
-                    "envelope_id": Uuid::nil(),
-                    "template_code": "agreement",
-                    "source": "",
-                    "commit_sha": "",
-                })),
-            ),
-            (
-                "POST",
-                format!("/app/api/notations/{n}/answers"),
-                Some(serde_json::json!({ "question_code": "entity", "value": "x" })),
-            ),
-            (
-                "POST",
-                format!("/app/api/notations/{n}/request-changes"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/notations/{n}/reask"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/notations/{n}/transcript"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/notations/{n}/intake"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/notations/{n}/approval"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/notations/{n}/signature"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/notations/{n}/clauses"),
-                Some(serde_json::json!({ "body": "Fee: $1." })),
-            ),
-            (
-                "PATCH",
-                format!("/app/api/notations/{n}/clauses/{r}"),
-                Some(serde_json::json!({ "body": "Fee: $2." })),
-            ),
-            (
-                "DELETE",
-                format!("/app/api/notations/{n}/clauses/{r}"),
-                None,
-            ),
-            (
-                "POST",
-                format!("/app/api/notations/{n}/clauses/{r}/move"),
-                Some(serde_json::json!({ "direction": "up" })),
-            ),
-            (
-                "POST",
-                format!("/app/api/review-documents/{r}/comments"),
-                Some(serde_json::json!({
-                    "anchor_start": 0,
-                    "anchor_end": 1,
-                    "quoted_text": "a",
-                    "body": "b",
-                })),
-            ),
-            (
-                "POST",
-                format!("/app/api/documents/{r}/deletion-requests"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "PATCH",
-                format!("/app/api/projects/{p}/documents/{r}"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/documents/{r}/reclassify"),
-                Some(serde_json::json!({ "kind": "letter" })),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/documents/{r}/delete"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/documents/{r}/restore"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/documents/{r}/hold"),
-                Some(serde_json::json!({ "held": true })),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/mail/file"),
-                Some(serde_json::json!({ "message_id": r })),
-            ),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/mail/eml"),
-                Some(serde_json::json!({ "raw_base64": "" })),
-            ),
-            (
-                "POST",
-                format!("/app/api/testimonials/{r}/publish"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/testimonials/{r}/unpublish"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "PUT",
-                format!("/app/api/playbooks/{r}"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/contract-reviews/{r}/findings/0"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/contract-reviews/{r}/summary"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/contract-reviews/{r}/approve"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/contract-reviews/{r}/reject"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/expunge-requests/{r}/deny"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "PATCH",
-                format!("/app/api/entities/{r}"),
-                Some(serde_json::json!({})),
-            ),
-            ("DELETE", format!("/app/api/entities/{r}"), None),
-        ];
-        // A door naming the fresh `r` answers 404 for the missing record even
-        // with no access check, so it proves only that an unknown record looks
-        // the same as one the lawyer may not see. The scoping itself is proven
-        // by the doors whose every id is seeded, and the control below.
-        // These reads name a record the fixture never seeds (a finance
-        // summary, an `a.pdf` document, a surfaces row), so they belong with
-        // the unknown-record doors too.
-        let unseeded_reads = [
-            format!("/app/api/projects/{p}/finance"),
-            format!("/app/api/projects/{p}/documents/revisions?slug=a.pdf"),
-            format!("/app/api/project-surfaces/{p}"),
-        ];
-        let r = r.to_string();
-        let (seeded, unseeded): (Vec<_>, Vec<_>) =
-            doors.into_iter().partition(|(_, path, body)| {
-                !unseeded_reads.contains(path)
-                    && !path.contains(&r)
-                    && !body.as_ref().is_some_and(|b| b.to_string().contains(&r))
-            });
-        for (method, path, body) in seeded.iter().chain(&unseeded) {
-            let (status, json) = call(&f.state, Some(&f.lawyer), method, path, body.clone()).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}: {json}");
-            assert_eq!(json["error"], "not_found", "{method} {path}");
-        }
-        // The control: once the same lawyer participates, every seeded read
-        // stops answering 404, so the refusals above came from the scoping.
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: p,
-                person_id: f.lawyer.person_id.unwrap(),
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .expect("add the lawyer to the matter");
-        let mut still_missing = Vec::new();
-        for (method, path, _) in seeded.iter().filter(|(method, ..)| *method == "GET") {
-            let (status, json) = call(&f.state, Some(&f.lawyer), method, path, None).await;
-            if status == StatusCode::NOT_FOUND {
-                still_missing.push(format!("{method} {path}: {json}"));
-            }
-        }
-        assert!(still_missing.is_empty(), "{still_missing:#?}");
-    }
-
-    /// Deployment-wide reads and Firm administration are Owner/Admin doors:
-    /// a lawyer is refused with `403` even though the route admits the tier.
-    #[tokio::test]
-    async fn admin_tier_doors_refuse_a_lawyer_with_403() {
-        let f = door_fixture().await;
-        let (p, r) = (f.project, Uuid::now_v7());
-        let doors: Vec<(&str, String, Option<serde_json::Value>)> = vec![
-            ("GET", "/app/api/project-repositories".into(), None),
-            (
-                "GET",
-                "/app/api/project-private-terms-reconciliation".into(),
-                None,
-            ),
-            ("GET", "/app/api/project-lifecycle".into(), None),
-            ("POST", format!("/app/api/project-surfaces/{p}"), None),
-            (
-                "POST",
-                format!("/app/api/projects/{p}/documents/{r}/storage"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                "/app/api/documents/purge".into(),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "POST",
-                format!("/app/api/expunge-requests/{r}/authorize"),
-                Some(serde_json::json!({})),
-            ),
-            (
-                "PATCH",
-                "/app/api/brands/acme".into(),
-                Some(serde_json::json!({ "typeface": "inter", "primary_color": "#000000" })),
-            ),
-            ("GET", "/app/api/firms".into(), None),
-        ];
-        for (method, path, body) in doors {
-            let (status, json) = call(&f.state, Some(&f.lawyer), method, &path, body).await;
-            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {json}");
-            assert_eq!(json["error"], "forbidden", "{method} {path}");
-        }
-    }
-
-    /// The extractors run before the body: no session is `401`, a client on
-    /// a lawyer door is `403`, even when the body would not parse.
-    #[tokio::test]
-    async fn the_session_extractors_refuse_before_the_body_is_read() {
-        let f = door_fixture().await;
-        let client = crate::SessionData::fresh("client", store::persons::Role::Client);
-        let p = f.project;
-        for (method, path) in [
-            ("POST", "/app/api/people".to_string()),
-            ("POST", "/app/api/projects".to_string()),
-            ("PATCH", format!("/app/api/projects/{p}")),
-            ("POST", format!("/app/api/projects/{p}/participants")),
-            ("POST", "/app/api/playbooks".to_string()),
-        ] {
-            let malformed = Some(serde_json::json!({ "unexpected": true }));
-            let (status, json) = call(&f.state, None, method, &path, malformed.clone()).await;
-            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
-            assert_eq!(json["error"], "unauthenticated");
-            let (status, json) = call(&f.state, Some(&client), method, &path, malformed).await;
-            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
-            assert_eq!(json["error"], "forbidden");
-        }
-        let (status, _) = call(
-            &f.state,
-            None,
-            "GET",
-            &format!("/app/api/projects/{p}"),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-        let admin = crate::SessionData::fresh("admin", store::persons::Role::Admin);
-        let (status, _) = call(
-            &f.state,
-            Some(&client),
-            "PATCH",
-            "/app/api/brands/acme",
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        let (status, _) = call(&f.state, None, "PATCH", "/app/api/brands/acme", None).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-        // An admin reaches the body, and a brand outside the caller's reach
-        // is a non-disclosing 404.
-        let (status, json) = call(
-            &f.state,
-            Some(&admin),
-            "PATCH",
-            "/app/api/brands/no-such-brand",
-            Some(serde_json::json!({ "typeface": "inter", "primary_color": "#000000" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
-    }
-
-    /// A body that parses as JSON but misses a required field is a `400`
-    /// naming the field, and a url-encoded form reaches the same check.
-    #[tokio::test]
-    async fn json_or_form_reports_the_missing_field() {
-        use tower::ServiceExt;
-        let f = door_fixture().await;
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            "/app/api/people",
-            Some(serde_json::json!({ "email": "x@example.com" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(json["error"], "invalid_request");
-        assert!(json["message"].as_str().unwrap().contains("name"));
-
-        let router = routes()
-            .with_state(f.state.clone())
-            .layer(axum::Extension(f.lawyer.clone()));
-        let response = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/app/api/people")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(axum::body::Body::from("email=x%40example.com"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let (status, json) = response_json(response).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(json["error"], "invalid_request");
-    }
-
-    /// The people doors: create, read, update, delete, and the refusals a
-    /// lawyer meets on the way — a role above their own, a merge of one
-    /// record into itself, a scoped session, a welcome to nobody.
-    #[tokio::test]
-    #[allow(clippy::too_many_lines)]
-    async fn the_people_doors_create_read_update_and_delete_a_person() {
-        let f = door_fixture().await;
-        let (status, _) = call(
-            &f.state, Some(&f.lawyer), "POST", "/app/api/people",
-            Some(serde_json::json!({"name":"Independent Contact", "email":"independent@example.com", "role":"client"})),
-        ).await;
-        assert_eq!(
-            status,
-            StatusCode::CREATED,
-            "contact creation is independent of Project creation"
-        );
-        let (status, _) = call(
-            &f.state, Some(&f.lawyer), "POST", "/app/api/people",
-            Some(serde_json::json!({"name":"Refused", "email":"refused@example.com", "project_id":f.project})),
-        ).await;
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "unrelated Project context stays hidden"
-        );
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: f.project,
-                person_id: f.lawyer.person_id.unwrap(),
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        let (status, _) = call(
-            &f.state, Some(&f.lawyer), "POST", "/app/api/people",
-            Some(serde_json::json!({"name":"Refused", "email":"refused@example.com", "role":"admin", "project_id":f.project})),
-        ).await;
-        assert_eq!(
-            status,
-            StatusCode::FORBIDDEN,
-            "a Lawyer cannot assign a Firm role"
-        );
-        let (status, created) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            "/app/api/people",
-            Some(serde_json::json!({
-                "name": "Dana Client",
-                "email": "dana@example.com",
-                "role": "client",
-                "project_id": f.project,
-            })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{created}");
-        assert_eq!(
-            created["role"], "client",
-            "a participating Lawyer creates a client without role coercion"
-        );
-        let (status, _) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            "/app/api/mail-signature?account=dana%40example.com",
-            None,
-        )
-        .await;
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "a Person creation does not expose that Person's mail signature"
-        );
-        let id = created["id"].as_str().unwrap().to_string();
-
-        let (status, people) =
-            call(&f.state, Some(&f.lawyer), "GET", "/app/api/people", None).await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(people["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|person| person["email"] == "dana@example.com"));
-
-        let (status, person) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/people/{id}"),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(person["name"], "Dana Client");
-        let (status, _) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/people/{}", Uuid::now_v7()),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-
-        let (status, updated) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "PATCH",
-            &format!("/app/api/people/{id}"),
-            Some(serde_json::json!({ "name": "Dana Q. Client" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{updated}");
-        assert_eq!(updated["name"], "Dana Q. Client");
-
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "PATCH",
-            &format!("/app/api/people/{}", Uuid::now_v7()),
-            Some(serde_json::json!({ "name": "Nobody" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
-
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            "/app/api/people",
-            Some(serde_json::json!({ "name": "Dup", "email": "dana@example.com" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT, "{json}");
-
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            "/app/api/people/merge",
-            Some(serde_json::json!({ "keep": "dana@example.com", "drop": "dana@example.com" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
-        assert_eq!(json["error"], "same_person");
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            "/app/api/people/merge",
-            Some(serde_json::json!({ "keep": "dana@example.com", "drop": "ghost@example.com" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
-        assert_eq!(json["error"], "not_found");
-
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            &format!("/app/api/people/{}/welcome", Uuid::now_v7()),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
-
-        let (status, deleted) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "DELETE",
-            &format!("/app/api/people/{id}"),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{deleted}");
-        assert!(store::persons::find_by_id(&f.db, id.parse().unwrap())
-            .await
-            .unwrap()
-            .is_none());
-        let (status, _) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "DELETE",
-            &format!("/app/api/people/{id}"),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    /// An Owner may assign roles, but never one above their own rank — and a
-    /// lawyer-tier session can still only mint a client.
-    #[tokio::test]
-    async fn an_admin_cannot_create_a_person_above_their_own_rank() {
-        let f = door_fixture().await;
-        let admin = crate::SessionData::fresh("admin", store::persons::Role::Admin);
-        let (status, json) = call(
-            &f.state,
-            Some(&admin),
-            "POST",
-            "/app/api/people",
-            Some(serde_json::json!({ "name": "Owner Two", "email": "o2@example.com", "role": "owner" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT, "{json}");
-        assert_eq!(json["error"], "blocked");
-        let (status, json) = call(
-            &f.state,
-            Some(&admin),
-            "POST",
-            "/app/api/people",
-            Some(serde_json::json!({ "name": "New Lawyer", "email": "nl@example.com", "role": "lawyer" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{json}");
-        assert_eq!(json["role"], "lawyer");
-    }
-
-    #[tokio::test]
-    async fn a_scoped_session_cannot_merge_people() {
-        let f = door_fixture().await;
-        let scoped = crate::SessionData {
-            scope: Some(crate::session::SessionScope::Document(
-                crate::session::DocumentScope {
-                    project_id: f.project,
-                    project_code: "x".into(),
-                },
-            )),
-            ..f.lawyer.clone()
-        };
-        let (status, json) = call(
-            &f.state,
-            Some(&scoped),
-            "POST",
-            "/app/api/people/merge",
-            Some(serde_json::json!({ "keep": "a@example.com", "drop": "b@example.com" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
-        assert_eq!(json["error"], "scope_violation");
-    }
-
-    /// The reference-table lists and the caller-scoped lists answer `200`
-    /// with arrays; a lawyer on no matter sees no matter.
-    #[tokio::test]
-    async fn the_directory_reads_answer_scoped_arrays() {
-        let f = door_fixture().await;
-        for path in [
-            "/app/api/jurisdictions",
-            "/app/api/entity-types",
-            "/app/api/entities",
-            "/app/api/expunge-requests",
-            "/app/api/playbooks",
-        ] {
-            let (status, json) = call(&f.state, Some(&f.lawyer), "GET", path, None).await;
-            assert_eq!(status, StatusCode::OK, "{path}: {json}");
-            assert!(json.is_array(), "{path}: {json}");
-        }
-        let (status, json) =
-            call(&f.state, Some(&f.lawyer), "GET", "/app/api/projects", None).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(json, serde_json::json!([]));
-    }
-
-    /// A participating lawyer reads the matter they work on: the project,
-    /// its participants, its notations, and its documents.
-    /// The Pre-Filing PII Check's terms are firm-side only: the participating
-    /// lawyer reads the code, matter name, and each participant's name,
-    /// mailbox, and phone; the matter's own client gets the bare 404.
-    #[tokio::test]
-    async fn private_terms_answer_a_firm_side_participant_and_refuse_the_client() {
-        let f = door_fixture().await;
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: f.project,
-                person_id: f.lawyer.person_id.unwrap(),
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .expect("add the lawyer to the matter");
-        let client = store::persons::find_or_create(
-            &f.db,
-            &store::persons::NewPerson {
-                phone: Some("702-555-0142".to_string()),
-                ..store::persons::NewPerson::new("Harper Cruller", "harper@crullers.example")
-            },
-        )
-        .await
-        .expect("seed the client person");
-        store::projects::add_participation(&f.db, f.project, client.id, "client")
-            .await
-            .expect("attach the client to the matter");
-        let path = format!("/app/api/projects/{}/private-terms", f.project);
-
-        let (status, json) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        let project = store::projects::find_by_id(&f.db, f.project)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(json["code"], project.code);
-        assert_eq!(json["name"], project.name);
-        let harper = json["participants"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|p| p["email"] == "harper@crullers.example")
-            .expect("the client participant is listed");
-        assert_eq!(harper["name"], "Harper Cruller");
-        assert_eq!(harper["phone"], "702-555-0142");
-
-        let client_session = crate::SessionData {
-            person_id: Some(client.id),
-            ..crate::SessionData::fresh("harper", store::persons::Role::Client)
-        };
-        let (status, _) = call(&f.state, Some(&client_session), "GET", &path, None).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn private_terms_include_the_client_and_only_referenced_parties() {
-        let f = door_fixture().await;
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: f.project,
-                person_id: f.lawyer.person_id.unwrap(),
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        let entity = store::test_support::seed_entity(&f.db).await;
-        store::project_references::reference(
-            &f.db,
-            f.project,
-            store::project_references::Party::entity(entity),
-            store::project_references::REASON_COUNTERPARTY_ENTITY,
-        )
-        .await
-        .unwrap();
-        let contact = store::persons::create(
-            &f.db,
-            &store::persons::NewPerson::new("Referenced Contact", "referenced@example.com"),
-        )
-        .await
-        .unwrap();
-        store::project_references::reference(
-            &f.db,
-            f.project,
-            store::project_references::Party::person(contact.id),
-            store::project_references::REASON_SIGNATORY,
-        )
-        .await
-        .unwrap();
-        let unrelated = store::test_support::seed_entity(&f.db).await;
-        let project = store::projects::find_by_id(&f.db, f.project)
-            .await
-            .unwrap()
-            .unwrap();
-        let client = store::entities::find_by_id(&f.db, project.entity_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let counterparty = store::entities::find_by_id(&f.db, entity)
-            .await
-            .unwrap()
-            .unwrap();
-        let unrelated = store::entities::find_by_id(&f.db, unrelated)
-            .await
-            .unwrap()
-            .unwrap();
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/projects/{}/private-terms", f.project),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        let terms = json["identifiers"]
-            .as_array()
-            .expect("complete party identifiers");
-        for value in [client.name, counterparty.name, contact.name, contact.email] {
-            assert!(
-                terms.contains(&serde_json::json!(value)),
-                "missing attached identifier"
-            );
-        }
-        assert!(!terms.contains(&serde_json::json!(unrelated.name)));
-        assert!(!terms.contains(&serde_json::json!(unrelated.id.to_string())));
-        let outside_person = store::persons::create(
-            &f.db,
-            &store::persons::NewPerson::with_role(
-                "Unrelated Lawyer",
-                "unrelated-lawyer@example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        let outsider = crate::SessionData {
-            person_id: Some(outside_person.id),
-            ..crate::SessionData::fresh("outsider", store::persons::Role::Lawyer)
-        };
-        let (status, _) = call(
-            &f.state,
-            Some(&outsider),
-            "GET",
-            &format!("/app/api/projects/{}/private-terms", f.project),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn private_terms_include_structured_identifiers_without_exporting_metadata() {
-        let f = door_fixture().await;
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: f.project,
-                person_id: f.lawyer.person_id.unwrap(),
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        let project = store::projects::find_by_id(&f.db, f.project)
-            .await
-            .unwrap()
-            .unwrap();
-        f.db.query("UPDATE $entity SET metadata = $metadata")
-            .bind((
-                "entity",
-                store::surreal::record_id("entity", project.entity_id),
-            ))
-            .bind((
-                "metadata",
-                serde_json::json!({
-                    "ein": "12-3456789", "private_note": "synthetic non-identifier context"
-                }),
-            ))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let contact = store::persons::create(
-            &f.db,
-            &store::persons::NewPerson {
-                given_name: Some("Privategiven".into()),
-                middle_name: Some("Privatemiddle".into()),
-                family_name: Some("Privatefamily".into()),
-                ..store::persons::NewPerson::new("Referenced Contact", "referenced@example.com")
-            },
-        )
-        .await
-        .unwrap();
-        store::project_references::reference(
-            &f.db,
-            f.project,
-            store::project_references::Party::person(contact.id),
-            store::project_references::REASON_SIGNATORY,
-        )
-        .await
-        .unwrap();
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/projects/{}/private-terms", f.project),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        let terms = json["identifiers"].as_array().unwrap();
-        let missing = [
-            "12-3456789",
-            "Privategiven",
-            "Privatemiddle",
-            "Privatefamily",
-        ]
-        .iter()
-        .filter(|value| !terms.contains(&serde_json::json!(value)))
-        .count();
-        assert_eq!(missing, 0, "stored structured identifiers must be included");
-        assert!(!terms.contains(&serde_json::json!("synthetic non-identifier context")));
-        f.db.query("UPDATE $entity SET metadata.ein = 123")
-            .bind((
-                "entity",
-                store::surreal::record_id("entity", project.entity_id),
-            ))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let (status, _) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/projects/{}/private-terms", f.project),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    }
-
-    #[tokio::test]
-    async fn private_terms_refuse_a_dangling_person_or_entity_reference() {
-        for (table, reason) in [
-            ("person", store::project_references::REASON_SIGNATORY),
-            (
-                "entity",
-                store::project_references::REASON_COUNTERPARTY_ENTITY,
-            ),
-        ] {
-            let f = door_fixture().await;
-            store::participation::add_participant(
-                &f.db,
-                &store::participation::AddParticipantCommand {
-                    project_id: f.project,
-                    person_id: f.lawyer.person_id.unwrap(),
-                    dri: store::participation::DriRequest::Unchanged,
-                    actor: store::participation::DriActor::System,
-                },
-            )
-            .await
-            .unwrap();
-            let missing = Uuid::now_v7();
-            // The compatibility relation permits a dangling target. Refuse
-            // the incomplete identifier set rather than dropping that party.
-            f.db.query("RELATE $project->project_reference->$party SET reason = $reason")
-                .bind(("project", store::surreal::record_id("project", f.project)))
-                .bind(("party", store::surreal::record_id(table, missing)))
-                .bind(("reason", reason.to_string()))
-                .await
-                .unwrap()
-                .check()
-                .unwrap();
-            assert!(store::project_references::for_project(&f.db, f.project)
-                .await
-                .unwrap()
-                .iter()
-                .any(|row| row.party.id == missing));
-            let (status, json) = call(
-                &f.state,
-                Some(&f.lawyer),
-                "GET",
-                &format!("/app/api/projects/{}/private-terms", f.project),
-                None,
-            )
-            .await;
-            assert_eq!(status, StatusCode::CONFLICT, "a dangling {table}");
-            assert!(json.get("identifiers").is_none());
-        }
-    }
-
-    #[tokio::test]
-    async fn private_terms_recover_after_an_orphaned_lawyer_dri_is_removed() {
-        let f = door_fixture().await;
-        let lawyer_id = f.lawyer.person_id.unwrap();
-        let missing = store::persons::create(
-            &f.db,
-            &store::persons::NewPerson::with_role(
-                "Former Lawyer",
-                "former-lawyer@example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        let mut orphaned_role = None;
-        for person_id in [lawyer_id, missing.id] {
-            let role = store::participation::add_participant(
-                &f.db,
-                &store::participation::AddParticipantCommand {
-                    project_id: f.project,
-                    person_id,
-                    dri: store::participation::DriRequest::Designate(
-                        store::projects::DriSide::Lawyer,
-                    ),
-                    actor: store::participation::DriActor::System,
-                },
-            )
-            .await
-            .unwrap();
-            if person_id == missing.id {
-                orphaned_role = Some(role.id);
-            }
-        }
-        f.db.query("DELETE $person")
-            .bind(("person", store::surreal::record_id("person", missing.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let path = format!("/app/api/projects/{}/private-terms", f.project);
-        let (status, body) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert!(body.get("identifiers").is_none());
-
-        store::participation::remove_participant(
-            &f.db,
-            f.project,
-            orphaned_role.unwrap(),
-            store::participation::DriActor::Person(lawyer_id),
-        )
-        .await
-        .unwrap();
-
-        let (status, body) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(body["participants"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|person| { person["email"] == "outside-lawyer@example.com" }));
-    }
-
-    #[tokio::test]
-    async fn private_terms_refuse_a_missing_attached_entity() {
-        let f = door_fixture().await;
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: f.project,
-                person_id: f.lawyer.person_id.unwrap(),
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        let project = store::projects::find_by_id(&f.db, f.project)
-            .await
-            .unwrap()
-            .unwrap();
-        f.db.query("DELETE $entity")
-            .bind((
-                "entity",
-                store::surreal::record_id("entity", project.entity_id),
-            ))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        assert!(matches!(
-            super::private_terms_for_project(&f.db, project).await,
-            Err(ApiError::PrivateTermsConflict(
-                "private terms: missing Entity record"
-            ))
-        ));
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/projects/{}/private-terms", f.project),
-            None,
-        )
-        .await;
-        assert!(
-            !status.is_success(),
-            "an incomplete set must not scan clean"
-        );
-        assert!(json.get("identifiers").is_none());
-    }
-
-    /// Stored Entity identifier data that is not a JSON object refuses with
-    /// the typed invalid-metadata error. Asserted over HTTP because this
-    /// refusal class had no handler test before the reconciliation work.
-    #[tokio::test]
-    async fn private_terms_refuse_entity_metadata_that_is_not_an_object() {
-        let f = door_fixture().await;
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: f.project,
-                person_id: f.lawyer.person_id.unwrap(),
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        let project = store::projects::find_by_id(&f.db, f.project)
-            .await
-            .unwrap()
-            .unwrap();
-        f.db.query("UPDATE $entity SET metadata = $metadata")
-            .bind((
-                "entity",
-                store::surreal::record_id("entity", project.entity_id),
-            ))
-            .bind(("metadata", serde_json::json!("not an object")))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/projects/{}/private-terms", f.project),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{json}");
-        assert_eq!(json["error"], "private_terms_incomplete", "{json}");
-        assert!(json.get("identifiers").is_none(), "{json}");
-    }
-
-    /// A stored EIN that is not `NN-NNNNNNN` refuses with the typed
-    /// invalid-EIN error. Asserted over HTTP because this refusal class had
-    /// no handler test before the reconciliation work.
-    #[tokio::test]
-    async fn private_terms_refuse_an_ein_that_is_not_nn_nnnnnnn() {
-        let f = door_fixture().await;
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: f.project,
-                person_id: f.lawyer.person_id.unwrap(),
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        let project = store::projects::find_by_id(&f.db, f.project)
-            .await
-            .unwrap()
-            .unwrap();
-        f.db.query("UPDATE $entity SET metadata = $metadata")
-            .bind((
-                "entity",
-                store::surreal::record_id("entity", project.entity_id),
-            ))
-            .bind(("metadata", serde_json::json!({ "ein": "123456789" })))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/projects/{}/private-terms", f.project),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{json}");
-        assert_eq!(json["error"], "private_terms_incomplete", "{json}");
-        assert!(json.get("identifiers").is_none(), "{json}");
-    }
-
-    /// A clean deployment answers an empty findings list, and a run with one
-    /// broken matter names only that matter — healthy ones are omitted.
-    #[tokio::test]
-    async fn the_reconciliation_door_reports_only_broken_matters() {
-        let f = door_fixture().await;
-        let healthy = store::projects::create(
-            &f.db,
-            &store::projects::NewProject {
-                code: "healthy-matter".into(),
-                name: "healthy matter".into(),
-                status: "open".into(),
-                entity_id: store::test_support::seed_entity(&f.db).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let admin = crate::SessionData::fresh("admin", store::persons::Role::Owner);
-        let (status, json) = call(
-            &f.state,
-            Some(&admin),
-            "GET",
-            "/app/api/project-private-terms-reconciliation",
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        assert_eq!(json["findings"].as_array().unwrap().len(), 0, "{json}");
-
-        // The seeded matter's client Entity record goes away out of band.
-        let project = store::projects::find_by_id(&f.db, f.project)
-            .await
-            .unwrap()
-            .unwrap();
-        f.db.query("DELETE $entity")
-            .bind((
-                "entity",
-                store::surreal::record_id("entity", project.entity_id),
-            ))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let (status, json) = call(
-            &f.state,
-            Some(&admin),
-            "GET",
-            "/app/api/project-private-terms-reconciliation",
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        let findings = json["findings"].as_array().unwrap();
-        assert_eq!(findings.len(), 1, "{json}");
-        assert_eq!(findings[0]["project_id"], f.project.to_string(), "{json}");
-        assert_eq!(findings[0]["code"], project.code, "{json}");
-        assert_eq!(findings[0]["items"][0]["kind"], "missing_entity", "{json}");
-        assert_eq!(
-            findings[0]["items"][0]["attached_as"], "project.client",
-            "{json}"
-        );
-        // The healthy matter is omitted.
-        assert!(
-            findings[0]["project_id"] != healthy.id.to_string(),
-            "{json}"
-        );
-    }
-
     /// The door and the refusal read the same records through the same
     /// checks (`store::private_terms`), so the report's kind must match the
     /// class the private-terms response refuses with — for every failure
@@ -17862,320 +14192,9 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
     // One matter per finding kind: the door's report and the private-terms
     // refusal must classify the same broken records identically, so neither
     // can drift from the other.
-    struct ReconciliationCase {
-        project: store::projects::Project,
-        kind: &'static str,
-        attached_as: Option<&'static str>,
-        field: Option<&'static str>,
-        refused_as: fn(&ApiError) -> bool,
-    }
-
-    async fn seed_extra_matters(f: &DoorFixture) -> Vec<store::projects::Project> {
-        let mut extra = Vec::new();
-        for prefix in ["second", "third", "fourth"] {
-            let entity = store::test_support::seed_entity(&f.db).await;
-            extra.push(
-                store::projects::create(
-                    &f.db,
-                    &store::projects::NewProject {
-                        code: format!("{prefix}-matter"),
-                        name: format!("{prefix} matter"),
-                        status: "open".into(),
-                        entity_id: entity,
-                        ..Default::default()
-                    },
-                )
-                .await
-                .unwrap(),
-            );
-        }
-        extra
-    }
 
     // Each matter breaks a different way, the way an orphan arrives: out of
     // band, never through the in-band command boundary.
-    async fn break_matters_out_of_band(
-        f: &DoorFixture,
-        first: &store::projects::Project,
-        extra: &[store::projects::Project],
-    ) {
-        let dangling = store::persons::create(
-            &f.db,
-            &store::persons::NewPerson::with_role(
-                "Dangling Participant",
-                "dangling-participant@example.com",
-                store::persons::Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: first.id,
-                person_id: dangling.id,
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .unwrap();
-        f.db.query("DELETE $person")
-            .bind(("person", store::surreal::record_id("person", dangling.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        f.db.query("DELETE $entity")
-            .bind((
-                "entity",
-                store::surreal::record_id("entity", extra[0].entity_id),
-            ))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        f.db.query("UPDATE $entity SET metadata = $metadata")
-            .bind((
-                "entity",
-                store::surreal::record_id("entity", extra[1].entity_id),
-            ))
-            .bind(("metadata", serde_json::json!("not an object")))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        f.db.query("UPDATE $entity SET metadata = $metadata")
-            .bind((
-                "entity",
-                store::surreal::record_id("entity", extra[2].entity_id),
-            ))
-            .bind(("metadata", serde_json::json!({ "ein": "123456789" })))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-    }
-
-    fn reconciliation_cases(
-        first: store::projects::Project,
-        extra: &[store::projects::Project],
-    ) -> Vec<ReconciliationCase> {
-        vec![
-            ReconciliationCase {
-                project: first,
-                kind: "missing_person",
-                attached_as: Some("participation"),
-                field: None,
-                refused_as: |error: &ApiError| {
-                    matches!(
-                        error,
-                        ApiError::PrivateTermsConflict("private terms: missing Person record")
-                    )
-                },
-            },
-            ReconciliationCase {
-                project: extra[0].clone(),
-                kind: "missing_entity",
-                attached_as: Some("project.client"),
-                field: None,
-                refused_as: |error: &ApiError| {
-                    matches!(
-                        error,
-                        ApiError::PrivateTermsConflict("private terms: missing Entity record")
-                    )
-                },
-            },
-            ReconciliationCase {
-                project: extra[1].clone(),
-                kind: "invalid_entity_metadata",
-                attached_as: None,
-                field: Some("metadata"),
-                refused_as: |error: &ApiError| {
-                    matches!(
-                        error,
-                        ApiError::PrivateTermsInvalid("private terms: invalid Entity metadata")
-                    )
-                },
-            },
-            ReconciliationCase {
-                project: extra[2].clone(),
-                kind: "invalid_entity_ein",
-                attached_as: None,
-                field: Some("metadata.ein"),
-                refused_as: |error: &ApiError| {
-                    matches!(
-                        error,
-                        ApiError::PrivateTermsInvalid("private terms: invalid Entity EIN")
-                    )
-                },
-            },
-        ]
-    }
-
-    async fn assert_the_report_row_and_the_refusal_agree(
-        f: &DoorFixture,
-        json: &serde_json::Value,
-        case: &ReconciliationCase,
-    ) {
-        let entry = json["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["project_id"] == case.project.id.to_string())
-            .unwrap_or_else(|| panic!("the report must name every broken matter: {json}"));
-        let items = entry["items"].as_array().unwrap();
-        assert_eq!(items.len(), 1, "{json}");
-        assert_eq!(items[0]["kind"], case.kind, "{json}");
-        assert_eq!(
-            items[0]
-                .get("attached_as")
-                .and_then(serde_json::Value::as_str),
-            case.attached_as,
-            "{json}"
-        );
-        assert_eq!(
-            items[0].get("field").and_then(serde_json::Value::as_str),
-            case.field,
-            "{json}"
-        );
-        // The same broken records refuse the private-terms response with
-        // the matching class — the report and the refusal cannot drift.
-        let Err(error) = super::private_terms_for_project(&f.db, case.project.clone()).await else {
-            panic!("the matter must refuse: {}", case.kind);
-        };
-        assert!((case.refused_as)(&error), "{error:?}");
-    }
-
-    #[tokio::test]
-    async fn the_reconciliation_door_and_the_refusal_classify_alike() {
-        let f = door_fixture().await;
-        let extra = seed_extra_matters(&f).await;
-        let first = store::projects::find_by_id(&f.db, f.project)
-            .await
-            .unwrap()
-            .unwrap();
-        break_matters_out_of_band(&f, &first, &extra).await;
-
-        // One full run attributes every broken matter.
-        let admin = crate::SessionData::fresh("admin", store::persons::Role::Owner);
-        let (status, json) = call(
-            &f.state,
-            Some(&admin),
-            "GET",
-            "/app/api/project-private-terms-reconciliation",
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        let findings = json["findings"].as_array().unwrap();
-        assert_eq!(findings.len(), 4, "{json}");
-
-        for case in reconciliation_cases(first, &extra) {
-            assert_the_report_row_and_the_refusal_agree(&f, &json, &case).await;
-        }
-    }
-
-    #[tokio::test]
-    async fn a_participating_lawyer_reads_their_matter() {
-        let f = door_fixture().await;
-        store::participation::add_participant(
-            &f.db,
-            &store::participation::AddParticipantCommand {
-                project_id: f.project,
-                person_id: f.lawyer.person_id.unwrap(),
-                dri: store::participation::DriRequest::Unchanged,
-                actor: store::participation::DriActor::System,
-            },
-        )
-        .await
-        .expect("add the lawyer to the matter");
-        let (p, n) = (f.project, f.notation);
-
-        let (status, json) =
-            call(&f.state, Some(&f.lawyer), "GET", "/app/api/projects", None).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(json.as_array().unwrap().len(), 1, "{json}");
-        assert_eq!(json[0]["id"], p.to_string());
-
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/projects/{p}"),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        assert_eq!(json["id"], p.to_string());
-
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/projects/{p}/participants"),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        assert!(json
-            .to_string()
-            .contains(&f.lawyer.person_id.unwrap().to_string()));
-
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/projects/{p}/notations"),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        assert!(json.to_string().contains(&n.to_string()));
-
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "GET",
-            &format!("/app/api/notations/{n}"),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-
-        for path in [
-            format!("/app/api/projects/{p}/status"),
-            format!("/app/api/projects/{p}/section-counts"),
-            format!("/app/api/projects/{p}/notation-inventory"),
-            format!("/app/api/projects/{p}/documents"),
-            format!("/app/api/projects/{p}/conversation"),
-            format!("/app/api/notations/{n}/answers"),
-            format!("/app/api/notations/{n}/review-documents"),
-        ] {
-            let (status, json) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
-            assert_eq!(status, StatusCode::OK, "{path}: {json}");
-        }
-
-        // Adding the same person twice is a conflict, not a second row.
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            &format!("/app/api/projects/{p}/participants"),
-            Some(serde_json::json!({ "person_id": f.lawyer.person_id.unwrap() })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT, "{json}");
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            &format!("/app/api/projects/{p}/participants"),
-            Some(serde_json::json!({ "person_id": Uuid::now_v7() })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
-    }
 
     #[tokio::test]
     async fn the_doc_routes_serve_the_explorer_and_the_document() {
@@ -18213,225 +14232,5 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
         let (status, json) = response_json(response).await;
         assert_eq!(status, StatusCode::OK);
         assert!(json["paths"].is_object());
-    }
-
-    #[tokio::test]
-    async fn validate_template_reports_its_path_and_cleanliness() {
-        let f = door_fixture().await;
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            "/app/api/drafts/validate",
-            Some(serde_json::json!({ "contents": "Plain prose.\n", "markdown_only": true })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        assert_eq!(json["path"], "template.md");
-        assert!(json["violations"].is_array());
-        assert_eq!(
-            json["clean"],
-            json["violations"].as_array().unwrap().iter().all(|v| {
-                rules::severity_for_code(v["code"].as_str().unwrap()) != rules::Severity::Error
-            })
-        );
-
-        let (status, json) = call(
-            &f.state,
-            Some(&f.lawyer),
-            "POST",
-            "/app/api/templates/validate",
-            Some(serde_json::json!({ "contents": "no frontmatter", "path": "Bad Name.md" })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{json}");
-        assert_eq!(json["path"], "Bad Name.md");
-        assert_eq!(json["clean"], false, "{json}");
-    }
-
-    /// The matter folder an upload names is persisted, rendered back on the
-    /// returned pointer, and read back on the live row (LAW-241).
-    #[tokio::test]
-    async fn uploads_preserve_explicit_folders() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "folder-upload").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-        let response = upload_document_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            JsonOrForm(UploadDocumentRequest {
-                filename: "agreement.pdf".to_string(),
-                slug: None,
-                content_base64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"retainer bytes",
-                ),
-                content_type: Some("application/pdf".to_string()),
-                kind: Some("agreement".to_string()),
-                visibility: None,
-                description: None,
-                metadata: None,
-                derived_from: None,
-                transcript_quality: None,
-                signing: None,
-                envelope_id: None,
-                notarization: Vec::new(),
-                evidence: None,
-                folder: Some("Discovery".to_string()),
-                expected_head: None,
-                mail_provenance: None,
-            }),
-        )
-        .await
-        .expect("a lawyer on the matter can upload with a folder");
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            json["folder"],
-            store::document_pointers::MatterFolder::Discovery.as_str(),
-            "the pointer renders the persisted folder"
-        );
-
-        let rows = store::assets::for_project(&db, project_id)
-            .await
-            .expect("list the matter's documents");
-        assert_eq!(rows.len(), 1);
-        let discovery = rows
-            .iter()
-            .find(|row| row.filename.as_deref() == Some("agreement.pdf"))
-            .expect("the folder upload is filed");
-        assert_eq!(
-            discovery.folder.as_deref(),
-            Some(store::document_pointers::MatterFolder::Discovery.as_str()),
-            "the live row carries the requested folder"
-        );
-    }
-
-    #[tokio::test]
-    async fn uploads_file_receipt_evidence_in_costs() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "receipt-upload").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-        let receipt = serde_json::json!({
-            "amount_cents": 2750,
-            "currency": "USD",
-            "payee": "sample filing service",
-            "category": "e_filing_service_fee",
-            "transaction_id": "sample-transaction"
-        });
-        let response = upload_document_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            JsonOrForm(UploadDocumentRequest {
-                filename: "receipt.pdf".to_string(),
-                slug: None,
-                content_base64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"expense receipt bytes",
-                ),
-                content_type: Some("application/pdf".to_string()),
-                kind: Some("receipt".to_string()),
-                visibility: None,
-                description: None,
-                metadata: Some(serde_json::json!({ "receipt": receipt })),
-                derived_from: None,
-                transcript_quality: None,
-                signing: None,
-                envelope_id: None,
-                notarization: Vec::new(),
-                evidence: None,
-                folder: None,
-                expected_head: None,
-                mail_provenance: None,
-            }),
-        )
-        .await
-        .expect("a lawyer on the matter can upload a receipt");
-        assert_eq!(response.status(), StatusCode::CREATED);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let pointer: store::document_pointers::DocumentPointer =
-            serde_json::from_slice(&body).unwrap();
-        assert_eq!(pointer.visibility, "internal");
-        assert_eq!(pointer.matter_folder().as_str(), "Costs");
-        assert_eq!(
-            serde_json::to_value(pointer.receipt.unwrap()).unwrap(),
-            receipt
-        );
-
-        let rows = store::assets::for_project(&db, project_id)
-            .await
-            .expect("list the matter's documents");
-        assert_eq!(rows.len(), 1);
-        let plain = rows
-            .iter()
-            .find(|row| row.filename.as_deref() == Some("receipt.pdf"))
-            .expect("the receipt upload is filed");
-        assert_eq!(plain.slug.as_deref(), Some("receipt.pdf"));
-        assert_eq!(plain.folder, None);
-        assert_eq!(plain.documents_path(), "Costs/receipt.pdf");
-        assert_eq!(plain.metadata.as_ref().unwrap()["receipt"], receipt);
-    }
-
-    /// A folder that is not one of the Firm's matter folders is `400
-    /// invalid_folder` and writes nothing — never a silent default (LAW-241).
-    #[tokio::test]
-    async fn an_upload_names_an_unknown_folder_and_writes_nothing() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "folder-refusal").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
-
-        let response = upload_document_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            JsonOrForm(UploadDocumentRequest {
-                filename: "agreement.pdf".to_string(),
-                slug: None,
-                content_base64: base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    b"retainer bytes",
-                ),
-                content_type: Some("application/pdf".to_string()),
-                kind: Some("agreement".to_string()),
-                visibility: None,
-                description: None,
-                metadata: None,
-                derived_from: None,
-                transcript_quality: None,
-                signing: None,
-                envelope_id: None,
-                notarization: Vec::new(),
-                evidence: None,
-                folder: Some("Left Drawer".to_string()),
-                expected_head: None,
-                mail_provenance: None,
-            }),
-        )
-        .await
-        .expect("the door answers a request with an unknown folder");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"], "invalid_folder");
-
-        assert!(
-            store::assets::for_project(&db, project_id)
-                .await
-                .expect("list the matter's documents")
-                .is_empty(),
-            "a refused folder writes no asset row"
-        );
     }
 }

@@ -40,7 +40,7 @@ pub struct CreateInput {
 
 /// `POST /app/admin/playbooks` — create a playbook for a Company.
 pub async fn create(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Form(input): Form<CreateInput>,
 ) -> Response {
     if input.name.trim().is_empty() {
@@ -52,7 +52,7 @@ pub async fn create(
         Err(e) => return back_to_new(&input, &e),
     };
     match playbooks::create(
-        &surreal,
+        &application_store,
         &playbooks::NewPlaybook {
             entity_id: input.entity_id,
             name: input.name.trim(),
@@ -80,13 +80,13 @@ pub struct UpdateInput {
 
 /// `POST /app/admin/playbooks/{id}` — replace the position set.
 pub async fn update(
-    State(surreal): State<store::surreal::SurrealDb>,
+    State(application_store): State<store::application_store::ApplicationStore>,
     Path(id): Path<Uuid>,
     Form(input): Form<UpdateInput>,
 ) -> Response {
     // An unknown id is a missing resource, not a refusal to correct: there is
     // no form to bounce back to, so it stays a 404.
-    if playbooks::by_id(&surreal, id)
+    if playbooks::by_id(&application_store, id)
         .await
         .ok()
         .flatten()
@@ -101,7 +101,7 @@ pub async fn update(
         Ok(p) => p,
         Err(e) => return back_to_edit(id, &input.positions, &e),
     };
-    match playbooks::update_positions(&surreal, id, &positions).await {
+    match playbooks::update_positions(&application_store, id, &positions).await {
         Ok(()) => Redirect::to(LAWYER_PLAYBOOKS_PATH).into_response(),
         Err(e) => {
             tracing::error!(error = %e, %id, "admin: update playbook positions failed");

@@ -1,9 +1,9 @@
 //! Native Project parents built through canonical accessors on the caller fixture.
-use store::surreal::SurrealDb;
+use store::application_store::ApplicationStore;
 use store::test_support::seed_entity_with_parents as entity;
 use uuid::Uuid;
 
-pub async fn matter(db: &SurrealDb) -> (store::projects::Project, Uuid) {
+pub async fn matter(db: &ApplicationStore) -> (store::projects::Project, Uuid) {
     let brand = format!("synthetic-{}", Uuid::new_v4().simple());
     let (firm, admin) = store::test_support::seed_firm_with_new_brand(db, &brand).await;
     let entity = entity(db).await;
@@ -12,7 +12,7 @@ pub async fn matter(db: &SurrealDb) -> (store::projects::Project, Uuid) {
 }
 
 pub async fn new_project(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     firm: Uuid,
     brand: &str,
     entity: Uuid,

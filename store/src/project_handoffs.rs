@@ -23,10 +23,10 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::access::ProjectLens;
+use crate::application_store::ApplicationStore;
 use crate::assets::Asset;
 use crate::persons::Role;
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 
 /// The manifest format this build writes and reads.
 pub const FORMAT: u32 = 1;
@@ -130,11 +130,11 @@ fn lens_name(lens: ProjectLens) -> &'static str {
 /// # Errors
 /// A store failure.
 pub async fn inventory(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     lens: ProjectLens,
 ) -> Result<Vec<Asset>, HandoffError> {
-    let mut rows = crate::assets::for_project(surreal, project_id)
+    let mut rows = crate::assets::for_project(application_store, project_id)
         .await
         .map_err(store_error)?;
     rows.retain(|row| {
@@ -230,7 +230,7 @@ fn entry_name(asset: &Asset, used: &mut BTreeSet<String>) -> String {
 /// a missing or damaged file, an oversize handoff, or a store failure.
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     documents: &Arc<dyn StorageService>,
     archive: Option<&Arc<dyn StorageService>>,
@@ -241,26 +241,36 @@ pub async fn prepare(
     now: DateTime<Utc>,
 ) -> Result<Handoff, HandoffError> {
     let (actor_id, actor_role) = actor;
-    if !crate::access::can_see_project_as_lawyer(surreal, Some(actor_id), actor_role, project_id)
-        .await
-        .map_err(store_error)?
+    if !crate::access::can_see_project_as_lawyer(
+        application_store,
+        Some(actor_id),
+        actor_role,
+        project_id,
+    )
+    .await
+    .map_err(store_error)?
     {
         return Err(HandoffError::ProjectNotFound);
     }
-    let project = crate::projects::find_by_id(surreal, project_id)
+    let project = crate::projects::find_by_id(application_store, project_id)
         .await
         .map_err(store_error)?
         .ok_or(HandoffError::ProjectNotFound)?;
     let firm_id = project.firm_id.ok_or(HandoffError::NoFirm)?;
-    let recipient = crate::persons::find_by_id(surreal, recipient_person_id)
+    let recipient = crate::persons::find_by_id(application_store, recipient_person_id)
         .await
         .map_err(store_error)?
         .ok_or(HandoffError::RecipientNotParticipant)?;
-    let lens = crate::access::matter_lens(surreal, Some(recipient.id), recipient.role, project_id)
-        .await
-        .map_err(store_error)?
-        .ok_or(HandoffError::RecipientNotParticipant)?;
-    let rows = inventory(surreal, project_id, lens).await?;
+    let lens = crate::access::matter_lens(
+        application_store,
+        Some(recipient.id),
+        recipient.role,
+        project_id,
+    )
+    .await
+    .map_err(store_error)?
+    .ok_or(HandoffError::RecipientNotParticipant)?;
+    let rows = inventory(application_store, project_id, lens).await?;
     if rows.len() > MAX_FILES {
         return Err(HandoffError::TooLarge);
     }
@@ -375,7 +385,7 @@ pub async fn for_project(pg: &PostgresDb, project_id: Uuid) -> Result<Vec<Handof
 /// # Errors
 /// [`HandoffError`] when a file is now missing or damaged, or a store failure.
 pub async fn bundle(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     documents: &Arc<dyn StorageService>,
     archive: Option<&Arc<dyn StorageService>>,
     handoff: &Handoff,
@@ -393,7 +403,7 @@ pub async fn bundle(
     };
     write(&mut writer, MANIFEST_PATH, &manifest)?;
     for file in &handoff.manifest.files {
-        let asset = crate::assets::find_by_id(surreal, file.asset_id)
+        let asset = crate::assets::find_by_id(application_store, file.asset_id)
             .await
             .map_err(store_error)?
             .filter(|asset| {

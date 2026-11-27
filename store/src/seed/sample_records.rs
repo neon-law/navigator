@@ -27,9 +27,9 @@ use chrono::NaiveDate;
 use rules::citation::{AuthorityClass, Disposition};
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::cases::{Device, EntryKind};
 use crate::projects::Project;
-use crate::surreal::SurrealDb;
 
 use super::{SAMPLE_ESTATE_CODE, SAMPLE_LITIGATION_CODE, SAMPLE_TRANSACTIONAL_CODE};
 
@@ -294,7 +294,7 @@ const LIBRARY: LitAuthority = LitAuthority {
 /// Write the rows `project`'s declared pages read, then, when a source is
 /// staged for it, its pages and Drafts.
 pub(super) async fn seed(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     project: &Project,
     lawyer_id: Uuid,
@@ -302,29 +302,29 @@ pub(super) async fn seed(
     get: impl Fn(&str) -> Option<String>,
 ) -> anyhow::Result<()> {
     match project.code.as_str() {
-        SAMPLE_LITIGATION_CODE => litigation(surreal, project, jurisdiction_id).await?,
-        SAMPLE_ESTATE_CODE => estate(surreal, project).await?,
+        SAMPLE_LITIGATION_CODE => litigation(application_store, project, jurisdiction_id).await?,
+        SAMPLE_ESTATE_CODE => estate(application_store, project).await?,
         _ => {}
     }
     if let Some(root) = crate::sample_project::staged_source_dir(&project.code, get) {
         let source = crate::sample_project::read_staged_source(&root, &project.code)
             .with_context(|| format!("staged source for `{}`", project.code))?;
-        staged(surreal, storage, project, lawyer_id, &source).await?;
+        staged(application_store, storage, project, lawyer_id, &source).await?;
     }
     Ok(())
 }
 
 async fn litigation(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project: &Project,
     jurisdiction_id: Uuid,
 ) -> anyhow::Result<()> {
-    if crate::cases::for_project(surreal, project.id)
+    if crate::cases::for_project(application_store, project.id)
         .await?
         .is_empty()
     {
         let case = crate::cases::open_case(
-            surreal,
+            application_store,
             &crate::cases::NewCase {
                 project_id: project.id,
                 caption: "Cruller v. Prine",
@@ -340,7 +340,7 @@ async fn litigation(
         for (index, entry) in DOCKET.iter().enumerate() {
             let number = (index + 1).to_string();
             let recorded = crate::cases::record_entry(
-                surreal,
+                application_store,
                 &crate::cases::NewDocketEntry {
                     case_id: case.id,
                     entry_number: &number,
@@ -359,11 +359,11 @@ async fn litigation(
                 served.push(recorded.id);
             }
         }
-        discovery(surreal, case.id, &served).await?;
+        discovery(application_store, case.id, &served).await?;
     }
     for ahead in DEADLINES {
         crate::project_deadlines::create(
-            surreal,
+            application_store,
             &crate::project_deadlines::NewDeadline {
                 project_id: project.id,
                 title: None,
@@ -388,7 +388,7 @@ async fn litigation(
     for (transaction_id, filed_on, note) in FILINGS {
         let filed_on = NaiveDate::parse_from_str(filed_on, "%Y-%m-%d")?.to_string();
         crate::efiling_transactions::record(
-            surreal,
+            application_store,
             &crate::efiling_transactions::EfilingReport {
                 project_id: project.id,
                 transaction_id: (*transaction_id).to_string(),
@@ -406,19 +406,28 @@ async fn litigation(
         )
         .await?;
     }
-    adverse_party(surreal, project, jurisdiction_id).await?;
+    adverse_party(application_store, project, jurisdiction_id).await?;
     for authority in LITIGATION_AUTHORITIES {
-        lit_authority(surreal, project, authority, Disposition::ReliedOn).await?;
+        lit_authority(application_store, project, authority, Disposition::ReliedOn).await?;
     }
-    lit_authority(surreal, project, &LIBRARY, Disposition::ReviewedNotUsed).await?;
-    Ok(())
+    lit_authority(
+        application_store,
+        project,
+        &LIBRARY,
+        Disposition::ReviewedNotUsed,
+    )
+    .await
 }
 
 /// The two interrogatory sets: ours with the defendant's responses, and
 /// theirs with our answers still due.
-async fn discovery(surreal: &SurrealDb, case_id: Uuid, served: &[Uuid]) -> anyhow::Result<()> {
+async fn discovery(
+    application_store: &ApplicationStore,
+    case_id: Uuid,
+    served: &[Uuid],
+) -> anyhow::Result<()> {
     let outbound = crate::cases::serve_discovery(
-        surreal,
+        application_store,
         &crate::cases::NewDiscoveryRequest {
             case_id,
             docket_entry_id: served.first().copied(),
@@ -432,10 +441,11 @@ async fn discovery(surreal: &SurrealDb, case_id: Uuid, served: &[Uuid]) -> anyho
     )
     .await?;
     for rog in OUTBOUND_INTERROGATORIES {
-        let item = crate::cases::add_item(surreal, outbound.id, rog.number, rog.asked).await?;
+        let item =
+            crate::cases::add_item(application_store, outbound.id, rog.number, rog.asked).await?;
         if rog.answer.is_some() || rog.objections.is_some() {
             crate::cases::answer_item(
-                surreal,
+                application_store,
                 item.id,
                 rog.answer.unwrap_or_default(),
                 rog.objections,
@@ -444,7 +454,7 @@ async fn discovery(surreal: &SurrealDb, case_id: Uuid, served: &[Uuid]) -> anyho
         }
     }
     let inbound = crate::cases::serve_discovery(
-        surreal,
+        application_store,
         &crate::cases::NewDiscoveryRequest {
             case_id,
             docket_entry_id: served.get(1).copied(),
@@ -461,7 +471,7 @@ async fn discovery(surreal: &SurrealDb, case_id: Uuid, served: &[Uuid]) -> anyho
     .await?;
     for (index, asked) in INBOUND_INTERROGATORIES.iter().enumerate() {
         let number = i32::try_from(index + 1)?;
-        crate::cases::add_item(surreal, inbound.id, number, asked).await?;
+        crate::cases::add_item(application_store, inbound.id, number, asked).await?;
     }
     Ok(())
 }
@@ -469,16 +479,16 @@ async fn discovery(surreal: &SurrealDb, case_id: Uuid, served: &[Uuid]) -> anyho
 /// The defendant, as the party the client is adverse to: the edge the
 /// party roster and the relationship graph read.
 async fn adverse_party(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project: &Project,
     jurisdiction_id: Uuid,
 ) -> anyhow::Result<()> {
-    let human = crate::entity_types::find_by_name(surreal, "Human")
+    let human = crate::entity_types::find_by_name(application_store, "Human")
         .await?
         .context("seed: entity_type `Human` must be seeded first")?;
     let mut report = super::SeedReport::default();
     let prine = super::ensure_dev_entity(
-        surreal,
+        application_store,
         &mut report,
         "Wendell Prine",
         human.id,
@@ -486,7 +496,7 @@ async fn adverse_party(
     )
     .await?;
     crate::project_references::reference(
-        surreal,
+        application_store,
         project.id,
         crate::project_references::Party::entity(prine),
         crate::project_references::REASON_ADVERSE_PARTY,
@@ -497,7 +507,7 @@ async fn adverse_party(
 
 /// Record one Authority, its use on the matter, and its verbatim quote.
 async fn lit_authority(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project: &Project,
     authority: &LitAuthority,
     disposition: Disposition,
@@ -514,7 +524,7 @@ async fn lit_authority(
     };
     let issued_on = authority.year.parse::<u16>().ok().map(|y| y.to_string());
     let row = crate::authorities::record(
-        surreal,
+        application_store,
         &crate::authorities::NewAuthority {
             class,
             citation: authority.cite,
@@ -529,7 +539,7 @@ async fn lit_authority(
     )
     .await?;
     let authority_use = crate::authorities::cite_in_matter(
-        surreal,
+        application_store,
         project.id,
         row.id,
         position,
@@ -537,12 +547,12 @@ async fn lit_authority(
         None,
     )
     .await?;
-    if crate::authorities::citations_for_use(surreal, authority_use.id)
+    if crate::authorities::citations_for_use(application_store, authority_use.id)
         .await?
         .is_empty()
     {
         crate::authorities::cite(
-            surreal,
+            application_store,
             &crate::authorities::NewCitation {
                 authority_use_id: authority_use.id,
                 quote: authority.quote,
@@ -558,7 +568,7 @@ async fn lit_authority(
 
 /// The estate plan's research: the intestacy cases the plan exists to
 /// avoid. No treatment has been verified, so each use is open for review.
-async fn estate(surreal: &SurrealDb, project: &Project) -> anyhow::Result<()> {
+async fn estate(application_store: &ApplicationStore, project: &Project) -> anyhow::Result<()> {
     for authority in ESTATE_AUTHORITIES {
         let citation = format!(
             "{}, {} ({})",
@@ -567,7 +577,7 @@ async fn estate(surreal: &SurrealDb, project: &Project) -> anyhow::Result<()> {
         let publisher = format!("Washington {}", authority.court);
         let year = authority.year.to_string();
         let row = crate::authorities::record(
-            surreal,
+            application_store,
             &crate::authorities::NewAuthority {
                 class: AuthorityClass::CaseLaw,
                 citation: &citation,
@@ -582,7 +592,7 @@ async fn estate(surreal: &SurrealDb, project: &Project) -> anyhow::Result<()> {
         )
         .await?;
         crate::authorities::cite_in_matter(
-            surreal,
+            application_store,
             project.id,
             row.id,
             "neutral",
@@ -625,13 +635,13 @@ const SIGNED_DRAFTS: &[(&str, &str, &str)] = &[(
 /// Store a staged source's pages, persist its Drafts, and open a Notation
 /// on each of [`NOTATION_DRAFTS`].
 async fn staged(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     storage: &Arc<dyn cloud::StorageService>,
     project: &Project,
     lawyer_id: Uuid,
     source: &crate::sample_project::StagedSource,
 ) -> anyhow::Result<()> {
-    crate::matter_pages::replace_for_project(surreal, project.id, &source.pages)
+    crate::matter_pages::replace_for_project(application_store, project.id, &source.pages)
         .await
         .with_context(|| format!("store the pages `{}` declares", project.code))?;
     let commit = source
@@ -640,7 +650,7 @@ async fn staged(
         .unwrap_or_else(|| "unrecorded".to_string());
     for (code, contents) in &source.drafts {
         let persisted = match crate::template_source::persist_contents(
-            surreal,
+            application_store,
             storage,
             project.id,
             code,
@@ -662,7 +672,7 @@ async fn staged(
             continue;
         }
         let notation = match crate::notations::find_by_project_template_person(
-            surreal,
+            application_store,
             project.id,
             persisted.template.id,
             lawyer_id,
@@ -672,7 +682,7 @@ async fn staged(
             Some(notation) => notation,
             None => {
                 crate::notations::create(
-                    surreal,
+                    application_store,
                     &crate::notations::NewNotation::new(
                         persisted.template.id,
                         lawyer_id,
@@ -688,7 +698,7 @@ async fn staged(
             .find(|(matter, draft, _)| *matter == project.code && draft == code)
         {
             sign(
-                surreal,
+                application_store,
                 notation.id,
                 &format!("{}-{code}", project.code),
                 signed_at,
@@ -701,17 +711,27 @@ async fn staged(
 
 /// Record a completed signature on `notation_id` and close the Notation.
 async fn sign(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     notation_id: Uuid,
     envelope: &str,
     signed_at: &str,
 ) -> anyhow::Result<()> {
     use crate::signatures::SignatureProvider;
-    crate::signatures::record_request(surreal, notation_id, SignatureProvider::DocuSign, envelope)
-        .await?;
-    crate::signatures::stamp_signed(surreal, SignatureProvider::DocuSign, envelope, signed_at)
-        .await?;
-    crate::notations::update_state(surreal, notation_id, "END").await?;
+    crate::signatures::record_request(
+        application_store,
+        notation_id,
+        SignatureProvider::DocuSign,
+        envelope,
+    )
+    .await?;
+    crate::signatures::stamp_signed(
+        application_store,
+        SignatureProvider::DocuSign,
+        envelope,
+        signed_at,
+    )
+    .await?;
+    crate::notations::update_state(application_store, notation_id, "END").await?;
     Ok(())
 }
 
@@ -724,19 +744,19 @@ mod tests {
     const ENGAGEMENT: &str =
         include_str!("../../../templates/notations/neon_law/onboarding__letter.md");
 
-    async fn project(surreal: &SurrealDb, code: &str) -> Project {
-        crate::test_support::seed_compiled_brands_postgres(surreal).await;
-        let firm_id = crate::firms::firm_id_for_brand_key(surreal, "neon")
+    async fn project(application_store: &ApplicationStore, code: &str) -> Project {
+        crate::test_support::seed_compiled_brands_postgres(application_store).await;
+        let firm_id = crate::firms::firm_id_for_brand_key(application_store, "neon")
             .await
             .expect("brand firm");
         crate::projects::create(
-            surreal,
+            application_store,
             &crate::projects::NewProject {
                 code: code.into(),
                 name: code.into(),
                 status: "open".into(),
                 firm_id,
-                entity_id: seed_entity(surreal).await,
+                entity_id: seed_entity(application_store).await,
                 ..Default::default()
             },
         )
@@ -752,23 +772,23 @@ mod tests {
 
     /// The canonical seed, then two passes of [`seed`] over the litigation
     /// and estate matters with a litigation source staged.
-    async fn seeded() -> (SurrealDb, Project, Project, tempfile::TempDir) {
-        let surreal = SurrealDb::uninitialized();
+    async fn seeded() -> (ApplicationStore, Project, Project, tempfile::TempDir) {
+        let application_store = ApplicationStore::uninitialized();
         let blobs = tempfile::tempdir().expect("tempdir");
         let storage: Arc<dyn cloud::StorageService> = Arc::new(
             cloud::FsStorage::new(blobs.path().to_path_buf())
                 .await
                 .expect("storage"),
         );
-        super::super::seed_canonical(&surreal, &storage)
+        super::super::seed_canonical(&application_store, &storage)
             .await
             .expect("canonical seed");
-        let nevada = crate::jurisdictions::find_by_name(&surreal, "Nevada")
+        let nevada = crate::jurisdictions::find_by_name(&application_store, "Nevada")
             .await
             .expect("lookup")
             .expect("Nevada");
         let lawyer = crate::persons::create(
-            &surreal,
+            &application_store,
             &crate::persons::NewPerson::with_role(
                 "Sample Lawyer",
                 "sample-records-lawyer@example.com",
@@ -778,8 +798,8 @@ mod tests {
         .await
         .expect("lawyer")
         .id;
-        let litigation = project(&surreal, SAMPLE_LITIGATION_CODE).await;
-        let estate = project(&surreal, SAMPLE_ESTATE_CODE).await;
+        let litigation = project(&application_store, SAMPLE_LITIGATION_CODE).await;
+        let estate = project(&application_store, SAMPLE_ESTATE_CODE).await;
 
         let stage = tempfile::tempdir().expect("tempdir");
         let root = stage.path().join(SAMPLE_LITIGATION_CODE);
@@ -800,13 +820,13 @@ mod tests {
 
         for _ in 0..2 {
             for matter in [&litigation, &estate] {
-                seed(&surreal, &storage, matter, lawyer, nevada.id, get)
+                seed(&application_store, &storage, matter, lawyer, nevada.id, get)
                     .await
                     .expect("seed");
             }
         }
 
-        (surreal, litigation, estate, blobs)
+        (application_store, litigation, estate, blobs)
     }
 
     /// Two passes over the sample matters write each row once: the litigation
@@ -814,10 +834,11 @@ mod tests {
     /// items, the Deadlines and filings and Authorities are there, and the
     /// staged source's page and signed engagement Notation are stored.
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One fixture verifies the complete set of persisted records.
     async fn the_sample_records_seed_once_and_carry_the_staged_source() {
         crate::test_support::with_postgres(async {
-            let (surreal, litigation, estate, _blobs) = seeded().await;
-            let docket = crate::cases::docket_for_project(&surreal, litigation.id)
+            let (application_store, litigation, estate, _blobs) = seeded().await;
+            let docket = crate::cases::docket_for_project(&application_store, litigation.id)
                 .await
                 .expect("docket");
             assert_eq!(docket.len(), DOCKET.len());
@@ -826,68 +847,74 @@ mod tests {
                 19,
                 "the timeline's 19 entries"
             );
-            let case = &crate::cases::for_project(&surreal, litigation.id)
+            let case = &crate::cases::for_project(&application_store, litigation.id)
                 .await
                 .expect("cases")[0];
-            let sets = crate::cases::discovery_requests(&surreal, case.id)
+            let sets = crate::cases::discovery_requests(&application_store, case.id)
                 .await
                 .expect("sets");
             assert_eq!(sets.len(), 2);
             for set in &sets {
-                let items = crate::cases::items(&surreal, set.id).await.expect("items");
+                let items = crate::cases::items(&application_store, set.id)
+                    .await
+                    .expect("items");
                 assert_eq!(items.len(), 8);
             }
             assert_eq!(
-                crate::project_deadlines::list(&surreal, litigation.id)
+                crate::project_deadlines::list(&application_store, litigation.id)
                     .await
                     .expect("deadlines")
                     .len(),
                 DEADLINES.len()
             );
             assert_eq!(
-                crate::efiling_transactions::list(&surreal, litigation.id)
+                crate::efiling_transactions::list(&application_store, litigation.id)
                     .await
                     .expect("filings")
                     .len(),
                 FILINGS.len()
             );
             assert_eq!(
-                crate::authorities::uses_for_project(&surreal, litigation.id)
+                crate::authorities::uses_for_project(&application_store, litigation.id)
                     .await
                     .expect("uses")
                     .len(),
                 LITIGATION_AUTHORITIES.len() + 1
             );
             assert_eq!(
-                crate::authorities::uses_for_project(&surreal, estate.id)
+                crate::authorities::uses_for_project(&application_store, estate.id)
                     .await
                     .expect("uses")
                     .len(),
                 ESTATE_AUTHORITIES.len()
             );
             assert_eq!(
-                crate::project_references::for_project(&surreal, litigation.id)
+                crate::project_references::for_project(&application_store, litigation.id)
                     .await
                     .expect("references")
                     .len(),
                 1
             );
 
-            let pages = crate::matter_pages::list_for_project(&surreal, litigation.id)
+            let pages = crate::matter_pages::list_for_project(&application_store, litigation.id)
                 .await
                 .expect("pages");
             assert_eq!(pages.len(), 1);
             assert_eq!(pages[0].entry.slug, "timeline");
-            let notations = crate::notations::list_by_project(&surreal, litigation.id)
+            let notations = crate::notations::list_by_project(&application_store, litigation.id)
                 .await
                 .expect("notations");
             assert_eq!(notations.len(), 1, "the staged engagement is activated");
             assert_eq!(notations[0].state, "END");
             assert!(
-                crate::templates::resolve_exact(&surreal, Some(litigation.id), "unlisted_memo")
-                    .await
-                    .expect("lookup")
-                    .is_some(),
+                crate::templates::resolve_exact(
+                    &application_store,
+                    Some(litigation.id),
+                    "unlisted_memo"
+                )
+                .await
+                .expect("lookup")
+                .is_some(),
                 "every staged Draft is persisted, activated or not"
             );
             assert_eq!(
@@ -895,18 +922,21 @@ mod tests {
                 Some("abc123"),
                 "the Notation pins the staged commit"
             );
-            let signature = crate::signatures::latest_for_notation(&surreal, notations[0].id)
-                .await
-                .expect("signature")
-                .expect("a signature");
+            let signature =
+                crate::signatures::latest_for_notation(&application_store, notations[0].id)
+                    .await
+                    .expect("signature")
+                    .expect("a signature");
             assert_eq!(
                 signature.state,
                 crate::signatures::SignatureState::Completed
             );
-            assert!(crate::matter_pages::list_for_project(&surreal, estate.id)
-                .await
-                .expect("pages")
-                .is_empty());
+            assert!(
+                crate::matter_pages::list_for_project(&application_store, estate.id)
+                    .await
+                    .expect("pages")
+                    .is_empty()
+            );
         })
         .await;
     }

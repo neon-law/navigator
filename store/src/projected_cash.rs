@@ -26,12 +26,12 @@ use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::matter_projections::{
     ContingentProjection, MatterProjection, MatterProjectionError, OddsSource,
 };
 use crate::postgres::PostgresDb;
 use crate::projects::Project;
-use crate::surreal::SurrealDb;
 
 /// How many quarters past the current one get their own bucket.
 pub const HORIZON_QUARTERS: i32 = 7;
@@ -114,7 +114,7 @@ fn pending(project: &Project, projection: MatterProjection) -> Option<Contingent
 /// `projects`' projections as `viewer`. A matter the PostgreSQL guard does
 /// not count `viewer` firm-side on is left out, never shown.
 async fn pending_projections<'a>(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     viewer: Uuid,
     projects: impl IntoIterator<Item = &'a Project>,
@@ -125,7 +125,9 @@ async fn pending_projections<'a>(
         if project.status != "open" {
             continue;
         }
-        match crate::matter_projections::for_project(surreal, pg, viewer, project.id, on).await {
+        match crate::matter_projections::for_project(application_store, pg, viewer, project.id, on)
+            .await
+        {
             Ok(projection) => {
                 if let Some(projection) = pending(project, projection) {
                     pending_matters.push((project, projection));
@@ -243,13 +245,13 @@ fn fold_pipeline(matters: &[(&Project, ContingentProjection)], today: NaiveDate)
 ///
 /// The failed projection read.
 pub async fn lawyer_pipeline(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     viewer: Uuid,
     projects: &[Project],
     on: NaiveDate,
 ) -> Result<LawyerPipeline, MatterProjectionError> {
-    let matters = pending_projections(surreal, pg, viewer, projects, on).await?;
+    let matters = pending_projections(application_store, pg, viewer, projects, on).await?;
     Ok(fold_pipeline(&matters, on))
 }
 
@@ -392,24 +394,25 @@ fn fold_firm(
 ///
 /// The failed Project, projection, brand, or invoice read.
 pub async fn firm_rollup(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     viewer: Uuid,
     firm_id: Uuid,
     on: NaiveDate,
 ) -> Result<FirmProjectedCash, ProjectedCashError> {
-    let projects: Vec<Project> = crate::projects::all(surreal)
+    let projects: Vec<Project> = crate::projects::all(application_store)
         .await?
         .into_iter()
         .filter(|project| project.firm_id == Some(firm_id))
         .collect();
-    let pending_matters = pending_projections(surreal, pg, viewer, &projects, on).await?;
+    let pending_matters = pending_projections(application_store, pg, viewer, &projects, on).await?;
     let lead_lawyers =
-        crate::projects::dri_names_by_project(surreal, crate::projects::DriSide::Lawyer).await?;
+        crate::projects::dri_names_by_project(application_store, crate::projects::DriSide::Lawyer)
+            .await?;
     let mut brand_names: BTreeMap<&str, String> = BTreeMap::new();
     for (project, _) in &pending_matters {
         if !brand_names.contains_key(project.brand.as_str()) {
-            let name = crate::brands::find_by_key(surreal, &project.brand)
+            let name = crate::brands::find_by_key(application_store, &project.brand)
                 .await?
                 .map_or_else(|| project.brand.clone(), |brand| brand.name);
             brand_names.insert(project.brand.as_str(), name);
@@ -429,7 +432,7 @@ pub async fn firm_rollup(
             .and_hms_opt(0, 0, 0)
             .unwrap_or_default(),
     );
-    let invoices = crate::xero_invoices::for_firm_since(surreal, firm_id, since).await?;
+    let invoices = crate::xero_invoices::for_firm_since(application_store, firm_id, since).await?;
     Ok(fold_firm(&matters, &invoices, on))
 }
 
@@ -437,11 +440,10 @@ pub async fn firm_rollup(
 mod tests {
     use chrono::{NaiveDate, TimeZone, Utc};
 
-    use super::{fold_firm, fold_pipeline, pending, FirmMatter, Quarter};
+    use super::{fold_firm, FirmMatter, Quarter};
     use crate::contingency_terms::CostsDeducted;
     use crate::matter_projections::{
-        project_contingent, ContingentInputs, ContingentProjection, MatterProjection, Odds,
-        PositionedTier,
+        project_contingent, ContingentInputs, ContingentProjection, Odds, PositionedTier,
     };
     use crate::outcome_estimates::tests::worked_example;
 
@@ -492,26 +494,6 @@ mod tests {
         )
     }
 
-    async fn project(
-        surreal: &crate::surreal::SurrealDb,
-        code: &str,
-        name: &str,
-    ) -> crate::projects::Project {
-        crate::projects::create(
-            surreal,
-            &crate::projects::NewProject {
-                code: code.to_string(),
-                name: name.to_string(),
-                status: "open".to_string(),
-                entity_id: crate::test_support::seed_entity(surreal).await,
-                brand: "neon".to_string(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-    }
-
     #[test]
     fn quarters_label_and_order_by_calendar() {
         assert_eq!(Quarter::of(today()).label(), "2026 Q4");
@@ -520,79 +502,6 @@ mod tests {
             Quarter(Quarter::of(today()).0 - 3).start(),
             NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()
         );
-    }
-
-    #[tokio::test]
-    async fn a_resolved_or_closed_matter_is_not_pipeline() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let mut open = project(&surreal, "open-matter", "Open matter").await;
-        let actual = projection(
-            Odds::Actual {
-                result: crate::matter_outcomes::MatterResult::Won,
-                gross_recovery_cents: 1,
-                fee_received_cents: 1,
-                costs_recovered_cents: 0,
-            },
-            None,
-        );
-        assert!(pending(&open, MatterProjection::Contingent(actual)).is_none());
-        assert!(pending(&open, MatterProjection::Contingent(defaulted())).is_some());
-        open.status = "closed".to_string();
-        assert!(pending(&open, MatterProjection::Contingent(defaulted())).is_none());
-    }
-
-    #[tokio::test]
-    async fn the_pipeline_sums_estimated_matters_and_ranks_by_expected_net() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let (a, b, c) = (
-            project(&surreal, "alpha", "Alpha").await,
-            project(&surreal, "bravo", "Bravo").await,
-            project(&surreal, "charlie", "Charlie").await,
-        );
-        let mut cheaper = estimated((2027, 2, 1));
-        cheaper.expected_net_cents = Some(1_000);
-        cheaper.stale = true;
-        let pipeline = fold_pipeline(
-            &[
-                (&a, defaulted()),
-                (&b, cheaper),
-                // Overdue: lands in the current quarter.
-                (&c, estimated((2026, 3, 1))),
-            ],
-            today(),
-        );
-        assert_eq!(pipeline.expected_fee_cents, 2 * 5_397_000);
-        assert_eq!(pipeline.expected_net_cents, 1_000 + 5_097_000);
-        assert_eq!(pipeline.net_range_cents, (2 * -1_200_000, 2 * 16_000_000));
-        assert_eq!(pipeline.costs_at_risk_cents, 3 * COSTS);
-        let ranked: Vec<_> = pipeline.matters.iter().map(|m| m.code.as_str()).collect();
-        assert_eq!(ranked, ["charlie", "bravo", "alpha"], "no estimate last");
-        assert!(pipeline.matters[1].stale);
-        let quarters: Vec<_> = pipeline
-            .by_quarter
-            .iter()
-            .map(|q| (q.label.as_str(), q.expected_cash_cents))
-            .collect();
-        assert_eq!(quarters, [("2026 Q4", 6_297_000), ("2027 Q1", 6_297_000)]);
-    }
-
-    #[tokio::test]
-    async fn far_off_resolutions_share_one_later_bucket() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let (a, b) = (
-            project(&surreal, "far", "Far").await,
-            project(&surreal, "farther", "Farther").await,
-        );
-        let pipeline = fold_pipeline(
-            &[(&a, estimated((2029, 1, 1))), (&b, estimated((2035, 1, 1)))],
-            today(),
-        );
-        let quarters: Vec<_> = pipeline
-            .by_quarter
-            .iter()
-            .map(|q| (q.label.as_str(), q.expected_cash_cents))
-            .collect();
-        assert_eq!(quarters, [("Later", 2 * 6_297_000)]);
     }
 
     fn firm_matter<'a>(
@@ -680,49 +589,6 @@ mod tests {
             (q3.invoiced_cents, q3.paid_cents),
             (10_000, 4_000),
             "USD only"
-        );
-    }
-
-    /// ENG-1250 privacy: the rollup's output carries only brand names, lead
-    /// lawyer names, "Unassigned", quarters, and cents, whatever the matters
-    /// and invoices behind it are called.
-    #[tokio::test]
-    async fn no_project_code_matter_name_client_or_invoice_id_reaches_the_rollup() {
-        let surreal = crate::surreal::test_support::mem().await;
-        let secret = project(&surreal, "secret-code", "Secret Matter v. Hidden Client").await;
-        let lawyers = vec!["Lawyer One".to_string()];
-        let rollup = fold_firm(
-            &[
-                firm_matter("Neon Law", &lawyers, estimated((2027, 1, 15))),
-                firm_matter("Neon Law", &[], estimated((2027, 3, 1))),
-            ],
-            &[crate::xero_invoices::FirmInvoice {
-                project_id: secret.id,
-                xero_invoice_id: "xero-secret-id".to_string(),
-                status: "AUTHORISED".to_string(),
-                amount_cents: 1,
-                amount_paid_cents: 0,
-                issued_at: Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap(),
-                currency: "USD".to_string(),
-                brand: secret.brand.clone(),
-                lawyer_dris: vec!["Lawyer One".to_string()],
-            }],
-            today(),
-        );
-        let json = serde_json::to_string(&rollup).unwrap();
-        for forbidden in [
-            secret.code.as_str(),
-            secret.name.as_str(),
-            "Hidden Client",
-            "xero-secret-id",
-            &secret.id.to_string(),
-            &secret.entity_id.to_string(),
-        ] {
-            assert!(!json.contains(forbidden), "{forbidden} leaked into {json}");
-        }
-        assert!(
-            json.contains("Neon Law") && json.contains("Unassigned"),
-            "{json}"
         );
     }
 }

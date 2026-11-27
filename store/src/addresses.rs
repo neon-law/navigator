@@ -10,22 +10,17 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
+use crate::application_store::ApplicationStore;
 use crate::persons::{self, PersonError};
-use crate::postgres::identity::{self as authority, AuthorityError};
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use crate::postgres::identity::AuthorityError;
+use crate::postgres::PostgresDb;
 
 /// The table these rows live in.
 const TABLE: &str = "address";
-/// The table `person_id` links into.
-const PERSON_TABLE: &str = "person";
-/// The table `entity_id` links into (ENG-120).
-const ENTITY_TABLE: &str = "entity";
-
 /// One postal address.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Address {
@@ -58,64 +53,18 @@ pub struct NewAddress {
     pub country: String,
 }
 
-/// The row as the engine reads and writes it — the seam between
-/// [`Address`] and the SDK's own `RecordId` and `Datetime`.
-#[derive(SurrealValue)]
-struct AddressRow {
-    id: surrealdb::types::RecordId,
-    person_id: Option<surrealdb::types::RecordId>,
-    entity_id: Option<surrealdb::types::RecordId>,
-    line1: String,
-    line2: Option<String>,
-    city: String,
-    region: String,
-    postal_code: String,
-    country: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl AddressRow {
-    /// `None` when a record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`].
-    fn into_address(self) -> Option<Address> {
-        Some(Address {
-            id: record_uuid(&self.id)?,
-            person_id: self.person_id.as_ref().and_then(record_uuid),
-            entity_id: self.entity_id.as_ref().and_then(record_uuid),
-            line1: self.line1,
-            line2: self.line2,
-            city: self.city,
-            region: self.region,
-            postal_code: self.postal_code,
-            country: self.country,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new column cannot reach [`AddressRow`] from only one query.
 const SELECT: &str = "id, person_id, entity_id, line1, line2, city, region, postal_code, \
                       country, inserted_at, updated_at";
 
 /// Errors reading or writing an address.
 #[derive(Debug, thiserror::Error)]
 pub enum AddressError {
-    /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// Reading the person a write links to failed.
     #[error(transparent)]
     Person(#[from] PersonError),
     /// The Person named by a write does not exist.
     #[error("no person {0}")]
     NoSuchPerson(Uuid),
-    /// A write reported success but returned no row, or returned one
-    /// this module could not read back — see [`AddressRow::into_address`].
-    #[error("writing an address returned no usable row")]
-    WriteReturnedNothing,
     /// PostgreSQL identity authority is configured and failed.
     #[error(transparent)]
     Authority(#[from] AuthorityError),
@@ -158,19 +107,10 @@ async fn pg_rows(
         .map_err(AuthorityError::from)?)
 }
 
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, AddressError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(AddressError::Db)
+async fn authority() -> Result<PostgresDb, AuthorityError> {
+    PostgresDb::application()
+        .await
+        .map_err(|error| AuthorityError::Unavailable(error.to_string()))
 }
 
 /// Write a new address under a fresh v7 UUID record id.
@@ -179,8 +119,8 @@ where
 ///
 /// [`AddressError::NoSuchPerson`] when `person_id` names no Person. The
 /// check returns the domain error before PostgreSQL enforces the foreign key.
-/// [`AddressError::Db`] when the insert fails.
-pub async fn create(db: &SurrealDb, new: &NewAddress) -> Result<Address, AddressError> {
+/// [`AddressError::Authority`] when the insert fails.
+pub async fn create(db: &ApplicationStore, new: &NewAddress) -> Result<Address, AddressError> {
     if let Some(person_id) = new.person_id {
         if persons::find_by_id(db, person_id).await?.is_none() {
             return Err(AddressError::NoSuchPerson(person_id));
@@ -188,110 +128,50 @@ pub async fn create(db: &SurrealDb, new: &NewAddress) -> Result<Address, Address
     }
 
     let id = Uuid::now_v7();
-    if let Some(pg) = authority::authority().await? {
-        let row = sqlx::query(AssertSqlSafe(format!(
-            "INSERT INTO {TABLE} (id, person_id, entity_id, line1, line2, city, region, \
-             postal_code, country) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING {SELECT}"
-        )))
-        .bind(id)
-        .bind(new.person_id)
-        .bind(new.entity_id)
-        .bind(&new.line1)
-        .bind(&new.line2)
-        .bind(&new.city)
-        .bind(&new.region)
-        .bind(&new.postal_code)
-        .bind(&new.country)
-        .fetch_one(&pg.0)
-        .await
-        .map_err(AuthorityError::from)?;
-        let address = from_pg(&row).map_err(AuthorityError::from)?;
-
-        return Ok(address);
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "CREATE $id SET \
-             person_id = $person_id, \
-             entity_id = $entity_id, \
-             line1 = $line1, \
-             line2 = $line2, \
-             city = $city, \
-             region = $region, \
-             postal_code = $postal_code, \
-             country = $country \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "person_id",
-            new.person_id.map(|p| record_id(PERSON_TABLE, p)),
-        ))
-        .bind((
-            "entity_id",
-            new.entity_id.map(|id| record_id(ENTITY_TABLE, id)),
-        ))
-        .bind(("line1", new.line1.clone()))
-        .bind(("line2", new.line2.clone()))
-        .bind(("city", new.city.clone()))
-        .bind(("region", new.region.clone()))
-        .bind(("postal_code", new.postal_code.clone()))
-        .bind(("country", new.country.clone()))
-    })
-    .await?;
-
-    let row: Option<AddressRow> = response.take(0)?;
-    let address = row
-        .and_then(AddressRow::into_address)
-        .ok_or(AddressError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Address(id)).await;
-    Ok(address)
+    let pg = authority().await?;
+    let row = sqlx::query(AssertSqlSafe(format!(
+        "INSERT INTO {TABLE} (id, person_id, entity_id, line1, line2, city, region, \
+         postal_code, country) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING {SELECT}"
+    )))
+    .bind(id)
+    .bind(new.person_id)
+    .bind(new.entity_id)
+    .bind(&new.line1)
+    .bind(&new.line2)
+    .bind(&new.city)
+    .bind(&new.region)
+    .bind(&new.postal_code)
+    .bind(&new.country)
+    .fetch_one(&pg.0)
+    .await
+    .map_err(AuthorityError::from)?;
+    Ok(from_pg(&row).map_err(AuthorityError::from)?)
 }
 
 /// One address by id.
 ///
 /// # Errors
 ///
-/// [`AddressError::Db`] if the lookup fails.
-pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Address>, AddressError> {
-    if let Some(pg) = authority::authority().await? {
-        return Ok(Box::pin(pg_rows(&pg, "id = $1", Some(id)))
-            .await?
-            .into_iter()
-            .next());
-    }
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<AddressRow> = response.take(0)?;
-    Ok(row.and_then(AddressRow::into_address))
+/// [`AddressError::Authority`] if the lookup fails.
+pub async fn find_by_id(_db: &ApplicationStore, id: Uuid) -> Result<Option<Address>, AddressError> {
+    let pg = authority().await?;
+    Ok(Box::pin(pg_rows(&pg, "id = $1", Some(id)))
+        .await?
+        .into_iter()
+        .next())
 }
 
-/// Every address belonging to one entity, oldest first. The entity id is
-/// a cross-engine value, so this is an equality filter rather than a
-/// link traversal.
+/// Every address belonging to one Entity, oldest first.
 ///
 /// # Errors
 ///
-/// [`AddressError::Db`] if the lookup fails.
-pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Address>, AddressError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(pg_rows(&pg, "entity_id = $1", Some(entity_id))).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE entity_id = $entity_id ORDER BY inserted_at ASC"
-        ))
-        .bind(("entity_id", record_id(ENTITY_TABLE, entity_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<AddressRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(AddressRow::into_address)
-        .collect())
+/// [`AddressError::Authority`] if the lookup fails.
+pub async fn for_entity(
+    _db: &ApplicationStore,
+    entity_id: Uuid,
+) -> Result<Vec<Address>, AddressError> {
+    let pg = authority().await?;
+    Box::pin(pg_rows(&pg, "entity_id = $1", Some(entity_id))).await
 }
 
 /// Every address belonging to one person, oldest first — the counterpart
@@ -299,23 +179,13 @@ pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Address>,
 ///
 /// # Errors
 ///
-/// [`AddressError::Db`] if the lookup fails.
-pub async fn for_person(db: &SurrealDb, person_id: Uuid) -> Result<Vec<Address>, AddressError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(pg_rows(&pg, "person_id = $1", Some(person_id))).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $person_id ORDER BY inserted_at ASC"
-        ))
-        .bind(("person_id", record_id(PERSON_TABLE, person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<AddressRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(AddressRow::into_address)
-        .collect())
+/// [`AddressError::Authority`] if the lookup fails.
+pub async fn for_person(
+    _db: &ApplicationStore,
+    person_id: Uuid,
+) -> Result<Vec<Address>, AddressError> {
+    let pg = authority().await?;
+    Box::pin(pg_rows(&pg, "person_id = $1", Some(person_id))).await
 }
 
 /// Find this entity's address at `line1`/`postal_code`, creating it if
@@ -330,9 +200,9 @@ pub async fn for_person(db: &SurrealDb, person_id: Uuid) -> Result<Vec<Address>,
 ///
 /// # Errors
 ///
-/// [`AddressError::Db`] if a lookup or the insert fails.
+/// [`AddressError::Authority`] if a lookup or the insert fails.
 pub async fn find_or_create_for_entity(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     new: &NewAddress,
 ) -> Result<(Address, bool), AddressError> {
     if let Some(entity_id) = new.entity_id {
@@ -354,9 +224,9 @@ pub async fn find_or_create_for_entity(
 /// # Errors
 ///
 /// [`AddressError::NoSuchPerson`] when `new.person_id` names no person, and
-/// [`AddressError::Db`] if a lookup or the insert fails.
+/// [`AddressError::Authority`] if a lookup or the insert fails.
 pub async fn find_or_create_for_person(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     new: &NewAddress,
 ) -> Result<(Address, bool), AddressError> {
     if let Some(person_id) = new.person_id {
@@ -375,22 +245,10 @@ pub async fn find_or_create_for_person(
 ///
 /// # Errors
 ///
-/// [`AddressError::Db`] if the lookup fails.
-pub async fn list_all(db: &SurrealDb) -> Result<Vec<Address>, AddressError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(pg_rows(&pg, "true", None)).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<AddressRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(AddressRow::into_address)
-        .collect())
+/// [`AddressError::Authority`] if the lookup fails.
+pub async fn list_all(_db: &ApplicationStore) -> Result<Vec<Address>, AddressError> {
+    let pg = authority().await?;
+    Box::pin(pg_rows(&pg, "true", None)).await
 }
 
 /// How many addresses exist. The production-emptiness gate asks this of
@@ -398,28 +256,15 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Address>, AddressError> {
 ///
 /// # Errors
 ///
-/// [`AddressError::Db`] if the count fails.
-pub async fn count(db: &SurrealDb) -> Result<i64, AddressError> {
-    if let Some(pg) = authority::authority().await? {
-        return Ok(
-            sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM {TABLE}")))
-                .fetch_one(&pg.0)
-                .await
-                .map_err(AuthorityError::from)?,
-        );
-    }
-    let mut response = db
-        .query(format!("SELECT count() AS count FROM {TABLE} GROUP ALL"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let counts: Vec<CountRow> = response.take(0)?;
-    Ok(counts.first().map_or(0, |c| c.count))
-}
-
-/// The one-field shape `SELECT count() AS count ... GROUP ALL` returns.
-#[derive(SurrealValue)]
-struct CountRow {
-    count: i64,
+/// [`AddressError::Authority`] if the count fails.
+pub async fn count(_db: &ApplicationStore) -> Result<i64, AddressError> {
+    let pg = authority().await?;
+    Ok(
+        sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM {TABLE}")))
+            .fetch_one(&pg.0)
+            .await
+            .map_err(AuthorityError::from)?,
+    )
 }
 
 #[cfg(test)]
@@ -445,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn a_created_address_reads_back_by_id() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let written = create(&db, &at("1 Fremont St")).await.unwrap();
             assert_eq!(written.line1, "1 Fremont St");
             assert_eq!(written.city, "Las Vegas");
@@ -458,7 +303,7 @@ mod tests {
     #[tokio::test]
     async fn an_address_may_belong_to_a_person() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let person = persons::create(&db, &NewPerson::new("Libra", "libra@example.com"))
                 .await
                 .unwrap();
@@ -474,7 +319,7 @@ mod tests {
     #[tokio::test]
     async fn an_address_for_a_person_who_does_not_exist_is_refused() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let nobody = Uuid::now_v7();
             let mut new = at("1 Fremont St");
             new.person_id = Some(nobody);
@@ -493,7 +338,7 @@ mod tests {
     #[tokio::test]
     async fn an_address_may_belong_to_neither_a_person_nor_an_entity() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             // The seed's mailroom placeholder is exactly this row, which is
             // why the schema carries no XOR assert.
             let written = create(&db, &at("(via mailroom: Reno)")).await.unwrap();
@@ -506,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn an_entity_id_is_stored_and_filtered_for_existing_entities() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let entity_id = crate::test_support::seed_entity(&db).await;
             let mut new = at("1 Fremont St");
             new.entity_id = Some(entity_id);
@@ -521,7 +366,7 @@ mod tests {
     #[tokio::test]
     async fn find_or_create_matches_the_seeders_natural_key() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let entity_id = crate::test_support::seed_entity(&db).await;
             let mut new = at("1 Fremont St");
             new.entity_id = Some(entity_id);
@@ -557,7 +402,7 @@ mod tests {
     #[tokio::test]
     async fn an_entity_keeps_every_address_it_answers_mail_at() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let entity_id = crate::test_support::seed_entity(&db).await;
             let in_state = |line1: &str, region: &str, zip: &str| {
                 let mut new = at(line1);
@@ -617,7 +462,7 @@ mod tests {
     #[tokio::test]
     async fn counting_an_empty_table_is_zero_rather_than_an_error() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             assert_eq!(count(&db).await.unwrap(), 0);
             create(&db, &at("1 Fremont St")).await.unwrap();
             create(&db, &at("2 Fremont St")).await.unwrap();
@@ -629,7 +474,7 @@ mod tests {
     #[tokio::test]
     async fn listing_is_ordered_oldest_first() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let first = create(&db, &at("1 Fremont St")).await.unwrap();
             let second = create(&db, &at("2 Fremont St")).await.unwrap();
             let ids: Vec<_> = list_all(&db)
@@ -647,7 +492,7 @@ mod tests {
     #[tokio::test]
     async fn for_person_returns_every_address_that_person_holds() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let person = persons::create(&db, &NewPerson::new("Libra", "libra@example.com"))
                 .await
                 .unwrap();
@@ -666,7 +511,7 @@ mod tests {
     #[tokio::test]
     async fn find_or_create_for_person_matches_the_seeders_natural_key() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let person = persons::create(&db, &NewPerson::new("Libra", "libra@example.com"))
                 .await
                 .unwrap();
@@ -686,7 +531,7 @@ mod tests {
     #[tokio::test]
     async fn find_or_create_for_person_refuses_a_person_who_does_not_exist() {
         crate::test_support::with_required_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let nobody = Uuid::now_v7();
             let mut new = at("1 Fremont St");
             new.person_id = Some(nobody);

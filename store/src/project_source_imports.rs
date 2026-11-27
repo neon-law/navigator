@@ -25,9 +25,9 @@ use serde::Serialize;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::persons::Role;
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 
 const OPERATION_KEY_MAX: usize = 200;
 const COMMIT_MESSAGE: &str = "Initialize Project source from a validated headless archive";
@@ -192,7 +192,7 @@ pub async fn pending(pg: &PostgresDb, limit: i64) -> Result<Vec<SourceImport>, S
 /// # Errors
 /// [`SourceImportError`] naming the refusal.
 pub async fn request(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     project_id: Uuid,
     actor: (Uuid, Role),
@@ -208,13 +208,18 @@ pub async fn request(
     }
     let tree = source_archive::canonicalize(archive)?;
     let (person_id, role) = actor;
-    if !crate::access::can_see_project_as_lawyer(surreal, Some(person_id), role, project_id)
-        .await
-        .map_err(store_error)?
+    if !crate::access::can_see_project_as_lawyer(
+        application_store,
+        Some(person_id),
+        role,
+        project_id,
+    )
+    .await
+    .map_err(store_error)?
     {
         return Err(SourceImportError::ProjectNotFound);
     }
-    let project = crate::projects::find_by_id(surreal, project_id)
+    let project = crate::projects::find_by_id(application_store, project_id)
         .await
         .map_err(store_error)?
         .ok_or(SourceImportError::ProjectNotFound)?;
@@ -280,7 +285,7 @@ async fn by_operation_key(
 /// [`SourceImportError`]; the import stays pending with its error recorded,
 /// except a repository holding other source, which refuses it for good.
 pub async fn process(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     forge: &dyn ForgeService,
     import_id: Uuid,
@@ -305,7 +310,7 @@ pub async fn process(
     };
     let import = from_row(&row)?;
     let archive: Vec<u8> = row.try_get("canonical_zip")?;
-    match apply(surreal, forge, &import, &archive, now).await {
+    match apply(application_store, forge, &import, &archive, now).await {
         Ok((repository_url, commit_sha)) => {
             let row = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "UPDATE project_source_import SET state = 'committed', canonical_zip = NULL, \
@@ -352,7 +357,7 @@ pub async fn process(
 }
 
 async fn apply(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     forge: &dyn ForgeService,
     import: &SourceImport,
     archive: &[u8],
@@ -362,7 +367,7 @@ async fn apply(
     if tree.digest() != import.tree_sha256 {
         return Err(SourceImportError::Archive(SourceArchiveError::Unreadable));
     }
-    let project = crate::projects::find_by_id(surreal, import.project_id)
+    let project = crate::projects::find_by_id(application_store, import.project_id)
         .await
         .map_err(store_error)?
         .ok_or(SourceImportError::ProjectNotFound)?;
@@ -392,7 +397,7 @@ async fn apply(
         }));
     }
     let stored = crate::projects::record_source_initialized(
-        surreal,
+        application_store,
         import.project_id,
         &repository.url,
         &now.to_rfc3339(),

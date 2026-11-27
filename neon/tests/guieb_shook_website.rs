@@ -4,7 +4,10 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn the_new_site_publish_routes_and_navigator_entry_points_are_brand_scoped() {
-    let state = portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
+    let state = portal::test_support::app_state(
+        store::application_store::ApplicationStore::uninitialized(),
+    )
+    .await;
     let dioxus = neon::public_dioxus_routers(&state);
     let app = portal::bootstrap(
         state,

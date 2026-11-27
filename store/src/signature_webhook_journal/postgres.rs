@@ -6,11 +6,9 @@
 use sqlx::{postgres::PgRow, Row};
 use uuid::Uuid;
 
-use super::{ReceiptError, ReceiptRow, WebhookReceipt, SELECT, TABLE};
+use super::{ReceiptError, WebhookReceipt, SELECT, TABLE};
 use crate::postgres::PostgresDb;
-use crate::postgres_backfill::Copied;
 use crate::signatures::SignatureProvider;
-use crate::surreal::SurrealDb;
 
 fn receipt(row: &PgRow) -> Result<WebhookReceipt, sqlx::Error> {
     Ok(WebhookReceipt {
@@ -119,44 +117,4 @@ pub(super) async fn record_attempt_failure(
     .execute(&pg.0)
     .await?;
     Ok(())
-}
-
-/// Copy every SurrealDB receipt PostgreSQL does not hold, keeping its id. A
-/// receipt PostgreSQL already journaled for the same event is left as is.
-pub(crate) async fn copy_from_surreal(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-) -> Result<Copied, surrealdb::Error> {
-    let rows: Vec<ReceiptRow> = surreal
-        .query(format!("SELECT {SELECT} FROM {TABLE}"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?
-        .take(0)?;
-    let mut copied = Copied::default();
-    for row in rows {
-        let Some(receipt) = row.into_receipt() else {
-            copied.unrepresentable(TABLE);
-            continue;
-        };
-        let result = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO {TABLE} (id, provider, provider_id, status, payload, consumed_at, \
-             attempts, last_error, inserted_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING"
-        )))
-        .bind(receipt.id)
-        .bind(&receipt.provider)
-        .bind(&receipt.provider_id)
-        .bind(&receipt.status)
-        .bind(&receipt.payload)
-        .bind(receipt.consumed_at)
-        .bind(receipt.attempts)
-        .bind(&receipt.last_error)
-        .bind(receipt.inserted_at)
-        .bind(receipt.updated_at)
-        .execute(&pg.0)
-        .await
-        .map(|done| done.rows_affected());
-        copied.record(TABLE, Some(receipt.id), result);
-    }
-    Ok(copied)
 }

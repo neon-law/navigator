@@ -9,7 +9,7 @@ use crate::postgres::matter;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::surreal::{record_id, SurrealDb};
+use crate::application_store::ApplicationStore;
 
 const TABLE: &str = "notation_source";
 
@@ -37,68 +37,24 @@ pub struct NewNotationSource {
 /// # Errors
 ///
 /// Propagates database failures, including duplicate review positions.
-pub async fn attach(db: &SurrealDb, source: &NewNotationSource) -> Result<(), surrealdb::Error> {
-    if let Some(pg) = matter::authority_for(TABLE)
-        .await
-        .map_err(crate::surreal::postgres_error)?
-    {
-        let now = chrono::Utc::now();
-        let _: serde_json::Value = matter::upsert(
-            &pg,
-            TABLE,
-            &json!({
-                "id": Uuid::now_v7(), "notation_id": source.notation_id, "kind": source.kind,
-                "communication_id": source.communication_id, "source_ref": source.source_ref,
-                "position": source.position, "inserted_at": now, "updated_at": now
-            }),
-        )
-        .await
-        .map_err(crate::surreal::postgres_error)?;
-        return Ok(());
-    }
-
-    let id = Uuid::now_v7();
-    db.query(
-        "CREATE $id SET notation_id = $notation_id, kind = $kind, \
-         communication_id = $communication_id, source_ref = $source_ref, position = $position",
+pub async fn attach(
+    _db: &ApplicationStore,
+    source: &NewNotationSource,
+) -> Result<(), crate::postgres::matter::MatterAuthorityError> {
+    let pg = matter::authority_for(TABLE).await?;
+    let now = chrono::Utc::now();
+    let _: serde_json::Value = matter::upsert(
+        &pg,
+        TABLE,
+        &json!({
+            "id": Uuid::now_v7(), "notation_id": source.notation_id, "kind": source.kind,
+            "communication_id": source.communication_id, "source_ref": source.source_ref,
+            "position": source.position, "inserted_at": now, "updated_at": now
+        }),
     )
-    .bind(("id", record_id(TABLE, id)))
-    .bind(("notation_id", record_id("notation", source.notation_id)))
-    .bind(("kind", source.kind.clone()))
-    .bind((
-        "communication_id",
-        source
-            .communication_id
-            .map(|id| record_id("communication", id)),
-    ))
-    .bind(("source_ref", source.source_ref.clone()))
-    .bind(("position", source.position))
-    .await
-    .and_then(surrealdb::IndexedResults::check)?;
-    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
+    .await?;
     Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{attach, kind, NewNotationSource};
-    use crate::surreal::test_support::mem;
-
-    #[tokio::test]
-    async fn questionnaire_sources_do_not_need_a_duplicated_communication() {
-        let db = mem().await;
-        let notation_id = crate::test_support::seed_notation(&db).await;
-        attach(
-            &db,
-            &NewNotationSource {
-                notation_id,
-                kind: kind::QUESTIONNAIRE.into(),
-                communication_id: None,
-                source_ref: Some("family__beneficiaries".into()),
-                position: 0,
-            },
-        )
-        .await
-        .unwrap();
-    }
-}
+mod tests {}

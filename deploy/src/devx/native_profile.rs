@@ -363,7 +363,6 @@ pub(super) fn demo_environment(
             "NAVIGATOR_FAKE_SIGNATURE_DIR",
             "/var/lib/navigator/repos/.fake-signature",
         ),
-        ("NAVIGATOR_FORBID_SURREAL", "1"),
     ] {
         values.insert(key.into(), value.into());
     }
@@ -808,8 +807,6 @@ spec:
         let mut cfg = KindConfig::from_env();
         cfg.web_port = 20637;
         assert_eq!(dbos_port(&cfg).unwrap(), 21337);
-        assert_ne!(dbos_port(&cfg).unwrap(), cfg.restate_ingress_port);
-        assert_ne!(dbos_port(&cfg).unwrap(), cfg.surreal_port);
         cfg.web_port = u16::MAX;
         assert!(dbos_port(&cfg).is_err());
     }

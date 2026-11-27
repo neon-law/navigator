@@ -20,9 +20,9 @@ use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
+use crate::application_store::ApplicationStore;
 use crate::git_access_tokens::hash_token;
 use crate::postgres::identity::{self as authority, AuthorityError};
-use crate::surreal::SurrealDb;
 
 /// The token in a "reset your password" email. Claiming it lets the
 /// holder set a new password in Identity Platform for the account.
@@ -70,9 +70,7 @@ pub struct EmailToken {
 
 /// Tokens require admitted PostgreSQL authority, including in Source contexts.
 async fn required_authority() -> Result<crate::postgres::PostgresDb, TokenError> {
-    authority::authority().await?.ok_or_else(|| {
-        AuthorityError::Unavailable("email tokens are unavailable in Source context".into()).into()
-    })
+    Ok(authority::authority().await?)
 }
 
 /// Persist a freshly minted token and return the stored row. The caller
@@ -83,7 +81,7 @@ async fn required_authority() -> Result<crate::postgres::PostgresDb, TokenError>
 /// # Errors
 /// [`TokenError::Authority`] if the insert fails.
 pub async fn mint(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
     email: &str,
     purpose: &str,
@@ -120,7 +118,7 @@ pub async fn mint(
 /// # Errors
 /// [`TokenError::Authority`] if the lookup fails.
 pub async fn validate(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     plaintext: &str,
     purpose: &str,
     now: DateTime<Utc>,
@@ -152,7 +150,7 @@ pub async fn validate(
 /// # Errors
 /// [`TokenError::Authority`] if the update fails.
 pub async fn consume(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     token_id: Uuid,
     now: DateTime<Utc>,
 ) -> Result<(), TokenError> {
@@ -178,7 +176,7 @@ pub async fn consume(
 /// # Errors
 /// [`TokenError::Authority`] if the lookup fails.
 pub async fn has_live_token_since(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
     purpose: &str,
     since: DateTime<Utc>,
@@ -208,7 +206,7 @@ mod tests {
     use crate::test_support::with_postgres;
     use chrono::Duration;
 
-    async fn a_person(db: &SurrealDb) -> Uuid {
+    async fn a_person(db: &ApplicationStore) -> Uuid {
         crate::persons::create(
             db,
             &crate::persons::NewPerson::new(
@@ -222,43 +220,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_context_cannot_access_tokens() {
-        let db = SurrealDb::uninitialized();
-        let now = Utc::now();
-        crate::postgres_mirror::from_source(async {
-            let id = Uuid::now_v7();
-            assert!(matches!(
-                mint(
-                    &db,
-                    id,
-                    "synthetic@example.test",
-                    PURPOSE_EMAIL_CONFIRM,
-                    "synthetic",
-                    now
-                )
-                .await,
-                Err(TokenError::Authority(_))
-            ));
-            assert!(matches!(
-                validate(&db, "synthetic", PURPOSE_EMAIL_CONFIRM, now).await,
-                Err(TokenError::Authority(_))
-            ));
-            assert!(matches!(
-                consume(&db, id, now).await,
-                Err(TokenError::Authority(_))
-            ));
-            assert!(matches!(
-                has_live_token_since(&db, id, PURPOSE_EMAIL_CONFIRM, now, now).await,
-                Err(TokenError::Authority(_))
-            ));
-        })
-        .await;
-    }
-
-    #[tokio::test]
     async fn mint_then_validate_resolves_person_and_purpose() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let person_id = a_person(&db).await;
             let now = Utc::now();
 
@@ -290,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn validate_is_scoped_to_the_purpose() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let now = Utc::now();
 
             mint(
@@ -321,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_token_does_not_validate() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let resolved = validate(&db, "never-minted", PURPOSE_PASSWORD_RESET, Utc::now())
                 .await
                 .unwrap();
@@ -333,7 +297,7 @@ mod tests {
     #[tokio::test]
     async fn expired_token_is_treated_as_absent() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let now = Utc::now();
 
             mint(
@@ -358,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn consumed_token_stops_validating() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let now = Utc::now();
 
             let minted = mint(
@@ -391,7 +355,7 @@ mod tests {
     #[tokio::test]
     async fn consuming_an_unknown_token_is_a_no_op() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             consume(&db, Uuid::now_v7(), Utc::now()).await.unwrap();
         })
         .await;
@@ -400,7 +364,7 @@ mod tests {
     #[tokio::test]
     async fn a_token_minted_before_the_window_does_not_satisfy_the_throttle() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let person_id = a_person(&db).await;
             let now = Utc::now();
 
@@ -436,7 +400,7 @@ mod tests {
     #[tokio::test]
     async fn throttle_sees_a_live_token_inside_the_window_only() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let person_id = a_person(&db).await;
             let now = Utc::now();
 
@@ -491,7 +455,7 @@ mod tests {
     #[tokio::test]
     async fn another_persons_live_token_does_not_satisfy_the_throttle() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let now = Utc::now();
 
             mint(
@@ -521,7 +485,7 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_token_purpose_is_rejected() {
         with_postgres(async {
-            let db = crate::surreal::SurrealDb::uninitialized();
+            let db = crate::application_store::ApplicationStore::uninitialized();
             let err = mint(
                 &db,
                 a_person(&db).await,

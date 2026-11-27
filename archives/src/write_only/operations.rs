@@ -47,16 +47,6 @@ pub struct Destination {
 }
 
 impl Config {
-    pub(crate) fn read(path: &Path) -> Result<Self> {
-        ensure!(
-            std::fs::metadata(path)?.len() <= 8 * 1024 * 1024,
-            "write-only archive configuration exceeds its size limit"
-        );
-        let config: Self = serde_json::from_slice(&std::fs::read(path)?)?;
-        config.validate()?;
-        Ok(config)
-    }
-
     pub fn validate(&self) -> std::result::Result<(), crate::write_only::Error> {
         self.validate_inner()
             .map_err(|_| crate::write_only::Error::Configuration)
@@ -386,7 +376,10 @@ pub(super) fn frozen_bundle(bundle: Bundle) -> Result<Capture> {
             .and_then(|key| key.rsplit('/').next())
             .context("missing frozen table identity")?;
         ensure!(
-            crate::tables::is_safe_archive_table_name(table),
+            !table.is_empty()
+                && table
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'),
             "invalid frozen table identity"
         );
         let parquet = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(

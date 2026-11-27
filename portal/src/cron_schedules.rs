@@ -113,7 +113,7 @@ mod tests {
     async fn manual_schedules_use_authenticated_dbos_with_a_unique_run_key() {
         for job in MANUAL_JOBS
             .iter()
-            .filter(|job| !store::workflow_engine::disabled_billing_service(job.service))
+            .filter(|job| !store::disabled_billing::disabled_billing_service(job.service))
         {
             let dbos = MockServer::start().await;
             Mock::given(method("POST"))

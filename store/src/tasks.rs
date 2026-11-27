@@ -445,8 +445,8 @@ mod tests {
         use super::super::{
             assign, create, list_events, transition, NewProjectTask, ProjectTaskError, TaskState,
         };
+        use crate::postgres::fixtures::{connect, fresh_schema};
         use crate::postgres::PostgresDb;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
         use sqlx::Row;
         use uuid::Uuid;
 

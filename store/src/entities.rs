@@ -15,17 +15,13 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::{AlreadyExistsError, ErrorDetails, SurrealValue};
 use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::postgres::PostgresDb;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
-
-/// The table these rows live in.
-const TABLE: &str = "entity";
 
 /// One legal organization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -75,47 +71,6 @@ impl Entity {
     }
 }
 
-/// The row as the engine reads and writes it. Separate from [`Entity`]
-/// because the SDK owns its own `RecordId` and `Datetime`, and the
-/// conversion belongs at this seam rather than in every caller.
-#[derive(SurrealValue)]
-struct EntityRow {
-    id: surrealdb::types::RecordId,
-    name: String,
-    entity_type_id: surrealdb::types::RecordId,
-    jurisdiction_id: surrealdb::types::RecordId,
-    phone: Option<String>,
-    url: Option<String>,
-    avatar_url: Option<String>,
-    xero_id: Option<String>,
-    metadata: Option<serde_json::Value>,
-    firm_anchor_key: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl EntityRow {
-    /// `None` when a record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`], or a
-    /// link that names one.
-    fn into_entity(self) -> Option<Entity> {
-        Some(Entity {
-            id: record_uuid(&self.id)?,
-            name: self.name,
-            entity_type_id: record_uuid(&self.entity_type_id)?,
-            jurisdiction_id: record_uuid(&self.jurisdiction_id)?,
-            phone: self.phone,
-            url: self.url,
-            avatar_url: self.avatar_url,
-            xero_id: self.xero_id,
-            metadata: self.metadata,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-            firm_anchor_key: self.firm_anchor_key,
-        })
-    }
-}
-
 /// The projection every read shares, so one field list describes the
 /// row and a new column cannot reach [`EntityRow`] from only one query.
 const SELECT: &str = "id, name, entity_type_id, jurisdiction_id, phone, url, avatar_url, \
@@ -137,8 +92,6 @@ pub struct NewEntity {
 /// Errors reading or writing an entity.
 #[derive(Debug, thiserror::Error)]
 pub enum EntityError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// The write collided with `entity_firm_anchor` — a row already
     /// holds the firm anchor's identity, and a second would be born
     /// protected. See this module's header.
@@ -210,138 +163,12 @@ enum PgBind {
 /// Run one entity write in PostgreSQL and project each row it returns.
 async fn pg_write(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
 ) -> Result<Option<Entity>, EntityError> {
     let row = query.fetch_optional(&pg.0).await.map_err(pg_error)?;
     let entity = row.as_ref().map(from_pg).transpose().map_err(pg_error)?;
     Ok(entity)
-}
-
-/// The table whose **record id is the firm-anchor key**. Writing it makes
-/// racers collide on one identical record key, which is much stronger than
-/// a UNIQUE index entry — but the engine has an empty-table first-write gap.
-/// `take_claim` primes this table before every real `CREATE`, so a raw
-/// double-success on the engine's empty-table first write cannot publish two
-/// protected Entity rows. See the `firm_anchor` block in
-/// `store/src/schema/navigator.surql`.
-const CLAIM_TABLE: &str = "firm_anchor";
-
-/// A reserved string record link that keeps the claim table populated. The
-/// engine accepts record links without validating that the target row exists,
-/// and no public holder lookup addresses this link. The sentinel's claim
-/// record uses a native nil UUID key, so it cannot collide with any string
-/// firm-anchor key — including this reserved spelling.
-const CLAIM_SENTINEL_ENTITY_ID: &str = "__navigator_claim_sentinel__";
-
-/// Populate the claim table before a real anchor claim can be its first row.
-/// `UPSERT` is safe here because this is one reserved, inert key; unlike the
-/// real claim, it cannot replace another entity's ownership.
-const PRIME_CLAIM_TABLE: &str = "UPSERT $claim SET entity_id = $entity_id;";
-
-/// Claim the anchor for `$id`, refusing when any row already holds it.
-///
-/// `CREATE` rather than `UPSERT` on purpose: `UPSERT` would take the claim
-/// from its current holder, which is the fork this exists to refuse. The
-/// engine's empty-table gap is handled by priming the table before the real
-/// claim below.
-///
-/// **It runs as its own statement, never inside a wider transaction.**
-/// That is the whole mechanism, and it is easy to "tidy" away. An
-/// explicit `BEGIN … COMMIT` reads the snapshot taken at `BEGIN`, so two
-/// racers each see the claim free and each `CREATE` succeeds against its
-/// own snapshot — the fork comes straight back, and the wider the
-/// transaction the likelier it is. Committing the claim on its own is
-/// what makes the second racer read the first one's row. The real claim never
-/// reaches this statement until the table has its reserved sentinel row.
-const CLAIM: &str = "CREATE type::record('firm_anchor', $firm_anchor_key) SET entity_id = $id;";
-
-/// Release whatever claim `$id` holds. A no-op when it holds none, so it
-/// costs nothing to run on a path that may not have claimed.
-const RELEASE: &str = "DELETE firm_anchor WHERE entity_id = $id;";
-
-/// Turn a write failure into the conflict it names, or leave it a
-/// database fault.
-///
-/// The claim collision is **typed**: `CREATE` onto a taken record id
-/// reports [`AlreadyExistsError::Record`] carrying that id, so the
-/// discriminator is a structured value rather than prose — the same
-/// standard [`crate::surreal::retry::is_retryable`] holds itself to, and
-/// the shared classifier in [`crate::surreal::retry`] could not meet.
-///
-/// The UNIQUE `entity_firm_anchor` index is still a backstop for a fork
-/// that is not a race, and it *is* untyped, so its arm still reads the
-/// message. That arm is pinned by
-/// [`tests::a_unique_violation_carries_no_typed_detail_only_the_index_name`]
-/// against a real engine, so an upstream reword fails there rather than
-/// silently turning a refusal into a server fault.
-fn classify_write(error: surrealdb::Error) -> EntityError {
-    if claims_the_firm_anchor(&error)
-        || crate::surreal::retry::unique_violation(&error) == Some("entity_firm_anchor")
-    {
-        EntityError::FirmAnchorTaken
-    } else {
-        EntityError::Db(error)
-    }
-}
-
-/// Whether `error` is the claim record refusing a second holder.
-fn claims_the_firm_anchor(error: &surrealdb::Error) -> bool {
-    matches!(
-        error.details(),
-        ErrorDetails::AlreadyExists(Some(AlreadyExistsError::Record { id }))
-            if id.starts_with(CLAIM_TABLE)
-    )
-}
-
-/// Take the anchor claim for `id` when it does not already hold it,
-/// reporting whether this call is the one now holding it.
-///
-/// A write that mints nothing claims nothing, and a holder re-writing its
-/// own row claims nothing either — which is what makes a re-run seed and
-/// an in-place edit of the anchor idempotent rather than self-refusing.
-/// A holder that is a *different* entity does try, and is refused, which
-/// is the right answer.
-async fn take_claim(db: &SurrealDb, id: Uuid, key: Option<&str>) -> Result<bool, EntityError> {
-    let Some(key) = key else { return Ok(false) };
-    prime_claim_table(db).await?;
-    let holder = firm_anchor_holder(db, key).await?;
-    if holder == Some(id) {
-        return Ok(false);
-    }
-    let outcome = writing(|| {
-        db.query(CLAIM)
-            .bind(("id", record_id(TABLE, id)))
-            .bind(("firm_anchor_key", key.to_string()))
-    })
-    .await;
-    outcome.map(|_| true)
-}
-
-/// Ensure a real claim never performs the claim table's first write.
-async fn prime_claim_table(db: &SurrealDb) -> Result<(), EntityError> {
-    writing(|| {
-        db.query(PRIME_CLAIM_TABLE)
-            .bind(("claim", record_id(CLAIM_TABLE, Uuid::nil())))
-            .bind((
-                "entity_id",
-                surrealdb::types::RecordId::new(TABLE, CLAIM_SENTINEL_ENTITY_ID),
-            ))
-    })
-    .await
-    .map(|_| ())
-}
-
-/// Give back a claim taken for a write that then did not land, so a
-/// failure does not leave the anchor claimed by a row that never became
-/// it — which nothing could mint afterwards.
-///
-/// Best effort on purpose: it runs on a path that is already reporting
-/// something else, and the caller's own outcome is the one worth
-/// surfacing. A claim stranded here is visible as a `firm_anchor` row
-/// whose `entity_id` names a row that does not carry the key.
-async fn surrender_claim(db: &SurrealDb, id: Uuid) {
-    let _ = writing(|| db.query(RELEASE).bind(("id", record_id(TABLE, id)))).await;
 }
 
 /// The entity currently holding `key`, or `None` when the anchor is free.
@@ -354,53 +181,18 @@ async fn surrender_claim(db: &SurrealDb, id: Uuid) {
 /// # Errors
 ///
 /// [`EntityError::Db`] if the lookup fails.
-pub async fn firm_anchor_holder(db: &SurrealDb, key: &str) -> Result<Option<Uuid>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let rows = Box::pin(pg_rows(
-            &pg,
-            "FROM entity WHERE firm_anchor_key = $1",
-            vec![PgBind::Text(key.to_string())],
-        ))
-        .await?;
-        return Ok(rows.first().map(|entity| entity.id));
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE entity_id FROM ONLY type::record('{CLAIM_TABLE}', $key)"
-        ))
-        .bind(("key", key.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let holder: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(holder.as_ref().and_then(record_uuid))
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, EntityError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt).await.map_err(classify_write)
-}
-
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Entity>, EntityError> {
-    let row: Option<EntityRow> = response.take(0)?;
-    Ok(row.and_then(EntityRow::into_entity))
-}
-
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Entity>, EntityError> {
-    let rows: Vec<EntityRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(EntityRow::into_entity)
-        .collect())
+pub async fn firm_anchor_holder(
+    _db: &ApplicationStore,
+    key: &str,
+) -> Result<Option<Uuid>, EntityError> {
+    let pg = authority::authority().await?;
+    let rows = Box::pin(pg_rows(
+        &pg,
+        "FROM entity WHERE firm_anchor_key = $1",
+        vec![PgBind::Text(key.to_string())],
+    ))
+    .await?;
+    Ok(rows.first().map(|entity| entity.id))
 }
 
 /// Resolve one entity by id.
@@ -408,23 +200,15 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Entity>, EntityEr
 /// # Errors
 ///
 /// [`EntityError::Db`] if the lookup fails.
-pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let rows = Box::pin(pg_rows(
-            &pg,
-            "FROM entity WHERE id = $1",
-            vec![PgBind::Id(id)],
-        ))
-        .await?;
-        return Ok(rows.into_iter().next());
-    }
-    let response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let entity = one(response)?;
-    Ok(entity)
+pub async fn find_by_id(_db: &ApplicationStore, id: Uuid) -> Result<Option<Entity>, EntityError> {
+    let pg = authority::authority().await?;
+    let rows = Box::pin(pg_rows(
+        &pg,
+        "FROM entity WHERE id = $1",
+        vec![PgBind::Id(id)],
+    ))
+    .await?;
+    Ok(rows.into_iter().next())
 }
 
 /// Resolve many entities by id in one round trip — the bulk read a
@@ -434,26 +218,17 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Entity>, Enti
 /// # Errors
 ///
 /// [`EntityError::Db`] if the lookup fails.
-pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Entity>, EntityError> {
+pub async fn find_by_ids(_db: &ApplicationStore, ids: &[Uuid]) -> Result<Vec<Entity>, EntityError> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(pg_rows(
-            &pg,
-            "FROM entity WHERE id = ANY($1)",
-            vec![PgBind::Ids(ids.to_vec())],
-        ))
-        .await;
-    }
-    let records: Vec<surrealdb::types::RecordId> =
-        ids.iter().map(|id| record_id(TABLE, *id)).collect();
-    let response = db
-        .query(format!("SELECT {SELECT} FROM $ids"))
-        .bind(("ids", records))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = authority::authority().await?;
+    Box::pin(pg_rows(
+        &pg,
+        "FROM entity WHERE id = ANY($1)",
+        vec![PgBind::Ids(ids.to_vec())],
+    ))
+    .await
 }
 
 /// Resolve an entity by exact `name`.
@@ -465,52 +240,33 @@ pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Entity>, En
 /// # Errors
 ///
 /// [`EntityError::Db`] if the lookup fails.
-pub async fn find_by_name(db: &SurrealDb, name: &str) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let rows = Box::pin(pg_rows(
-            &pg,
-            "FROM entity WHERE name = $1 ORDER BY id LIMIT 1",
-            vec![PgBind::Text(name.trim().to_string())],
-        ))
-        .await?;
-        return Ok(rows.into_iter().next());
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE name = $name LIMIT 1"
-        ))
-        .bind(("name", name.trim().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+pub async fn find_by_name(
+    _db: &ApplicationStore,
+    name: &str,
+) -> Result<Option<Entity>, EntityError> {
+    let pg = authority::authority().await?;
+    let rows = Box::pin(pg_rows(
+        &pg,
+        "FROM entity WHERE name = $1 ORDER BY id LIMIT 1",
+        vec![PgBind::Text(name.trim().to_string())],
+    ))
+    .await?;
+    Ok(rows.into_iter().next())
 }
 
 /// Resolve a name-only reference only when it identifies exactly one Entity.
 pub(crate) async fn find_unique_by_name(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     name: &str,
 ) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let mut rows = Box::pin(pg_rows(
-            &pg,
-            "FROM entity WHERE name = $1 LIMIT 2",
-            vec![PgBind::Text(name.trim().to_string())],
-        ))
-        .await?;
-        return Ok(if rows.len() == 1 { rows.pop() } else { None });
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE name = $name LIMIT 2"
-        ))
-        .bind(("name", name.trim().to_string()))
-        .await?
-        .check()?;
-    let rows: Vec<EntityRow> = response.take(0)?;
-    match rows.as_slice() {
-        [_] => Ok(rows.into_iter().next().and_then(EntityRow::into_entity)),
-        _ => Ok(None),
-    }
+    let pg = authority::authority().await?;
+    let mut rows = Box::pin(pg_rows(
+        &pg,
+        "FROM entity WHERE name = $1 LIMIT 2",
+        vec![PgBind::Text(name.trim().to_string())],
+    ))
+    .await?;
+    Ok(if rows.len() == 1 { rows.pop() } else { None })
 }
 
 /// Resolve an entity by the `(name, entity_type_id)` pair the canonical
@@ -524,32 +280,21 @@ pub(crate) async fn find_unique_by_name(
 ///
 /// [`EntityError::Db`] if the lookup fails.
 pub async fn find_by_name_and_type(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     name: &str,
     entity_type_id: Uuid,
 ) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let rows = Box::pin(pg_rows(
-            &pg,
-            "FROM entity WHERE name = $1 AND entity_type_id = $2 ORDER BY id LIMIT 1",
-            vec![
-                PgBind::Text(name.trim().to_string()),
-                PgBind::Id(entity_type_id),
-            ],
-        ))
-        .await?;
-        return Ok(rows.into_iter().next());
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE name = $name AND entity_type_id = $entity_type_id LIMIT 1"
-        ))
-        .bind(("name", name.trim().to_string()))
-        .bind(("entity_type_id", record_id("entity_type", entity_type_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = authority::authority().await?;
+    let rows = Box::pin(pg_rows(
+        &pg,
+        "FROM entity WHERE name = $1 AND entity_type_id = $2 ORDER BY id LIMIT 1",
+        vec![
+            PgBind::Text(name.trim().to_string()),
+            PgBind::Id(entity_type_id),
+        ],
+    ))
+    .await?;
+    Ok(rows.into_iter().next())
 }
 
 /// Resolve an entity by the full `(name, entity_type_id,
@@ -565,40 +310,24 @@ pub async fn find_by_name_and_type(
 ///
 /// [`EntityError::Db`] if the lookup fails.
 pub async fn find_by_identity(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     name: &str,
     entity_type_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let rows = Box::pin(pg_rows(
-            &pg,
-            "FROM entity WHERE name = $1 AND entity_type_id = $2 AND jurisdiction_id = $3 \
-             ORDER BY id LIMIT 1",
-            vec![
-                PgBind::Text(name.trim().to_string()),
-                PgBind::Id(entity_type_id),
-                PgBind::Id(jurisdiction_id),
-            ],
-        ))
-        .await?;
-        return Ok(rows.into_iter().next());
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE name = $name AND entity_type_id = $entity_type_id \
-               AND jurisdiction_id = $jurisdiction_id LIMIT 1"
-        ))
-        .bind(("name", name.trim().to_string()))
-        .bind(("entity_type_id", record_id("entity_type", entity_type_id)))
-        .bind((
-            "jurisdiction_id",
-            record_id("jurisdiction", jurisdiction_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = authority::authority().await?;
+    let rows = Box::pin(pg_rows(
+        &pg,
+        "FROM entity WHERE name = $1 AND entity_type_id = $2 AND jurisdiction_id = $3 \
+         ORDER BY id LIMIT 1",
+        vec![
+            PgBind::Text(name.trim().to_string()),
+            PgBind::Id(entity_type_id),
+            PgBind::Id(jurisdiction_id),
+        ],
+    ))
+    .await?;
+    Ok(rows.into_iter().next())
 }
 
 /// Point an existing entity at a different jurisdiction, leaving every
@@ -614,34 +343,19 @@ pub async fn find_by_identity(
 ///
 /// [`EntityError::Db`] if the write fails.
 pub async fn repoint_jurisdiction(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     jurisdiction_id: Uuid,
 ) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let sql = format!(
-            "UPDATE entity SET jurisdiction_id = $2, updated_at = now() \
-             WHERE id = $1 RETURNING {SELECT}"
-        );
-        let query = sqlx::query(AssertSqlSafe(sql))
-            .bind(id)
-            .bind(jurisdiction_id);
-        return Box::pin(pg_write(&pg, db, query)).await;
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE $id SET jurisdiction_id = $jurisdiction_id, updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "jurisdiction_id",
-            record_id("jurisdiction", jurisdiction_id),
-        ))
-    })
-    .await?;
-    let row: Option<EntityRow> = response.take(0)?;
-    mirrored(db, Ok(row.and_then(EntityRow::into_entity))).await
+    let pg = authority::authority().await?;
+    let sql = format!(
+        "UPDATE entity SET jurisdiction_id = $2, updated_at = now() \
+         WHERE id = $1 RETURNING {SELECT}"
+    );
+    let query = sqlx::query(AssertSqlSafe(sql))
+        .bind(id)
+        .bind(jurisdiction_id);
+    Box::pin(pg_write(&pg, db, query)).await
 }
 
 /// Set — or clear — the entity's avatar route, leaving every other field
@@ -653,56 +367,32 @@ pub async fn repoint_jurisdiction(
 ///
 /// [`EntityError::Db`] if the write fails.
 pub async fn set_avatar_url(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     avatar_url: Option<String>,
 ) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let sql = format!(
-            "UPDATE entity SET avatar_url = $2, updated_at = now() WHERE id = $1 RETURNING {SELECT}"
-        );
-        let query = sqlx::query(AssertSqlSafe(sql)).bind(id).bind(avatar_url);
-        return Box::pin(pg_write(&pg, db, query)).await;
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE $id SET avatar_url = $avatar_url, updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("avatar_url", avatar_url.clone()))
-    })
-    .await?;
-    let row: Option<EntityRow> = response.take(0)?;
-    mirrored(db, Ok(row.and_then(EntityRow::into_entity))).await
+    let pg = authority::authority().await?;
+    let sql = format!(
+        "UPDATE entity SET avatar_url = $2, updated_at = now() WHERE id = $1 RETURNING {SELECT}"
+    );
+    let query = sqlx::query(AssertSqlSafe(sql)).bind(id).bind(avatar_url);
+    Box::pin(pg_write(&pg, db, query)).await
 }
 
 /// Fill a missing EIN from an approved public firm seed, preserving existing attributes.
-pub(crate) async fn seed_ein(db: &SurrealDb, id: Uuid, ein: &str) -> Result<(), EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let sql = format!(
-            "UPDATE entity SET metadata = COALESCE(metadata, '{{}}'::jsonb) \
-             || jsonb_build_object('ein', $2::text), updated_at = now() \
-             WHERE id = $1 AND metadata->'ein' IS NULL RETURNING {SELECT}"
-        );
-        let query = sqlx::query(AssertSqlSafe(sql)).bind(id).bind(ein);
-        Box::pin(pg_write(&pg, db, query)).await?;
-        return Ok(());
-    }
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE $id SET metadata.ein = $ein, updated_at = time::now() \
-             WHERE metadata.ein IS NONE RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("ein", ein.to_string()))
-    })
-    .await?;
-    let rows: Vec<EntityRow> = response.take(0)?;
-    mirrored(
-        db,
-        Ok(rows.into_iter().next().and_then(EntityRow::into_entity)),
-    )
-    .await?;
+pub(crate) async fn seed_ein(
+    db: &ApplicationStore,
+    id: Uuid,
+    ein: &str,
+) -> Result<(), EntityError> {
+    let pg = authority::authority().await?;
+    let sql = format!(
+        "UPDATE entity SET metadata = COALESCE(metadata, '{{}}'::jsonb) \
+         || jsonb_build_object('ein', $2::text), updated_at = now() \
+         WHERE id = $1 AND metadata->'ein' IS NULL RETURNING {SELECT}"
+    );
+    let query = sqlx::query(AssertSqlSafe(sql)).bind(id).bind(ein);
+    Box::pin(pg_write(&pg, db, query)).await?;
     Ok(())
 }
 
@@ -726,70 +416,18 @@ pub(crate) async fn seed_ein(db: &SurrealDb, id: Uuid, ein: &str) -> Result<(), 
 /// [`EntityError::FirmAnchorTaken`] when another row already holds
 /// `key`, and [`EntityError::Db`] for anything else.
 pub async fn set_firm_anchor_key(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     key: Option<String>,
 ) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        // The `entity_firm_anchor_key` unique index is the claim here.
-        let sql = format!(
-            "UPDATE entity SET firm_anchor_key = $2, updated_at = now() \
-             WHERE id = $1 RETURNING {SELECT}"
-        );
-        let query = sqlx::query(AssertSqlSafe(sql)).bind(id).bind(key);
-        return Box::pin(pg_write(&pg, db, query)).await;
-    }
-    let write = format!(
-        "UPDATE $id SET firm_anchor_key = $firm_anchor_key, updated_at = time::now() \
-         RETURN {SELECT}"
+    let pg = authority::authority().await?;
+    // The `entity_firm_anchor_key` unique index is the claim here.
+    let sql = format!(
+        "UPDATE entity SET firm_anchor_key = $2, updated_at = now() \
+         WHERE id = $1 RETURNING {SELECT}"
     );
-    // Surrendering the key must surrender the claim with it, or the
-    // anchor could never be minted again — the claim, not the column, is
-    // what a later mint collides with.
-    let claimed = take_claim(db, id, key.as_deref()).await?;
-    // Surrendering the key surrenders the claim with it, or the anchor
-    // could never be minted again — the claim, not the column, is what a
-    // later mint collides with. The column is cleared first, so a failure
-    // between the two leaves the anchor claimed rather than free while a
-    // row still reads as the anchor.
-    let statement = if key.is_none() {
-        format!("{write}; {RELEASE}")
-    } else {
-        write
-    };
-    let written = async {
-        let mut response = writing(|| {
-            db.query(&statement)
-                .bind(("id", record_id(TABLE, id)))
-                .bind(("firm_anchor_key", key.clone()))
-        })
-        .await?;
-        let row: Option<EntityRow> = response.take(0)?;
-        Ok::<_, EntityError>(row.and_then(EntityRow::into_entity))
-    }
-    .await;
-    if claimed && !matches!(written, Ok(Some(_))) {
-        surrender_claim(db, id).await;
-    }
-    mirrored(db, written).await
-}
-
-/// Mirror a written entity row into PostgreSQL after its Surreal write, and
-/// hand the write's own outcome back unchanged. A write that changed nothing
-/// is not mirrored. Never fails the write; see
-/// [`crate::postgres_mirror::after_write`].
-async fn mirrored(
-    db: &SurrealDb,
-    written: Result<Option<Entity>, EntityError>,
-) -> Result<Option<Entity>, EntityError> {
-    if let Ok(Some(entity)) = &written {
-        crate::postgres_mirror::after_write(
-            db,
-            crate::postgres_mirror::MirrorKey::Entity(entity.id),
-        )
-        .await;
-    }
-    written
+    let query = sqlx::query(AssertSqlSafe(sql)).bind(id).bind(key);
+    Box::pin(pg_write(&pg, db, query)).await
 }
 
 /// Whether any row already carries `key` as its firm-anchor key.
@@ -806,19 +444,8 @@ async fn mirrored(
 /// # Errors
 ///
 /// [`EntityError::Db`] if the lookup fails.
-pub async fn firm_anchor_exists(db: &SurrealDb, key: &str) -> Result<bool, EntityError> {
-    if authority::authority().await?.is_some() {
-        return Ok(firm_anchor_holder(db, key).await?.is_some());
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM {TABLE} WHERE firm_anchor_key = $key LIMIT 1"
-        ))
-        .bind(("key", key.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(!ids.is_empty())
+pub async fn firm_anchor_exists(db: &ApplicationStore, key: &str) -> Result<bool, EntityError> {
+    Ok(firm_anchor_holder(db, key).await?.is_some())
 }
 
 /// Every entity, ordered by name so a listing is stably ordered before
@@ -827,22 +454,10 @@ pub async fn firm_anchor_exists(db: &SurrealDb, key: &str) -> Result<bool, Entit
 /// # Errors
 ///
 /// [`EntityError::Db`] if the lookup fails.
-pub async fn all(db: &SurrealDb) -> Result<Vec<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(pg_rows(&pg, "FROM entity ORDER BY name, id", Vec::new())).await;
-    }
-    let response = db
-        .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY name ASC"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn all(_db: &ApplicationStore) -> Result<Vec<Entity>, EntityError> {
+    let pg = authority::authority().await?;
+    Box::pin(pg_rows(&pg, "FROM entity ORDER BY name, id", Vec::new())).await
 }
-
-/// The shared fields written by Entity creation and updates.
-const WRITE_FIELDS: &str = "name = $name, entity_type_id = $entity_type_id, \
-                            jurisdiction_id = $jurisdiction_id, \
-                            xero_id = $xero_id, \
-                            firm_anchor_key = $firm_anchor_key, updated_at = time::now()";
 
 /// Write a new entity row under a fresh v7 id.
 ///
@@ -850,12 +465,12 @@ const WRITE_FIELDS: &str = "name = $name, entity_type_id = $entity_type_id, \
 ///
 /// [`EntityError::FirmAnchorTaken`] when the row would fork the firm
 /// anchor, and [`EntityError::Db`] for anything else.
-pub async fn create(db: &SurrealDb, input: &NewEntity) -> Result<Entity, EntityError> {
+pub async fn create(db: &ApplicationStore, input: &NewEntity) -> Result<Entity, EntityError> {
     upsert_with_id(db, Uuid::now_v7(), input).await
 }
 
 pub(crate) async fn create_with_metadata(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     input: &NewEntity,
     metadata: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<Entity, EntityError> {
@@ -874,7 +489,7 @@ pub(crate) async fn create_with_metadata(
 /// [`EntityError::FirmAnchorTaken`] when the row would fork the firm
 /// anchor, and [`EntityError::Db`] for anything else.
 pub async fn upsert_with_id(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     input: &NewEntity,
 ) -> Result<Entity, EntityError> {
@@ -882,79 +497,34 @@ pub async fn upsert_with_id(
 }
 
 async fn upsert_with_metadata(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     input: &NewEntity,
     metadata: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<Entity, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let sql = format!(
-            "INSERT INTO entity (id, name, entity_type_id, jurisdiction_id, phone, url, \
-             xero_id, firm_anchor_key, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, \
-             entity_type_id = EXCLUDED.entity_type_id, jurisdiction_id = EXCLUDED.jurisdiction_id, \
-             phone = EXCLUDED.phone, url = EXCLUDED.url, xero_id = EXCLUDED.xero_id, \
-             firm_anchor_key = EXCLUDED.firm_anchor_key, \
-             metadata = COALESCE(EXCLUDED.metadata, entity.metadata), updated_at = now() \
-             RETURNING {SELECT}"
-        );
-        let query = sqlx::query(AssertSqlSafe(sql))
-            .bind(id)
-            .bind(input.name.trim())
-            .bind(input.entity_type_id)
-            .bind(input.jurisdiction_id)
-            .bind(input.phone.clone())
-            .bind(input.url.clone())
-            .bind(input.xero_id.clone())
-            .bind(input.firm_anchor_key.clone())
-            .bind(metadata.cloned().map(serde_json::Value::Object));
-        return Box::pin(pg_write(&pg, db, query))
-            .await?
-            .ok_or(EntityError::WriteReturnedNothing);
-    }
-    let claimed = take_claim(db, id, input.firm_anchor_key.as_deref()).await?;
-    let written = upsert_row(db, id, input, metadata).await;
-    if claimed && written.is_err() {
-        surrender_claim(db, id).await;
-    }
-    let entity = written?;
-    mirrored(db, Ok(Some(entity.clone()))).await?;
-    Ok(entity)
-}
-
-/// The `UPSERT` half of [`upsert_with_id`], after the claim is settled.
-async fn upsert_row(
-    db: &SurrealDb,
-    id: Uuid,
-    input: &NewEntity,
-    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
-) -> Result<Entity, EntityError> {
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPSERT $id SET {WRITE_FIELDS}, phone = $phone, url = $url, \
-             metadata = IF $metadata IS NONE THEN metadata ELSE $metadata END, \
-             inserted_at = IF inserted_at THEN inserted_at ELSE time::now() END \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("metadata", metadata.cloned().map(serde_json::Value::Object)))
-        .bind(("name", input.name.trim().to_string()))
-        .bind((
-            "entity_type_id",
-            record_id("entity_type", input.entity_type_id),
-        ))
-        .bind((
-            "jurisdiction_id",
-            record_id("jurisdiction", input.jurisdiction_id),
-        ))
-        .bind(("phone", input.phone.clone()))
-        .bind(("url", input.url.clone()))
-        .bind(("xero_id", input.xero_id.clone()))
-        .bind(("firm_anchor_key", input.firm_anchor_key.clone()))
-    })
-    .await?;
-    let row: Option<EntityRow> = response.take(0)?;
-    row.and_then(EntityRow::into_entity)
+    let pg = authority::authority().await?;
+    let sql = format!(
+        "INSERT INTO entity (id, name, entity_type_id, jurisdiction_id, phone, url, \
+         xero_id, firm_anchor_key, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, \
+         entity_type_id = EXCLUDED.entity_type_id, jurisdiction_id = EXCLUDED.jurisdiction_id, \
+         phone = EXCLUDED.phone, url = EXCLUDED.url, xero_id = EXCLUDED.xero_id, \
+         firm_anchor_key = EXCLUDED.firm_anchor_key, \
+         metadata = COALESCE(EXCLUDED.metadata, entity.metadata), updated_at = now() \
+         RETURNING {SELECT}"
+    );
+    let query = sqlx::query(AssertSqlSafe(sql))
+        .bind(id)
+        .bind(input.name.trim())
+        .bind(input.entity_type_id)
+        .bind(input.jurisdiction_id)
+        .bind(input.phone.clone())
+        .bind(input.url.clone())
+        .bind(input.xero_id.clone())
+        .bind(input.firm_anchor_key.clone())
+        .bind(metadata.cloned().map(serde_json::Value::Object));
+    Box::pin(pg_write(&pg, db, query))
+        .await?
         .ok_or(EntityError::WriteReturnedNothing)
 }
 
@@ -980,7 +550,7 @@ async fn upsert_row(
 /// [`EntityError::FirmAnchorTaken`] when the write would fork the firm
 /// anchor, and [`EntityError::Db`] for anything else.
 pub async fn update(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     input: &NewEntity,
 ) -> Result<Option<Entity>, EntityError> {
@@ -994,7 +564,7 @@ pub async fn update(
 ///
 /// Returns the same database and firm-anchor errors as [`update`].
 pub(crate) async fn update_with_metadata(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     input: &NewEntity,
     metadata: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -1020,84 +590,35 @@ pub(crate) struct ContactUpdate {
 /// Apply requested contact values while keeping omitted columns at their
 /// current values at write time.
 pub(crate) async fn update_fields(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
     input: &NewEntity,
     metadata: Option<&serde_json::Map<String, serde_json::Value>>,
     contact: ContactUpdate,
 ) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        // A Firm anchor keeps its name: the rename is refused as `None`.
-        let sql = format!(
-            "UPDATE entity SET name = $2, entity_type_id = $3, jurisdiction_id = $4, \
-             xero_id = $5, firm_anchor_key = $6, \
-             phone = CASE WHEN $7 THEN $8 ELSE phone END, \
-             url = CASE WHEN $9 THEN $10 ELSE url END, \
-             metadata = COALESCE($11, metadata), updated_at = now() \
-             WHERE id = $1 AND (name = $2 OR firm_anchor_key IS NULL) RETURNING {SELECT}"
-        );
-        let query = sqlx::query(AssertSqlSafe(sql))
-            .bind(id)
-            .bind(input.name.trim())
-            .bind(input.entity_type_id)
-            .bind(input.jurisdiction_id)
-            .bind(input.xero_id.clone())
-            .bind(input.firm_anchor_key.clone())
-            .bind(contact.phone)
-            .bind(input.phone.clone())
-            .bind(contact.url)
-            .bind(input.url.clone())
-            .bind(metadata.cloned().map(serde_json::Value::Object));
-        return Box::pin(pg_write(&pg, db, query)).await;
-    }
-    let claimed = take_claim(db, id, input.firm_anchor_key.as_deref()).await?;
-    let written = update_row(db, id, input, metadata, contact).await;
-    // `Ok(None)` is the refused rename, not a write — a claim taken for it
-    // has to go back, or one refused edit would strand the anchor.
-    if claimed && !matches!(written, Ok(Some(_))) {
-        surrender_claim(db, id).await;
-    }
-    mirrored(db, written).await
-}
-
-/// The `UPDATE` half of [`update`], after the claim is settled.
-async fn update_row(
-    db: &SurrealDb,
-    id: Uuid,
-    input: &NewEntity,
-    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
-    contact: ContactUpdate,
-) -> Result<Option<Entity>, EntityError> {
-    let mut response = writing(|| {
-        db.query(format!(
-            "UPDATE $id SET {WRITE_FIELDS}, \
-             phone = IF $set_phone THEN $phone ELSE phone END, \
-             url = IF $set_url THEN $url ELSE url END, \
-             metadata = IF $metadata IS NONE THEN metadata ELSE $metadata END \
-             WHERE name = $name OR firm_anchor_key IS NONE \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("metadata", metadata.cloned().map(serde_json::Value::Object)))
-        .bind(("name", input.name.trim().to_string()))
-        .bind((
-            "entity_type_id",
-            record_id("entity_type", input.entity_type_id),
-        ))
-        .bind((
-            "jurisdiction_id",
-            record_id("jurisdiction", input.jurisdiction_id),
-        ))
-        .bind(("set_phone", contact.phone))
-        .bind(("set_url", contact.url))
-        .bind(("phone", input.phone.clone()))
-        .bind(("url", input.url.clone()))
-        .bind(("xero_id", input.xero_id.clone()))
-        .bind(("firm_anchor_key", input.firm_anchor_key.clone()))
-    })
-    .await?;
-    let rows: Vec<EntityRow> = response.take(0)?;
-    Ok(rows.into_iter().next().and_then(EntityRow::into_entity))
+    let pg = authority::authority().await?;
+    // A Firm anchor keeps its name: the rename is refused as `None`.
+    let sql = format!(
+        "UPDATE entity SET name = $2, entity_type_id = $3, jurisdiction_id = $4, \
+         xero_id = $5, firm_anchor_key = $6, \
+         phone = CASE WHEN $7 THEN $8 ELSE phone END, \
+         url = CASE WHEN $9 THEN $10 ELSE url END, \
+         metadata = COALESCE($11, metadata), updated_at = now() \
+         WHERE id = $1 AND (name = $2 OR firm_anchor_key IS NULL) RETURNING {SELECT}"
+    );
+    let query = sqlx::query(AssertSqlSafe(sql))
+        .bind(id)
+        .bind(input.name.trim())
+        .bind(input.entity_type_id)
+        .bind(input.jurisdiction_id)
+        .bind(input.xero_id.clone())
+        .bind(input.firm_anchor_key.clone())
+        .bind(contact.phone)
+        .bind(input.phone.clone())
+        .bind(contact.url)
+        .bind(input.url.clone())
+        .bind(metadata.cloned().map(serde_json::Value::Object));
+    Box::pin(pg_write(&pg, db, query)).await
 }
 
 /// Delete the entity carrying `id` **unless it is the firm anchor**,
@@ -1124,26 +645,13 @@ async fn update_row(
 ///
 /// [`EntityError::Db`] if the delete fails.
 pub async fn delete_unless_firm_anchor(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<Entity>, EntityError> {
-    if let Some(pg) = authority::authority().await? {
-        let sql = format!(
-            "DELETE FROM entity WHERE id = $1 AND firm_anchor_key IS NULL RETURNING {SELECT}"
-        );
-        return Box::pin(pg_write(&pg, db, sqlx::query(AssertSqlSafe(sql)).bind(id))).await;
-    }
-    let mut response = writing(|| {
-        db.query("DELETE $id WHERE firm_anchor_key IS NONE RETURN BEFORE")
-            .bind(("id", record_id(TABLE, id)))
-    })
-    .await?;
-    let rows: Vec<EntityRow> = response.take(0)?;
-    mirrored(
-        db,
-        Ok(rows.into_iter().next().and_then(EntityRow::into_entity)),
-    )
-    .await
+    let pg = authority::authority().await?;
+    let sql =
+        format!("DELETE FROM entity WHERE id = $1 AND firm_anchor_key IS NULL RETURNING {SELECT}");
+    Box::pin(pg_write(&pg, db, sqlx::query(AssertSqlSafe(sql)).bind(id))).await
 }
 
 /// The tables that reference `id`, with how many rows each holds. Empty
@@ -1157,8 +665,9 @@ pub async fn delete_unless_firm_anchor(
 ///
 /// [`EntityError::Authority`] for PostgreSQL admission or query failure;
 /// [`EntityError::Db`] for a Source query failure.
-pub async fn dependents(db: &SurrealDb, id: Uuid) -> Result<Vec<Dependent>, EntityError> {
-    let counts = if let Some(pg) = authority::authority().await? {
+pub async fn dependents(_db: &ApplicationStore, id: Uuid) -> Result<Vec<Dependent>, EntityError> {
+    let counts = {
+        let pg = authority::authority().await?;
         // Match the canonical typed graph endpoints, including their table
         // discriminator: a Person with the same UUID is not this Entity.
         let (projects, addresses, roles, relationships, references): (i64, i64, i64, i64, i64) =
@@ -1177,26 +686,6 @@ pub async fn dependents(db: &SurrealDb, id: Uuid) -> Result<Vec<Dependent>, Enti
             .await
             .map_err(pg_error)?;
         [projects, addresses, roles, relationships, references]
-    } else {
-        let mut response = db
-            .query(
-                "SELECT VALUE count() FROM project WHERE entity_id = $id GROUP ALL;
-                 SELECT VALUE count() FROM address WHERE entity_id = $id GROUP ALL;
-                 SELECT VALUE count() FROM entity_role WHERE out = $id GROUP ALL;
-                 SELECT VALUE count() FROM relationship WHERE in = $id OR out = $id GROUP ALL;
-                 SELECT VALUE count() FROM project_reference WHERE out = $id GROUP ALL;",
-            )
-            .bind(("id", record_id(TABLE, id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check)?;
-
-        // `GROUP ALL` on an empty Source table yields no row.
-        let mut counts = [0; DEPENDENT_TABLES.len()];
-        for (index, count) in counts.iter_mut().enumerate() {
-            let counted: Option<i64> = response.take(index)?;
-            *count = counted.unwrap_or(0);
-        }
-        counts
     };
     Ok(DEPENDENT_TABLES
         .iter()
@@ -1254,10 +743,10 @@ mod tests {
         firm_anchor_exists, seed_ein, set_avatar_url, update, update_with_metadata, EntityError,
         NewEntity,
     };
-    use crate::surreal::SurrealDb;
+    use crate::application_store::ApplicationStore;
     use uuid::Uuid;
 
-    async fn input(db: &SurrealDb, name: &str) -> NewEntity {
+    async fn input(db: &ApplicationStore, name: &str) -> NewEntity {
         let (entity_type_id, jurisdiction_id) = crate::test_support::seed_entity_parents(db).await;
         NewEntity {
             name: name.into(),
@@ -1270,7 +759,7 @@ mod tests {
         }
     }
 
-    async fn anchor(db: &SurrealDb, name: &str) -> NewEntity {
+    async fn anchor(db: &ApplicationStore, name: &str) -> NewEntity {
         NewEntity {
             firm_anchor_key: Some(name.to_lowercase()),
             ..input(db, name).await
@@ -1280,7 +769,7 @@ mod tests {
     #[tokio::test]
     async fn a_created_entity_reads_back_by_id_and_name() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let created = create(&db, &input(&db, "  Beta LLC  ").await)
                 .await
                 .unwrap();
@@ -1302,7 +791,7 @@ mod tests {
     #[tokio::test]
     async fn set_avatar_url_writes_and_clears_leaving_every_other_field_alone() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let created = create(&db, &input(&db, "Delta LLC").await).await.unwrap();
             assert_eq!(created.avatar_url, None);
 
@@ -1326,7 +815,7 @@ mod tests {
     #[tokio::test]
     async fn seeded_ein_fills_missing_values_and_preserves_other_metadata_and_existing_ein() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let row = create(&db, &input(&db, "Example LLC").await).await.unwrap();
             seed_ein(&db, row.id, "12-3456789").await.unwrap();
             assert_eq!(
@@ -1360,7 +849,7 @@ mod tests {
     #[tokio::test]
     async fn ordinary_updates_preserve_entity_metadata() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let created = create(&db, &input(&db, "Example LLC").await).await.unwrap();
             assert_eq!(created.metadata, None);
             let metadata = serde_json::json!({"ein": "12-3456789", "nested": {"label": "sample"}});
@@ -1387,7 +876,7 @@ mod tests {
     #[tokio::test]
     async fn the_reference_links_round_trip_as_the_ids_the_caller_supplied() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let wanted = input(&db, "Gamma Trust").await;
             let created = create(&db, &wanted).await.unwrap();
 
@@ -1405,7 +894,7 @@ mod tests {
     #[tokio::test]
     async fn a_second_row_under_the_firm_anchor_key_is_refused() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             create(&db, &anchor(&db, "Neon Law").await).await.unwrap();
 
             let forked = create(&db, &anchor(&db, "Neon Law").await).await;
@@ -1424,7 +913,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_creates_of_the_anchor_yield_exactly_one_row() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let racer = anchor(&db, "Neon Law").await;
             let other = anchor(&db, "Neon Law").await;
             let (first, second) = tokio::join!(create(&db, &racer), create(&db, &other));
@@ -1443,7 +932,7 @@ mod tests {
     #[tokio::test]
     async fn ordinary_namesakes_still_coexist() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             // Only the anchor takes the key; two ordinary namesakes coexist
             // because PostgreSQL's partial unique index excludes NULL keys.
             create(&db, &input(&db, "Beta LLC").await).await.unwrap();
@@ -1456,7 +945,7 @@ mod tests {
     #[tokio::test]
     async fn update_replaces_every_field_and_reports_a_missing_row() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let row = create(&db, &input(&db, "Beta LLC").await).await.unwrap();
             assert_eq!(row.xero_id, None, "a fresh entity has no Xero contact yet");
             let mut edit = input(&db, "Beta Holdings LLC").await;
@@ -1480,7 +969,7 @@ mod tests {
     #[tokio::test]
     async fn delete_returns_the_removed_row_once_and_then_nothing() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let row = create(&db, &input(&db, "Beta LLC").await).await.unwrap();
 
             assert_eq!(
@@ -1503,7 +992,7 @@ mod tests {
     #[tokio::test]
     async fn a_row_that_became_the_anchor_after_the_read_is_not_deleted() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let ordinary = create(&db, &input(&db, "Acme LLC").await).await.unwrap();
 
             // What a caller would have read: an ordinary, deletable row.
@@ -1541,7 +1030,7 @@ mod tests {
     #[tokio::test]
     async fn find_by_ids_reads_many_and_ignores_ids_with_no_row() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let one = create(&db, &input(&db, "One LLC").await).await.unwrap();
             let two = create(&db, &input(&db, "Two LLC").await).await.unwrap();
 
@@ -1561,7 +1050,7 @@ mod tests {
     #[tokio::test]
     async fn dependents_counts_the_rows_a_delete_would_strand() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let entity = create(&db, &input(&db, "Referenced LLC").await)
                 .await
                 .unwrap();
@@ -1602,7 +1091,7 @@ mod tests {
     #[tokio::test]
     async fn dependents_sees_a_graph_edge_as_well_as_a_matter() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let entity = create(&db, &input(&db, "Edged LLC").await).await.unwrap();
             let person = crate::persons::create(
                 &db,
@@ -1633,7 +1122,7 @@ mod tests {
     #[tokio::test]
     async fn listing_orders_by_name() {
         crate::test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             for name in ["Zeta LLC", "Alpha LLC", "Mu LLC"] {
                 create(&db, &input(&db, name).await).await.unwrap();
             }
@@ -1648,7 +1137,3 @@ mod tests {
         .await;
     }
 }
-
-#[cfg(test)]
-#[path = "entities/surreal_compatibility_tests.rs"]
-mod surreal_compatibility_tests;

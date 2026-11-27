@@ -233,8 +233,8 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     >()
     .await?;
     let person_id = crate::admin_listing::injected_person_id().await;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let projects = firm_overview_projects(&surreal, person_id, store_role(role)).await?;
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let projects = firm_overview_projects(&application_store, person_id, store_role(role)).await?;
 
     let status = match query.status.as_deref() {
         Some("closed") => "closed",
@@ -250,7 +250,7 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         .map_err(crate::lawyer_project_detail::server_error)?;
     let (verified, pending_esign_result, filed, agreement_rows) = tokio::join!(
         store::onboarding::verified_providers(&pg, &project_ids),
-        store::projects::onboarding_esign_pending(&surreal, &projects),
+        store::projects::onboarding_esign_pending(&application_store, &projects),
         store::onboarding::filed_signing_methods(&pg, &project_ids),
         store::onboarding::agreements(&pg, &project_ids),
     );
@@ -302,7 +302,7 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         .map(|project| project.id)
         .collect();
     let (current_state_result, deadline_result, next_due_by_project) = tokio::join!(
-        current_states_for_projects(&surreal, page_of_projects),
+        current_states_for_projects(&application_store, page_of_projects),
         deadlines::load(&projects, today, requested_deadline_page),
         store::project_deadlines::next_upcoming_date_by_project(&project_page_ids, today),
     );
@@ -368,9 +368,9 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         .collect();
     retainers.sort_by(|left, right| left.code.cmp(&right.code));
     let (calendar_events, conflict_findings, pipeline) = tokio::join!(
-        calendar_events_for_projects(&surreal, &projects),
-        conflict_findings_for_projects(&surreal, &projects),
-        crate::projected_cash::derive::load_pipeline(&surreal, person_id, &projects),
+        calendar_events_for_projects(&application_store, &projects),
+        conflict_findings_for_projects(&application_store, &projects),
+        crate::projected_cash::derive::load_pipeline(&application_store, person_id, &projects),
     );
     let calendar_events = calendar_events?;
     let conflict_findings = conflict_findings?;
@@ -418,26 +418,27 @@ fn store_role(role: ViewerRole) -> store::persons::Role {
 
 #[cfg(feature = "server")]
 async fn firm_overview_projects(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Option<uuid::Uuid>,
     store_role: store::persons::Role,
 ) -> Result<Vec<store::projects::Project>, ServerFnError> {
     // A failed access query is not an empty workload. Commit a real 500 rather
     // than rendering an honest-looking zero-count dashboard over a database
     // that never answered — the handler drew the same line.
-    let mut projects = store::access::visible_projects_as_lawyer(surreal, person_id, store_role)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "dashboard: visible_projects_as_lawyer failed");
-            dioxus_fullstack_core::FullstackContext::commit_http_status(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            );
-            ServerFnError::new(e.clone())
-        })?;
+    let mut projects =
+        store::access::visible_projects_as_lawyer(application_store, person_id, store_role)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "dashboard: visible_projects_as_lawyer failed");
+                dioxus_fullstack_core::FullstackContext::commit_http_status(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    None,
+                );
+                ServerFnError::new(e.clone())
+            })?;
 
     let host_brand = crate::app_chrome::request_brand().await;
-    let firm_id = store::firms::firm_id_for_brand_key(surreal, host_brand.as_str())
+    let firm_id = store::firms::firm_id_for_brand_key(application_store, host_brand.as_str())
         .await
         .map_err(|error| {
             dioxus_fullstack_core::FullstackContext::commit_http_status(
@@ -447,7 +448,7 @@ async fn firm_overview_projects(
             ServerFnError::new(error.to_string())
         })?;
     let firm_brands = if let Some(id) = firm_id {
-        store::firms::brand_keys_for_firm(surreal, id)
+        store::firms::brand_keys_for_firm(application_store, id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
     } else {
@@ -466,11 +467,11 @@ async fn firm_overview_projects(
 /// honest when the store actually answered.
 #[cfg(feature = "server")]
 async fn conflict_findings_for_projects(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     projects: &[store::projects::Project],
 ) -> Result<Vec<ConflictFindingView>, ServerFnError> {
     let project_ids: Vec<uuid::Uuid> = projects.iter().map(|project| project.id).collect();
-    let findings = store::conflicts::findings_for_matters(surreal, &project_ids)
+    let findings = store::conflicts::findings_for_matters(application_store, &project_ids)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "dashboard: findings_for_matters failed");
@@ -572,11 +573,11 @@ fn esign_pill(provider: Option<store::signatures::SignatureProvider>, state: &st
 /// a 500, the same line every other dashboard lookup on this page draws.
 #[cfg(feature = "server")]
 async fn current_states_for_projects(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     projects: &[&store::projects::Project],
 ) -> Result<std::collections::HashMap<uuid::Uuid, String>, ServerFnError> {
     let project_ids: Vec<uuid::Uuid> = projects.iter().map(|project| project.id).collect();
-    let notations = store::notations::list_by_projects(surreal, &project_ids)
+    let notations = store::notations::list_by_projects(application_store, &project_ids)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "dashboard: list_by_projects failed");
@@ -608,7 +609,7 @@ async fn current_states_for_projects(
 /// when the store answered.
 #[cfg(feature = "server")]
 async fn calendar_events_for_projects(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     projects: &[store::projects::Project],
 ) -> Result<Vec<crate::project_calendar::CalendarEvent>, ServerFnError> {
     let project_ids: Vec<uuid::Uuid> = projects
@@ -616,18 +617,19 @@ async fn calendar_events_for_projects(
         .filter(|project| project.status == "open")
         .map(|project| project.id)
         .collect();
-    let appearances = store::cases::current_appearances_for_projects(surreal, &project_ids)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "dashboard: current_appearances_for_projects failed");
-            dioxus_fullstack_core::FullstackContext::commit_http_status(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            );
-            ServerFnError::new(e.to_string())
-        })?;
+    let appearances =
+        store::cases::current_appearances_for_projects(application_store, &project_ids)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "dashboard: current_appearances_for_projects failed");
+                dioxus_fullstack_core::FullstackContext::commit_http_status(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    None,
+                );
+                ServerFnError::new(e.to_string())
+            })?;
     let entity_ids: Vec<uuid::Uuid> = projects.iter().map(|project| project.entity_id).collect();
-    let entities = store::entities::find_by_ids(surreal, &entity_ids)
+    let entities = store::entities::find_by_ids(application_store, &entity_ids)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "dashboard: entities for calendar failed");

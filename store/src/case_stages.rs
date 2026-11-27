@@ -467,8 +467,8 @@ mod tests {
     // They share the canonical-schema fixture used across the store crate.
     mod database {
         use super::super::{create_definition, current_stage, history, set_stage, CaseStageError};
+        use crate::postgres::fixtures::{connect, fresh_schema};
         use crate::postgres::PostgresDb;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
         use sqlx::Row;
         use uuid::Uuid;
 

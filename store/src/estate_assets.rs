@@ -9,12 +9,11 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::matter_record_links::{one_of, optional_text, require_project, required_text};
 use crate::postgres::matter::{self, MatterAuthorityError};
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 pub use model::estate_assets::{FUNDING_STATES, PASSES_BY};
 
 const TABLE: &str = "estate_asset";
@@ -44,48 +43,10 @@ pub struct EstateAssetFields {
     pub note: Option<String>,
 }
 
-#[derive(SurrealValue)]
-struct EstateAssetRow {
-    id: surrealdb::types::RecordId,
-    project_id: surrealdb::types::RecordId,
-    category: String,
-    description: String,
-    passes_by: String,
-    funding_state: String,
-    note: Option<String>,
-    inserted_at: String,
-    updated_at: String,
-}
-
 // Deletion mirroring needs identity, not the current schedule's complete shape.
-#[derive(SurrealValue)]
-struct DeletedEstateAssetRow {
-    id: surrealdb::types::RecordId,
-}
-
-impl EstateAssetRow {
-    fn into_asset(self) -> Option<EstateAsset> {
-        Some(EstateAsset {
-            id: record_uuid(&self.id)?,
-            project_id: record_uuid(&self.project_id)?,
-            category: self.category,
-            description: self.description,
-            passes_by: self.passes_by,
-            funding_state: self.funding_state,
-            note: self.note,
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
-const SELECT: &str = "id, project_id, category, description, passes_by, funding_state, note, \
-     inserted_at, updated_at";
 
 #[derive(Debug, thiserror::Error)]
 pub enum EstateAssetError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Postgres(MatterAuthorityError),
     #[error("{0}")]
@@ -125,56 +86,26 @@ fn normalize(fields: &EstateAssetFields) -> Result<EstateAssetFields, EstateAsse
 }
 
 async fn persist(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     id: Uuid,
     project_id: Uuid,
     fields: EstateAssetFields,
     inserted_at: &str,
 ) -> Result<EstateAsset, EstateAssetError> {
     let now = chrono::Utc::now().to_rfc3339();
-    if let Some(pg) = matter::authority().await? {
-        let row = EstateAsset {
-            id,
-            project_id,
-            category: fields.category,
-            description: fields.description,
-            passes_by: fields.passes_by,
-            funding_state: fields.funding_state,
-            note: fields.note,
-            inserted_at: inserted_at.to_owned(),
-            updated_at: now,
-        };
-        return Ok(matter::upsert(&pg, TABLE, &row).await?);
-    }
-    let response = surreal
-        .query(format!(
-            "UPSERT $id SET project_id = $project_id, category = $category, \
-             description = $description, passes_by = $passes_by, \
-             funding_state = $funding_state, note = $note, inserted_at = $inserted_at, \
-             updated_at = $now RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("project_id", record_id("project", project_id)))
-        .bind(("category", fields.category))
-        .bind(("description", fields.description))
-        .bind(("passes_by", fields.passes_by))
-        .bind(("funding_state", fields.funding_state))
-        .bind(("note", fields.note))
-        .bind(("inserted_at", inserted_at.to_string()))
-        .bind(("now", now))
-        .await
-        .and_then(surrealdb::IndexedResults::check);
-    let mut response = match response {
-        Ok(response) => response,
-        Err(error) if retry::unique_violation(&error) == Some(LINE_INDEX) => {
-            return Err(EstateAssetError::Invalid(DUPLICATE_LINE.into()));
-        }
-        Err(error) => return Err(error.into()),
+    let pg = matter::authority().await?;
+    let row = EstateAsset {
+        id,
+        project_id,
+        category: fields.category,
+        description: fields.description,
+        passes_by: fields.passes_by,
+        funding_state: fields.funding_state,
+        note: fields.note,
+        inserted_at: inserted_at.to_owned(),
+        updated_at: now,
     };
-    crate::postgres_mirror::records::after_write(surreal, TABLE, id).await;
-    let row: Option<EstateAssetRow> = response.take(0)?;
-    row.and_then(EstateAssetRow::into_asset)
-        .ok_or(EstateAssetError::WriteReturnedNothing)
+    Ok(matter::upsert(&pg, TABLE, &row).await?)
 }
 
 /// A Project's asset schedule, by category then description.
@@ -183,26 +114,12 @@ async fn persist(
 ///
 /// [`EstateAssetError::Db`] if the read fails.
 pub async fn list(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<EstateAsset>, EstateAssetError> {
-    if let Some(pg) = matter::authority().await? {
-        let filter = json!({"project_id": project_id});
-        return Ok(matter::select(&pg, TABLE, filter, &["category", "description"]).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project_id \
-             ORDER BY category, description"
-        ))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<EstateAssetRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(EstateAssetRow::into_asset)
-        .collect())
+    let pg = matter::authority().await?;
+    let filter = json!({"project_id": project_id});
+    Ok(matter::select(&pg, TABLE, filter, &["category", "description"]).await?)
 }
 
 /// One Estate Asset on a Project, or `None`.
@@ -211,25 +128,13 @@ pub async fn list(
 ///
 /// [`EstateAssetError::Db`] if the read fails.
 pub async fn find(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     id: Uuid,
 ) -> Result<Option<EstateAsset>, EstateAssetError> {
-    if let Some(pg) = matter::authority().await? {
-        let filter = json!({"id": id, "project_id": project_id});
-        return Ok(matter::find(&pg, TABLE, filter).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} \
-             WHERE id = $id AND project_id = $project_id LIMIT 1"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<EstateAssetRow> = response.take(0)?;
-    Ok(row.and_then(EstateAssetRow::into_asset))
+    let pg = matter::authority().await?;
+    let filter = json!({"id": id, "project_id": project_id});
+    Ok(matter::find(&pg, TABLE, filter).await?)
 }
 
 /// The row holding one (category, description) line, or `None`. Both are
@@ -239,31 +144,18 @@ pub async fn find(
 ///
 /// [`EstateAssetError::Db`] if the read fails.
 pub async fn find_by_line(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     category: &str,
     description: &str,
 ) -> Result<Option<EstateAsset>, EstateAssetError> {
-    if let Some(pg) = matter::authority().await? {
-        let filter = json!({
-            "project_id": project_id,
-            "category": category.trim(),
-            "description": description.trim(),
-        });
-        return Ok(matter::find(&pg, TABLE, filter).await?);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY {TABLE} WHERE project_id = $project_id \
-             AND category = $category AND description = $description LIMIT 1"
-        ))
-        .bind(("project_id", record_id("project", project_id)))
-        .bind(("category", category.trim().to_string()))
-        .bind(("description", description.trim().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<EstateAssetRow> = response.take(0)?;
-    Ok(row.and_then(EstateAssetRow::into_asset))
+    let pg = matter::authority().await?;
+    let filter = json!({
+        "project_id": project_id,
+        "category": category.trim(),
+        "description": description.trim(),
+    });
+    Ok(matter::find(&pg, TABLE, filter).await?)
 }
 
 /// Store a new Estate Asset and return it.
@@ -274,16 +166,23 @@ pub async fn find_by_line(
 /// `passes_by` or `funding_state` outside its list, a missing Project, or a
 /// line already on the schedule; [`EstateAssetError::Db`] if the write fails.
 pub async fn insert(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     fields: &EstateAssetFields,
 ) -> Result<EstateAsset, EstateAssetError> {
     let fields = normalize(fields)?;
-    require_project(surreal, project_id)
+    require_project(application_store, project_id)
         .await
         .map_err(EstateAssetError::Invalid)?;
     let inserted_at = chrono::Utc::now().to_rfc3339();
-    persist(surreal, Uuid::now_v7(), project_id, fields, &inserted_at).await
+    persist(
+        application_store,
+        Uuid::now_v7(),
+        project_id,
+        fields,
+        &inserted_at,
+    )
+    .await
 }
 
 /// Replace an Estate Asset's fields and return the stored row.
@@ -293,17 +192,17 @@ pub async fn insert(
 /// [`EstateAssetError::NotFound`] when the row is not on this Project;
 /// otherwise as [`insert`].
 pub async fn update(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     id: Uuid,
     fields: &EstateAssetFields,
 ) -> Result<EstateAsset, EstateAssetError> {
-    let existing = find(surreal, project_id, id)
+    let existing = find(application_store, project_id, id)
         .await?
         .ok_or(EstateAssetError::NotFound)?;
     let fields = normalize(fields)?;
     persist(
-        surreal,
+        application_store,
         existing.id,
         project_id,
         fields,
@@ -319,23 +218,15 @@ pub async fn update(
 /// [`EstateAssetError::NotFound`] when the row is not on this Project;
 /// [`EstateAssetError::Db`] if the delete fails.
 pub async fn delete(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     id: Uuid,
 ) -> Result<(), EstateAssetError> {
-    find(surreal, project_id, id)
+    find(application_store, project_id, id)
         .await?
         .ok_or(EstateAssetError::NotFound)?;
-    if let Some(pg) = matter::authority().await? {
-        matter::delete(&pg, TABLE, json!({"id": id})).await?;
-        return Ok(());
-    }
-    surreal
-        .query("DELETE $id")
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    crate::postgres_mirror::records::after_write(surreal, TABLE, id).await;
+    let pg = matter::authority().await?;
+    matter::delete(&pg, TABLE, json!({"id": id})).await?;
     Ok(())
 }
 
@@ -346,29 +237,11 @@ pub async fn delete(
 ///
 /// [`EstateAssetError::Db`] if the delete fails.
 pub async fn delete_for_project(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<(), EstateAssetError> {
-    if let Some(pg) = matter::authority().await? {
-        matter::delete(&pg, TABLE, json!({"project_id": project_id})).await?;
-        return Ok(());
-    }
-    let mut response = surreal
-        .query(format!(
-            "DELETE {TABLE} WHERE project_id = $project_id RETURN BEFORE"
-        ))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let deleted: Vec<DeletedEstateAssetRow> = response.take(0)?;
-    crate::postgres_mirror::after_writes(
-        surreal,
-        deleted
-            .into_iter()
-            .filter_map(|row| record_uuid(&row.id))
-            .map(|id| crate::postgres_mirror::MirrorKey::Record { table: TABLE, id }),
-    )
-    .await;
+    let pg = matter::authority().await?;
+    matter::delete(&pg, TABLE, json!({"project_id": project_id})).await?;
     Ok(())
 }
 

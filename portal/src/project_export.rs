@@ -43,19 +43,20 @@ pub async fn download_all(
     if !store::projects::is_valid_code(&project_code) {
         return not_found();
     }
-    let project_id = match store::projects::find_by_code(&state.surreal, &project_code).await {
-        Ok(Some(project)) => project.id,
-        Ok(None) => return not_found(),
-        Err(error) => {
-            tracing::error!(error = %error, "documents.zip: Project lookup failed");
-            return internal_error();
-        }
-    };
+    let project_id =
+        match store::projects::find_by_code(&state.application_store, &project_code).await {
+            Ok(Some(project)) => project.id,
+            Ok(None) => return not_found(),
+            Err(error) => {
+                tracing::error!(error = %error, "documents.zip: Project lookup failed");
+                return internal_error();
+            }
+        };
     // Gate on the caller's matter participation and use the same resolved lens
     // for the bytes that ship. A mixed-role person must not widen this archive
     // merely because their system tier is firm-side.
     let lens = match store::access::matter_lens(
-        &state.surreal,
+        &state.application_store,
         session.person_id,
         session.role,
         project_id,
@@ -69,7 +70,7 @@ pub async fn download_all(
             return internal_error();
         }
     };
-    let proj = match store::projects::find_by_id(&state.surreal, project_id).await {
+    let proj = match store::projects::find_by_id(&state.application_store, project_id).await {
         Ok(Some(project)) => project,
         Ok(None) => return not_found(),
         Err(error) => {
@@ -89,7 +90,7 @@ pub async fn download_all(
     // portal matter-detail listing did if left ungated (internal work
     // product, `unclassified` lawyer/email uploads). The lawyer lens is
     // unfiltered.
-    let assets = match store::assets::for_project(&state.surreal, project_id).await {
+    let assets = match store::assets::for_project(&state.application_store, project_id).await {
         // `for_project` reads newest-first; the archive lists oldest-first,
         // which is insertion order reversed.
         Ok(rows) => {

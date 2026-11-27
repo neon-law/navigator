@@ -215,7 +215,8 @@ async fn submit(
         };
         store::leads::record_intake(&new_lead, &consent_event, &answers).await
     } else {
-        store::leads::record_consent_event(&state.surreal, &new_lead, &consent_event).await
+        store::leads::record_consent_event(&state.application_store, &new_lead, &consent_event)
+            .await
     };
     match saved {
         Ok(lead) => {
@@ -440,7 +441,7 @@ mod tests {
     }
 
     async fn test_app(
-        db: store::surreal::SurrealDb,
+        db: store::application_store::ApplicationStore,
         rate_limit: RateLimit,
     ) -> (Router, SessionStore) {
         test_app_with_state(crate::test_support::app_state(db).await, rate_limit)
@@ -519,7 +520,7 @@ mod tests {
     #[tokio::test]
     async fn iep_intake_validates_before_saving_and_offers_signup_after_commit() {
         store::test_support::with_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             store::test_support::seed_firm_with_new_brand(&db, "iep-defenders").await;
             let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
             let token = "synthetic-intake-token";
@@ -556,7 +557,7 @@ mod tests {
     #[tokio::test]
     async fn accepts_a_lead_without_creating_a_person() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
             let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
             let token = "lead-csrf";
@@ -583,7 +584,7 @@ mod tests {
     #[tokio::test]
     async fn same_day_legal_records_contact_before_redirecting_to_sign_in() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
             let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
             let token = "same-day-csrf";
@@ -611,7 +612,7 @@ mod tests {
     #[tokio::test]
     async fn a_configured_hcaptcha_stores_only_leads_whose_token_it_redeems() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
             let siteverify = MockServer::start().await;
             Mock::given(method("POST"))
@@ -673,7 +674,7 @@ mod tests {
     #[tokio::test]
     async fn an_accepted_lead_is_emailed_its_confirmation_link() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
             let email = std::sync::Arc::new(crate::email::CapturingEmail::new());
             let mut state = crate::test_support::app_state(db.clone()).await;
@@ -709,7 +710,7 @@ mod tests {
     #[tokio::test]
     async fn records_sms_consent_only_when_a_phone_is_present() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
             let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
             let token = "sms-csrf";
@@ -767,7 +768,7 @@ mod tests {
     #[tokio::test]
     async fn records_callback_consent_only_when_a_phone_is_present() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             let token = "call-csrf";
             for (email, phone, expected) in [
                 ("call@example.com", "+1 555 010 0100", true),
@@ -807,7 +808,7 @@ mod tests {
     #[tokio::test]
     async fn derives_sms_evidence_server_side_and_ignores_tampered_fields() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
         let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
         let token = "tampered-sms-csrf";
@@ -841,7 +842,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_invalid_submissions_with_the_same_redirect_and_no_row() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
             for (email, phone, honeypot, token_ok) in [
                 ("no-at.example.com", "", "", true),
                 ("too-long@example.com", "!", "", true),
@@ -895,7 +896,7 @@ mod tests {
     #[tokio::test]
     async fn rate_limits_a_burst() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
             let (app, sessions) = test_app(db, RateLimit::new(1, Duration::from_mins(1))).await;
             let token = "rate-csrf";
@@ -924,7 +925,7 @@ mod tests {
     #[tokio::test]
     async fn audit_contains_the_lead_id_and_source_but_not_the_email() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
             crate::test_tracing::ensure_callsite_interest();
             let output = Arc::new(Mutex::new(Vec::new()));
@@ -975,7 +976,7 @@ mod tests {
     }
 
     async fn conversion_test_app(
-        db: store::surreal::SurrealDb,
+        db: store::application_store::ApplicationStore,
         origin: String,
     ) -> (Router, SessionStore) {
         let mut state = crate::test_support::app_state(db).await;
@@ -986,7 +987,7 @@ mod tests {
     #[tokio::test]
     async fn a_successful_submission_fires_exactly_one_conversion_with_no_personal_data() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -1027,7 +1028,7 @@ mod tests {
     #[tokio::test]
     async fn rejected_submissions_fire_no_conversion() {
         store::test_support::with_required_postgres(async {
-            let db = store::surreal::SurrealDb::uninitialized();
+            let db = store::application_store::ApplicationStore::uninitialized();
 
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -1077,7 +1078,7 @@ mod tests {
 
         // A handle with no engine behind it: every store call errors,
         // exercising the same `Err(error)` branch a real outage would.
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let (app, sessions) = conversion_test_app(db, server.uri()).await;
         let token = "storage-failure-csrf";
         let response = app

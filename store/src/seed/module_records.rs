@@ -14,9 +14,9 @@ use super::{
     parse_seed, OperatorEntityNameRef, OperatorPersonRef, OperatorProjectRef, ReconcileAction,
     ReconcileActor, ReconcileRecord, ReconcileReport, ScopeViolation, SeedModel,
 };
+use crate::application_store::ApplicationStore;
 use crate::project_references::Party;
 use crate::projects::Project;
-use crate::surreal::SurrealDb;
 use model::seed::module_records::{
     party_key, CapTableHoldingRec, EstateAssetRec, FiduciaryRoleRec,
     CAP_TABLE_HOLDING_LOOKUP_FIELDS, ESTATE_ASSET_LOOKUP_FIELDS, FIDUCIARY_ROLE_LOOKUP_FIELDS,
@@ -25,7 +25,7 @@ use model::seed::module_records::{
 /// The Project a record writes to: the session's own under scope, or the
 /// one the record names.
 async fn resolve_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     model: SeedModel,
     scope: Option<&Project>,
     named: Option<&OperatorProjectRef>,
@@ -35,7 +35,7 @@ async fn resolve_project(
             Err(anyhow::Error::new(ScopeViolation::CrossProject))
         }
         (Some(scope), _) => Ok(scope.clone()),
-        (None, Some(named)) => crate::projects::find_by_code(surreal, named.code.trim())
+        (None, Some(named)) => crate::projects::find_by_code(application_store, named.code.trim())
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -53,14 +53,14 @@ async fn resolve_project(
 
 /// The existing Person or Entity a record names.
 async fn resolve_party(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     model: SeedModel,
     person: Option<&OperatorPersonRef>,
     entity: Option<&OperatorEntityNameRef>,
 ) -> anyhow::Result<Party> {
     party_key(model, person, entity)?;
     if let Some(person) = person {
-        let found = crate::persons::find_by_email_ci(surreal, person.email.trim())
+        let found = crate::persons::find_by_email_ci(application_store, person.email.trim())
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -72,7 +72,7 @@ async fn resolve_party(
         return Ok(Party::person(found.id));
     }
     let entity = entity.expect("party_key admits exactly one of person or entity");
-    let found = crate::entities::find_by_name(surreal, entity.name.trim())
+    let found = crate::entities::find_by_name(application_store, entity.name.trim())
         .await?
         .ok_or_else(|| {
             anyhow::anyhow!(
@@ -133,7 +133,7 @@ fn differing<const N: usize>(pairs: [(&str, bool); N]) -> Vec<String> {
 }
 
 pub(super) async fn reconcile_fiduciary_roles(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     overwrite: bool,
     actor: &ReconcileActor<'_>,
@@ -145,13 +145,24 @@ pub(super) async fn reconcile_fiduciary_roles(
         ..ReconcileReport::default()
     };
     for rec in parse_seed::<FiduciaryRoleRec>(yaml, model, FIDUCIARY_ROLE_LOOKUP_FIELDS)? {
-        let project = resolve_project(surreal, model, scope, rec.project.as_ref()).await?;
-        let party = resolve_party(surreal, model, rec.person.as_ref(), rec.entity.as_ref()).await?;
+        let project =
+            resolve_project(application_store, model, scope, rec.project.as_ref()).await?;
+        let party = resolve_party(
+            application_store,
+            model,
+            rec.person.as_ref(),
+            rec.entity.as_ref(),
+        )
+        .await?;
         let role = rec.role.trim().to_string();
         let key = format!("{} / {role} / {}", project.code, rec.successor_order);
-        let existing =
-            crate::fiduciary_roles::find_by_slot(surreal, project.id, &role, rec.successor_order)
-                .await?;
+        let existing = crate::fiduciary_roles::find_by_slot(
+            application_store,
+            project.id,
+            &role,
+            rec.successor_order,
+        )
+        .await?;
         let fields = crate::fiduciary_roles::FiduciaryRoleFields {
             role,
             fiduciary: party,
@@ -168,10 +179,11 @@ pub(super) async fn reconcile_fiduciary_roles(
         if !actor.dry_run {
             match (&plan, &existing) {
                 (Plan::New, _) => {
-                    crate::fiduciary_roles::insert(surreal, project.id, &fields).await?;
+                    crate::fiduciary_roles::insert(application_store, project.id, &fields).await?;
                 }
                 (Plan::Changed(_), Some(row)) => {
-                    crate::fiduciary_roles::update(surreal, project.id, row.id, &fields).await?;
+                    crate::fiduciary_roles::update(application_store, project.id, row.id, &fields)
+                        .await?;
                 }
                 _ => {}
             }
@@ -182,7 +194,7 @@ pub(super) async fn reconcile_fiduciary_roles(
 }
 
 pub(super) async fn reconcile_estate_assets(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     overwrite: bool,
     actor: &ReconcileActor<'_>,
@@ -194,7 +206,8 @@ pub(super) async fn reconcile_estate_assets(
         ..ReconcileReport::default()
     };
     for rec in parse_seed::<EstateAssetRec>(yaml, model, ESTATE_ASSET_LOOKUP_FIELDS)? {
-        let project = resolve_project(surreal, model, scope, rec.project.as_ref()).await?;
+        let project =
+            resolve_project(application_store, model, scope, rec.project.as_ref()).await?;
         let fields = crate::estate_assets::EstateAssetFields {
             category: rec.category.trim().to_string(),
             description: rec.description.trim().to_string(),
@@ -207,7 +220,7 @@ pub(super) async fn reconcile_estate_assets(
             project.code, fields.category, fields.description
         );
         let existing = crate::estate_assets::find_by_line(
-            surreal,
+            application_store,
             project.id,
             &fields.category,
             &fields.description,
@@ -227,10 +240,11 @@ pub(super) async fn reconcile_estate_assets(
         if !actor.dry_run {
             match (&plan, &existing) {
                 (Plan::New, _) => {
-                    crate::estate_assets::insert(surreal, project.id, &fields).await?;
+                    crate::estate_assets::insert(application_store, project.id, &fields).await?;
                 }
                 (Plan::Changed(_), Some(row)) => {
-                    crate::estate_assets::update(surreal, project.id, row.id, &fields).await?;
+                    crate::estate_assets::update(application_store, project.id, row.id, &fields)
+                        .await?;
                 }
                 _ => {}
             }
@@ -241,7 +255,7 @@ pub(super) async fn reconcile_estate_assets(
 }
 
 pub(super) async fn reconcile_cap_table_holdings(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     yaml: &str,
     overwrite: bool,
     actor: &ReconcileActor<'_>,
@@ -253,10 +267,16 @@ pub(super) async fn reconcile_cap_table_holdings(
         ..ReconcileReport::default()
     };
     for rec in parse_seed::<CapTableHoldingRec>(yaml, model, CAP_TABLE_HOLDING_LOOKUP_FIELDS)? {
-        let project = resolve_project(surreal, model, scope, rec.project.as_ref()).await?;
+        let project =
+            resolve_project(application_store, model, scope, rec.project.as_ref()).await?;
         let holder_key = party_key(model, rec.person.as_ref(), rec.entity.as_ref())?;
-        let holder =
-            resolve_party(surreal, model, rec.person.as_ref(), rec.entity.as_ref()).await?;
+        let holder = resolve_party(
+            application_store,
+            model,
+            rec.person.as_ref(),
+            rec.entity.as_ref(),
+        )
+        .await?;
         let fields = crate::cap_table_holdings::CapTableHoldingFields {
             holder,
             share_class: rec.share_class.trim().to_string(),
@@ -265,7 +285,7 @@ pub(super) async fn reconcile_cap_table_holdings(
         };
         let key = format!("{} / {holder_key} / {}", project.code, fields.share_class);
         let existing = crate::cap_table_holdings::find_by_line(
-            surreal,
+            application_store,
             project.id,
             holder,
             &fields.share_class,
@@ -284,10 +304,17 @@ pub(super) async fn reconcile_cap_table_holdings(
         if !actor.dry_run {
             match (&plan, &existing) {
                 (Plan::New, _) => {
-                    crate::cap_table_holdings::insert(surreal, project.id, &fields).await?;
+                    crate::cap_table_holdings::insert(application_store, project.id, &fields)
+                        .await?;
                 }
                 (Plan::Changed(_), Some(row)) => {
-                    crate::cap_table_holdings::update(surreal, project.id, row.id, &fields).await?;
+                    crate::cap_table_holdings::update(
+                        application_store,
+                        project.id,
+                        row.id,
+                        &fields,
+                    )
+                    .await?;
                 }
                 _ => {}
             }
@@ -319,15 +346,15 @@ mod tests {
         }
     }
 
-    async fn project(surreal: &SurrealDb, code: &str) -> Project {
-        crate::test_support::seed_compiled_brands_postgres(surreal).await;
+    async fn project(application_store: &ApplicationStore, code: &str) -> Project {
+        crate::test_support::seed_compiled_brands_postgres(application_store).await;
         crate::projects::create(
-            surreal,
+            application_store,
             &crate::projects::NewProject {
                 code: code.into(),
                 name: "Sample matter".into(),
                 status: "open".into(),
-                entity_id: seed_entity(surreal).await,
+                entity_id: seed_entity(application_store).await,
                 ..Default::default()
             },
         )
@@ -335,9 +362,9 @@ mod tests {
         .unwrap()
     }
 
-    async fn person(surreal: &SurrealDb, email: &str) -> uuid::Uuid {
+    async fn person(application_store: &ApplicationStore, email: &str) -> uuid::Uuid {
         crate::persons::create(
-            surreal,
+            application_store,
             &NewPerson::with_role("Sample Person", email, Role::Client),
         )
         .await
@@ -345,11 +372,11 @@ mod tests {
         .id
     }
 
-    async fn named_entity(surreal: &SurrealDb, name: &str) -> uuid::Uuid {
+    async fn named_entity(application_store: &ApplicationStore, name: &str) -> uuid::Uuid {
         let (entity_type_id, jurisdiction_id) =
-            crate::test_support::seed_entity_parents(surreal).await;
+            crate::test_support::seed_entity_parents(application_store).await;
         crate::entities::create(
-            surreal,
+            application_store,
             &crate::entities::NewEntity {
                 name: name.into(),
                 entity_type_id,
@@ -366,13 +393,21 @@ mod tests {
     }
 
     async fn import(
-        surreal: &SurrealDb,
+        application_store: &ApplicationStore,
         model: SeedModel,
         yaml: &str,
         overwrite: bool,
         scope: Option<&str>,
     ) -> anyhow::Result<ReconcileReport> {
-        reconcile_yaml(surreal, model, yaml, "Firm", overwrite, &actor(scope)).await
+        reconcile_yaml(
+            application_store,
+            model,
+            yaml,
+            "Firm",
+            overwrite,
+            &actor(scope),
+        )
+        .await
     }
 
     fn counts(report: &ReconcileReport) -> (usize, usize, usize) {
@@ -398,13 +433,13 @@ records:
     #[tokio::test]
     async fn fiduciary_roles_import_then_reimport_unchanged() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let estate = project(&surreal, "sample-estate").await;
-            let grantor = person(&surreal, "grantor@example.com").await;
-            let trust_company = named_entity(&surreal, "Sample Trust Company").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let estate = project(&application_store, "sample-estate").await;
+            let grantor = person(&application_store, "grantor@example.com").await;
+            let trust_company = named_entity(&application_store, "Sample Trust Company").await;
 
             let first = import(
-                &surreal,
+                &application_store,
                 SeedModel::FiduciaryRole,
                 FIDUCIARY_ROLES,
                 false,
@@ -413,7 +448,7 @@ records:
             .await
             .unwrap();
             assert_eq!(counts(&first), (2, 0, 0));
-            let roster = crate::fiduciary_roles::list(&surreal, estate.id)
+            let roster = crate::fiduciary_roles::list(&application_store, estate.id)
                 .await
                 .unwrap();
             assert_eq!(roster.len(), 2);
@@ -421,7 +456,7 @@ records:
             assert_eq!(roster[1].fiduciary, Party::entity(trust_company));
 
             let again = import(
-                &surreal,
+                &application_store,
                 SeedModel::FiduciaryRole,
                 FIDUCIARY_ROLES,
                 false,
@@ -431,7 +466,7 @@ records:
             .unwrap();
             assert_eq!(counts(&again), (0, 0, 2));
             assert_eq!(
-                crate::fiduciary_roles::list(&surreal, estate.id)
+                crate::fiduciary_roles::list(&application_store, estate.id)
                     .await
                     .unwrap()
                     .len(),
@@ -444,10 +479,10 @@ records:
     #[tokio::test]
     async fn a_fiduciary_role_moves_to_a_new_person_only_with_overwrite() {
         crate::test_support::with_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
-        let estate = project(&surreal, "sample-estate").await;
-        person(&surreal, "first@example.com").await;
-        let second = person(&surreal, "second@example.com").await;
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
+        let estate = project(&application_store, "sample-estate").await;
+        person(&application_store, "first@example.com").await;
+        let second = person(&application_store, "second@example.com").await;
         let seed = |email: &str| {
             format!(
                 "lookup_fields: [project_id, role, successor_order]\nrecords:\n  - project: {{ code: sample-estate }}\n    role: executor\n    successor_order: 1\n    person: {{ email: {email} }}\n"
@@ -455,11 +490,11 @@ records:
         };
         let first = seed("first@example.com");
         let second_yaml = seed("second@example.com");
-        import(&surreal, SeedModel::FiduciaryRole, &first, false, None)
+        import(&application_store, SeedModel::FiduciaryRole, &first, false, None)
             .await
             .unwrap();
         let kept = import(
-            &surreal,
+            &application_store,
             SeedModel::FiduciaryRole,
             &second_yaml,
             false,
@@ -468,7 +503,7 @@ records:
         .await
         .unwrap();
         assert_eq!(counts(&kept), (0, 0, 1));
-        let moved = import(&surreal, SeedModel::FiduciaryRole, &second_yaml, true, None)
+        let moved = import(&application_store, SeedModel::FiduciaryRole, &second_yaml, true, None)
             .await
             .unwrap();
         assert_eq!(counts(&moved), (0, 1, 0));
@@ -476,7 +511,7 @@ records:
             moved.records[0].changed_fields,
             vec!["fiduciary".to_string()]
         );
-        let roster = crate::fiduciary_roles::list(&surreal, estate.id)
+        let roster = crate::fiduciary_roles::list(&application_store, estate.id)
             .await
             .unwrap();
         assert_eq!(roster.len(), 1);
@@ -505,11 +540,11 @@ records:
     #[tokio::test]
     async fn estate_assets_import_under_scope_then_reimport_unchanged() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let estate = project(&surreal, "sample-estate").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let estate = project(&application_store, "sample-estate").await;
             let scope = Some("sample-estate");
             let first = import(
-                &surreal,
+                &application_store,
                 SeedModel::EstateAsset,
                 ESTATE_ASSETS,
                 false,
@@ -518,14 +553,14 @@ records:
             .await
             .unwrap();
             assert_eq!(counts(&first), (2, 0, 0));
-            let schedule = crate::estate_assets::list(&surreal, estate.id)
+            let schedule = crate::estate_assets::list(&application_store, estate.id)
                 .await
                 .unwrap();
             assert_eq!(schedule.len(), 2);
             assert_eq!(schedule[1].note.as_deref(), Some("Deed drafted"));
 
             let again = import(
-                &surreal,
+                &application_store,
                 SeedModel::EstateAsset,
                 ESTATE_ASSETS,
                 false,
@@ -537,11 +572,17 @@ records:
 
             let funded =
                 ESTATE_ASSETS.replace("funding_state: in_progress", "funding_state: funded");
-            let changed = import(&surreal, SeedModel::EstateAsset, &funded, true, scope)
-                .await
-                .unwrap();
+            let changed = import(
+                &application_store,
+                SeedModel::EstateAsset,
+                &funded,
+                true,
+                scope,
+            )
+            .await
+            .unwrap();
             assert_eq!(counts(&changed), (0, 1, 1));
-            let schedule = crate::estate_assets::list(&surreal, estate.id)
+            let schedule = crate::estate_assets::list(&application_store, estate.id)
                 .await
                 .unwrap();
             assert_eq!(schedule[1].funding_state, "funded");
@@ -552,12 +593,12 @@ records:
     #[tokio::test]
     async fn a_scoped_record_naming_another_project_is_refused() {
         crate::test_support::with_postgres(async {
-        let surreal = crate::surreal::SurrealDb::uninitialized();
-        project(&surreal, "sample-estate").await;
-        let other = project(&surreal, "sample-transactional").await;
+        let application_store = crate::application_store::ApplicationStore::uninitialized();
+        project(&application_store, "sample-estate").await;
+        let other = project(&application_store, "sample-transactional").await;
         let yaml = "lookup_fields: [project_id, category, description]\nrecords:\n  - project: { code: sample-transactional }\n    category: account\n    description: Checking\n    passes_by: will\n    funding_state: not_funded\n";
         let error = import(
-            &surreal,
+            &application_store,
             SeedModel::EstateAsset,
             yaml,
             false,
@@ -569,7 +610,7 @@ records:
             error.downcast_ref::<ScopeViolation>(),
             Some(ScopeViolation::CrossProject)
         ));
-        assert!(crate::estate_assets::list(&surreal, other.id)
+        assert!(crate::estate_assets::list(&application_store, other.id)
             .await
             .unwrap()
             .is_empty());
@@ -597,25 +638,37 @@ records:
     #[tokio::test]
     async fn cap_table_holdings_import_then_reimport_unchanged() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let company = project(&surreal, "sample-transactional").await;
-            let founder = person(&surreal, "founder@example.com").await;
-            person(&surreal, "employee@example.com").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let company = project(&application_store, "sample-transactional").await;
+            let founder = person(&application_store, "founder@example.com").await;
+            person(&application_store, "employee@example.com").await;
 
-            let first = import(&surreal, SeedModel::CapTableHolding, CAP_TABLE, false, None)
-                .await
-                .unwrap();
+            let first = import(
+                &application_store,
+                SeedModel::CapTableHolding,
+                CAP_TABLE,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(counts(&first), (2, 0, 0));
-            let table = crate::cap_table_holdings::list(&surreal, company.id)
+            let table = crate::cap_table_holdings::list(&application_store, company.id)
                 .await
                 .unwrap();
             assert_eq!(table.len(), 2);
             assert_eq!(table[0].holder, Party::person(founder));
             assert_eq!(table[0].shares, 6_000_000);
 
-            let again = import(&surreal, SeedModel::CapTableHolding, CAP_TABLE, false, None)
-                .await
-                .unwrap();
+            let again = import(
+                &application_store,
+                SeedModel::CapTableHolding,
+                CAP_TABLE,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(counts(&again), (0, 0, 2));
         })
         .await;
@@ -624,12 +677,12 @@ records:
     #[tokio::test]
     async fn a_dry_run_plans_without_writing() {
         crate::test_support::with_postgres(async {
-            let surreal = crate::surreal::SurrealDb::uninitialized();
-            let company = project(&surreal, "sample-transactional").await;
-            person(&surreal, "founder@example.com").await;
-            person(&surreal, "employee@example.com").await;
+            let application_store = crate::application_store::ApplicationStore::uninitialized();
+            let company = project(&application_store, "sample-transactional").await;
+            person(&application_store, "founder@example.com").await;
+            person(&application_store, "employee@example.com").await;
             let report = reconcile_yaml(
-                &surreal,
+                &application_store,
                 SeedModel::CapTableHolding,
                 CAP_TABLE,
                 "Firm",
@@ -642,10 +695,12 @@ records:
             .await
             .unwrap();
             assert_eq!(counts(&report), (2, 0, 0));
-            assert!(crate::cap_table_holdings::list(&surreal, company.id)
-                .await
-                .unwrap()
-                .is_empty());
+            assert!(
+                crate::cap_table_holdings::list(&application_store, company.id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
         })
         .await;
     }

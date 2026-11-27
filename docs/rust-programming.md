@@ -19,10 +19,7 @@ Navigator is application code. The public Rust guides come first; advice for pub
 - `unsafe_code = "forbid"`; clippy pedantic runs with `-D warnings`. When a lint can enforce a rule, enable the lint
   instead of adding prose.
 - The stack is Tokio, Axum, and PostgreSQL through SQLx. New models use relational tables and ordered migrations.
-  Prefer PostgreSQL writes through supported domain accessors; [storage models and writes](storage-models.md) records
-  authority selection and cutover limits. SurrealDB compatibility paths remain for domains awaiting cutover; see
-  [SurrealDB compatibility](surreal-compatibility.md) and the [PostgreSQL tooling guide](postgres-tooling.md).
-  `workflows-service`, `archives`, and `billing-workflows` use the Restate SDK directly; `workflows` does not.
+  Write through [domain accessors](storage-models.md). See [PostgreSQL tooling](postgres-tooling.md).
 
 ## Error handling
 
@@ -56,8 +53,7 @@ Navigator is application code. The public Rust guides come first; advice for pub
 - A poisoned `std::sync::Mutex` is a bug; `.lock().expect("…")` propagates it. Recover with `PoisonError::into_inner`
   only where every write leaves the data valid, and say why in a comment.
 
-Restate handlers are stricter: no native concurrency for journaled work. See
-[`agent-workflows.md`](agent-workflows.md#restate-handler-authoring) and [`durable-workflows.md`](durable-workflows.md).
+DBOS workflow code follows the [durability rules](dbos-durability.md).
 
 ## Axum
 

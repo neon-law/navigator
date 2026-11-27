@@ -300,7 +300,7 @@ pub trait SignatureProvider: Send + Sync {
     /// Local providers already operate inside an isolated test environment.
     async fn for_project(
         &self,
-        _db: &store::surreal::SurrealDb,
+        _db: &store::application_store::ApplicationStore,
         _project_id: Uuid,
     ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
         Ok(None)
@@ -309,7 +309,7 @@ pub trait SignatureProvider: Send + Sync {
     /// Resolve a configured Firm account for account-level reconciliation.
     async fn for_firm(
         &self,
-        _db: &store::surreal::SurrealDb,
+        _db: &store::application_store::ApplicationStore,
         _firm: Uuid,
     ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
         Ok(None)
@@ -318,7 +318,7 @@ pub trait SignatureProvider: Send + Sync {
     /// Verify the raw Connect delivery and return the bound account.
     async fn verify_firm_connect(
         &self,
-        _db: &store::surreal::SurrealDb,
+        _db: &store::application_store::ApplicationStore,
         _firm: Uuid,
         _signature: &str,
         _body: &[u8],

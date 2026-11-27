@@ -6,13 +6,11 @@
 //! when the firm signs its closing letter. Archival (the Drive cold
 //! store) is a separate downstream step and is left untouched here.
 
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::persons::Role;
 use crate::postgres::PostgresDb;
-use crate::postgres_mirror::MirrorKey;
-use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 pub use model::projects::is_valid_repository_url;
 pub use model::projects::{
     drive_folder_id_from_input, is_valid_calendar_id, is_valid_code, is_valid_drive_folder_id,
@@ -183,141 +181,14 @@ pub struct Project {
     pub updated_at: String,
 }
 
-#[derive(surrealdb::types::SurrealValue)]
-struct ProjectRow {
-    id: surrealdb::types::RecordId,
-    code: String,
-    name: String,
-    status: String,
-    /// Required (ENG-587): the schema's own boot-time backfill guarantees
-    /// every row has a value by the time this reads it — see
-    /// `store/src/schema/navigator.surql`'s `project.brand` comment.
-    brand: String,
-    entity_id: surrealdb::types::RecordId,
-    firm_id: Option<surrealdb::types::RecordId>,
-    jurisdiction_id: Option<surrealdb::types::RecordId>,
-    description: Option<String>,
-    drive_folder_id: Option<String>,
-    repository_url: Option<String>,
-    git_initialized_at: Option<String>,
-    forge_provisioned_at: Option<String>,
-    closed_at: Option<String>,
-    closure_reason: Option<String>,
-    internal_slack_channel_url: Option<String>,
-    external_slack_channel_url: Option<String>,
-    internal_slack_channel_id: Option<String>,
-    private_notion_page_url: Option<String>,
-    shared_notion_page_url: Option<String>,
-    calendar_id: Option<String>,
-    calendar_timezone: Option<String>,
-    booking_url: Option<String>,
-    /// The onboarding-jurisdiction value a Clause input may bind directly.
-    /// Optional because rows written before the field existed keep no value;
-    /// reads collapse the absence to `None`.
-    onboarding_jurisdiction: Option<String>,
-    /// The matter's client DRI Person. A `record<person>` link in the
-    /// SurrealDB source; [`Project`] carries the bare `Uuid`.
-    client_dri_person_id: Option<surrealdb::types::RecordId>,
-    /// Plan-panel economics (ENG-1269). Bare `uuid` for the plan pointer;
-    /// everything else plain text. Optional for the same reason as
-    /// `onboarding_jurisdiction`.
-    legal_plan_id: Option<Uuid>,
-    plan_member_id: Option<String>,
-    plan_case_number: Option<String>,
-    benefit_code: Option<String>,
-    plan_matter_type: Option<String>,
-    plan_state: Option<String>,
-    plan_assigned_on: Option<String>,
-    plan_accepted_on: Option<String>,
-    plan_closed_on: Option<String>,
-    kit_version: Option<String>,
-    inserted_at: String,
-    updated_at: String,
-}
-
-impl ProjectRow {
-    fn into_project(self) -> Option<Project> {
-        Some(Project {
-            id: record_uuid(&self.id)?,
-            code: self.code,
-            name: self.name,
-            status: self.status,
-            brand: self.brand,
-            entity_id: record_uuid(&self.entity_id)?,
-            firm_id: match self.firm_id.as_ref() {
-                None => None,
-                Some(id) => Some(record_uuid(id)?),
-            },
-            jurisdiction_id: match self.jurisdiction_id.as_ref() {
-                None => None,
-                Some(id) => Some(record_uuid(id)?),
-            },
-            onboarding_jurisdiction: self.onboarding_jurisdiction,
-            client_dri_person_id: match self.client_dri_person_id.as_ref() {
-                None => None,
-                Some(id) => Some(record_uuid(id)?),
-            },
-            description: self.description,
-            drive_folder_id: self.drive_folder_id,
-            repository_url: self.repository_url,
-            git_initialized_at: self.git_initialized_at,
-            forge_provisioned_at: self.forge_provisioned_at,
-            closed_at: self.closed_at,
-            closure_reason: self.closure_reason,
-            internal_slack_channel_url: self.internal_slack_channel_url,
-            external_slack_channel_url: self.external_slack_channel_url,
-            internal_slack_channel_id: self.internal_slack_channel_id,
-            private_notion_page_url: self.private_notion_page_url,
-            shared_notion_page_url: self.shared_notion_page_url,
-            calendar_id: self.calendar_id,
-            calendar_timezone: self.calendar_timezone,
-            booking_url: self.booking_url,
-            legal_plan_id: self.legal_plan_id,
-            plan_member_id: self.plan_member_id,
-            plan_case_number: self.plan_case_number,
-            benefit_code: self.benefit_code,
-            plan_matter_type: self.plan_matter_type,
-            plan_state: self.plan_state,
-            plan_assigned_on: self.plan_assigned_on,
-            plan_accepted_on: self.plan_accepted_on,
-            plan_closed_on: self.plan_closed_on,
-            kit_version: self.kit_version,
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
-impl ProjectRow {}
-
 mod timezone;
 pub use timezone::calendar_timezone;
-
-pub(crate) const PROJECT_TABLE: &str = "project";
-/// The entities cluster this table links into (ENG-120).
-const ENTITY_TABLE: &str = "entity";
-const PERSON_PROJECT_ROLE_TABLE: &str = "person_project_role";
-const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id, \
-                              jurisdiction_id, onboarding_jurisdiction, \
-                              client_dri_person_id, description, \
-                              drive_folder_id, repository_url, git_initialized_at, \
-                              forge_provisioned_at, closed_at, closure_reason, \
-                              internal_slack_channel_url, external_slack_channel_url, \
-                              internal_slack_channel_id, \
-                              private_notion_page_url, shared_notion_page_url, \
-                              calendar_id, calendar_timezone, booking_url, \
-                              legal_plan_id, plan_member_id, plan_case_number, \
-                              benefit_code, plan_matter_type, plan_state, plan_assigned_on, \
-                              plan_accepted_on, plan_closed_on, kit_version, \
-                              inserted_at, updated_at";
 
 /// Errors from the Project and participation seams.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectStoreError {
     #[error("PostgreSQL Project lifecycle state is unavailable")]
     LifecycleUnavailable,
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Person(#[from] crate::persons::PersonError),
     #[error(transparent)]
@@ -374,9 +245,6 @@ pub enum ProjectStoreError {
     #[error(transparent)]
     Brand(Box<crate::brands::BrandError>),
     /// Under tenancy authority, PostgreSQL did not accept a Project write that
-    /// committed through the SurrealDB transaction path.
-    #[error("PostgreSQL did not accept the Project write: {0}")]
-    Authority(#[from] crate::postgres_mirror::MirrorError),
     #[error("PostgreSQL Project operation failed: {0}")]
     Postgres(String),
 }
@@ -427,50 +295,14 @@ impl From<ProjectStoreError> for ProjectCommandError {
 }
 
 /// The admitted PostgreSQL handle, or `None` only inside explicit Source import reads.
-async fn authority() -> Result<Option<PostgresDb>, ProjectStoreError> {
-    if crate::postgres::tenancy::enabled() {
-        Ok(Some(Box::pin(crate::postgres::tenancy::db()).await?))
-    } else {
-        Ok(None)
-    }
+async fn authority() -> Result<PostgresDb, ProjectStoreError> {
+    Ok(Box::pin(crate::postgres::tenancy::db()).await?)
 }
 
 impl From<crate::external_identities::ExternalIdentityError> for ProjectStoreError {
     fn from(error: crate::external_identities::ExternalIdentityError) -> Self {
         Self::ExternalIdentity(Box::new(error))
     }
-}
-
-fn classify_project_write(error: surrealdb::Error) -> ProjectStoreError {
-    match crate::surreal::retry::unique_violation(&error) {
-        Some("project_code") => ProjectStoreError::CodeTaken,
-        Some("person_project_role_pair") => ProjectStoreError::DuplicateParticipation,
-        _ => {
-            let message = error.to_string();
-            if message.contains("field `code`") && message.contains("readonly") {
-                ProjectStoreError::CodeImmutable
-            } else {
-                ProjectStoreError::Db(error)
-            }
-        }
-    }
-}
-
-/// Run a write under the shared retry policy
-/// ([`crate::surreal::retry`]), mapping whatever finally comes back to
-/// this module's error.
-///
-/// Only the mapping lives here. How long a lost race is re-run, and
-/// which engine conditions count as a lost race, are one policy for the
-/// whole crate.
-async fn writing_project<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, ProjectStoreError>
-where
-    F: FnMut() -> Q,
-    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
-{
-    retry::writing(attempt)
-        .await
-        .map_err(classify_project_write)
 }
 
 /// Inputs for creating a Project row. Command callers validate the
@@ -529,39 +361,6 @@ pub struct PersonProjectRole {
     pub updated_at: String,
 }
 
-#[derive(SurrealValue)]
-struct PersonProjectRoleRow {
-    id: surrealdb::types::RecordId,
-    person_id: surrealdb::types::RecordId,
-    project_id: surrealdb::types::RecordId,
-    participation: String,
-    is_lawyer_dri: bool,
-    is_client_dri: bool,
-    inserted_at: String,
-    updated_at: String,
-}
-
-impl PersonProjectRoleRow {
-    fn into_role(self) -> Option<PersonProjectRole> {
-        Some(PersonProjectRole {
-            id: record_uuid(&self.id)?,
-            person_id: record_uuid(&self.person_id)?,
-            project_id: record_uuid(&self.project_id)?,
-            participation: self.participation,
-            is_lawyer_dri: self.is_lawyer_dri,
-            is_client_dri: self.is_client_dri,
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
-impl PersonProjectRoleRow {}
-
-const PERSON_PROJECT_ROLE_SELECT: &str =
-    "id, person_id, project_id, participation, is_lawyer_dri, \
-                                           is_client_dri, inserted_at, updated_at";
-
 /// The participation kinds on the client side of a matter. `counterparty`
 /// remains listed because a legacy row must keep reading client-side: promoting
 /// an adverse party to the firm lens is the one direction that must never
@@ -583,50 +382,29 @@ pub fn participation_for_role(role: Role) -> &'static str {
 
 /// All participation rows for a matter, in stable insertion order.
 pub async fn participations_for_project(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<PersonProjectRole>, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        return Box::pin(crate::postgres::participation::for_project_on(
-            &pg, project_id,
-        ))
-        .await
-        .map_err(|error| pg_participation_error(error, project_id, Uuid::nil()));
-    }
-    participations_for_project_in_surreal(surreal, project_id).await
-}
-
-async fn participations_for_project_in_surreal(
-    surreal: &SurrealDb,
-    project_id: Uuid,
-) -> Result<Vec<PersonProjectRole>, ProjectStoreError> {
-    let mut response = surreal
-        .query(format!(
-            "SELECT {PERSON_PROJECT_ROLE_SELECT} FROM {PERSON_PROJECT_ROLE_TABLE} \
-             WHERE project_id = $project_id ORDER BY inserted_at, id"
-        ))
-        .bind(("project_id", record_id(PROJECT_TABLE, project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<PersonProjectRoleRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(PersonProjectRoleRow::into_role)
-        .collect())
+    let pg = authority().await?;
+    Box::pin(crate::postgres::participation::for_project_on(
+        &pg, project_id,
+    ))
+    .await
+    .map_err(|error| pg_participation_error(error, project_id, Uuid::nil()))
 }
 
 /// People currently designated lawyer DRI on a matter, in insertion order.
 pub async fn lawyer_dri_people(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<crate::persons::Person>, ProjectStoreError> {
     let mut people = Vec::new();
-    for row in participations_for_project(surreal, project_id)
+    for row in participations_for_project(application_store, project_id)
         .await?
         .into_iter()
         .filter(|row| row.is_lawyer_dri)
     {
-        if let Some(person) = crate::persons::find_by_id(surreal, row.person_id).await? {
+        if let Some(person) = crate::persons::find_by_id(application_store, row.person_id).await? {
             people.push(person);
         }
     }
@@ -635,104 +413,29 @@ pub async fn lawyer_dri_people(
 
 /// Every participation row, ordered for the lawyer directory.
 pub async fn all_participations(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
 ) -> Result<Vec<PersonProjectRole>, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        return Box::pin(crate::postgres::participation::all_on(&pg))
-            .await
-            .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()));
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {PERSON_PROJECT_ROLE_SELECT} FROM {PERSON_PROJECT_ROLE_TABLE} \
-             ORDER BY project_id, person_id"
-        ))
+    let pg = authority().await?;
+    Box::pin(crate::postgres::participation::all_on(&pg))
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<PersonProjectRoleRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(PersonProjectRoleRow::into_role)
-        .collect())
+        .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()))
 }
 
 /// One participation row by its id.
 pub async fn participation_by_id(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<PersonProjectRole>, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        return Box::pin(crate::postgres::participation::by_id_on(&pg, id))
-            .await
-            .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()));
-    }
-    participation_by_id_in_surreal(surreal, id).await
-}
-
-/// The SurrealDB copy of one participation row: the mirror's source.
-pub(crate) async fn participation_by_id_in_surreal(
-    surreal: &SurrealDb,
-    id: Uuid,
-) -> Result<Option<PersonProjectRole>, ProjectStoreError> {
-    let mut response = surreal
-        .query(format!("SELECT {PERSON_PROJECT_ROLE_SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(PERSON_PROJECT_ROLE_TABLE, id)))
+    let pg = authority().await?;
+    Box::pin(crate::postgres::participation::by_id_on(&pg, id))
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<PersonProjectRoleRow> = response.take(0)?;
-    Ok(row.and_then(PersonProjectRoleRow::into_role))
-}
-
-/// Complete explicit compatibility writes through the shared projection boundary.
-async fn publish(
-    surreal: &SurrealDb,
-    keys: impl IntoIterator<Item = MirrorKey>,
-) -> Result<Option<PostgresDb>, ProjectStoreError> {
-    let Some(pg) = authority().await? else {
-        crate::postgres_mirror::after_writes(surreal, keys).await;
-        return Ok(None);
-    };
-    for key in keys {
-        Box::pin(crate::postgres_mirror::mirror(surreal, &pg, &key)).await?;
-    }
-    Ok(Some(pg))
-}
-
-/// Publish participation rows a whole-graph SurrealDB rewrite moved or
-/// deleted ([`crate::person_merge`]).
-pub(crate) async fn publish_participations(
-    surreal: &SurrealDb,
-    ids: impl IntoIterator<Item = Uuid>,
-) -> Result<(), ProjectStoreError> {
-    publish(
-        surreal,
-        ids.into_iter().map(MirrorKey::ProjectParticipation),
-    )
-    .await?;
-    Ok(())
-}
-
-/// Publish one Project write and return the authoritative row: PostgreSQL's
-/// under tenancy authority, otherwise the SurrealDB row written.
-async fn mirrored(
-    surreal: &SurrealDb,
-    project: Option<Project>,
-) -> Result<Option<Project>, ProjectStoreError> {
-    let Some(project) = project else {
-        return Ok(None);
-    };
-    match Box::pin(publish(surreal, [MirrorKey::Project(project.id)])).await? {
-        Some(pg) => Box::pin(crate::postgres::projects::find_by_id_on(&pg, project.id))
-            .await
-            .map_err(ProjectStoreError::from),
-        None => Ok(Some(project)),
-    }
+        .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()))
 }
 
 /// Write `columns` to the PostgreSQL Project first, then copy the committed row
 /// into the SurrealDB compatibility copy. `None` when no Project has that id.
 async fn patch_in_postgres(
-    _surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     pg: &PostgresDb,
     project_id: Uuid,
     columns: &[crate::postgres::projects::Column<'_>],
@@ -752,208 +455,94 @@ async fn patch_in_postgres(
     Ok(Some(project))
 }
 
-/// [`patch_in_postgres`] under tenancy authority; `None` leaves the caller on
-/// its SurrealDB write.
+/// Patch the Project on the admitted PostgreSQL application pool.
 async fn patch_under_authority(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     columns: &[crate::postgres::projects::Column<'_>],
-) -> Result<Option<Option<Project>>, ProjectCommandError> {
-    let Some(pg) = authority().await? else {
-        return Ok(None);
-    };
-    Ok(Some(
-        patch_in_postgres(surreal, &pg, project_id, columns, None).await?,
-    ))
-}
-
-/// Publish a Project and every participation on it, parent first.
-async fn mirror_project_with_participations(
-    surreal: &SurrealDb,
-    project_id: Uuid,
-) -> Result<(), ProjectStoreError> {
-    if !crate::postgres_mirror::enabled() && authority().await?.is_none() {
-        return Ok(());
-    }
-    let participations = participations_for_project_in_surreal(surreal, project_id).await?;
-    publish(
-        surreal,
-        std::iter::once(MirrorKey::Project(project_id)).chain(
-            participations
-                .into_iter()
-                .map(|role| MirrorKey::ProjectParticipation(role.id)),
-        ),
-    )
-    .await?;
-    Ok(())
+) -> Result<Option<Project>, ProjectCommandError> {
+    let pg = authority().await?;
+    patch_in_postgres(application_store, &pg, project_id, columns, None)
+        .await
+        .map_err(Into::into)
 }
 
 /// Add one person to a Project, validating both record links at the command
 /// seam. The unique pair index is the concurrency backstop.
 pub async fn add_participation(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     person_id: Uuid,
-    participation: &str,
+    _participation: &str,
 ) -> Result<PersonProjectRole, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        // PostgreSQL derives the label from the Person's tier
-        // ([`participation_for_role`]) inside the insert's transaction.
-        let role = Box::pin(crate::postgres::participation::add_on(
-            &pg, project_id, person_id,
-        ))
-        .await
-        .map_err(|error| pg_participation_error(error, project_id, person_id))?;
+    let pg = authority().await?;
+    // PostgreSQL derives the label from the Person's tier
+    // ([`participation_for_role`]) inside the insert's transaction.
+    let role = Box::pin(crate::postgres::participation::add_on(
+        &pg, project_id, person_id,
+    ))
+    .await
+    .map_err(|error| pg_participation_error(error, project_id, person_id))?;
 
-        return Ok(role);
-    }
-    if crate::persons::find_by_id(surreal, person_id)
-        .await?
-        .is_none()
-    {
-        return Err(ProjectStoreError::NoSuchPerson(person_id));
-    }
-    if find_by_id(surreal, project_id).await?.is_none() {
-        return Err(ProjectStoreError::NoSuchProject(project_id));
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut response = writing_project(|| {
-        surreal
-            .query(format!(
-                "CREATE $id SET person_id = $person_id, project_id = $project_id, \
-                 participation = $participation, inserted_at = $now, updated_at = $now \
-                 RETURN {PERSON_PROJECT_ROLE_SELECT}"
-            ))
-            .bind(("id", record_id(PERSON_PROJECT_ROLE_TABLE, Uuid::now_v7())))
-            .bind(("person_id", record_id("person", person_id)))
-            .bind(("project_id", record_id(PROJECT_TABLE, project_id)))
-            .bind(("participation", participation.to_string()))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    let row: Option<PersonProjectRoleRow> = response.take(0)?;
-    let role = row
-        .and_then(PersonProjectRoleRow::into_role)
-        .ok_or(ProjectStoreError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(surreal, MirrorKey::ProjectParticipation(role.id)).await;
     Ok(role)
 }
 
 /// Replace a participation's person and label without disturbing its DRI
 /// markers. The caller enforces the DRI-side rule before invoking this write.
 pub async fn update_participation(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     role_id: Uuid,
     person_id: Uuid,
-    participation: &str,
+    _participation: &str,
 ) -> Result<Option<PersonProjectRole>, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        let role = Box::pin(crate::postgres::participation::update_on(
-            &pg, role_id, person_id,
-        ))
-        .await
-        .map_err(|error| pg_participation_error(error, Uuid::nil(), person_id))?;
-        return Ok(role);
-    }
-    if crate::persons::find_by_id(surreal, person_id)
-        .await?
-        .is_none()
-    {
-        return Err(ProjectStoreError::NoSuchPerson(person_id));
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut response = writing_project(|| {
-        surreal
-            .query(format!(
-                "UPDATE $id SET person_id = $person_id, participation = $participation, \
-                 updated_at = $now RETURN {PERSON_PROJECT_ROLE_SELECT}"
-            ))
-            .bind(("id", record_id(PERSON_PROJECT_ROLE_TABLE, role_id)))
-            .bind(("person_id", record_id("person", person_id)))
-            .bind(("participation", participation.to_string()))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    let row: Option<PersonProjectRoleRow> = response.take(0)?;
-    crate::postgres_mirror::after_write(surreal, MirrorKey::ProjectParticipation(role_id)).await;
-    Ok(row.and_then(PersonProjectRoleRow::into_role))
+    let pg = authority().await?;
+    let role = Box::pin(crate::postgres::participation::update_on(
+        &pg, role_id, person_id,
+    ))
+    .await
+    .map_err(|error| pg_participation_error(error, Uuid::nil(), person_id))?;
+    Ok(role)
 }
 
 /// Remove one participation row. The caller checks the lawyer-DRI invariant
 /// before deletion; this low-level command is intentionally idempotent.
 pub async fn remove_participation(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     role_id: Uuid,
 ) -> Result<(), ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        return Box::pin(crate::postgres::participation::remove_on(&pg, role_id))
-            .await
-            .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()));
-    }
-    writing_project(|| {
-        surreal
-            .query("DELETE $id")
-            .bind(("id", record_id(PERSON_PROJECT_ROLE_TABLE, role_id)))
-    })
-    .await?;
-    crate::postgres_mirror::after_write(surreal, MirrorKey::ProjectParticipation(role_id)).await;
-    Ok(())
+    let pg = authority().await?;
+    Box::pin(crate::postgres::participation::remove_on(&pg, role_id))
+        .await
+        .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()))
 }
 
 /// Read the participation that gives `person_id` scope on `project_id`.
 pub async fn participation_for_person(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     person_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<PersonProjectRole>, ProjectStoreError> {
-    if let Some(pg) = PostgresDb::configured()
+    let pg = PostgresDb::application()
         .await
-        .map_err(|e| ProjectStoreError::Postgres(e.to_string()))?
-    {
-        return Box::pin(crate::postgres::participation::for_person_on(
-            &pg, person_id, project_id,
-        ))
-        .await
-        .map_err(|error| pg_participation_error(error, project_id, person_id));
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {PERSON_PROJECT_ROLE_SELECT} FROM ONLY {PERSON_PROJECT_ROLE_TABLE} \
-             WHERE person_id = $person_id AND project_id = $project_id LIMIT 1"
-        ))
-        .bind(("person_id", record_id("person", person_id)))
-        .bind(("project_id", record_id(PROJECT_TABLE, project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<PersonProjectRoleRow> = response.take(0)?;
-    Ok(row.and_then(PersonProjectRoleRow::into_role))
+        .map_err(|e| ProjectStoreError::Postgres(e.to_string()))?;
+    Box::pin(crate::postgres::participation::for_person_on(
+        &pg, person_id, project_id,
+    ))
+    .await
+    .map_err(|error| pg_participation_error(error, project_id, person_id))
 }
 
 /// All participation rows held by one person, in stable insertion order.
 pub async fn participations_for_person(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Vec<PersonProjectRole>, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        return Box::pin(crate::postgres::participation::for_person_projects_on(
-            &pg, person_id,
-        ))
-        .await
-        .map_err(|error| pg_participation_error(error, Uuid::nil(), person_id));
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {PERSON_PROJECT_ROLE_SELECT} FROM {PERSON_PROJECT_ROLE_TABLE} \
-             WHERE person_id = $person_id ORDER BY inserted_at, id"
-        ))
-        .bind(("person_id", record_id("person", person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<PersonProjectRoleRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(PersonProjectRoleRow::into_role)
-        .collect())
+    let pg = authority().await?;
+    Box::pin(crate::postgres::participation::for_person_projects_on(
+        &pg, person_id,
+    ))
+    .await
+    .map_err(|error| pg_participation_error(error, Uuid::nil(), person_id))
 }
 
 /// Whether this person holds a firm-side participation row on the matter.
@@ -962,23 +551,26 @@ pub async fn participations_for_person(
 /// client-side participations and client DRIs never enter the lawyer lens,
 /// while unrecognized participation strings remain firm-side. Callers layer
 /// their own tier rule over it — `store::access` requires the row of every
-/// tier, while [`can_access_as_lawyer_in_surreal`] keeps the Owner/Admin
+/// tier, while [`can_access_as_lawyer`] keeps the Owner/Admin
 /// short-circuit its own callers still depend on.
 pub async fn has_firm_participation(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Uuid,
     project_id: Uuid,
 ) -> Result<bool, ProjectStoreError> {
-    Ok(participation_for_person(surreal, person_id, project_id)
-        .await?
-        .is_some_and(|row| {
-            !PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str()) && !row.is_client_dri
-        }))
+    Ok(
+        participation_for_person(application_store, person_id, project_id)
+            .await?
+            .is_some_and(|row| {
+                !PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str())
+                    && !row.is_client_dri
+            }),
+    )
 }
 
 /// Whether an Owner or Firm Admin may oversee this Project without participation.
 pub async fn can_administer_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Option<Uuid>,
     role: Role,
     project: &Project,
@@ -988,21 +580,21 @@ pub async fn can_administer_project(
     }
     let firm_id = match project.firm_id {
         Some(firm_id) => Some(firm_id),
-        None => crate::firms::firm_id_for_brand_key(surreal, &project.brand).await?,
+        None => crate::firms::firm_id_for_brand_key(application_store, &project.brand).await?,
     };
     let Some(firm_id) = firm_id else {
         return Ok(true);
     };
     let decision = crate::firm_capability::FirmCapability::ManageMembership
-        .resolve(surreal, role, person_id, firm_id)
+        .resolve(application_store, role, person_id, firm_id)
         .await?;
     Ok(decision.is_allowed())
 }
 
 /// Legacy firm-side command access follows Project participation and allows
 /// oversight by the Owner or an Admin of the owning Firm.
-pub async fn can_access_as_lawyer_in_surreal(
-    surreal: &SurrealDb,
+pub async fn can_access_as_lawyer(
+    application_store: &ApplicationStore,
     person_id: Option<Uuid>,
     role: Role,
     project_id: Uuid,
@@ -1014,17 +606,17 @@ pub async fn can_access_as_lawyer_in_surreal(
         return Ok(true);
     }
     if role == Role::Admin {
-        let Some(project) = find_by_id(surreal, project_id).await? else {
+        let Some(project) = find_by_id(application_store, project_id).await? else {
             return Ok(false);
         };
-        if can_administer_project(surreal, person_id, role, &project).await? {
+        if can_administer_project(application_store, person_id, role, &project).await? {
             return Ok(true);
         }
     }
     let Some(person_id) = person_id else {
         return Ok(false);
     };
-    has_firm_participation(surreal, person_id, project_id).await
+    has_firm_participation(application_store, person_id, project_id).await
 }
 
 /// Whether a person may read a Project through the client lens.
@@ -1033,19 +625,21 @@ pub async fn can_access_as_lawyer_in_surreal(
 /// participation rows. The client-side predicate lives here beside the
 /// lawyer predicate so that every access decision reads one membership
 /// table.
-pub async fn can_access_as_client_in_surreal(
-    surreal: &SurrealDb,
+pub async fn can_access_as_client(
+    application_store: &ApplicationStore,
     person_id: Option<Uuid>,
     project_id: Uuid,
 ) -> Result<bool, ProjectStoreError> {
     let Some(person_id) = person_id else {
         return Ok(false);
     };
-    Ok(participation_for_person(surreal, person_id, project_id)
-        .await?
-        .is_some_and(|row| {
-            PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str()) || row.is_client_dri
-        }))
+    Ok(
+        participation_for_person(application_store, person_id, project_id)
+            .await?
+            .is_some_and(|row| {
+                PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str()) || row.is_client_dri
+            }),
+    )
 }
 
 /// One matter as the Owner/Admin directory lens sees it: what the matter is,
@@ -1075,7 +669,7 @@ pub struct MatterDirectoryEntry {
 /// The Owner/Admin directory over every matter.
 ///
 /// The third shape beside the two predicates above, and neither of them:
-/// [`can_access_as_lawyer_in_surreal`] short-circuits the admin tier to full
+/// [`can_access_as_lawyer`] short-circuits the admin tier to full
 /// access to a matter, and `store::access` requires a participation row of
 /// every tier and denies without one. This one is oversight rather than
 /// membership — see that a matter exists and who owns it, without seeing what
@@ -1087,18 +681,18 @@ pub struct MatterDirectoryEntry {
 /// the tier is checked before the read runs, so a `lawyer` call touches
 /// nothing.
 pub async fn matter_directory(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     role: Role,
 ) -> Result<Vec<MatterDirectoryEntry>, ProjectStoreError> {
     if !role.is_admin_tier() {
         return Ok(Vec::new());
     }
-    let projects = all(surreal).await?;
+    let projects = all(application_store).await?;
     if projects.is_empty() {
         return Ok(Vec::new());
     }
 
-    let dris_by_project = dri_names_by_project(surreal, DriSide::Lawyer).await?;
+    let dris_by_project = dri_names_by_project(application_store, DriSide::Lawyer).await?;
     Ok(projects
         .into_iter()
         .map(|project| MatterDirectoryEntry {
@@ -1125,11 +719,11 @@ pub async fn matter_directory(
 /// than deriving its own membership set, so this stays in step with every
 /// other Firm-scoped directory read.
 pub async fn matter_directory_for(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     role: Role,
     viewer_person_id: Option<Uuid>,
 ) -> Result<Vec<MatterDirectoryEntry>, ProjectStoreError> {
-    let entries = matter_directory(surreal, role).await?;
+    let entries = matter_directory(application_store, role).await?;
     if role == Role::Owner {
         return Ok(entries);
     }
@@ -1140,7 +734,7 @@ pub async fn matter_directory_for(
         return Ok(Vec::new());
     };
     let firm_ids = crate::firm_capability::allowed_firm_ids(
-        surreal,
+        application_store,
         Role::Admin,
         Some(person_id),
         crate::firm_capability::FirmCapability::ViewDirectory,
@@ -1149,7 +743,7 @@ pub async fn matter_directory_for(
     if firm_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let owned: std::collections::BTreeSet<_> = all(surreal)
+    let owned: std::collections::BTreeSet<_> = all(application_store)
         .await?
         .into_iter()
         .filter(|project| {
@@ -1175,12 +769,12 @@ pub async fn matter_directory_for(
 /// so each project's names come back sorted rather than left in row-scan
 /// order.
 pub(crate) async fn dri_names_by_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     side: DriSide,
 ) -> Result<std::collections::HashMap<Uuid, Vec<String>>, ProjectStoreError> {
     let mut ids_by_project: std::collections::HashMap<Uuid, Vec<Uuid>> =
         std::collections::HashMap::new();
-    for row in all_participations(surreal)
+    for row in all_participations(application_store)
         .await?
         .into_iter()
         .filter(|row| match side {
@@ -1195,7 +789,7 @@ pub(crate) async fn dri_names_by_project(
     }
     let dri_ids: Vec<Uuid> = ids_by_project.values().flatten().copied().collect();
     let names: std::collections::HashMap<Uuid, String> =
-        crate::persons::find_by_ids(surreal, &dri_ids)
+        crate::persons::find_by_ids(application_store, &dri_ids)
             .await?
             .into_iter()
             .map(|person| (person.id, person.name))
@@ -1258,13 +852,13 @@ pub struct ProjectSlackMembershipTargets {
 /// channel. Recorded Slack identities replace email lookup. A Project without
 /// a channel is still a target, so the sync can create or adopt one.
 pub async fn slack_membership_targets(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
 ) -> Result<ProjectSlackMembershipTargets, ProjectStoreError> {
-    let projects = all(surreal).await?;
+    let projects = all(application_store).await?;
     let project_count = projects.len();
     let mut targets = Vec::new();
     for project in projects {
-        targets.push(membership_target_for(surreal, project).await?);
+        targets.push(membership_target_for(application_store, project).await?);
     }
     Ok(ProjectSlackMembershipTargets {
         projects: project_count,
@@ -1275,34 +869,37 @@ pub async fn slack_membership_targets(
 /// One Project's Slack target, by the same rules as [`slack_membership_targets`].
 /// `None` when the Project no longer exists.
 pub async fn slack_membership_target(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Option<ProjectSlackMembershipTarget>, ProjectStoreError> {
-    match find_by_id(surreal, project_id).await? {
-        Some(project) => Ok(Some(membership_target_for(surreal, project).await?)),
+    match find_by_id(application_store, project_id).await? {
+        Some(project) => Ok(Some(
+            membership_target_for(application_store, project).await?,
+        )),
         None => Ok(None),
     }
 }
 
 async fn membership_target_for(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project: Project,
 ) -> Result<ProjectSlackMembershipTarget, ProjectStoreError> {
-    let participations = participations_for_project(surreal, project.id).await?;
+    let participations = participations_for_project(application_store, project.id).await?;
     let mut emails = std::collections::BTreeSet::new();
     let mut slack_ids = std::collections::BTreeSet::new();
     for row in participations
         .into_iter()
         .filter(crate::access::is_firm_participation)
     {
-        let Some(person) = crate::persons::find_by_id(surreal, row.person_id).await? else {
+        let Some(person) = crate::persons::find_by_id(application_store, row.person_id).await?
+        else {
             continue;
         };
         if person.role == crate::persons::Role::Client {
             continue;
         }
         if let Some(identity) = crate::external_identities::find_by_person_and_system(
-            surreal,
+            application_store,
             person.id,
             crate::external_identities::ExternalSystem::Slack,
         )
@@ -1353,19 +950,20 @@ pub struct ProjectCanvas {
 /// Unlike [`slack_membership_target`], it reads both DRI sides, and it never
 /// feeds an invite list: a Client DRI appears here without joining a channel.
 pub async fn project_canvas(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Option<ProjectCanvas>, ProjectStoreError> {
-    let Some(project) = find_by_id(surreal, project_id).await? else {
+    let Some(project) = find_by_id(application_store, project_id).await? else {
         return Ok(None);
     };
     let mut client_dri_emails = Vec::new();
     let mut lawyer_dris = Vec::new();
-    for row in participations_for_project(surreal, project.id).await? {
+    for row in participations_for_project(application_store, project.id).await? {
         if !row.is_client_dri && !row.is_lawyer_dri {
             continue;
         }
-        let Some(person) = crate::persons::find_by_id(surreal, row.person_id).await? else {
+        let Some(person) = crate::persons::find_by_id(application_store, row.person_id).await?
+        else {
             continue;
         };
         if row.is_client_dri {
@@ -1401,14 +999,16 @@ pub async fn project_canvas(
 /// purpose is to surface a side left unassigned — on either side — so both
 /// are read here, where `matter_directory` deliberately reads only the
 /// lawyer side for its Owner/Admin oversight view.
-pub async fn dri_digest(surreal: &SurrealDb) -> Result<Vec<ProjectDriSummary>, ProjectStoreError> {
-    let mut projects = all(surreal).await?;
+pub async fn dri_digest(
+    application_store: &ApplicationStore,
+) -> Result<Vec<ProjectDriSummary>, ProjectStoreError> {
+    let mut projects = all(application_store).await?;
     projects.retain(|project| project.status == "open");
     if projects.is_empty() {
         return Ok(Vec::new());
     }
-    let lawyer_by_project = dri_names_by_project(surreal, DriSide::Lawyer).await?;
-    let client_by_project = dri_names_by_project(surreal, DriSide::Client).await?;
+    let lawyer_by_project = dri_names_by_project(application_store, DriSide::Lawyer).await?;
+    let client_by_project = dri_names_by_project(application_store, DriSide::Client).await?;
     Ok(projects
         .into_iter()
         .map(|project| ProjectDriSummary {
@@ -1431,101 +1031,45 @@ pub async fn dri_digest(surreal: &SurrealDb) -> Result<Vec<ProjectDriSummary>, P
 ///
 /// Designation is **additive**: a matter carries as many accountable people per
 /// side as the firm has put there, so taking the marker displaces nobody. Giving
-/// it up is [`clear_dri_in_surreal`], and that is the only way a person leaves a
+/// it up is [`clear_dri`], and that is the only way a person leaves a
 /// set.
 ///
 /// The transaction writes the Project itself first: concurrent DRI changes to
 /// the same Project conflict on that row and retry through the typed conflict
 /// loop, so the set-emptiness rule `store::participation` checks beforehand
 /// cannot be raced by two removals that each saw a second holder.
-pub async fn designate_dri_in_surreal(
-    surreal: &SurrealDb,
+pub async fn designate_dri(
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     person_id: Uuid,
     side: DriSide,
 ) -> Result<(), ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        Box::pin(crate::postgres::participation::designate_dri_on(
-            &pg, project_id, person_id, side,
-        ))
-        .await
-        .map_err(|error| pg_participation_error(error, project_id, person_id))?;
-        return Ok(());
-    }
-    let Some(person) = crate::persons::find_by_id(surreal, person_id).await? else {
-        return Err(ProjectStoreError::NoSuchPerson(person_id));
-    };
-    if find_by_id(surreal, project_id).await?.is_none() {
-        return Err(ProjectStoreError::NoSuchProject(project_id));
-    }
-    let flag = match side {
-        DriSide::Lawyer => "is_lawyer_dri",
-        DriSide::Client => "is_client_dri",
-    };
-    // A DRI's first row is a participation like any other: derived from the
-    // person being designated, never from a word this function picks.
-    let participation = participation_for_role(person.role);
-    let now = chrono::Utc::now().to_rfc3339();
-    writing_project(|| {
-        surreal
-            .query(format!(
-                "BEGIN; \
-                 UPDATE $project SET updated_at = $now; \
-                 LET $existing = (SELECT VALUE id FROM {PERSON_PROJECT_ROLE_TABLE} \
-                    WHERE project_id = $project AND person_id = $person LIMIT 1)[0]; \
-                 IF $existing != NONE {{ \
-                    UPDATE $existing SET {flag} = true, updated_at = $now; \
-                 }} ELSE {{ \
-                    CREATE $role SET person_id = $person, project_id = $project, \
-                    participation = $participation, {flag} = true, \
-                    inserted_at = $now, updated_at = $now; \
-                 }}; \
-                 COMMIT;"
-            ))
-            .bind(("project", record_id(PROJECT_TABLE, project_id)))
-            .bind(("person", record_id("person", person_id)))
-            .bind(("role", record_id(PERSON_PROJECT_ROLE_TABLE, Uuid::now_v7())))
-            .bind(("participation", participation.to_string()))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    mirror_project_with_participations(surreal, project_id).await
+    let pg = authority().await?;
+    Box::pin(crate::postgres::participation::designate_dri_on(
+        &pg, project_id, person_id, side,
+    ))
+    .await
+    .map_err(|error| pg_participation_error(error, project_id, person_id))?;
+    Ok(())
 }
 
 /// Drop one participation row's DRI marker for `side`.
 ///
-/// The inverse of [`designate_dri_in_surreal`], and the only way a person leaves
+/// The inverse of [`designate_dri`], and the only way a person leaves
 /// a DRI set. It takes one row out and leaves the rest of the side alone; that
 /// the lawyer set never empties is `store::participation`'s rule, checked above
 /// this call.
-pub async fn clear_dri_in_surreal(
-    surreal: &SurrealDb,
+pub async fn clear_dri(
+    _application_store: &ApplicationStore,
     role_id: Uuid,
     side: DriSide,
 ) -> Result<(), ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        Box::pin(crate::postgres::participation::clear_dri_on(
-            &pg, role_id, side,
-        ))
-        .await
-        .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()))?;
-        return Ok(());
-    }
-    let flag = match side {
-        DriSide::Lawyer => "is_lawyer_dri",
-        DriSide::Client => "is_client_dri",
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    writing_project(|| {
-        surreal
-            .query(format!(
-                "UPDATE $role SET {flag} = false, updated_at = $now"
-            ))
-            .bind(("role", record_id(PERSON_PROJECT_ROLE_TABLE, role_id)))
-            .bind(("now", now.clone()))
-    })
-    .await?;
-    crate::postgres_mirror::after_write(surreal, MirrorKey::ProjectParticipation(role_id)).await;
+    let pg = authority().await?;
+    Box::pin(crate::postgres::participation::clear_dri_on(
+        &pg, role_id, side,
+    ))
+    .await
+    .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()))?;
     Ok(())
 }
 
@@ -1533,70 +1077,16 @@ pub async fn clear_dri_in_surreal(
 ///
 /// Writes retry only typed Surreal transaction conflicts; a code collision is
 /// a caller-correctable conflict and is never retried as if it were transient.
-pub async fn create(surreal: &SurrealDb, input: &NewProject) -> Result<Project, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        let project = Box::pin(crate::postgres::projects::create_on(&pg, input))
-            .await
-            .map_err(|error| pg_project_error(error, input))?;
+pub async fn create(
+    _application_store: &ApplicationStore,
+    input: &NewProject,
+) -> Result<Project, ProjectStoreError> {
+    let pg = authority().await?;
+    let project = Box::pin(crate::postgres::projects::create_on(&pg, input))
+        .await
+        .map_err(|error| pg_project_error(error, input))?;
 
-        return Ok(project);
-    }
-    if let Some(firm_id) = input.firm_id {
-        if crate::firms::find_by_id(surreal, firm_id).await?.is_none() {
-            return Err(ProjectStoreError::NoSuchFirm(firm_id));
-        }
-    }
-    if !crate::firms::brand_key_exists(surreal, &input.brand).await? {
-        return Err(ProjectStoreError::UnknownBrand(input.brand.clone()));
-    }
-    if let Some(jurisdiction_id) = input.jurisdiction_id {
-        if crate::jurisdictions::find_by_id(surreal, jurisdiction_id)
-            .await?
-            .is_none()
-        {
-            return Err(ProjectStoreError::NoSuchJurisdiction(jurisdiction_id));
-        }
-    }
-    let id = Uuid::now_v7();
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut response = writing_project(|| {
-        surreal
-            .query(format!(
-                "CREATE $id SET code = $code, name = $name, status = $status, \
-                 brand = $brand, \
-                 entity_id = $entity_id, \
-                 firm_id = $firm_id, \
-                 jurisdiction_id = $jurisdiction_id, \
-                 description = $description, inserted_at = $inserted_at, \
-                 updated_at = $updated_at RETURN {PROJECT_SELECT}"
-            ))
-            .bind(("id", record_id(PROJECT_TABLE, id)))
-            .bind(("code", input.code.clone()))
-            .bind(("name", input.name.clone()))
-            .bind(("status", input.status.clone()))
-            .bind(("brand", input.brand.clone()))
-            .bind(("entity_id", record_id(ENTITY_TABLE, input.entity_id)))
-            .bind((
-                "firm_id",
-                input
-                    .firm_id
-                    .map(|firm_id| record_id(crate::firms::TABLE, firm_id)),
-            ))
-            .bind((
-                "jurisdiction_id",
-                input
-                    .jurisdiction_id
-                    .map(|id| record_id(crate::jurisdictions::TABLE, id)),
-            ))
-            .bind(("description", input.description.clone()))
-            .bind(("inserted_at", now.clone()))
-            .bind(("updated_at", now.clone()))
-    })
-    .await?;
-    let row: Option<ProjectRow> = response.take(0)?;
-    mirrored(surreal, row.and_then(ProjectRow::into_project))
-        .await?
-        .ok_or(ProjectStoreError::WriteReturnedNothing)
+    Ok(project)
 }
 
 /// Write one archived Project row back under its original id and code, every
@@ -1606,119 +1096,24 @@ pub async fn create(surreal: &SurrealDb, input: &NewProject) -> Result<Project, 
 /// # Errors
 /// [`ProjectStoreError`] on a database failure.
 pub async fn restore_archived(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project: &Project,
 ) -> Result<crate::assets::RowRestore, ProjectStoreError> {
-    if let Some(existing) = find_by_id(surreal, project.id).await? {
+    if let Some(existing) = find_by_id(application_store, project.id).await? {
         return Ok(if &existing == project {
             crate::assets::RowRestore::Identical
         } else {
             crate::assets::RowRestore::Conflict
         });
     }
-    if find_by_code(surreal, &project.code).await?.is_some() {
+    if find_by_code(application_store, &project.code)
+        .await?
+        .is_some()
+    {
         return Ok(crate::assets::RowRestore::Conflict);
     }
-    if let Some(pg) = authority().await? {
-        return Ok(Box::pin(crate::postgres_mirror::tenancy::put_project(&pg, project)).await?);
-    }
-    restore_archived_in_surreal(surreal, project).await?;
-    Ok(crate::assets::RowRestore::Created)
-}
-
-/// Create one archived Project row in SurrealDB and publish it to PostgreSQL.
-async fn restore_archived_in_surreal(
-    surreal: &SurrealDb,
-    project: &Project,
-) -> Result<(), ProjectStoreError> {
-    let mut response = writing_project(|| {
-        surreal
-            .query(format!(
-                "CREATE $id SET code = $code, name = $name, status = $status, brand = $brand, \
-                 entity_id = $entity_id, firm_id = $firm_id, jurisdiction_id = $jurisdiction_id, \
-                 description = $description, drive_folder_id = $drive_folder_id, \
-                 repository_url = $repository_url, git_initialized_at = $git_initialized_at, \
-                 forge_provisioned_at = $forge_provisioned_at, closed_at = $closed_at, \
-                 closure_reason = $closure_reason, \
-                 internal_slack_channel_url = $internal_slack_channel_url, \
-                 external_slack_channel_url = $external_slack_channel_url, \
-                 internal_slack_channel_id = $internal_slack_channel_id, \
-                 private_notion_page_url = $private_notion_page_url, \
-                 shared_notion_page_url = $shared_notion_page_url, \
-                 calendar_id = $calendar_id, calendar_timezone = $calendar_timezone, booking_url = $booking_url, \
-                 legal_plan_id = $legal_plan_id, plan_member_id = $plan_member_id, \
-                 plan_case_number = $plan_case_number, \
-                 benefit_code = $benefit_code, plan_matter_type = $plan_matter_type, \
-                 plan_state = $plan_state, plan_assigned_on = $plan_assigned_on, \
-                 plan_accepted_on = $plan_accepted_on, plan_closed_on = $plan_closed_on, \
-                 kit_version = $kit_version, \
-                 inserted_at = $inserted_at, updated_at = $updated_at RETURN {PROJECT_SELECT}"
-            ))
-            .bind(("id", record_id(PROJECT_TABLE, project.id)))
-            .bind(("code", project.code.clone()))
-            .bind(("name", project.name.clone()))
-            .bind(("status", project.status.clone()))
-            .bind(("brand", project.brand.clone()))
-            .bind(("entity_id", record_id(ENTITY_TABLE, project.entity_id)))
-            .bind((
-                "firm_id",
-                project.firm_id.map(|id| record_id(crate::firms::TABLE, id)),
-            ))
-            .bind((
-                "jurisdiction_id",
-                project
-                    .jurisdiction_id
-                    .map(|id| record_id(crate::jurisdictions::TABLE, id)),
-            ))
-            .bind(("description", project.description.clone()))
-            .bind(("drive_folder_id", project.drive_folder_id.clone()))
-            .bind(("repository_url", project.repository_url.clone()))
-            .bind(("git_initialized_at", project.git_initialized_at.clone()))
-            .bind(("forge_provisioned_at", project.forge_provisioned_at.clone()))
-            .bind(("closed_at", project.closed_at.clone()))
-            .bind(("closure_reason", project.closure_reason.clone()))
-            .bind((
-                "internal_slack_channel_url",
-                project.internal_slack_channel_url.clone(),
-            ))
-            .bind((
-                "external_slack_channel_url",
-                project.external_slack_channel_url.clone(),
-            ))
-            .bind((
-                "internal_slack_channel_id",
-                project.internal_slack_channel_id.clone(),
-            ))
-            .bind((
-                "private_notion_page_url",
-                project.private_notion_page_url.clone(),
-            ))
-            .bind((
-                "shared_notion_page_url",
-                project.shared_notion_page_url.clone(),
-            ))
-            .bind(("calendar_id", project.calendar_id.clone()))
-            .bind(("calendar_timezone", project.calendar_timezone.clone()))
-            .bind(("booking_url", project.booking_url.clone()))
-            .bind(("legal_plan_id", project.legal_plan_id))
-            .bind(("plan_member_id", project.plan_member_id.clone()))
-            .bind(("plan_case_number", project.plan_case_number.clone()))
-            .bind(("benefit_code", project.benefit_code.clone()))
-            .bind(("plan_matter_type", project.plan_matter_type.clone()))
-            .bind(("plan_state", project.plan_state.clone()))
-            .bind(("plan_assigned_on", project.plan_assigned_on.clone()))
-            .bind(("plan_accepted_on", project.plan_accepted_on.clone()))
-            .bind(("plan_closed_on", project.plan_closed_on.clone()))
-            .bind(("kit_version", project.kit_version.clone()))
-            .bind(("inserted_at", project.inserted_at.clone()))
-            .bind(("updated_at", project.updated_at.clone()))
-    })
-    .await?;
-    let row: Option<ProjectRow> = response.take(0)?;
-    mirrored(surreal, row.and_then(ProjectRow::into_project))
-        .await?
-        .ok_or(ProjectStoreError::WriteReturnedNothing)?;
-    Ok(())
+    let pg = authority().await?;
+    Ok(crate::postgres::projects::restore_on(&pg, project).await?)
 }
 
 /// Whether a Project other than `project_id` records `drive_folder_id`. The
@@ -1728,29 +1123,14 @@ async fn restore_archived_in_surreal(
 /// # Errors
 /// [`ProjectStoreError`] on a database failure.
 pub async fn drive_folder_recorded_elsewhere(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     drive_folder_id: &str,
 ) -> Result<bool, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        return crate::postgres::projects::drive_folder_recorded_elsewhere_on(
-            &pg,
-            project_id,
-            drive_folder_id,
-        )
+    let pg = authority().await?;
+    crate::postgres::projects::drive_folder_recorded_elsewhere_on(&pg, project_id, drive_folder_id)
         .await
-        .map_err(ProjectStoreError::from);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT id FROM {PROJECT_TABLE} WHERE drive_folder_id = $folder AND id != $id LIMIT 1"
-        ))
-        .bind(("folder", drive_folder_id.to_string()))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let found: Option<surrealdb::types::RecordId> = response.take((0, "id"))?;
-    Ok(found.is_some())
+        .map_err(ProjectStoreError::from)
 }
 
 /// Find the Project carrying `code`, whose UNIQUE index makes it at most one.
@@ -1759,25 +1139,13 @@ pub async fn drive_folder_recorded_elsewhere(
 /// knows, while the id is whatever the engine that first created the record
 /// assigned.
 pub async fn find_by_code(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     code: &str,
 ) -> Result<Option<Project>, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        return Box::pin(crate::postgres::projects::find_by_code_on(&pg, code))
-            .await
-            .map_err(ProjectStoreError::from);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {PROJECT_SELECT} FROM ONLY {PROJECT_TABLE} WHERE code = $code LIMIT 1"
-        ))
-        .bind(("code", code.to_string()))
+    let pg = authority().await?;
+    Box::pin(crate::postgres::projects::find_by_code_on(&pg, code))
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ProjectRow> = response.take(0)?;
-    let mut project = row.and_then(ProjectRow::into_project);
-    Box::pin(overlay_lifecycle(project.as_mut_slice())).await?;
-    Ok(project)
+        .map_err(ProjectStoreError::from)
 }
 
 /// Resolve the Project carrying `code`, creating it under `id` if absent.
@@ -1788,15 +1156,15 @@ pub async fn find_by_code(
 /// against one shared engine, each re-seeding the same fixture codes. Mirrors
 /// [`crate::persons::find_or_create`].
 pub async fn find_or_create_by_code(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     input: &NewProject,
 ) -> Result<Project, ProjectStoreError> {
-    if let Some(existing) = find_by_code(surreal, &input.code).await? {
+    if let Some(existing) = find_by_code(application_store, &input.code).await? {
         return Ok(existing);
     }
-    match upsert_with_id(surreal, id, input).await {
-        Err(ProjectStoreError::CodeTaken) => find_by_code(surreal, &input.code)
+    match upsert_with_id(application_store, id, input).await {
+        Err(ProjectStoreError::CodeTaken) => find_by_code(application_store, &input.code)
             .await?
             .ok_or(ProjectStoreError::WriteReturnedNothing),
         other => other,
@@ -1811,86 +1179,16 @@ pub async fn find_or_create_by_code(
 /// Idempotent, so re-running a seed over a persisted database reconciles the
 /// record instead of duplicating it.
 pub async fn upsert_with_id(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     id: Uuid,
     input: &NewProject,
 ) -> Result<Project, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        let project = Box::pin(crate::postgres::projects::upsert_with_id_on(&pg, id, input))
-            .await
-            .map_err(|error| pg_project_error(error, input))?;
+    let pg = authority().await?;
+    let project = Box::pin(crate::postgres::projects::upsert_with_id_on(&pg, id, input))
+        .await
+        .map_err(|error| pg_project_error(error, input))?;
 
-        return Ok(project);
-    }
-    if let Some(firm_id) = input.firm_id {
-        if crate::firms::find_by_id(surreal, firm_id).await?.is_none() {
-            return Err(ProjectStoreError::NoSuchFirm(firm_id));
-        }
-    }
-    if !crate::firms::brand_key_exists(surreal, &input.brand).await? {
-        return Err(ProjectStoreError::UnknownBrand(input.brand.clone()));
-    }
-    if let Some(jurisdiction_id) = input.jurisdiction_id {
-        if crate::jurisdictions::find_by_id(surreal, jurisdiction_id)
-            .await?
-            .is_none()
-        {
-            return Err(ProjectStoreError::NoSuchJurisdiction(jurisdiction_id));
-        }
-    }
-    let now = chrono::Utc::now().to_rfc3339();
-    let firm_set = if input.firm_id.is_some() {
-        "firm_id = $firm_id,"
-    } else {
-        ""
-    };
-    // Same shape as `firm_set`: an upsert that does not name a jurisdiction
-    // leaves whatever the row already carries, so a re-seed never clears a
-    // jurisdiction a lawyer set.
-    let jurisdiction_set = if input.jurisdiction_id.is_some() {
-        "jurisdiction_id = $jurisdiction_id,"
-    } else {
-        ""
-    };
-    let mut response = writing_project(|| {
-        surreal
-            .query(format!(
-                "UPSERT $id SET code = $code, name = $name, status = $status, \
-                 brand = $brand, \
-                 entity_id = $entity_id, \
-                 {firm_set} \
-                 {jurisdiction_set} \
-                 description = $description, \
-                 inserted_at = IF inserted_at THEN inserted_at ELSE $inserted_at END, \
-                 updated_at = $updated_at RETURN {PROJECT_SELECT}"
-            ))
-            .bind(("id", record_id(PROJECT_TABLE, id)))
-            .bind(("code", input.code.clone()))
-            .bind(("name", input.name.clone()))
-            .bind(("status", input.status.clone()))
-            .bind(("brand", input.brand.clone()))
-            .bind(("entity_id", record_id(ENTITY_TABLE, input.entity_id)))
-            .bind((
-                "firm_id",
-                input
-                    .firm_id
-                    .map(|firm_id| record_id(crate::firms::TABLE, firm_id)),
-            ))
-            .bind((
-                "jurisdiction_id",
-                input
-                    .jurisdiction_id
-                    .map(|id| record_id(crate::jurisdictions::TABLE, id)),
-            ))
-            .bind(("description", input.description.clone()))
-            .bind(("inserted_at", now.clone()))
-            .bind(("updated_at", now.clone()))
-    })
-    .await?;
-    let row: Option<ProjectRow> = response.take(0)?;
-    mirrored(surreal, row.and_then(ProjectRow::into_project))
-        .await?
-        .ok_or(ProjectStoreError::WriteReturnedNothing)
+    Ok(project)
 }
 
 /// Find the Project identified by `id` in the projects cluster.
@@ -1898,82 +1196,37 @@ pub async fn upsert_with_id(
 /// This is the validation read a writer uses to prove a project id names a
 /// real row before storing a reference to it.
 pub async fn find_by_id(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<Project>, ProjectStoreError> {
-    if let Some(pg) = PostgresDb::configured()
+    let pg = PostgresDb::application()
         .await
-        .map_err(|e| ProjectStoreError::Postgres(e.to_string()))?
-    {
-        return Box::pin(crate::postgres::projects::find_by_id_on(&pg, id))
-            .await
-            .map_err(ProjectStoreError::from);
-    }
-    find_by_id_in_surreal(surreal, id).await
-}
-
-/// The SurrealDB copy of one Project, lifecycle overlay applied: the
-/// mirror's source.
-pub(crate) async fn find_by_id_in_surreal(
-    surreal: &SurrealDb,
-    id: Uuid,
-) -> Result<Option<Project>, ProjectStoreError> {
-    let mut response = surreal
-        .query(format!("SELECT {PROJECT_SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(PROJECT_TABLE, id)))
+        .map_err(|e| ProjectStoreError::Postgres(e.to_string()))?;
+    Box::pin(crate::postgres::projects::find_by_id_on(&pg, id))
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ProjectRow> = response.take(0)?;
-    let mut project = row.and_then(ProjectRow::into_project);
-    Box::pin(overlay_lifecycle(project.as_mut_slice())).await?;
-    Ok(project)
+        .map_err(ProjectStoreError::from)
 }
 
 /// Find a Project by its display name. Seeds use this only as their natural
 /// key lookup; application commands address Projects by UUID.
 pub async fn find_by_name(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     name: &str,
 ) -> Result<Option<Project>, ProjectStoreError> {
-    if let Some(pg) = authority().await? {
-        return Box::pin(crate::postgres::projects::find_by_name_on(&pg, name))
-            .await
-            .map_err(ProjectStoreError::from);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {PROJECT_SELECT} FROM ONLY {PROJECT_TABLE} WHERE name = $name LIMIT 1"
-        ))
-        .bind(("name", name.to_string()))
+    let pg = authority().await?;
+    Box::pin(crate::postgres::projects::find_by_name_on(&pg, name))
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ProjectRow> = response.take(0)?;
-    Ok(row.and_then(ProjectRow::into_project))
+        .map_err(ProjectStoreError::from)
 }
 
 /// Every project in stable lawyer-list order.
-pub async fn all(surreal: &SurrealDb) -> Result<Vec<Project>, ProjectStoreError> {
-    if let Some(pg) = PostgresDb::configured()
+pub async fn all(_application_store: &ApplicationStore) -> Result<Vec<Project>, ProjectStoreError> {
+    let pg = PostgresDb::application()
         .await
-        .map_err(|e| ProjectStoreError::Postgres(e.to_string()))?
-    {
-        return Box::pin(crate::postgres::projects::all_on(&pg))
-            .await
-            .map_err(ProjectStoreError::from);
-    }
-    let mut response = surreal
-        .query(format!(
-            "SELECT {PROJECT_SELECT} FROM {PROJECT_TABLE} ORDER BY name, id"
-        ))
+        .map_err(|e| ProjectStoreError::Postgres(e.to_string()))?;
+    Box::pin(crate::postgres::projects::all_on(&pg))
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ProjectRow> = response.take(0)?;
-    let mut projects: Vec<_> = rows
-        .into_iter()
-        .filter_map(ProjectRow::into_project)
-        .collect();
-    Box::pin(overlay_lifecycle(&mut projects)).await?;
-    Ok(projects)
+        .map_err(ProjectStoreError::from)
 }
 
 /// Which side of a matter a DRI designation applies to.
@@ -2085,11 +1338,11 @@ pub fn normalize_code(input: &str) -> Option<String> {
 /// A caller that owes its reader a distinct answer for a store failure calls
 /// [`find_by_code`] directly and maps the error itself: an outage must read as
 /// `500`, not as "your matter is gone".
-pub async fn id_for_code(surreal: &SurrealDb, project_code: &str) -> Option<Uuid> {
+pub async fn id_for_code(application_store: &ApplicationStore, project_code: &str) -> Option<Uuid> {
     if !is_valid_code(project_code) {
         return None;
     }
-    find_by_code(surreal, project_code)
+    find_by_code(application_store, project_code)
         .await
         .ok()
         .flatten()
@@ -2137,16 +1390,16 @@ pub fn is_valid_kit_version(value: &str) -> bool {
 ///
 /// Propagates any database error.
 pub async fn sole_open_matter_for_person(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Option<Uuid>, String> {
-    let notations = crate::notations::list_by_person(surreal, person_id)
+    let notations = crate::notations::list_by_person(application_store, person_id)
         .await
         .map_err(|error| error.to_string())?;
 
     let mut open: Vec<Uuid> = Vec::new();
     for n in notations {
-        if let Some(p) = find_by_id(surreal, n.project_id)
+        if let Some(p) = find_by_id(application_store, n.project_id)
             .await
             .map_err(|error| error.to_string())?
         {
@@ -2167,16 +1420,16 @@ pub async fn sole_open_matter_for_person(
 /// firm-signature side effect is a no-op. `inserted_at`/`updated_at` are
 /// maintained by the entity's active-model behavior.
 pub async fn close_for_notation(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     notation_id: Uuid,
 ) -> Result<Option<Uuid>, String> {
-    let Some(n) = crate::notations::find_by_id(surreal, notation_id)
+    let Some(n) = crate::notations::find_by_id(application_store, notation_id)
         .await
         .map_err(|error| error.to_string())?
     else {
         return Ok(None);
     };
-    let Some(p) = find_by_id(surreal, n.project_id)
+    let Some(p) = find_by_id(application_store, n.project_id)
         .await
         .map_err(|error| error.to_string())?
     else {
@@ -2188,15 +1441,22 @@ pub async fn close_for_notation(
     if p.status == "closed" || p.status == "archived" {
         return Ok(Some(project_id));
     }
-    let has_engagement = onboarding_official_sets(surreal, std::slice::from_ref(&p)).await?;
+    let has_engagement =
+        onboarding_official_sets(application_store, std::slice::from_ref(&p)).await?;
     let reason = if has_engagement.contains(&p.id) {
         ClosureReason::EngagementCompleted
     } else {
         ClosureReason::PitchDeclined
     };
-    transition_project_with_reason(surreal, project_id, Transition::Close, Some(reason), None)
-        .await
-        .map_err(|error| error.to_string())?;
+    transition_project_with_reason(
+        application_store,
+        project_id,
+        Transition::Close,
+        Some(reason),
+        None,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     Ok(Some(project_id))
 }
 
@@ -2266,12 +1526,12 @@ impl Transition {
 /// effective time on reopen, or an effective time outside the interval from
 /// matter-open through now.
 pub async fn transition_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     transition: Transition,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<Project, ProjectCommandError> {
-    transition_project_with_reason(surreal, id, transition, None, effective_at).await
+    transition_project_with_reason(application_store, id, transition, None, effective_at).await
 }
 
 /// Move a matter through its lifecycle with an optional close reason.
@@ -2280,35 +1540,27 @@ pub async fn transition_project(
 /// against the matter's pre-close lifecycle class. A repeated close never
 /// invents or replaces a reason already stored on the row.
 pub async fn transition_project_with_reason(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     transition: Transition,
     reason: Option<ClosureReason>,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<Project, ProjectCommandError> {
-    transition_project_attested(surreal, id, transition, reason, None, effective_at, None).await
-}
-
-fn postgres_lifecycle_enabled() -> bool {
-    !crate::postgres_mirror::reading_source()
-}
-
-async fn overlay_lifecycle(projects: &mut [Project]) -> Result<(), ProjectStoreError> {
-    if postgres_lifecycle_enabled() && !projects.is_empty() {
-        let pg = PostgresDb::configured()
-            .await
-            .map_err(|_| ProjectStoreError::LifecycleUnavailable)?
-            .ok_or(ProjectStoreError::LifecycleUnavailable)?;
-        crate::postgres::project_lifecycle::overlay(&pg, projects)
-            .await
-            .map_err(|_| ProjectStoreError::LifecycleUnavailable)?;
-    }
-    Ok(())
+    transition_project_attested(
+        application_store,
+        id,
+        transition,
+        reason,
+        None,
+        effective_at,
+        None,
+    )
+    .await
 }
 
 /// Apply a lifecycle request with the authenticated attorney and optional reopening reason.
 pub async fn transition_project_attested(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     transition: Transition,
     reason: Option<ClosureReason>,
@@ -2316,44 +1568,16 @@ pub async fn transition_project_attested(
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
     attesting_person_id: Option<Uuid>,
 ) -> Result<Project, ProjectCommandError> {
-    if postgres_lifecycle_enabled() {
-        return Box::pin(transition_on_postgres(
-            surreal,
-            id,
-            transition,
-            reason,
-            reopen_reason,
-            effective_at,
-            attesting_person_id,
-        ))
-        .await;
-    }
-    if reopen_reason.is_some() {
-        return Err(ProjectCommandError::Invalid(
-            "Reopen with history requires PostgreSQL lifecycle authority.",
-        ));
-    }
-    let row = find_by_id(surreal, id)
-        .await
-        .map_err(lifecycle_db_error)?
-        .ok_or(ProjectCommandError::NotFound)?;
-    if effective_at.is_some() && transition == Transition::Reopen {
-        return Err(ProjectCommandError::Invalid(
-            "An effective date applies only to close and archive transitions.",
-        ));
-    }
-    let now = chrono::Utc::now();
-    let (closed_at, closure_reason) =
-        lifecycle_projection(surreal, &row, transition, reason, effective_at, now).await?;
-    let target = transition.target_status();
-    if row.status == target && row.closed_at == closed_at && row.closure_reason == closure_reason {
-        return Ok(row);
-    }
-    let updated =
-        project_lifecycle_projection(surreal, id, target, closed_at, closure_reason).await?;
-    mirrored(surreal, Some(updated))
-        .await?
-        .ok_or(ProjectCommandError::NotFound)
+    Box::pin(transition_on_postgres(
+        application_store,
+        id,
+        transition,
+        reason,
+        reopen_reason,
+        effective_at,
+        attesting_person_id,
+    ))
+    .await
 }
 
 fn lifecycle_db_error(error: impl std::fmt::Display) -> ProjectCommandError {
@@ -2361,7 +1585,7 @@ fn lifecycle_db_error(error: impl std::fmt::Display) -> ProjectCommandError {
 }
 
 async fn lifecycle_projection(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     row: &Project,
     transition: Transition,
     reason: Option<ClosureReason>,
@@ -2393,7 +1617,7 @@ async fn lifecycle_projection(
     }
 
     if transition == Transition::Close && row.status == "open" {
-        let has_engagement = onboarding_official_sets(surreal, std::slice::from_ref(row))
+        let has_engagement = onboarding_official_sets(application_store, std::slice::from_ref(row))
             .await
             .map_err(ProjectCommandError::Db)?;
         let reason = reason.ok_or(ProjectCommandError::Invalid("A close reason is required."))?;
@@ -2409,9 +1633,10 @@ async fn lifecycle_projection(
                     "That close reason applies only to an active matter.",
                 ));
             }
-            let (_, has_offboarding) = matter_lifecycle_sets(surreal, std::slice::from_ref(row))
-                .await
-                .map_err(ProjectCommandError::Db)?;
+            let (_, has_offboarding) =
+                matter_lifecycle_sets(application_store, std::slice::from_ref(row))
+                    .await
+                    .map_err(ProjectCommandError::Db)?;
             if !has_offboarding.contains(&row.id) {
                 return Err(ProjectCommandError::Invalid(
                     "A pitch requires an offboarding document before it can be closed.",
@@ -2442,36 +1667,8 @@ async fn lifecycle_projection(
     Ok((closed_at, closure_reason))
 }
 
-async fn project_lifecycle_projection(
-    surreal: &SurrealDb,
-    id: Uuid,
-    target: &str,
-    closed_at: Option<String>,
-    closure_reason: Option<String>,
-) -> Result<Project, ProjectCommandError> {
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET status = $status, closed_at = $closed_at, closure_reason = $closure_reason, updated_at = $updated_at \
-             RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, id)))
-        .bind(("status", target.to_string()))
-        .bind(("closed_at", closed_at))
-        .bind(("closure_reason", closure_reason))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    updated
-        .and_then(ProjectRow::into_project)
-        .ok_or(ProjectCommandError::NotFound)
-}
-
 async fn transition_on_postgres(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     transition: Transition,
     reason: Option<ClosureReason>,
@@ -2493,11 +1690,10 @@ async fn transition_on_postgres(
             "A reopen reason applies only to reopening a Project.",
         ));
     }
-    let pg = PostgresDb::configured()
+    let pg = PostgresDb::application()
         .await
-        .map_err(lifecycle_db_error)?
-        .ok_or(ProjectCommandError::NotFound)?;
-    find_by_id(surreal, id)
+        .map_err(lifecycle_db_error)?;
+    find_by_id(application_store, id)
         .await
         .map_err(lifecycle_db_error)?
         .ok_or(ProjectCommandError::NotFound)?;
@@ -2508,8 +1704,15 @@ async fn transition_on_postgres(
         .map_err(lifecycle_db_error)?
         .ok_or(ProjectCommandError::NotFound)?;
     let now = chrono::Utc::now();
-    let (closed_at, closure_reason) =
-        lifecycle_projection(surreal, &row, transition, reason, effective_at, now).await?;
+    let (closed_at, closure_reason) = lifecycle_projection(
+        application_store,
+        &row,
+        transition,
+        reason,
+        effective_at,
+        now,
+    )
+    .await?;
     let target = transition.target_status();
     if row.status != target || row.closed_at != closed_at || row.closure_reason != closure_reason {
         if !ledger::has_history(&mut tx, id)
@@ -2519,7 +1722,7 @@ async fn transition_on_postgres(
             ledger::append(
                 &mut tx,
                 &row,
-                &lifecycle_baseline(surreal, &row).await?,
+                &lifecycle_baseline(application_store, &row).await?,
                 row.closed_at.as_deref(),
                 row.closure_reason.as_deref(),
             )
@@ -2559,12 +1762,12 @@ async fn transition_on_postgres(
 }
 
 async fn lifecycle_baseline(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project: &Project,
 ) -> Result<crate::postgres::project_lifecycle::StatusTransition, ProjectCommandError> {
     let mut baseline = crate::postgres::project_lifecycle::baseline(project);
     if baseline.to_status == "open" {
-        let opening = crate::relationship_logs::for_project(surreal, project.id)
+        let opening = crate::relationship_logs::for_project(application_store, project.id)
             .await
             .map_err(lifecycle_db_error)?
             .into_iter()
@@ -2576,7 +1779,7 @@ async fn lifecycle_baseline(
 
 /// Read current lifecycle and history from the same committed PostgreSQL snapshot.
 pub async fn status_with_history(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     mut project: Project,
 ) -> Result<
     (
@@ -2586,10 +1789,9 @@ pub async fn status_with_history(
     ProjectCommandError,
 > {
     use crate::postgres::project_lifecycle as ledger;
-    let pg = PostgresDb::configured()
+    let pg = PostgresDb::application()
         .await
-        .map_err(lifecycle_db_error)?
-        .ok_or(ProjectCommandError::NotFound)?;
+        .map_err(lifecycle_db_error)?;
     let mut tx = pg.pool().begin().await.map_err(lifecycle_db_error)?;
     let current = ledger::lock(&mut tx, project.id)
         .await
@@ -2604,7 +1806,7 @@ pub async fn status_with_history(
     }
     tx.commit().await.map_err(lifecycle_db_error)?;
     if history.is_empty() {
-        history.push(lifecycle_baseline(surreal, &project).await?);
+        history.push(lifecycle_baseline(application_store, &project).await?);
     }
     Ok((project, history))
 }
@@ -2623,7 +1825,7 @@ pub async fn status_with_history(
 /// Returns [`ProjectCommandError::Invalid`] for an empty or non-identifier
 /// value, and propagates a database error (including a duplicate assignment).
 pub async fn set_drive_folder_id(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     drive_folder_id: Option<&str>,
 ) -> Result<Option<Project>, ProjectCommandError> {
@@ -2641,47 +1843,22 @@ pub async fn set_drive_folder_id(
         })
         .transpose()?;
 
-    if let Some(patched) = patch_under_authority(
-        surreal,
+    patch_under_authority(
+        application_store,
         project_id,
         &[crate::postgres::projects::Column::Text(
             "drive_folder_id",
             drive_folder_id.as_deref(),
         )],
     )
-    .await?
-    {
-        return Ok(patched);
-    }
-    if find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET drive_folder_id = $drive_folder_id, updated_at = $updated_at \
-             RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("drive_folder_id", drive_folder_id))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+    .await
 }
 
 /// Record the Slack Web API channel ID provisioned for a matter's private
 /// firm-side channel. This is a system-managed coordinate, not a free-form
 /// resource URL, so only non-empty ASCII channel IDs are accepted here.
 pub async fn set_internal_slack_channel_id(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     channel_id: &str,
 ) -> Result<Option<Project>, ProjectCommandError> {
@@ -2689,40 +1866,15 @@ pub async fn set_internal_slack_channel_id(
     if channel_id.is_empty() || !channel_id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
         return Err(ProjectCommandError::Invalid(SLACK_CHANNEL_ID_INVALID));
     }
-    if let Some(patched) = patch_under_authority(
-        surreal,
+    patch_under_authority(
+        application_store,
         project_id,
         &[crate::postgres::projects::Column::Text(
             "internal_slack_channel_id",
             Some(channel_id),
         )],
     )
-    .await?
-    {
-        return Ok(patched);
-    }
-    if find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET internal_slack_channel_id = $channel_id, updated_at = $updated_at \
-             RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("channel_id", channel_id.to_string()))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+    .await
 }
 
 /// Record the canonical Slack URL for a matter's private firm-side channel.
@@ -2734,7 +1886,7 @@ pub async fn set_internal_slack_channel_id(
 /// Returns [`ProjectCommandError::Invalid`] for an empty or malformed URL,
 /// and propagates a database error.
 pub async fn set_internal_slack_channel_url(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     channel_url: &str,
 ) -> Result<Option<Project>, ProjectCommandError> {
@@ -2742,40 +1894,15 @@ pub async fn set_internal_slack_channel_url(
     if channel_url.is_empty() || !is_valid_resource_url(channel_url) {
         return Err(ProjectCommandError::Invalid(SLACK_CHANNEL_URL_INVALID));
     }
-    if let Some(patched) = patch_under_authority(
-        surreal,
+    patch_under_authority(
+        application_store,
         project_id,
         &[crate::postgres::projects::Column::Text(
             "internal_slack_channel_url",
             Some(channel_url),
         )],
     )
-    .await?
-    {
-        return Ok(patched);
-    }
-    if find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET internal_slack_channel_url = $channel_url, updated_at = $updated_at \
-             RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("channel_url", channel_url.to_string()))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+    .await
 }
 
 fn validate_internal_slack_channel<'a>(
@@ -2827,39 +1954,14 @@ pub async fn set_internal_slack_channel_on(
 /// one half would make a retry choose between posting and rendering a stale
 /// link. Callers that have resolved a channel should use this atomic seam.
 pub async fn set_internal_slack_channel(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     channel_id: &str,
     channel_url: &str,
 ) -> Result<Option<Project>, ProjectCommandError> {
     let (channel_id, channel_url) = validate_internal_slack_channel(channel_id, channel_url)?;
-    if let Some(pg) = authority().await? {
-        return set_internal_slack_channel_on(&pg, project_id, channel_id, channel_url).await;
-    }
-    if find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET internal_slack_channel_id = $channel_id, \
-             internal_slack_channel_url = $channel_url, updated_at = $updated_at \
-             RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("channel_id", channel_id.to_string()))
-        .bind(("channel_url", channel_url.to_string()))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+    let pg = authority().await?;
+    set_internal_slack_channel_on(&pg, project_id, channel_id, channel_url).await
 }
 
 /// Set or clear the matter's governing jurisdiction.
@@ -2877,12 +1979,12 @@ pub async fn set_internal_slack_channel(
 /// jurisdiction — a dangling link would make the matter's governing law
 /// unreadable rather than absent — and propagates database errors.
 pub async fn set_jurisdiction(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     jurisdiction_id: Option<Uuid>,
 ) -> Result<Option<Project>, ProjectCommandError> {
     if let Some(jurisdiction_id) = jurisdiction_id {
-        if crate::jurisdictions::find_by_id(surreal, jurisdiction_id)
+        if crate::jurisdictions::find_by_id(application_store, jurisdiction_id)
             .await
             .map_err(|error| ProjectCommandError::Db(error.to_string()))?
             .is_none()
@@ -2890,43 +1992,15 @@ pub async fn set_jurisdiction(
             return Err(ProjectCommandError::Invalid(JURISDICTION_UNKNOWN));
         }
     }
-    if let Some(patched) = patch_under_authority(
-        surreal,
+    patch_under_authority(
+        application_store,
         project_id,
         &[crate::postgres::projects::Column::Id(
             "jurisdiction_id",
             jurisdiction_id,
         )],
     )
-    .await?
-    {
-        return Ok(patched);
-    }
-    if find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET jurisdiction_id = $jurisdiction_id, updated_at = $updated_at \
-             RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind((
-            "jurisdiction_id",
-            jurisdiction_id.map(|id| record_id(crate::jurisdictions::TABLE, id)),
-        ))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+    .await
 }
 
 /// Refusal for a `client_dri_person_id` naming a Person who holds no
@@ -2952,19 +2026,19 @@ const CLIENT_DRI_NOT_ON_PROJECT: &str = "client_dri_person_id names a Person wit
 /// [`ProjectCommandError::Invalid`] when the Person is unknown or holds no
 /// client-DRI row on the matter, and propagates a database error.
 pub async fn set_client_dri_person_id(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     person_id: Option<Uuid>,
 ) -> Result<Option<Project>, ProjectCommandError> {
     if let Some(person_id) = person_id {
-        if crate::persons::find_by_id(surreal, person_id)
+        if crate::persons::find_by_id(application_store, person_id)
             .await
             .map_err(|error| ProjectCommandError::Db(error.to_string()))?
             .is_none()
         {
             return Err(ProjectCommandError::Invalid("no such person"));
         }
-        let on_this_matter = participation_for_person(surreal, person_id, project_id)
+        let on_this_matter = participation_for_person(application_store, person_id, project_id)
             .await
             .map_err(|error| ProjectCommandError::Db(error.to_string()))?
             .is_some_and(|row| row.is_client_dri);
@@ -2972,41 +2046,15 @@ pub async fn set_client_dri_person_id(
             return Err(ProjectCommandError::Invalid(CLIENT_DRI_NOT_ON_PROJECT));
         }
     }
-    if let Some(patched) = patch_under_authority(
-        surreal,
+    patch_under_authority(
+        application_store,
         project_id,
         &[crate::postgres::projects::Column::Id(
             "client_dri_person_id",
             person_id,
         )],
     )
-    .await?
-    {
-        return Ok(patched);
-    }
-    if find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    surreal
-        .query("UPDATE $id SET client_dri_person_id = $person_id, updated_at = $updated_at")
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("person_id", person_id.map(|id| record_id("person", id))))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    // Read the updated row through the production SELECT instead of the
-    // UPDATE's own RETURN: a RETURN projection serializes a record link as a
-    // string, which deserializes back as `None` — the value would be silently
-    // lost exactly when it was just written.
-    let updated = find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated).await?)
+    .await
 }
 
 /// The legal-plan panel columns staged onto a plan matter (ENG-1269). The
@@ -3129,12 +2177,12 @@ fn check_plan_columns(columns: &PlanColumns) -> Result<(), ProjectCommandError> 
 /// [`ProjectCommandError::Invalid`] names the field; the PostgreSQL foreign
 /// key is the backstop for a writer that skips this accessor.
 pub async fn set_plan_columns(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     project_id: Uuid,
     columns: &PlanColumns,
 ) -> Result<Option<Project>, ProjectCommandError> {
-    set_plan_columns_with_benefit(surreal, pg, project_id, columns, None).await
+    set_plan_columns_with_benefit(application_store, pg, project_id, columns, None).await
 }
 
 /// Update the plan and its verified benefit in the same Project write.
@@ -3142,12 +2190,14 @@ pub async fn set_plan_columns(
 /// # Errors
 /// Refuses inconsistent benefit terms, a plan outside the Firm, and database failures.
 pub async fn set_plan_columns_with_benefit(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     project_id: Uuid,
     columns: &PlanColumns,
     terms: Option<&model::plan_benefit::PlanBenefitTerms>,
 ) -> Result<Option<Project>, ProjectCommandError> {
+    use crate::postgres::projects::Column::{Date, Id, Text};
+
     if let Some(terms) = terms {
         terms.validate().map_err(ProjectCommandError::Invalid)?;
         if columns.legal_plan_id.is_none() || columns.benefit_code.is_none() {
@@ -3157,7 +2207,7 @@ pub async fn set_plan_columns_with_benefit(
         }
     }
     check_plan_columns(columns)?;
-    let Some(project) = find_by_id(surreal, project_id)
+    let Some(project) = find_by_id(application_store, project_id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
     else {
@@ -3173,62 +2223,30 @@ pub async fn set_plan_columns_with_benefit(
             None => return Err(ProjectCommandError::Invalid(PLAN_UNKNOWN)),
         }
     }
-    if let Some(authority) = authority().await? {
-        use crate::postgres::projects::Column::{Date, Id, Text};
-        let date = |text: &Option<String>| text.as_deref().and_then(|text| text.parse().ok());
-        let mut updates = vec![
-            Id("legal_plan_id", columns.legal_plan_id),
-            Text("plan_member_id", columns.plan_member_id.as_deref()),
-            Text("plan_case_number", columns.plan_case_number.as_deref()),
-            Text("benefit_code", columns.benefit_code.as_deref()),
-            Text("plan_matter_type", columns.plan_matter_type.as_deref()),
-            Text("plan_state", columns.plan_state.as_deref()),
-            Date("plan_assigned_on", date(&columns.plan_assigned_on)),
-            Date("plan_accepted_on", date(&columns.plan_accepted_on)),
-            Date("plan_closed_on", date(&columns.plan_closed_on)),
-            Text("kit_version", columns.kit_version.as_deref()),
-        ];
-        updates.extend(plan_benefit_columns(columns, terms));
-        let within_firm = project.firm_id.map(|firm| (firm, None));
-        return Ok(
-            patch_in_postgres(surreal, &authority, project_id, &updates, within_firm).await?,
-        );
-    }
-    if terms.is_some() {
-        return Err(ProjectCommandError::Invalid(
-            "benefit terms require PostgreSQL Project storage",
-        ));
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET legal_plan_id = $legal_plan_id, \
-             plan_member_id = $plan_member_id, \
-             plan_case_number = $plan_case_number, benefit_code = $benefit_code, \
-             plan_matter_type = $plan_matter_type, plan_state = $plan_state, \
-             plan_assigned_on = $plan_assigned_on, \
-             plan_accepted_on = $plan_accepted_on, \
-             plan_closed_on = $plan_closed_on, kit_version = $kit_version, \
-             updated_at = $updated_at RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("legal_plan_id", columns.legal_plan_id))
-        .bind(("plan_member_id", columns.plan_member_id.clone()))
-        .bind(("plan_case_number", columns.plan_case_number.clone()))
-        .bind(("benefit_code", columns.benefit_code.clone()))
-        .bind(("plan_matter_type", columns.plan_matter_type.clone()))
-        .bind(("plan_state", columns.plan_state.clone()))
-        .bind(("plan_assigned_on", columns.plan_assigned_on.clone()))
-        .bind(("plan_accepted_on", columns.plan_accepted_on.clone()))
-        .bind(("plan_closed_on", columns.plan_closed_on.clone()))
-        .bind(("kit_version", columns.kit_version.clone()))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+    let authority = authority().await?;
+    let date = |text: &Option<String>| text.as_deref().and_then(|text| text.parse().ok());
+    let mut updates = vec![
+        Id("legal_plan_id", columns.legal_plan_id),
+        Text("plan_member_id", columns.plan_member_id.as_deref()),
+        Text("plan_case_number", columns.plan_case_number.as_deref()),
+        Text("benefit_code", columns.benefit_code.as_deref()),
+        Text("plan_matter_type", columns.plan_matter_type.as_deref()),
+        Text("plan_state", columns.plan_state.as_deref()),
+        Date("plan_assigned_on", date(&columns.plan_assigned_on)),
+        Date("plan_accepted_on", date(&columns.plan_accepted_on)),
+        Date("plan_closed_on", date(&columns.plan_closed_on)),
+        Text("kit_version", columns.kit_version.as_deref()),
+    ];
+    updates.extend(plan_benefit_columns(columns, terms));
+    let within_firm = project.firm_id.map(|firm| (firm, None));
+    Ok(patch_in_postgres(
+        application_store,
+        &authority,
+        project_id,
+        &updates,
+        within_firm,
+    )
+    .await?)
 }
 
 fn plan_benefit_columns<'a>(
@@ -3264,7 +2282,7 @@ fn plan_benefit_columns<'a>(
 
 /// Link a manifest's Firm-owned Legal Plan, leaving existing plan details intact.
 pub async fn link_manifest_legal_plan(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project: &Project,
     firm: Uuid,
     brand: &str,
@@ -3281,33 +2299,16 @@ pub async fn link_manifest_legal_plan(
         None if dry_run => return Ok(Some(project.clone())),
         None => {}
     }
-    let updated = if let Some(pg) = authority().await? {
+    let updated = {
+        let pg = authority().await?;
         crate::postgres::projects::link_legal_plan_on(&pg, project.id, firm, brand, plan)
             .await
             .map_err(ProjectStoreError::from)?
-    } else {
-        let mut response = surreal
-            .query(format!(
-                "UPDATE $id SET legal_plan_id = $plan, updated_at = $updated_at \
-                 WHERE firm_id = $firm AND brand = $brand AND legal_plan_id = NONE RETURN {PROJECT_SELECT}"
-            ))
-            .bind(("id", record_id(PROJECT_TABLE, project.id)))
-            .bind(("firm", record_id(crate::firms::TABLE, firm)))
-            .bind(("brand", brand.to_string()))
-            .bind(("plan", plan))
-            .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-        let row: Option<ProjectRow> = response
-            .take(0)
-            .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-        mirrored(surreal, row.and_then(ProjectRow::into_project)).await?
     };
     if updated.is_some() {
         return Ok(updated);
     }
-    let current = find_by_id(surreal, project.id)
+    let current = find_by_id(application_store, project.id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
     match current {
@@ -3325,7 +2326,7 @@ pub async fn link_manifest_legal_plan(
 /// Record the firm-private Notion page provisioned for a Project. This is a
 /// system-managed coordinate; client-facing project payloads must redact it.
 pub async fn set_private_notion_page_url(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     page_url: &str,
 ) -> Result<Option<Project>, ProjectCommandError> {
@@ -3333,40 +2334,15 @@ pub async fn set_private_notion_page_url(
     if page_url.is_empty() || !is_valid_resource_url(page_url) {
         return Err(ProjectCommandError::Invalid(NOTION_PAGE_URL_INVALID));
     }
-    if let Some(patched) = patch_under_authority(
-        surreal,
+    patch_under_authority(
+        application_store,
         project_id,
         &[crate::postgres::projects::Column::Text(
             "private_notion_page_url",
             Some(page_url),
         )],
     )
-    .await?
-    {
-        return Ok(patched);
-    }
-    if find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET private_notion_page_url = $page_url, updated_at = $updated_at \
-             RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("page_url", page_url.to_string()))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+    .await
 }
 
 /// Record the shared Google Calendar provisioned for a Project. Like the
@@ -3379,7 +2355,7 @@ pub async fn set_private_notion_page_url(
 /// [`ProjectCommandError::Invalid`] for a value [`is_valid_calendar_id`]
 /// refuses, or a database error.
 pub async fn set_calendar_id(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     calendar_id: &str,
 ) -> Result<Option<Project>, ProjectCommandError> {
@@ -3387,7 +2363,13 @@ pub async fn set_calendar_id(
     if !is_valid_calendar_id(calendar_id) {
         return Err(ProjectCommandError::Invalid(CALENDAR_ID_INVALID));
     }
-    set_optional_column(surreal, project_id, "calendar_id", Some(calendar_id)).await
+    set_optional_column(
+        application_store,
+        project_id,
+        "calendar_id",
+        Some(calendar_id),
+    )
+    .await
 }
 
 /// Clear the client's booking link. Closing a matter calls this: a closed
@@ -3398,48 +2380,24 @@ pub async fn set_calendar_id(
 /// # Errors
 /// Propagates a database error.
 pub async fn clear_booking_url(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Option<Project>, ProjectCommandError> {
-    set_optional_column(surreal, project_id, "booking_url", None).await
+    set_optional_column(application_store, project_id, "booking_url", None).await
 }
 
 async fn set_optional_column(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     column: &'static str,
     value: Option<&str>,
 ) -> Result<Option<Project>, ProjectCommandError> {
-    if let Some(patched) = patch_under_authority(
-        surreal,
+    patch_under_authority(
+        application_store,
         project_id,
         &[crate::postgres::projects::Column::Text(column, value)],
     )
-    .await?
-    {
-        return Ok(patched);
-    }
-    if find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET {column} = $value, updated_at = $updated_at RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("value", value.map(str::to_string)))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+    .await
 }
 
 /// Request body for updating a matter's **descriptive** fields through the
@@ -3563,7 +2521,7 @@ pub struct UpdateProjectCommand {
 /// Returns [`ProjectCommandError::Invalid`] when the URL is not one
 /// [`is_valid_repository_url`] accepts, and propagates a database error.
 pub async fn set_repository_url(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     repository_url: Option<&str>,
 ) -> Result<Option<Project>, ProjectCommandError> {
@@ -3579,40 +2537,15 @@ pub async fn set_repository_url(
         })
         .transpose()?;
 
-    if let Some(patched) = patch_under_authority(
-        surreal,
+    patch_under_authority(
+        application_store,
         project_id,
         &[crate::postgres::projects::Column::Text(
             "repository_url",
             repository_url.as_deref(),
         )],
     )
-    .await?
-    {
-        return Ok(patched);
-    }
-    if find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET repository_url = $repository_url, updated_at = $updated_at \
-             RETURN {PROJECT_SELECT}"
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("repository_url", repository_url))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
+    .await
 }
 
 /// Record a provisioned repository's URL and when it was provisioned in one
@@ -3626,7 +2559,7 @@ pub async fn set_repository_url(
 /// [`ProjectCommandError::Invalid`] for a URL [`is_valid_repository_url`]
 /// refuses, or a database error.
 pub async fn record_provisioned_repository(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     repository_url: &str,
     provisioned_at: &str,
@@ -3634,32 +2567,16 @@ pub async fn record_provisioned_repository(
     if !is_valid_repository_url(repository_url.trim()) {
         return Err(ProjectCommandError::Invalid(REPOSITORY_URL_INVALID));
     }
-    if let Some(pg) = authority().await? {
-        let project = Box::pin(crate::postgres::projects::record_provisioned_repository_on(
-            &pg,
-            project_id,
-            repository_url,
-            provisioned_at,
-        ))
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-        return Ok(project);
-    }
-    surreal
-        .query(
-            "UPDATE $id SET repository_url = $url, forge_provisioned_at = $at, updated_at = $at \
-             WHERE repository_url IS NONE",
-        )
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("url", repository_url.trim().to_string()))
-        .bind(("at", provisioned_at.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let project = find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, project).await?)
+    let pg = authority().await?;
+    let project = Box::pin(crate::postgres::projects::record_provisioned_repository_on(
+        &pg,
+        project_id,
+        repository_url,
+        provisioned_at,
+    ))
+    .await
+    .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    Ok(project)
 }
 
 /// Record that a verified first commit initialized the Project's source at
@@ -3671,7 +2588,7 @@ pub async fn record_provisioned_repository(
 /// # Errors
 /// [`ProjectCommandError::Invalid`] for a refused URL, or a database error.
 pub async fn record_source_initialized(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     repository_url: &str,
     initialized_at: &str,
@@ -3680,34 +2597,16 @@ pub async fn record_source_initialized(
     if !is_valid_repository_url(url) {
         return Err(ProjectCommandError::Invalid(REPOSITORY_URL_INVALID));
     }
-    if let Some(pg) = authority().await? {
-        let project = Box::pin(crate::postgres::projects::record_source_initialized_on(
-            &pg,
-            project_id,
-            repository_url,
-            initialized_at,
-        ))
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-        return Ok(project);
-    }
-    surreal
-        .query(
-            "UPDATE $id SET repository_url = $url, \
-             forge_provisioned_at = forge_provisioned_at ?? $at, \
-             git_initialized_at = git_initialized_at ?? $at, updated_at = $at \
-             WHERE repository_url IS NONE OR repository_url = $url",
-        )
-        .bind(("id", record_id(PROJECT_TABLE, project_id)))
-        .bind(("url", url.to_string()))
-        .bind(("at", initialized_at.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let project = find_by_id(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, project).await?)
+    let pg = authority().await?;
+    let project = Box::pin(crate::postgres::projects::record_source_initialized_on(
+        &pg,
+        project_id,
+        repository_url,
+        initialized_at,
+    ))
+    .await
+    .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    Ok(project)
 }
 
 /// A matter's descriptive update could not be applied.
@@ -3819,7 +2718,7 @@ const BRAND_WORN_BY_NO_FIRM: &str = "That brand is not worn by a Firm.";
 const BRAND_WORN_BY_ANOTHER_FIRM: &str = "That brand is worn by a different Firm.";
 
 async fn validate_firm_brand_update(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     input: &UpdateProjectCommand,
 ) -> Result<Option<(Uuid, String)>, ProjectCommandError> {
     match (input.firm_id, input.brand.as_deref()) {
@@ -3833,14 +2732,14 @@ async fn validate_firm_brand_update(
             // row carries, a key no Firm wears, or a key another Firm wears.
             // `find_by_key` reads the same store `firm_id_for_brand_key`
             // does, so the two checks agree under PostgreSQL tenancy too.
-            if crate::brands::find_by_key(surreal, brand)
+            if crate::brands::find_by_key(application_store, brand)
                 .await
                 .map_err(|error| ProjectCommandError::Db(error.to_string()))?
                 .is_none()
             {
                 return Err(ProjectCommandError::Invalid(UNKNOWN_BRAND_KEY));
             }
-            let wearing_firm = crate::firms::firm_id_for_brand_key(surreal, brand)
+            let wearing_firm = crate::firms::firm_id_for_brand_key(application_store, brand)
                 .await
                 .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
             match wearing_firm {
@@ -3890,11 +2789,11 @@ fn validate_update_command(input: &UpdateProjectCommand) -> Result<(), ProjectCo
 /// repointed entity exists, and a named Drive ingest folder is not recorded
 /// on another matter.
 async fn validate_update_references(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     input: &UpdateProjectCommand,
 ) -> Result<(), ProjectCommandError> {
-    if find_by_id(surreal, id)
+    if find_by_id(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
         .is_none()
@@ -3905,7 +2804,7 @@ async fn validate_update_references(
         // A `record<entity>` link is not validated by the engine, so this
         // read-back is what keeps a matter from being repointed at an
         // entity that does not exist.
-        if crate::entities::find_by_id(surreal, entity_id)
+        if crate::entities::find_by_id(application_store, entity_id)
             .await
             .map_err(|error| ProjectCommandError::Db(error.to_string()))?
             .is_none()
@@ -3918,7 +2817,7 @@ async fn validate_update_references(
     // command seam rather than discovered as a misdirected import later.
     if let Some(drive_folder_id) = input.drive_folder_id.as_deref() {
         if !drive_folder_id.trim().is_empty()
-            && drive_folder_recorded_elsewhere(surreal, id, drive_folder_id.trim())
+            && drive_folder_recorded_elsewhere(application_store, id, drive_folder_id.trim())
                 .await
                 .map_err(probe_failed)?
         {
@@ -3953,23 +2852,23 @@ async fn validate_update_references(
 /// `Unchanged(id)` update leaves `status`, `closed_at`, and every other
 /// column a concurrent lifecycle write may be changing entirely untouched.
 pub async fn update_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     input: &UpdateProjectCommand,
 ) -> Result<Project, ProjectCommandError> {
-    update_project_inner(surreal, id, input, false).await
+    update_project_inner(application_store, id, input, false).await
 }
 
 /// Change the Brand within the Project's current Firm, even if another
 /// administrator moves the Project between the caller's read and this write.
 pub async fn change_brand(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     firm_id: Uuid,
     brand: String,
 ) -> Result<Project, ProjectCommandError> {
     update_project_inner(
-        surreal,
+        application_store,
         id,
         &UpdateProjectCommand {
             firm_id: Some(firm_id),
@@ -3983,7 +2882,7 @@ pub async fn change_brand(
 
 /// [`update_project_inner`]'s write, PostgreSQL first.
 async fn update_project_in_postgres(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     id: Uuid,
     input: &UpdateProjectCommand,
@@ -4019,91 +2918,33 @@ async fn update_project_in_postgres(
     let within_firm = firm_brand
         .filter(|_| keep_firm)
         .map(|(firm_id, brand)| (*firm_id, Some(brand.as_str())));
-    patch_in_postgres(surreal, pg, id, &columns, within_firm)
+    patch_in_postgres(application_store, pg, id, &columns, within_firm)
         .await?
         .ok_or(ProjectCommandError::NotFound)
 }
 
 async fn update_project_inner(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     id: Uuid,
     input: &UpdateProjectCommand,
     keep_firm: bool,
 ) -> Result<Project, ProjectCommandError> {
     validate_update_command(input)?;
-    let firm_brand = validate_firm_brand_update(surreal, input).await?;
-    validate_update_references(surreal, id, input).await?;
+    let firm_brand = validate_firm_brand_update(application_store, input).await?;
+    validate_update_references(application_store, id, input).await?;
     // The optional text columns are handled from one table, so a column is set
     // and bound from the same row rather than from two `if` blocks a hundred
     // lines apart that have to be kept in step.
-    if let Some(pg) = authority().await? {
-        return update_project_in_postgres(surreal, &pg, id, input, firm_brand.as_ref(), keep_firm)
-            .await;
-    }
-    let text_columns = optional_text_columns(input);
-    let mut assignments = vec!["updated_at = $updated_at".to_string()];
-    if input.name.is_some() {
-        assignments.push("name = $name".to_string());
-    }
-    if input.entity_id.is_some() {
-        assignments.push("entity_id = $entity_id".to_string());
-    }
-    if firm_brand.is_some() {
-        if !keep_firm {
-            assignments.push("firm_id = $firm_id".to_string());
-        }
-        assignments.push("brand = $brand".to_string());
-    }
-    for (column, value) in text_columns {
-        if value.is_some() {
-            assignments.push(format!("{column} = ${column}"));
-        }
-    }
-    let condition = if keep_firm {
-        " WHERE firm_id = $firm_id AND (SELECT VALUE firm_id FROM firm_brand WHERE brand_key = $brand) = [$firm_id]"
-    } else {
-        ""
-    };
-    let mut response = surreal
-        .query(format!(
-            "UPDATE $id SET {}{condition} RETURN {PROJECT_SELECT}",
-            assignments.join(", ")
-        ))
-        .bind(("id", record_id(PROJECT_TABLE, id)))
-        .bind((
-            "name",
-            input
-                .name
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string(),
-        ))
-        .bind(("updated_at", chrono::Utc::now().to_rfc3339()));
-    if let Some(entity_id) = input.entity_id {
-        response = response.bind(("entity_id", record_id(ENTITY_TABLE, entity_id)));
-    }
-    if let Some((firm_id, brand)) = firm_brand {
-        response = response
-            .bind(("firm_id", record_id(crate::firms::TABLE, firm_id)))
-            .bind(("brand", brand));
-    }
-    for (column, value) in text_columns {
-        if let Some(value) = value {
-            // A blank submission clears the column rather than storing "".
-            response = response.bind((column, crate::people_commands::none_if_blank(Some(value))));
-        }
-    }
-    let mut response = response
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    let updated: Option<ProjectRow> = response
-        .take(0)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    mirrored(surreal, updated.and_then(ProjectRow::into_project))
-        .await?
-        .ok_or(ProjectCommandError::NotFound)
+    let pg = authority().await?;
+    update_project_in_postgres(
+        application_store,
+        &pg,
+        id,
+        input,
+        firm_brand.as_ref(),
+        keep_firm,
+    )
+    .await
 }
 
 /// A reference probe could not be answered. The matter is left alone: a
@@ -4115,15 +2956,15 @@ fn probe_failed(error: impl std::fmt::Display) -> ProjectCommandError {
 /// Delete a matter after validating the records in the projects cluster.
 /// Nothing in the engine refuses a delete that strands a reference, so the
 /// check belongs at this command seam.
-pub async fn delete_project_with_surreal(
-    surreal: &SurrealDb,
+pub async fn delete_project(
+    application_store: &ApplicationStore,
     id: Uuid,
 ) -> Result<Project, ProjectCommandError> {
-    let project = find_by_id(surreal, id)
+    let project = find_by_id(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
         .ok_or(ProjectCommandError::NotFound)?;
-    if !participations_for_project(surreal, id)
+    if !participations_for_project(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
         .is_empty()
@@ -4134,13 +2975,13 @@ pub async fn delete_project_with_surreal(
     }
     // `notations` is Surreal-resident, so its reference check runs against
     // that engine.
-    if crate::notations::exists_for_project(surreal, id)
+    if crate::notations::exists_for_project(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
     {
         return Err(ProjectCommandError::Referenced("notations".into()));
     }
-    if !crate::xero_invoices::for_projects(surreal, &[id])
+    if !crate::xero_invoices::for_projects(application_store, &[id])
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
         .is_empty()
@@ -4152,31 +2993,31 @@ pub async fn delete_project_with_surreal(
     // `assets` with ENG-121, `communications`, `expunge_requests`, and
     // `expunge_records` with ENG-160 — so each answer comes from the engine
     // that actually holds the rows.
-    if crate::templates::exists_for_project(surreal, id)
+    if crate::templates::exists_for_project(application_store, id)
         .await
         .map_err(probe_failed)?
     {
         return Err(ProjectCommandError::Referenced("templates".into()));
     }
-    if crate::expunge_requests::exists_for_project(surreal, id)
+    if crate::expunge_requests::exists_for_project(application_store, id)
         .await
         .map_err(probe_failed)?
     {
         return Err(ProjectCommandError::Referenced("expunge_requests".into()));
     }
-    if crate::communications::exists_for_project(surreal, id)
+    if crate::communications::exists_for_project(application_store, id)
         .await
         .map_err(probe_failed)?
     {
         return Err(ProjectCommandError::Referenced("communications".into()));
     }
-    if crate::expunge_records::exists_for_project(surreal, id)
+    if crate::expunge_records::exists_for_project(application_store, id)
         .await
         .map_err(probe_failed)?
     {
         return Err(ProjectCommandError::Referenced("expunge_records".into()));
     }
-    if crate::assets::exists_for_project(surreal, id)
+    if crate::assets::exists_for_project(application_store, id)
         .await
         .map_err(probe_failed)?
     {
@@ -4185,51 +3026,40 @@ pub async fn delete_project_with_surreal(
     // Surreal cascades nothing, so the
     // `authority_uses`/`citations`/`verifications` chain is walked
     // explicitly before the project row itself is removed below.
-    crate::authorities::delete_for_project(surreal, id)
+    crate::authorities::delete_for_project(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
     // `cases` and its discovery chain moved to SurrealDB with wave six
     // (ENG-160); the cascade walks that chain explicitly, the same way the
     // `authorities` sweep above does.
-    crate::cases::delete_for_project(surreal, id)
+    crate::cases::delete_for_project(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
     // The synced Matter Pages and Matter Caption are a copy of the
     // repository's manifest, so they go with the row rather than blocking
     // the delete.
-    crate::matter_pages::delete_for_project(surreal, id)
+    crate::matter_pages::delete_for_project(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    crate::matter_captions::delete_for_project(surreal, id)
+    crate::matter_captions::delete_for_project(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
     // Fiduciary roles, the estate asset schedule, and cap table holdings are
     // imported from the repository's seeds, so they go with the row too.
-    crate::fiduciary_roles::delete_for_project(surreal, id)
+    crate::fiduciary_roles::delete_for_project(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    crate::estate_assets::delete_for_project(surreal, id)
+    crate::estate_assets::delete_for_project(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    crate::cap_table_holdings::delete_for_project(surreal, id)
+    crate::cap_table_holdings::delete_for_project(application_store, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
     let pg = authority().await?;
-    if let Some(pg) = &pg {
-        Box::pin(crate::postgres::projects::delete_on(pg, id))
-            .await
-            .map_err(ProjectStoreError::from)?;
-        return Ok(project);
-    }
-    surreal
-        .query("DELETE $id")
-        .bind(("id", record_id(PROJECT_TABLE, id)))
+    let pg = &pg;
+    Box::pin(crate::postgres::projects::delete_on(pg, id))
         .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    if pg.is_none() {
-        publish(surreal, [MirrorKey::Project(id)]).await?;
-    }
+        .map_err(ProjectStoreError::from)?;
     Ok(project)
 }
 
@@ -4379,10 +3209,10 @@ pub enum OpenMatterError {
 /// already-in-flight open by a person demoted mid-request. Nick accepted
 /// that narrowing on 2026-08-02.
 async fn lock_person(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Option<crate::persons::Person>, OpenMatterError> {
-    crate::persons::find_by_id(surreal, person_id)
+    crate::persons::find_by_id(application_store, person_id)
         .await
         .map_err(|err| person_lookup_failed(&err))
 }
@@ -4397,10 +3227,10 @@ fn person_lookup_failed(err: &crate::persons::PersonError) -> OpenMatterError {
 /// tier — the caller needs it to derive the lawyer role's own participation
 /// word rather than writing a fixed one.
 async fn validate_open_references(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     input: &OpenMatterCommand,
 ) -> Result<Role, OpenMatterError> {
-    let client = lock_person(surreal, input.client_id)
+    let client = lock_person(application_store, input.client_id)
         .await?
         .ok_or(OpenMatterError::NotFound("client"))?;
     if client.role != Role::Client {
@@ -4408,14 +3238,14 @@ async fn validate_open_references(
     }
     // The engine does not validate a `record<entity>` link, so the matter
     // a client opens against is read back rather than trusted.
-    if crate::entities::find_by_id(surreal, input.entity_id)
+    if crate::entities::find_by_id(application_store, input.entity_id)
         .await
         .map_err(|error| OpenMatterError::Db(error.to_string()))?
         .is_none()
     {
         return Err(OpenMatterError::NotFound("entity"));
     }
-    let attester = lock_person(surreal, input.acting_person_id)
+    let attester = lock_person(application_store, input.acting_person_id)
         .await?
         .ok_or(OpenMatterError::NotFound("attester"))?;
     // The attester becomes the accountable lawyer DRI and the actor on the
@@ -4427,7 +3257,7 @@ async fn validate_open_references(
         return Err(OpenMatterError::AttesterNotAllowed);
     }
     if let Some(jurisdiction_id) = input.jurisdiction_id {
-        if crate::jurisdictions::find_by_id(surreal, jurisdiction_id)
+        if crate::jurisdictions::find_by_id(application_store, jurisdiction_id)
             .await
             .map_err(|error| OpenMatterError::Db(error.to_string()))?
             .is_none()
@@ -4460,16 +3290,12 @@ fn initial_status_and_closed_at(
     ))
 }
 
-fn jurisdiction_record(id: Option<Uuid>) -> Option<surrealdb::types::RecordId> {
-    id.map(|id| record_id(crate::jurisdictions::TABLE, id))
-}
-
 /// The conflict attestation that belongs with every opened matter.
 ///
 /// It names who attested and, when the check was not clear, the findings they
 /// attested over.
 async fn record_open_attestation(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     acting_person_id: Uuid,
     clear: bool,
@@ -4484,7 +3310,7 @@ async fn record_open_attestation(
         )
     };
     crate::relationship_logs::record(
-        surreal,
+        application_store,
         &crate::relationship_logs::NewRelationshipLog {
             actor_person_id: Some(acting_person_id),
             subject_type: "project".to_string(),
@@ -4501,18 +3327,18 @@ async fn record_open_attestation(
 
 /// Resolve ownership without dropping an explicitly authorized Firm.
 async fn resolve_open_firm(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     input: &OpenMatterCommand,
 ) -> Result<Uuid, OpenMatterError> {
     // Validate every caller's selected brand against live rows. The API uses
     // the request brand by default or an explicitly authorized Firm/brand pair.
-    if !crate::firms::brand_key_exists(surreal, &input.brand)
+    if !crate::firms::brand_key_exists(application_store, &input.brand)
         .await
         .map_err(|error| OpenMatterError::Db(error.to_string()))?
     {
         return Err(OpenMatterError::NotFound("brand"));
     }
-    let firm_id = crate::firms::firm_id_for_brand_key(surreal, &input.brand)
+    let firm_id = crate::firms::firm_id_for_brand_key(application_store, &input.brand)
         .await
         .map_err(|error| OpenMatterError::Db(error.to_string()))?;
     let firm_id = firm_id.ok_or(OpenMatterError::Invalid(BRAND_WORN_BY_NO_FIRM))?;
@@ -4526,7 +3352,7 @@ async fn resolve_open_firm(
 
 /// Commit the canonical Project and both DRI rows in PostgreSQL.
 async fn open_matter_in_postgres(
-    _surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     pg: &PostgresDb,
     open: &crate::postgres::projects::OpenMatter<'_>,
 ) -> Result<Project, OpenMatterError> {
@@ -4543,20 +3369,20 @@ async fn open_matter_in_postgres(
 }
 
 pub async fn open_matter(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     input: &OpenMatterCommand,
 ) -> Result<Project, OpenMatterError> {
-    open_matter_with_id(surreal, input, None).await
+    open_matter_with_id(application_store, input, None).await
 }
 
 /// Resume only the Project ID allocated to this staged notice. The caller
 /// serializes decisions on the notice before using this entry point.
 pub(crate) async fn open_matter_for_intake(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     input: &OpenMatterCommand,
     intake_id: Uuid,
 ) -> Result<Project, OpenMatterError> {
-    open_matter_with_id(surreal, input, Some(intake_id)).await
+    open_matter_with_id(application_store, input, Some(intake_id)).await
 }
 
 #[expect(
@@ -4564,7 +3390,7 @@ pub(crate) async fn open_matter_for_intake(
     reason = "one open applies the same validation and conflict attestation to a new Project or an intake retry"
 )]
 async fn open_matter_with_id(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     input: &OpenMatterCommand,
     intake_id: Option<Uuid>,
 ) -> Result<Project, OpenMatterError> {
@@ -4591,27 +3417,28 @@ async fn open_matter_with_id(
              it must start and end with a letter or digit.",
         ));
     }
-    let firm_id = resolve_open_firm(surreal, input).await?;
+    let firm_id = resolve_open_firm(application_store, input).await?;
 
     // Validate every reference before opening. The project and both
     // participations commit in the explicit SurrealDB transaction below;
     // transaction conflicts retry with jitter. `lock_person` remains the
     // accepted narrowing.
     let attester_participation =
-        participation_for_role(validate_open_references(surreal, input).await?);
+        participation_for_role(validate_open_references(application_store, input).await?);
     // Conflict check, before any write. The relationship graph is advisory to
     // clear but authoritative to block: a confident adverse link to a current
     // client hard-stops the open, and no attestation overrides it (a waiver is
     // a separate, heavier flow). A clear or softly-flagged check proceeds on
     // the attorney's attestation, which the audit row below records.
-    let conflict = crate::conflicts::check_new_matter(surreal, input.client_id, input.entity_id)
-        .await
-        .map_err(OpenMatterError::Db)?;
+    let conflict =
+        crate::conflicts::check_new_matter(application_store, input.client_id, input.entity_id)
+            .await
+            .map_err(OpenMatterError::Db)?;
     if conflict.has_blocking() {
         return Err(OpenMatterError::BlockingConflict(conflict.summary_lines()));
     }
     if let Some(id) = intake_id {
-        if let Some(project) = find_by_id(surreal, id)
+        if let Some(project) = find_by_id(application_store, id)
             .await
             .map_err(|error| OpenMatterError::Db(error.to_string()))?
         {
@@ -4622,7 +3449,7 @@ async fn open_matter_with_id(
             {
                 return Err(OpenMatterError::CodeConflict);
             }
-            let roles = participations_for_project(surreal, id)
+            let roles = participations_for_project(application_store, id)
                 .await
                 .map_err(|error| OpenMatterError::Db(error.to_string()))?;
             if !roles
@@ -4634,7 +3461,7 @@ async fn open_matter_with_id(
             {
                 return Err(OpenMatterError::CodeConflict);
             }
-            let logs = crate::relationship_logs::for_project(surreal, id)
+            let logs = crate::relationship_logs::for_project(application_store, id)
                 .await
                 .map_err(OpenMatterError::Attestation)?;
             if !logs.iter().any(|log| {
@@ -4642,7 +3469,7 @@ async fn open_matter_with_id(
                     && log.actor_person_id == Some(input.acting_person_id)
             }) {
                 record_open_attestation(
-                    surreal,
+                    application_store,
                     id,
                     input.acting_person_id,
                     conflict.is_clear(),
@@ -4673,12 +3500,11 @@ async fn open_matter_with_id(
         lawyer_participation: attester_participation,
         client: input.client_id,
     };
-    let created = match authority()
-        .await
-        .map_err(|error| OpenMatterError::Db(error.to_string()))?
-    {
-        Some(pg) => Box::pin(open_matter_in_postgres(surreal, &pg, &open)).await?,
-        None => Box::pin(open_matter_in_surreal(surreal, &open)).await?,
+    let created = {
+        let pg = authority()
+            .await
+            .map_err(|error| OpenMatterError::Db(error.to_string()))?;
+        Box::pin(open_matter_in_postgres(application_store, &pg, &open)).await?
     };
     // The attestation is the record that the conflict check was run and
     // cleared — the record the firm's `@cleared` discipline rests on. It
@@ -4686,78 +3512,13 @@ async fn open_matter_with_id(
     // names the Project by foreign key, so the matter's PostgreSQL copy
     // lands first. A failure of either is the caller's error.
     record_open_attestation(
-        surreal,
+        application_store,
         created.id,
         input.acting_person_id,
         conflict.is_clear(),
         &conflict.summary_lines(),
     )
     .await?;
-    Ok(created)
-}
-
-/// Open a matter in one SurrealDB transaction, then publish the Project and
-/// both DRI rows to PostgreSQL.
-async fn open_matter_in_surreal(
-    surreal: &SurrealDb,
-    open: &crate::postgres::projects::OpenMatter<'_>,
-) -> Result<Project, OpenMatterError> {
-    let project_id = open.id.unwrap_or_else(Uuid::now_v7);
-    let now = chrono::Utc::now().to_rfc3339();
-    let jurisdiction_id = jurisdiction_record(open.project.jurisdiction_id);
-    let mut response = writing_project(|| {
-        surreal
-            .query(format!(
-                r"BEGIN;
-                 CREATE $project SET code = $code, name = $name, status = $status,
-                    brand = $brand,
-                    firm_id = IF (SELECT VALUE firm_id FROM firm_brand WHERE brand_key = $brand) = [$firm_id] {{
-                        $firm_id
-                    }} ELSE {{ THROW 'project_firm_brand_changed'; }},
-                    entity_id = $entity_id, jurisdiction_id = $jurisdiction_id,
-                    description = $description,
-                    closed_at = $closed_at,
-                    inserted_at = $now, updated_at = $now RETURN {PROJECT_SELECT};
-                 CREATE $lawyer_role SET person_id = $attester, project_id = $project, participation = $attester_participation,
-                    is_lawyer_dri = true, inserted_at = $now, updated_at = $now;
-                 CREATE $client_role SET person_id = $client, project_id = $project, participation = 'client',
-                    is_client_dri = true, inserted_at = $now, updated_at = $now;
-                 COMMIT;"
-            ))
-            .bind(("project", record_id(PROJECT_TABLE, project_id)))
-            .bind(("lawyer_role", record_id(PERSON_PROJECT_ROLE_TABLE, Uuid::now_v7())))
-            .bind(("client_role", record_id(PERSON_PROJECT_ROLE_TABLE, Uuid::now_v7())))
-            .bind(("code", open.project.code.clone()))
-            .bind(("name", open.project.name.clone()))
-            .bind(("status", open.project.status.clone()))
-            .bind(("closed_at", open.closed_at.map(str::to_string)))
-            .bind(("brand", open.project.brand.clone()))
-            .bind(("firm_id", open.project.firm_id.map(|id| record_id(crate::firms::TABLE, id))))
-            .bind(("entity_id", record_id(ENTITY_TABLE, open.project.entity_id)))
-            .bind(("jurisdiction_id", jurisdiction_id.clone()))
-            .bind(("description", open.project.description.clone()))
-            .bind(("attester", record_id("person", open.lawyer)))
-            .bind(("attester_participation", open.lawyer_participation.to_string()))
-            .bind(("client", record_id("person", open.client)))
-            .bind(("now", now.clone()))
-    })
-    .await
-    .map_err(|error| match error {
-        ProjectStoreError::CodeTaken => OpenMatterError::CodeConflict,
-        other if other.to_string().contains("project_firm_brand_changed") =>
-            OpenMatterError::Invalid("Firm and brand changed while opening the matter; retry the request."),
-        other => OpenMatterError::Db(other.to_string()),
-    })?;
-    let created: Option<ProjectRow> = response
-        .take(1)
-        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
-    let created = created
-        .and_then(ProjectRow::into_project)
-        .ok_or_else(|| OpenMatterError::Db("opening a matter returned no project".into()))?;
-
-    mirror_project_with_participations(surreal, project_id)
-        .await
-        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
     Ok(created)
 }
 
@@ -4960,7 +3721,7 @@ impl OnboardingStatus {
 ///
 /// PostgreSQL configuration, application admission, and query failures are returned to the caller.
 pub async fn onboarding_status(
-    _surreal: &crate::surreal::SurrealDb,
+    _application_store: &crate::application_store::ApplicationStore,
     project_id: Uuid,
     code: &str,
 ) -> Result<OnboardingStatus, String> {
@@ -4991,7 +3752,7 @@ pub fn execution_lifecycle_label(code: &str, status: &str, official: bool) -> &'
 ///
 /// PostgreSQL configuration, application admission, and query failures are returned to the caller.
 pub async fn onboarding_official_sets(
-    _surreal: &crate::surreal::SurrealDb,
+    _application_store: &crate::application_store::ApplicationStore,
     projects: &[Project],
 ) -> Result<std::collections::HashSet<Uuid>, String> {
     let pg = crate::postgres::PostgresDb::application()
@@ -5009,7 +3770,7 @@ pub async fn onboarding_official_sets(
 ///
 /// PostgreSQL configuration, application admission, and query failures are returned to the caller.
 pub async fn onboarding_esign_pending(
-    _surreal: &crate::surreal::SurrealDb,
+    _application_store: &crate::application_store::ApplicationStore,
     projects: &[Project],
 ) -> Result<std::collections::HashMap<Uuid, crate::onboarding::EsignSummary>, String> {
     let pg = crate::postgres::PostgresDb::application()
@@ -5031,7 +3792,7 @@ pub async fn onboarding_esign_pending(
 ///
 /// PostgreSQL configuration, application admission, and query failures are returned to the caller.
 pub async fn matter_lifecycle_sets(
-    _surreal: &crate::surreal::SurrealDb,
+    _application_store: &crate::application_store::ApplicationStore,
     projects: &[Project],
 ) -> Result<
     (
@@ -5105,14 +3866,14 @@ pub fn open_pitch_counts(
 /// follow-up post in that Firm's Slack, using the shared verified onboarding
 /// evidence.
 pub async fn matter_open_pitch_counts(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Uuid,
 ) -> Result<Vec<BrandOpenPitch>, ProjectStoreError> {
-    let brands = crate::brands::for_firm(surreal, firm_id)
+    let brands = crate::brands::for_firm(application_store, firm_id)
         .await
         .map_err(|error| ProjectStoreError::Brand(Box::new(error)))?;
-    let projects = all(surreal).await?;
-    let has_engagement = onboarding_official_sets(surreal, &projects)
+    let projects = all(application_store).await?;
+    let has_engagement = onboarding_official_sets(application_store, &projects)
         .await
         .map_err(ProjectStoreError::Lifecycle)?;
     let brands: Vec<(&str, &str)> = brands
@@ -5134,321 +3895,7 @@ pub async fn matter_open_pitch_counts(
 
 #[cfg(test)]
 mod surreal_read_tests {
-    use super::{
-        can_access_as_client_in_surreal, can_access_as_lawyer_in_surreal, classify_project_write,
-        create, designate_dri_in_surreal, dri_digest, find_by_id, matter_directory,
-        matter_directory_for, open_pitch_counts, record_id, upsert_with_id, DriSide, NewProject,
-        ProjectStoreError, ENTITY_TABLE,
-    };
-    use crate::persons::Role;
-    use crate::schema::apply;
-    use crate::surreal::test_support::unmigrated;
-    use crate::test_support::mem_surreal;
-
-    /// A fresh Firm and its Admin DRI's person id, fit to create a
-    /// Firm-scoped brand (ENG-659: `store::brands::create` refuses
-    /// `firm_id: None`) — a one-liner for the tests below that only need
-    /// *some* live brand key, not a particular Firm.
-    async fn practice_firm(
-        db: &crate::surreal::SurrealDb,
-        name: &str,
-    ) -> (crate::firms::Firm, uuid::Uuid) {
-        let admin = crate::persons::create(
-            db,
-            &crate::persons::NewPerson::with_role(
-                format!("{name} Admin DRI"),
-                format!("{name}-admin-dri-{}@example.com", uuid::Uuid::now_v7()),
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        let firm = crate::firms::create(
-            db,
-            &crate::firms::NewFirm {
-                name: name.to_string(),
-                status: "active".to_string(),
-                entity_id: crate::test_support::seed_entity(db).await,
-                admin_dri_person_id: admin,
-            },
-        )
-        .await
-        .unwrap();
-        (firm, admin)
-    }
-
-    #[tokio::test]
-    async fn find_by_id_reads_the_projects_cluster_row() {
-        let db = unmigrated().await;
-        apply(&db).await.unwrap();
-        let id = uuid::Uuid::now_v7();
-        let entity_id = uuid::Uuid::now_v7();
-        db.query(
-            "CREATE $id SET code = 'matter', name = 'Matter', status = 'open', \
-             entity_id = $entity_id, brand = 'neon', inserted_at = '2026-08-04T00:00:00Z', \
-             updated_at = '2026-08-04T00:00:00Z'",
-        )
-        .bind(("id", crate::surreal::record_id("project", id)))
-        .bind(("entity_id", record_id(ENTITY_TABLE, entity_id)))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-
-        let project = find_by_id(&db, id).await.unwrap().unwrap();
-        assert_eq!(project.id, id);
-        assert_eq!(project.entity_id, entity_id);
-        assert_eq!(project.code, "matter");
-    }
-
-    /// `brand` round-trips through `create` for every key the registry
-    /// serves today, and a row written with no explicit `brand` (`create`
-    /// always writes one via `NewProject::default()`, but a caller may pass
-    /// through that default) reads back as `"neon"`. `create` now validates
-    /// the key against live `brand` rows (ENG-587), so each is seeded first —
-    /// see [`create_refuses_an_unknown_brand_key`] for what happens without
-    /// one, and `store/tests/schema_apply_backfills_project_brand.rs` for a
-    /// row that predates the field entirely.
-    #[tokio::test]
-    async fn create_round_trips_brand_for_every_registered_key() {
-        let db = mem_surreal().await;
-        // `mem_surreal` already seeds every `CLOSED_BRAND_KEYS` entry —
-        // including "neon" and "delete-your-data" — as a system-wide brand
-        // row, so both exist before this test creates any Project.
-        for (label, brand) in [
-            ("neon", "neon"),
-            ("delete-your-data", "delete-your-data"),
-            ("default", "neon"),
-        ] {
-            let entity_id = crate::test_support::seed_entity(&db).await;
-            let input = if label == "default" {
-                NewProject {
-                    code: format!("brand-{label}"),
-                    name: format!("Brand {label}"),
-                    status: "open".to_string(),
-                    entity_id,
-                    ..Default::default()
-                }
-            } else {
-                NewProject {
-                    code: format!("brand-{label}"),
-                    name: format!("Brand {label}"),
-                    status: "open".to_string(),
-                    brand: brand.to_string(),
-                    entity_id,
-                    description: None,
-                    ..Default::default()
-                }
-            };
-            let created = create(&db, &input).await.unwrap();
-            assert_eq!(created.brand, brand, "{label}: create response");
-            let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();
-            assert_eq!(reloaded.brand, brand, "{label}: reread from the store");
-        }
-    }
-
-    /// ENG-587: a key no `brand` row carries is refused before any write —
-    /// the same check `store::firms::attach_brand` runs, not a compiled
-    /// closed list.
-    #[tokio::test]
-    async fn create_refuses_an_unknown_brand_key() {
-        let db = mem_surreal().await;
-        let entity_id = crate::test_support::seed_entity(&db).await;
-        let err = create(
-            &db,
-            &NewProject {
-                code: "unknown-brand-project".to_string(),
-                name: "Unknown Brand Project".to_string(),
-                status: "open".to_string(),
-                brand: "never-registered".to_string(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            ProjectStoreError::UnknownBrand(key) if key == "never-registered"
-        ));
-    }
-
-    /// Seed and fixture callers use upsert_with_id, so it must enforce the
-    /// same live-brand boundary as matter-open's create.
-    #[tokio::test]
-    async fn upsert_with_id_refuses_an_unknown_brand_key() {
-        let db = mem_surreal().await;
-        let entity_id = crate::test_support::seed_entity(&db).await;
-        let id = uuid::Uuid::now_v7();
-        let err = upsert_with_id(
-            &db,
-            id,
-            &NewProject {
-                code: "unknown-upsert-brand".to_string(),
-                name: "Unknown upsert brand".to_string(),
-                status: "open".to_string(),
-                brand: "never-registered".to_string(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            ProjectStoreError::UnknownBrand(key) if key == "never-registered"
-        ));
-        assert_eq!(find_by_id(&db, id).await.unwrap(), None);
-    }
-
-    /// Runtime-created keys remain valid on the fixture upsert path; the
-    /// check is a live table lookup, not a closed compiled list.
-    #[tokio::test]
-    async fn upsert_with_id_accepts_a_runtime_created_brand_key() {
-        let db = mem_surreal().await;
-        let (firm, admin) = practice_firm(&db, "Upsert Brand Practice").await;
-        crate::brands::create(
-            &db,
-            Role::Admin,
-            Some(admin),
-            &crate::brands::NewBrand {
-                name: "Upsert Custom Brand".to_string(),
-                key: "upsert-custom-brand".to_string(),
-                firm_id: Some(firm.id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let entity_id = crate::test_support::seed_entity(&db).await;
-        let project = upsert_with_id(
-            &db,
-            uuid::Uuid::now_v7(),
-            &NewProject {
-                code: "upsert-custom-brand".to_string(),
-                name: "Upsert custom brand".to_string(),
-                status: "open".to_string(),
-                brand: "upsert-custom-brand".to_string(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("a runtime-created brand is a valid upsert target");
-        assert_eq!(project.brand, "upsert-custom-brand");
-    }
-
-    /// ENG-587: a runtime-created brand key (the kind `webapp::brands_new`
-    /// mints) is just as usable at matter-open as a compiled one — the
-    /// validation is store-side against live rows, not a closed enum.
-    #[tokio::test]
-    async fn create_accepts_a_runtime_created_brand_key() {
-        let db = mem_surreal().await;
-        let (firm, admin) = practice_firm(&db, "Custom Brand Practice").await;
-        crate::brands::create(
-            &db,
-            Role::Admin,
-            Some(admin),
-            &crate::brands::NewBrand {
-                name: "Custom Brand".to_string(),
-                key: "custom-brand".to_string(),
-                firm_id: Some(firm.id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let entity_id = crate::test_support::seed_entity(&db).await;
-        let created = create(
-            &db,
-            &NewProject {
-                code: "custom-brand-project".to_string(),
-                name: "Custom Brand Project".to_string(),
-                status: "open".to_string(),
-                brand: "custom-brand".to_string(),
-                entity_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(created.brand, "custom-brand");
-    }
-
-    /// The write-side proof that a historical row (no `brand` value at all)
-    /// stays writable: `store/tests/schema_apply_backfills_project_brand.rs`
-    /// covers the read/backfill half from outside the crate; this covers a
-    /// specific partial-update call site inside it.
-    /// `designate_dri_in_surreal` only sets `updated_at` on the Project row,
-    /// which is exactly the shape of coercion error a required, undefaulted
-    /// `brand` field would produce against a row still genuinely missing a
-    /// value — ENG-587's backfill (re-run by `apply` below, the same
-    /// idempotent step every boot takes) is what prevents that.
-    ///
-    /// `brand` predates ENG-587 as `option<string>`, so a historical row
-    /// reproduces that permissive definition rather than removing the field
-    /// outright: the backfill `UPDATE` this test proves runs *before* the
-    /// tightened `DEFINE FIELD`, against a `SCHEMAFULL` table, so it needs
-    /// `brand` to already be defined (however loosely) or the statement
-    /// itself is refused as referencing a field that does not exist.
-    #[tokio::test]
-    async fn designating_a_dri_on_a_project_written_before_brand_was_defined() {
-        let db = unmigrated().await;
-        apply(&db).await.unwrap();
-        // The established default must be a live brand before a historical
-        // absent value may be backfilled; otherwise the upgrade names the
-        // missing default instead of inventing a dangling reference.
-        let (firm, admin) = practice_firm(&db, "Pre-Brand DRI Practice").await;
-        crate::brands::create(
-            &db,
-            Role::Admin,
-            Some(admin),
-            &crate::brands::NewBrand {
-                name: "Neon".to_string(),
-                key: "neon".to_string(),
-                firm_id: Some(firm.id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        db.query("ALTER DATABASE COMPATIBILITY 3; DEFINE FIELD OVERWRITE brand ON project TYPE option<string>")
-            .await
-            .unwrap().check().unwrap();
-        let project_id = uuid::Uuid::now_v7();
-        let entity_id = uuid::Uuid::now_v7();
-        db.query(
-            "CREATE $id SET code = 'pre-brand-dri', name = 'Pre-Brand DRI Matter', \
-             status = 'open', entity_id = $entity_id, \
-             inserted_at = '2026-08-25T00:00:00Z', updated_at = '2026-08-25T00:00:00Z'",
-        )
-        .bind(("id", crate::surreal::record_id("project", project_id)))
-        .bind(("entity_id", record_id(ENTITY_TABLE, entity_id)))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-        // Re-apply the shipped schema, exactly as a boot would: this is what
-        // runs the backfill `UPDATE` a second time, now that this row exists
-        // to backfill, before the tightened field definition takes effect.
-        apply(&db).await.unwrap();
-
-        let lawyer = crate::persons::create(
-            &db,
-            &crate::persons::NewPerson::with_role(
-                "Pre-Brand DRI Lawyer",
-                "dri-lawyer@example.com",
-                Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-
-        designate_dri_in_surreal(&db, project_id, lawyer.id, DriSide::Lawyer)
-            .await
-            .expect("designating a DRI must not fail on a project row that predates `brand`");
-    }
+    use super::open_pitch_counts;
 
     fn line(brand: &str, open: usize, pitches: usize) -> super::BrandOpenPitch {
         super::BrandOpenPitch {
@@ -5547,709 +3994,6 @@ mod surreal_read_tests {
             );
         }
     }
-
-    /// `new` is well-formed and still refused, in Rust *and* in the engine.
-    ///
-    /// `/app/projects/new` is the matter-open form and `/app/projects/{code}/…`
-    /// is a Project's own surface, so a Project coded `new` collides with a
-    /// literal route. Refusing it in [`super::is_valid_code`] alone would leave
-    /// a direct write able to create the colliding row, which is why the
-    /// `ASSERT` on `project.code` carries the same refusal.
-    #[tokio::test]
-    async fn the_project_code_new_is_refused_in_rust_and_in_the_engine() {
-        assert!(
-            cloud::workspace::is_valid_slug("new"),
-            "`new` is a well-formed slug — the shape check is not what rejects it"
-        );
-        assert!(!super::is_valid_code("new"));
-        // Every other well-formed code still passes, so the refusal is one
-        // code and not a widening.
-        assert!(super::is_valid_code("new-matter"));
-        assert!(super::is_valid_code("renew"));
-
-        let db = unmigrated().await;
-        apply(&db).await.unwrap();
-        let direct = db
-            .query(
-                "CREATE $id SET code = 'new', name = 'New', status = 'open', \
-                 entity_id = $entity_id, inserted_at = '2026-08-11T00:00:00Z', \
-                 updated_at = '2026-08-11T00:00:00Z'",
-            )
-            .bind((
-                "id",
-                crate::surreal::record_id("project", uuid::Uuid::now_v7()),
-            ))
-            .bind(("entity_id", record_id(ENTITY_TABLE, uuid::Uuid::now_v7())))
-            .await
-            .and_then(surrealdb::IndexedResults::check);
-        assert!(
-            direct.is_err(),
-            "the engine must refuse a Project coded `new` written around is_valid_code"
-        );
-    }
-
-    /// `closed` is well-formed and still refused, in Rust *and* in the engine —
-    /// the same reasoning as `new`, for `/app/projects/closed` (links to the
-    /// retired closed-matters tab) instead of the matter-open form.
-    #[tokio::test]
-    async fn the_project_code_closed_is_refused_in_rust_and_in_the_engine() {
-        assert!(
-            cloud::workspace::is_valid_slug("closed"),
-            "`closed` is a well-formed slug — the shape check is not what rejects it"
-        );
-        assert!(!super::is_valid_code("closed"));
-        assert!(super::is_valid_code("closed-matter"));
-        assert!(super::is_valid_code("foreclosed"));
-
-        let db = unmigrated().await;
-        apply(&db).await.unwrap();
-        let direct = db
-            .query(
-                "CREATE $id SET code = 'closed', name = 'Closed', status = 'open', \
-                 entity_id = $entity_id, inserted_at = '2026-08-11T00:00:00Z', \
-                 updated_at = '2026-08-11T00:00:00Z'",
-            )
-            .bind((
-                "id",
-                crate::surreal::record_id("project", uuid::Uuid::now_v7()),
-            ))
-            .bind(("entity_id", record_id(ENTITY_TABLE, uuid::Uuid::now_v7())))
-            .await
-            .and_then(surrealdb::IndexedResults::check);
-        assert!(
-            direct.is_err(),
-            "the engine must refuse a Project coded `closed` written around is_valid_code"
-        );
-    }
-
-    /// Immutability is structural: an `UPDATE` that rewrites `code` on an
-    /// existing row is refused by the engine itself, not only by the absence
-    /// of a handler that offers to change it (`UpdateProjectCommand` has no
-    /// `code` field at all — this test is the direct write no handler stands
-    /// between).
-    #[tokio::test]
-    async fn a_direct_write_cannot_change_an_existing_projects_code() {
-        let db = unmigrated().await;
-        apply(&db).await.unwrap();
-        let id = uuid::Uuid::now_v7();
-        let entity_id = uuid::Uuid::now_v7();
-        db.query(
-            "CREATE $id SET code = 'alpha-matter', name = 'Alpha', status = 'open', \
-             entity_id = $entity_id, brand = 'neon', inserted_at = '2026-08-25T00:00:00Z', \
-             updated_at = '2026-08-25T00:00:00Z'",
-        )
-        .bind(("id", crate::surreal::record_id("project", id)))
-        .bind(("entity_id", record_id(ENTITY_TABLE, entity_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .expect("seed the project row");
-
-        let attempt = db
-            .query("UPDATE $id SET code = 'beta-matter'")
-            .bind(("id", crate::surreal::record_id("project", id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check);
-
-        let error = attempt.expect_err("the engine must refuse a direct write that changes `code`");
-        assert!(
-            matches!(
-                classify_project_write(error),
-                ProjectStoreError::CodeImmutable
-            ),
-            "the refusal should classify as CodeImmutable, pointing callers at the glossary rule"
-        );
-    }
-
-    #[tokio::test]
-    async fn create_rejects_a_duplicate_project_code() {
-        let db = mem_surreal().await;
-        let input = NewProject {
-            code: "matter".into(),
-            name: "Matter".into(),
-            status: "open".into(),
-            entity_id: uuid::Uuid::now_v7(),
-            ..NewProject::default()
-        };
-
-        let created = create(&db, &input).await.unwrap();
-        assert_eq!(created.code, "matter");
-        assert!(matches!(
-            create(&db, &input).await,
-            Err(ProjectStoreError::CodeTaken)
-        ));
-    }
-
-    #[tokio::test]
-    async fn lawyer_lens_excludes_client_side_participation() {
-        let db = unmigrated().await;
-        apply(&db).await.unwrap();
-        let lawyer_id = uuid::Uuid::now_v7();
-        let client_id = uuid::Uuid::now_v7();
-        let project_id = uuid::Uuid::now_v7();
-        for (id, email, role) in [
-            (lawyer_id, "lawyer@example.com", "lawyer"),
-            (client_id, "client@example.com", "client"),
-        ] {
-            db.query("CREATE $id SET name = $email, email = $email, role = $role")
-                .bind(("id", crate::surreal::record_id("person", id)))
-                .bind(("email", email.to_string()))
-                .bind(("role", role.to_string()))
-                .await
-                .unwrap()
-                .check()
-                .unwrap();
-        }
-        db.query(
-            "CREATE $id SET code = 'matter', name = 'Matter', status = 'open', \
-             entity_id = $entity_id, brand = 'neon', inserted_at = '2026-08-04T00:00:00Z', \
-             updated_at = '2026-08-04T00:00:00Z'",
-        )
-        .bind(("id", crate::surreal::record_id("project", project_id)))
-        .bind(("entity_id", record_id(ENTITY_TABLE, uuid::Uuid::now_v7())))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-        for (person_id, participation) in [(lawyer_id, "lawyer"), (client_id, "client")] {
-            db.query(
-                "CREATE $id SET person_id = $person_id, project_id = $project_id, \
-                 participation = $participation, inserted_at = '2026-08-04T00:00:00Z', \
-                 updated_at = '2026-08-04T00:00:00Z'",
-            )
-            .bind((
-                "id",
-                crate::surreal::record_id("person_project_role", uuid::Uuid::now_v7()),
-            ))
-            .bind(("person_id", crate::surreal::record_id("person", person_id)))
-            .bind((
-                "project_id",
-                crate::surreal::record_id("project", project_id),
-            ))
-            .bind(("participation", participation.to_string()))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        }
-
-        assert!(
-            can_access_as_lawyer_in_surreal(&db, Some(lawyer_id), Role::Lawyer, project_id)
-                .await
-                .unwrap()
-        );
-        assert!(
-            !can_access_as_lawyer_in_surreal(&db, Some(client_id), Role::Lawyer, project_id)
-                .await
-                .unwrap()
-        );
-    }
-
-    #[tokio::test]
-    async fn client_lens_matches_client_side_participation_and_dri_marker() {
-        let db = unmigrated().await;
-        apply(&db).await.unwrap();
-        let client_id = uuid::Uuid::now_v7();
-        let lawyer_id = uuid::Uuid::now_v7();
-        let project_id = uuid::Uuid::now_v7();
-        for (id, email) in [
-            (client_id, "client@example.com"),
-            (lawyer_id, "lawyer@example.com"),
-        ] {
-            db.query("CREATE $id SET name = $email, email = $email, role = 'client'")
-                .bind(("id", crate::surreal::record_id("person", id)))
-                .bind(("email", email.to_string()))
-                .await
-                .unwrap()
-                .check()
-                .unwrap();
-        }
-        db.query(
-            "CREATE $id SET code = 'matter', name = 'Matter', status = 'open', \
-             entity_id = $entity_id, brand = 'neon', inserted_at = '2026-08-04T00:00:00Z', \
-             updated_at = '2026-08-04T00:00:00Z'",
-        )
-        .bind(("id", crate::surreal::record_id("project", project_id)))
-        .bind(("entity_id", record_id(ENTITY_TABLE, uuid::Uuid::now_v7())))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-        for (person_id, participation, is_client_dri) in
-            [(client_id, "client", false), (lawyer_id, "lawyer", true)]
-        {
-            db.query(
-                "CREATE $id SET person_id = $person_id, project_id = $project_id, \
-                 participation = $participation, is_client_dri = $is_client_dri, \
-                 inserted_at = '2026-08-04T00:00:00Z', updated_at = '2026-08-04T00:00:00Z'",
-            )
-            .bind((
-                "id",
-                crate::surreal::record_id("person_project_role", uuid::Uuid::now_v7()),
-            ))
-            .bind(("person_id", crate::surreal::record_id("person", person_id)))
-            .bind((
-                "project_id",
-                crate::surreal::record_id("project", project_id),
-            ))
-            .bind(("participation", participation.to_string()))
-            .bind(("is_client_dri", is_client_dri))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        }
-        assert!(
-            can_access_as_client_in_surreal(&db, Some(client_id), project_id)
-                .await
-                .unwrap()
-        );
-        assert!(
-            can_access_as_client_in_surreal(&db, Some(lawyer_id), project_id)
-                .await
-                .unwrap()
-        );
-        assert!(!can_access_as_client_in_surreal(&db, None, project_id)
-            .await
-            .unwrap());
-    }
-
-    /// Read at the SurrealQL level: the transaction clears no one else's flag,
-    /// so both rows keep it.
-    #[tokio::test]
-    async fn designating_a_second_dri_adds_to_the_side() {
-        let db = unmigrated().await;
-        apply(&db).await.unwrap();
-        let first = uuid::Uuid::now_v7();
-        let second = uuid::Uuid::now_v7();
-        let project = uuid::Uuid::now_v7();
-        for (id, email) in [(first, "first@example.com"), (second, "second@example.com")] {
-            db.query("CREATE $id SET name = $email, email = $email, role = 'lawyer'")
-                .bind(("id", crate::surreal::record_id("person", id)))
-                .bind(("email", email.to_string()))
-                .await
-                .unwrap()
-                .check()
-                .unwrap();
-        }
-        db.query(
-            "CREATE $id SET code = 'matter', name = 'Matter', status = 'open', \
-             entity_id = $entity_id, brand = 'neon', inserted_at = '2026-08-04T00:00:00Z', \
-             updated_at = '2026-08-04T00:00:00Z'",
-        )
-        .bind(("id", crate::surreal::record_id("project", project)))
-        .bind(("entity_id", record_id(ENTITY_TABLE, uuid::Uuid::now_v7())))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-
-        designate_dri_in_surreal(&db, project, first, DriSide::Lawyer)
-            .await
-            .unwrap();
-        designate_dri_in_surreal(&db, project, second, DriSide::Lawyer)
-            .await
-            .unwrap();
-        let lawyer_dris: Vec<uuid::Uuid> = db
-            .query(
-                "SELECT VALUE person_id.id() FROM person_project_role \
-                 WHERE project_id = $project AND is_lawyer_dri = true",
-            )
-            .bind(("project", crate::surreal::record_id("project", project)))
-            .await
-            .unwrap()
-            .take(0)
-            .unwrap();
-        let mut got = lawyer_dris;
-        got.sort();
-        let mut expected = vec![first, second];
-        expected.sort();
-        assert_eq!(got, expected, "designation adds rather than replaces");
-    }
-
-    /// The lens over every matter: what it is, and who is accountable. The
-    /// matter with no flagged row is the case the view exists to surface, so
-    /// it appears with an empty DRI rather than being dropped or erroring.
-    #[tokio::test]
-    async fn the_directory_names_every_matter_and_its_accountable_lawyer() {
-        let surreal = mem_surreal().await;
-        let lawyer = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::new("Accountable Lawyer", "dri@neonlaw.com"),
-        )
-        .await
-        .unwrap();
-        let assigned = create(
-            &surreal,
-            &NewProject {
-                code: "assigned-matter".into(),
-                name: "Assigned matter".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        create(
-            &surreal,
-            &NewProject {
-                code: "unassigned-matter".into(),
-                name: "Unassigned matter".into(),
-                status: "closed".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        designate_dri_in_surreal(&surreal, assigned.id, lawyer.id, DriSide::Lawyer)
-            .await
-            .unwrap();
-
-        // Owner and Admin read the same directory, and neither holds a
-        // participation row on either matter — oversight is not membership.
-        for role in [Role::Owner, Role::Admin] {
-            let directory = matter_directory(&surreal, role).await.unwrap();
-            let entries: Vec<(&str, &str, Vec<&str>)> = directory
-                .iter()
-                .map(|entry| {
-                    (
-                        entry.code.as_str(),
-                        entry.status.as_str(),
-                        entry.lawyer_dris.iter().map(String::as_str).collect(),
-                    )
-                })
-                .collect();
-            assert_eq!(
-                entries,
-                vec![
-                    ("assigned-matter", "open", vec!["Accountable Lawyer"]),
-                    ("unassigned-matter", "closed", vec![]),
-                ],
-                "{role:?} directory"
-            );
-            assert_eq!(directory[0].name, "Assigned matter");
-        }
-    }
-
-    /// ENG-587: the directory carries each matter's `brand` key, not just
-    /// code/name/status/DRI — the admin-tier oversight lens now names which
-    /// portal a matter's clients see, not only who is accountable for it.
-    #[tokio::test]
-    async fn the_directory_names_each_matter_s_brand() {
-        let surreal = mem_surreal().await;
-        let (firm, admin) = practice_firm(&surreal, "Directory Brand Practice").await;
-        crate::brands::create(
-            &surreal,
-            Role::Admin,
-            Some(admin),
-            &crate::brands::NewBrand {
-                name: "Directory Brand".to_string(),
-                key: "directory-brand".to_string(),
-                firm_id: Some(firm.id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        create(
-            &surreal,
-            &NewProject {
-                code: "branded-matter".into(),
-                name: "Branded Matter".into(),
-                status: "open".into(),
-                brand: "directory-brand".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-
-        let directory = matter_directory(&surreal, Role::Owner).await.unwrap();
-        let entry = directory
-            .iter()
-            .find(|entry| entry.code == "branded-matter")
-            .unwrap();
-        assert_eq!(entry.brand, "directory-brand");
-    }
-
-    /// The lens is admin-tier only. A `lawyer` caller gets nothing from
-    /// it — the firm-wide directory is not a wider `/app/lawyer` read.
-    #[tokio::test]
-    async fn the_directory_is_closed_to_every_tier_below_admin() {
-        let surreal = mem_surreal().await;
-        create(
-            &surreal,
-            &NewProject {
-                code: "firm-wide".into(),
-                name: "Firm wide".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-
-        for role in [Role::Lawyer, Role::Clerk, Role::Client] {
-            assert!(
-                matter_directory(&surreal, role).await.unwrap().is_empty(),
-                "{role:?} must read no directory"
-            );
-        }
-        assert_eq!(
-            matter_directory(&surreal, Role::Admin).await.unwrap().len(),
-            1
-        );
-    }
-
-    /// Owner still reads every matter. Admin reads only matters whose
-    /// `firm_id` is a firm they belong to, and an Admin with no membership
-    /// reads nothing — including matters that still have no owner.
-    #[tokio::test]
-    async fn the_directory_scopes_an_admin_to_their_firms() {
-        let surreal = mem_surreal().await;
-        let admin_a = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role("Admin A", "admin-a@example.com", Role::Admin),
-        )
-        .await
-        .unwrap();
-        let admin_b = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::with_role("Admin B", "admin-b@example.com", Role::Admin),
-        )
-        .await
-        .unwrap();
-        let firm_a = crate::firms::create(
-            &surreal,
-            &crate::firms::NewFirm {
-                name: "Practice A".into(),
-                status: "active".into(),
-                entity_id: crate::test_support::seed_entity(&surreal).await,
-                admin_dri_person_id: admin_a.id,
-            },
-        )
-        .await
-        .unwrap();
-        let firm_b = crate::firms::create(
-            &surreal,
-            &crate::firms::NewFirm {
-                name: "Practice B".into(),
-                status: "active".into(),
-                entity_id: crate::test_support::seed_entity(&surreal).await,
-                admin_dri_person_id: admin_b.id,
-            },
-        )
-        .await
-        .unwrap();
-        create(
-            &surreal,
-            &NewProject {
-                code: "matter-a".into(),
-                name: "Matter A".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                firm_id: Some(firm_a.id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        create(
-            &surreal,
-            &NewProject {
-                code: "matter-b".into(),
-                name: "Matter B".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                firm_id: Some(firm_b.id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        create(
-            &surreal,
-            &NewProject {
-                code: "unowned".into(),
-                name: "Unowned".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-
-        let owner = matter_directory_for(&surreal, Role::Owner, None)
-            .await
-            .unwrap();
-        assert_eq!(
-            owner.iter().map(|e| e.code.as_str()).collect::<Vec<_>>(),
-            vec!["matter-a", "matter-b", "unowned"]
-        );
-
-        let scoped = matter_directory_for(&surreal, Role::Admin, Some(admin_a.id))
-            .await
-            .unwrap();
-        assert_eq!(
-            scoped.iter().map(|e| e.code.as_str()).collect::<Vec<_>>(),
-            vec!["matter-a"]
-        );
-
-        let unscoped = matter_directory_for(&surreal, Role::Admin, None)
-            .await
-            .unwrap();
-        assert!(unscoped.is_empty());
-    }
-
-    /// A flagged row naming a person who is no longer in the table reads as
-    /// unassigned. The directory's job is to keep listing the matter.
-    #[tokio::test]
-    async fn a_dri_row_naming_a_missing_person_reads_as_unassigned() {
-        let surreal = mem_surreal().await;
-        let project = create(
-            &surreal,
-            &NewProject {
-                code: "dangling-dri".into(),
-                name: "Dangling DRI".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        surreal
-            .query(
-                "CREATE $id SET person_id = $person, project_id = $project, \
-                 participation = 'lawyer', is_lawyer_dri = true, is_client_dri = false, \
-                 inserted_at = '2026-08-11T00:00:00Z', updated_at = '2026-08-11T00:00:00Z'",
-            )
-            .bind((
-                "id",
-                record_id(super::PERSON_PROJECT_ROLE_TABLE, uuid::Uuid::now_v7()),
-            ))
-            .bind(("person", record_id("person", uuid::Uuid::now_v7())))
-            .bind(("project", record_id(super::PROJECT_TABLE, project.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        let directory = matter_directory(&surreal, Role::Owner).await.unwrap();
-        assert_eq!(directory.len(), 1);
-        assert_eq!(directory[0].code, "dangling-dri");
-        assert!(directory[0].lawyer_dris.is_empty());
-    }
-
-    /// Unlike `matter_directory`, the digest carries both DRI sides and no
-    /// role gate at all — the nightly workflow that reads it runs headless,
-    /// with no session to check.
-    #[tokio::test]
-    async fn dri_digest_reports_both_sides_for_open_projects() {
-        let surreal = mem_surreal().await;
-        let lawyer = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::new("Accountable Lawyer", "digest-lawyer@neonlaw.com"),
-        )
-        .await
-        .unwrap();
-        let client = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::new("Represented Client", "digest-client@neonlaw.com"),
-        )
-        .await
-        .unwrap();
-        let assigned = create(
-            &surreal,
-            &NewProject {
-                code: "digest-assigned".into(),
-                name: "Digest assigned".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        create(
-            &surreal,
-            &NewProject {
-                code: "digest-unassigned".into(),
-                name: "Digest unassigned".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        designate_dri_in_surreal(&surreal, assigned.id, lawyer.id, DriSide::Lawyer)
-            .await
-            .unwrap();
-        designate_dri_in_surreal(&surreal, assigned.id, client.id, DriSide::Client)
-            .await
-            .unwrap();
-
-        let digest = dri_digest(&surreal).await.unwrap();
-        let entries: Vec<(&str, Vec<&str>, Vec<&str>)> = digest
-            .iter()
-            .map(|entry| {
-                (
-                    entry.code.as_str(),
-                    entry.lawyer_dris.iter().map(String::as_str).collect(),
-                    entry.client_dris.iter().map(String::as_str).collect(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            entries,
-            vec![
-                (
-                    "digest-assigned",
-                    vec!["Accountable Lawyer"],
-                    vec!["Represented Client"]
-                ),
-                ("digest-unassigned", vec![], vec![]),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn participation_write_readbacks_both_native_links() {
-        let surreal = mem_surreal().await;
-        let person = crate::persons::create(
-            &surreal,
-            &crate::persons::NewPerson::new("Participant", "participant-port@example.com"),
-        )
-        .await
-        .unwrap();
-        let project = create(
-            &surreal,
-            &NewProject {
-                code: "participation-port".into(),
-                name: "Participation port".into(),
-                status: "open".into(),
-                entity_id: uuid::Uuid::now_v7(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let created = super::add_participation(&surreal, project.id, person.id, "lawyer")
-            .await
-            .unwrap();
-        assert_eq!(created.person_id, person.id);
-        assert_eq!(
-            super::participations_for_project(&surreal, project.id)
-                .await
-                .unwrap(),
-            vec![created]
-        );
-    }
 }
 
 #[cfg(test)]
@@ -6337,174 +4081,10 @@ mod kit_version_tests {
 }
 
 #[cfg(test)]
-mod project_code_resolution_tests {
-    use super::id_for_code;
-
-    /// A code resolves; everything else is the same `None`.
-    #[tokio::test]
-    async fn a_code_resolves_and_every_miss_is_indistinguishable() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let project = crate::projects::create(
-            &surreal,
-            &crate::projects::NewProject {
-                code: "libra-formation".into(),
-                name: "Libra formation".into(),
-                status: "open".into(),
-                entity_id: crate::test_support::seed_entity(&surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("a seeded Project");
-
-        assert_eq!(
-            id_for_code(&surreal, "libra-formation").await,
-            Some(project.id)
-        );
-
-        for miss in [
-            // A well-formed code no Project carries.
-            "aries-eviction",
-            // `new` is the matter-open form, not a matter.
-            "new",
-            // Malformed, so the store is never asked.
-            "Not_A_Code",
-            "",
-        ] {
-            assert_eq!(
-                id_for_code(&surreal, miss).await,
-                None,
-                "`{miss}` must not resolve a matter"
-            );
-        }
-
-        // The row id is not a way to name the matter, which is the whole point
-        // of keying these routes on the code.
-        assert_eq!(
-            id_for_code(&surreal, &project.id.to_string()).await,
-            None,
-            "a row id must not resolve the matter it belongs to"
-        );
-    }
-}
+mod project_code_resolution_tests {}
 
 #[cfg(test)]
-mod project_jurisdiction_tests {
-    use super::{
-        create, find_by_id, set_jurisdiction, NewProject, ProjectCommandError, ProjectStoreError,
-    };
-    use crate::jurisdictions::NewJurisdiction;
-    use uuid::Uuid;
-
-    async fn nevada(surreal: &crate::surreal::SurrealDb) -> Uuid {
-        crate::jurisdictions::create(surreal, &NewJurisdiction::new("Nevada", "NV", "state"))
-            .await
-            .unwrap()
-            .id
-    }
-
-    async fn matter(surreal: &crate::surreal::SurrealDb, jurisdiction_id: Option<Uuid>) -> Uuid {
-        create(
-            surreal,
-            &NewProject {
-                code: "acme-formation".into(),
-                name: "Acme formation".into(),
-                status: "open".into(),
-                entity_id: crate::test_support::seed_entity(surreal).await,
-                jurisdiction_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    /// The matter's governing jurisdiction is written at matter-open and
-    /// reads back off the row like any other field.
-    #[tokio::test]
-    async fn a_matter_can_be_opened_with_its_governing_jurisdiction() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let nevada = nevada(&surreal).await;
-        let id = matter(&surreal, Some(nevada)).await;
-
-        assert_eq!(
-            find_by_id(&surreal, id)
-                .await
-                .unwrap()
-                .unwrap()
-                .jurisdiction_id,
-            Some(nevada)
-        );
-    }
-
-    /// A matter opened before its jurisdiction is settled carries none, and
-    /// nothing derives one for it.
-    #[tokio::test]
-    async fn a_matter_without_a_jurisdiction_carries_none() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let id = matter(&surreal, None).await;
-
-        assert_eq!(
-            find_by_id(&surreal, id)
-                .await
-                .unwrap()
-                .unwrap()
-                .jurisdiction_id,
-            None
-        );
-    }
-
-    /// The link is validated at the write: a dangling jurisdiction would
-    /// make the matter's governing law unreadable rather than absent.
-    #[tokio::test]
-    async fn a_dangling_jurisdiction_is_refused_at_matter_open() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let created = create(
-            &surreal,
-            &NewProject {
-                code: "ghost".into(),
-                name: "Ghost".into(),
-                status: "open".into(),
-                entity_id: crate::test_support::seed_entity(&surreal).await,
-                jurisdiction_id: Some(Uuid::now_v7()),
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(
-            matches!(created, Err(ProjectStoreError::NoSuchJurisdiction(_))),
-            "got {created:?}"
-        );
-    }
-
-    /// Set later, and cleared back to unsettled.
-    #[tokio::test]
-    async fn the_jurisdiction_can_be_set_and_cleared_afterwards() {
-        let surreal = crate::test_support::mem_surreal().await;
-        let nevada = nevada(&surreal).await;
-        let id = matter(&surreal, None).await;
-
-        let set = set_jurisdiction(&surreal, id, Some(nevada)).await.unwrap();
-        assert_eq!(set.unwrap().jurisdiction_id, Some(nevada));
-
-        let cleared = set_jurisdiction(&surreal, id, None).await.unwrap();
-        assert_eq!(cleared.unwrap().jurisdiction_id, None);
-
-        let unknown = set_jurisdiction(&surreal, id, Some(Uuid::now_v7())).await;
-        assert!(
-            matches!(unknown, Err(ProjectCommandError::Invalid(_))),
-            "got {unknown:?}"
-        );
-        assert_eq!(
-            set_jurisdiction(&surreal, Uuid::now_v7(), Some(nevada))
-                .await
-                .unwrap(),
-            None,
-            "a matter that does not exist is reported as absent, not created"
-        );
-    }
-}
+mod project_jurisdiction_tests {}
 
 #[cfg(test)]
 mod onboarding_status_tests {
@@ -6563,459 +4143,4 @@ mod onboarding_status_tests {
 /// file's existing read-test convention; no new embedded-engine call sites
 /// (`unmigrated` is not a ratchet-counted symbol).
 #[cfg(test)]
-mod matter_command_tests {
-    use super::{
-        create, delete_project_with_surreal, find_by_id, open_matter, restore_archived, NewProject,
-        OpenMatterCommand, OpenMatterError, ProjectCommandError,
-    };
-    use crate::firms::NewFirm;
-    use crate::persons::Role;
-    use crate::schema::apply;
-    use crate::surreal::test_support::{seed_compiled_brands, unmigrated};
-    use crate::surreal::SurrealDb;
-    use crate::test_support::seed_entity;
-
-    /// A store with the schema applied and the compiled brand rows seeded —
-    /// the posture `mem_surreal` hands out, assembled from the two public
-    /// pieces so this module adds no embedded-engine call sites.
-    async fn store() -> SurrealDb {
-        let db = unmigrated().await;
-        apply(&db).await.unwrap();
-        seed_compiled_brands(&db).await;
-        db
-    }
-
-    /// An attorney (the future attester) and a client of record.
-    async fn attorney_and_client(db: &SurrealDb) -> (uuid::Uuid, uuid::Uuid) {
-        let attorney = crate::persons::create(
-            db,
-            &crate::persons::NewPerson::with_role(
-                "Matter Attorney",
-                format!("matter-attorney-{}@example.com", uuid::Uuid::now_v7()),
-                Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        let client = crate::persons::create(
-            db,
-            &crate::persons::NewPerson::with_role(
-                "Matter Client",
-                format!("matter-client-{}@example.com", uuid::Uuid::now_v7()),
-                Role::Client,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        (attorney, client)
-    }
-
-    /// A Firm wearing the seeded `neon` brand — the `firm_brand` row the
-    /// open transaction consults before it will name a Firm on the row.
-    async fn firm_wearing_neon(db: &SurrealDb) -> uuid::Uuid {
-        // Firm creation requires an admin-tier Admin DRI, and a person may
-        // hold one role, so the firm gets its own admin distinct from the
-        // matter's lawyer.
-        let admin_dri = crate::persons::create(
-            db,
-            &crate::persons::NewPerson::with_role(
-                "Open Matter Practice Admin DRI",
-                format!("open-matter-admin-{}@example.com", uuid::Uuid::now_v7()),
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap()
-        .id;
-        let firm = crate::firms::create(
-            db,
-            &NewFirm {
-                name: "Open Matter Practice".to_string(),
-                status: "active".to_string(),
-                entity_id: seed_entity(db).await,
-                admin_dri_person_id: admin_dri,
-            },
-        )
-        .await
-        .unwrap();
-        db.query(
-            "CREATE firm_brand SET firm_id = $firm, brand_key = 'neon', \
-             inserted_at = '2026-11-17T00:00:00Z', updated_at = '2026-11-17T00:00:00Z'",
-        )
-        .bind((
-            "firm",
-            crate::surreal::record_id(crate::firms::TABLE, firm.id),
-        ))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-        firm.id
-    }
-
-    fn open_command(
-        firm_id: uuid::Uuid,
-        client_id: uuid::Uuid,
-        attorney: uuid::Uuid,
-        entity_id: uuid::Uuid,
-        code: &str,
-    ) -> OpenMatterCommand {
-        OpenMatterCommand {
-            firm_id: Some(firm_id),
-            name: "In re Coverage Backfill".to_string(),
-            code: code.to_string(),
-            client_id,
-            entity_id,
-            jurisdiction_id: None,
-            description: None,
-            brand: "neon".to_string(),
-            attestation: true,
-            acting_person_id: attorney,
-            closed_at: None,
-        }
-    }
-
-    /// Attestation is checked before anything else: a missing one is refused
-    /// without a single store query.
-    #[tokio::test]
-    async fn open_matter_requires_the_attestation() {
-        let db = unmigrated().await;
-        let mut command = open_command(
-            uuid::Uuid::now_v7(),
-            uuid::Uuid::now_v7(),
-            uuid::Uuid::now_v7(),
-            uuid::Uuid::now_v7(),
-            "attestation-first",
-        );
-        command.attestation = false;
-        assert!(matches!(
-            open_matter(&db, &command).await,
-            Err(OpenMatterError::AttestationRequired)
-        ));
-    }
-
-    #[tokio::test]
-    async fn open_matter_rejects_a_blank_name_before_a_blank_code() {
-        let db = unmigrated().await;
-        let ids = (
-            uuid::Uuid::now_v7(),
-            uuid::Uuid::now_v7(),
-            uuid::Uuid::now_v7(),
-            uuid::Uuid::now_v7(),
-        );
-        let mut command = open_command(ids.0, ids.1, ids.2, ids.3, "valid-code");
-        command.name = "   ".to_string();
-        assert!(matches!(
-            open_matter(&db, &command).await,
-            Err(OpenMatterError::Invalid("Name is required."))
-        ));
-        command.name = "Named".to_string();
-        command.code = "   ".to_string();
-        assert!(matches!(
-            open_matter(&db, &command).await,
-            Err(OpenMatterError::Invalid("Code is required."))
-        ));
-    }
-
-    #[tokio::test]
-    async fn open_matter_rejects_a_code_the_charset_refuses() {
-        let db = unmigrated().await;
-        let ids = (
-            uuid::Uuid::now_v7(),
-            uuid::Uuid::now_v7(),
-            uuid::Uuid::now_v7(),
-            uuid::Uuid::now_v7(),
-        );
-        let command = open_command(ids.0, ids.1, ids.2, ids.3, "Bad Code!");
-        assert!(matches!(
-            open_matter(&db, &command).await,
-            Err(OpenMatterError::Invalid(
-                "Project code must use lowercase letters, digits, and single hyphens; \
-                 it must start and end with a letter or digit."
-            ))
-        ));
-    }
-
-    /// The stored code is the caller's code, normalized for case and
-    /// whitespace only — never generated, never appended to.
-    #[tokio::test]
-    async fn open_matter_stores_the_code_normalized_but_untouched() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let (attorney, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db).await;
-        let created = open_matter(
-            &db,
-            &open_command(firm_id, client, attorney, entity, "  Matter-Code-13 "),
-        )
-        .await
-        .unwrap();
-        assert_eq!(created.code, "matter-code-13");
-        assert_eq!(created.status, "open");
-        assert_eq!(created.firm_id, Some(firm_id));
-        assert_eq!(created.closed_at, None);
-        let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();
-        assert_eq!(reloaded.code, "matter-code-13");
-    }
-
-    /// ENG-469: a matter can open already closed, dated in the same insert —
-    /// a close that predates the row it belongs to.
-    #[tokio::test]
-    async fn open_matter_can_open_an_already_closed_matter() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let (attorney, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db).await;
-        let closed_at = chrono::Utc::now() - chrono::Duration::hours(2);
-        let mut command = open_command(firm_id, client, attorney, entity, "already-closed");
-        command.closed_at = Some(closed_at);
-        let created = open_matter(&db, &command).await.unwrap();
-        assert_eq!(created.status, "closed");
-        assert_eq!(created.firm_id, Some(firm_id));
-    }
-
-    /// A close cannot be dated in the future — the one bound that survives
-    /// baking the state into the initial row.
-    #[tokio::test]
-    async fn open_matter_refuses_a_future_close_date() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let (attorney, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db).await;
-        let mut command = open_command(firm_id, client, attorney, entity, "future-close");
-        command.closed_at = Some(chrono::Utc::now() + chrono::Duration::hours(2));
-        assert!(matches!(
-            open_matter(&db, &command).await,
-            Err(OpenMatterError::Invalid(
-                "closed_at cannot be in the future."
-            ))
-        ));
-    }
-
-    /// A code already in use is refused, never silently resolved — the code
-    /// is a coordinate shared with systems Navigator does not own.
-    #[tokio::test]
-    async fn open_matter_refuses_a_code_collision() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let (attorney, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db).await;
-        open_matter(
-            &db,
-            &open_command(firm_id, client, attorney, entity, "one-code-only"),
-        )
-        .await
-        .unwrap();
-        let (second_attorney, second_client) = attorney_and_client(&db).await;
-        assert!(matches!(
-            open_matter(
-                &db,
-                &open_command(
-                    firm_id,
-                    second_client,
-                    second_attorney,
-                    entity,
-                    "one-code-only"
-                ),
-            )
-            .await,
-            Err(OpenMatterError::CodeConflict)
-        ));
-    }
-
-    /// The client of record must be a `Role::Client` person — the firm as
-    /// its own client is the loyalty problem both councils flagged.
-    #[tokio::test]
-    async fn open_matter_refuses_a_firm_attorney_as_client() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let (attorney, _client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db).await;
-        assert!(matches!(
-            open_matter(
-                &db,
-                &open_command(firm_id, attorney, attorney, entity, "attorney-as-client"),
-            )
-            .await,
-            Err(OpenMatterError::ClientNotAllowed)
-        ));
-    }
-
-    /// A client or clerk can never attest: the attester becomes the
-    /// accountable lawyer DRI.
-    #[tokio::test]
-    async fn open_matter_refuses_a_client_as_the_attesting_attorney() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let (_, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db).await;
-        assert!(matches!(
-            open_matter(
-                &db,
-                &open_command(firm_id, client, client, entity, "client-attests"),
-            )
-            .await,
-            Err(OpenMatterError::AttesterNotAllowed)
-        ));
-    }
-
-    /// A matter nobody participates in deletes outright.
-    #[tokio::test]
-    async fn delete_refuses_nothing_on_an_unreferenced_matter() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let created = create(
-            &db,
-            &NewProject {
-                code: "deletable-matter".to_string(),
-                name: "Deletable Matter".to_string(),
-                status: "open".to_string(),
-                entity_id: entity,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let deleted = delete_project_with_surreal(&db, created.id).await.unwrap();
-        assert_eq!(deleted.id, created.id);
-        assert_eq!(find_by_id(&db, created.id).await.unwrap(), None);
-    }
-
-    /// A missing matter answers `NotFound`.
-    #[tokio::test]
-    async fn delete_reports_not_found_for_a_missing_matter() {
-        let db = store().await;
-        assert!(matches!(
-            delete_project_with_surreal(&db, uuid::Uuid::now_v7()).await,
-            Err(ProjectCommandError::NotFound)
-        ));
-    }
-
-    /// A matter with a participation is referenced — the delete is refused
-    /// with the referencing table named, and the row survives.
-    #[tokio::test]
-    async fn delete_is_refused_while_a_participation_names_the_matter() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let created = create(
-            &db,
-            &NewProject {
-                code: "referenced-matter".to_string(),
-                name: "Referenced Matter".to_string(),
-                status: "open".to_string(),
-                entity_id: entity,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let person = crate::persons::create(
-            &db,
-            &crate::persons::NewPerson::with_role(
-                "Participant",
-                format!("participant-{}@example.com", uuid::Uuid::now_v7()),
-                Role::Lawyer,
-            ),
-        )
-        .await
-        .unwrap();
-        super::add_participation(&db, created.id, person.id, "lawyer")
-            .await
-            .unwrap();
-        match delete_project_with_surreal(&db, created.id).await {
-            Err(ProjectCommandError::Referenced(table)) => {
-                assert_eq!(table, "person_project_roles");
-            }
-            other => panic!("expected a referenced-matter refusal, got {other:?}"),
-        }
-        assert!(find_by_id(&db, created.id).await.unwrap().is_some());
-    }
-
-    /// The archiver's restore is a no-op on a row still present and equal.
-    #[tokio::test]
-    async fn restore_answers_identical_for_the_live_row() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let created = create(
-            &db,
-            &NewProject {
-                code: "restore-identical".to_string(),
-                name: "Restore Identical".to_string(),
-                status: "open".to_string(),
-                entity_id: entity,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let live = find_by_id(&db, created.id).await.unwrap().unwrap();
-        assert_eq!(
-            restore_archived(&db, &live).await.unwrap(),
-            crate::assets::RowRestore::Identical
-        );
-    }
-
-    /// A differing live row — or a live row holding the code under a
-    /// different id — is a conflict the caller must resolve.
-    #[tokio::test]
-    async fn restore_answers_conflict_for_a_differing_or_recoded_row() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let created = create(
-            &db,
-            &NewProject {
-                code: "restore-conflict".to_string(),
-                name: "Restore Conflict".to_string(),
-                status: "open".to_string(),
-                entity_id: entity,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let mut drifted = find_by_id(&db, created.id).await.unwrap().unwrap();
-        drifted.name = "Drifted Name".to_string();
-        assert_eq!(
-            restore_archived(&db, &drifted).await.unwrap(),
-            crate::assets::RowRestore::Conflict
-        );
-        // Same code, different id: the code is taken either way.
-        let mut recoded = find_by_id(&db, created.id).await.unwrap().unwrap();
-        recoded.id = uuid::Uuid::now_v7();
-        assert_eq!(
-            restore_archived(&db, &recoded).await.unwrap(),
-            crate::assets::RowRestore::Conflict
-        );
-    }
-
-    /// A row the archiver took comes back whole: same code, same fields,
-    /// readable again.
-    #[tokio::test]
-    async fn restore_creates_a_row_the_archiver_took() {
-        let db = store().await;
-        let entity = seed_entity(&db).await;
-        let created = create(
-            &db,
-            &NewProject {
-                code: "restore-created".to_string(),
-                name: "Restore Created".to_string(),
-                status: "open".to_string(),
-                entity_id: entity,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let archived = find_by_id(&db, created.id).await.unwrap().unwrap();
-        delete_project_with_surreal(&db, created.id).await.unwrap();
-        assert_eq!(find_by_id(&db, created.id).await.unwrap(), None);
-        assert_eq!(
-            restore_archived(&db, &archived).await.unwrap(),
-            crate::assets::RowRestore::Created
-        );
-        let restored = find_by_id(&db, created.id).await.unwrap().unwrap();
-        assert_eq!(restored, archived);
-    }
-}
+mod matter_command_tests {}

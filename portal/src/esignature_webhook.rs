@@ -262,16 +262,19 @@ pub async fn webhook(
 
     if state.signature_provider.supports_firm_connect() {
         let provider = store::signatures::SignatureProvider::DocuSign;
-        let Some(signature) =
-            store::signatures::by_provider(&state.surreal, provider, &payload.data.envelope_id)
-                .await
-                .map_err(|_| WebhookError::Database("signature lookup failed".into()))?
+        let Some(signature) = store::signatures::by_provider(
+            &state.application_store,
+            provider,
+            &payload.data.envelope_id,
+        )
+        .await
+        .map_err(|_| WebhookError::Database("signature lookup failed".into()))?
         else {
             return Ok(StatusCode::OK);
         };
         let scoped = crate::firm_docusign::for_notation(
             state.signature_provider.as_ref(),
-            &state.surreal,
+            &state.application_store,
             signature.notation_id,
         )
         .await
@@ -319,7 +322,7 @@ pub(crate) async fn process_known(
     // rechecks DocuSign after registration to cover earlier deliveries.
     let signature_provider = store::signatures::SignatureProvider::DocuSign;
     let Some(signature) = store::signatures::by_provider(
-        &state.surreal,
+        &state.application_store,
         signature_provider,
         &payload.data.envelope_id,
     )
@@ -339,7 +342,7 @@ pub(crate) async fn process_known(
     // here answers 500 while the provider still holds the event —
     // nothing is lost before the receipt exists.
     let receipt = store::signature_webhook_journal::journal_verified_receipt(
-        &state.surreal,
+        &state.application_store,
         signature_provider,
         &payload.data.envelope_id,
         terminal_state.as_str(),
@@ -364,7 +367,7 @@ pub(crate) async fn process_known(
     // redelivers; the sweep retries regardless.
     match consume_receipt(state, &signature, terminal_state, None).await {
         Ok(()) => {
-            store::signature_webhook_journal::mark_consumed(&state.surreal, receipt.id)
+            store::signature_webhook_journal::mark_consumed(&state.application_store, receipt.id)
                 .await
                 .map_err(|e| WebhookError::Database(e.to_string()))?;
             tracing::info!(
@@ -383,7 +386,7 @@ pub(crate) async fn process_known(
                 "esignature webhook: consumption failed; receipt stays pending for replay"
             );
             if let Err(e) = store::signature_webhook_journal::record_attempt_failure(
-                &state.surreal,
+                &state.application_store,
                 receipt.id,
                 &failure.to_string(),
             )
@@ -459,9 +462,13 @@ pub(crate) async fn consume_receipt(
                 // Mirror the workflow state into the `notations` row (the
                 // same pattern the retainer walk uses) so the admin UI
                 // reflects the end.
-                store::notations::update_state(&state.surreal, notation_id, next.as_str())
-                    .await
-                    .map_err(|e| ConsumeFailure(format!("mirroring notation state: {e}")))?;
+                store::notations::update_state(
+                    &state.application_store,
+                    notation_id,
+                    next.as_str(),
+                )
+                .await
+                .map_err(|e| ConsumeFailure(format!("mirroring notation state: {e}")))?;
                 tracing::info!(
                     %envelope_id,
                     %condition,
@@ -500,7 +507,7 @@ pub(crate) async fn consume_receipt(
     let stamped = match terminal_state {
         store::signatures::SignatureState::Completed => {
             store::signatures::stamp_signed(
-                &state.surreal,
+                &state.application_store,
                 provider,
                 envelope_id,
                 &verified_completed_at
@@ -510,13 +517,13 @@ pub(crate) async fn consume_receipt(
             .await
         }
         store::signatures::SignatureState::Declined => {
-            store::signatures::stamp_declined(&state.surreal, provider, envelope_id).await
+            store::signatures::stamp_declined(&state.application_store, provider, envelope_id).await
         }
         store::signatures::SignatureState::Voided => {
-            store::signatures::stamp_voided(&state.surreal, provider, envelope_id).await
+            store::signatures::stamp_voided(&state.application_store, provider, envelope_id).await
         }
         store::signatures::SignatureState::Expired => {
-            store::signatures::stamp_expired(&state.surreal, provider, envelope_id).await
+            store::signatures::stamp_expired(&state.application_store, provider, envelope_id).await
         }
         // `terminal_state` never yields `requested` (only terminal events
         // are consumed); the no-op keeps the match exhaustive.
@@ -558,7 +565,7 @@ async fn refresh_adoption(
             .map_err(|_| ConsumeFailure("opening adopted envelope lane".into()))?;
         let scoped = crate::firm_docusign::for_notation(
             state.signature_provider.as_ref(),
-            &state.surreal,
+            &state.application_store,
             notation_id,
         )
         .await
@@ -575,7 +582,7 @@ async fn refresh_adoption(
             ));
         }
         crate::signature_adoption::reconcile(
-            &state.surreal,
+            &state.application_store,
             &state.storage,
             provider,
             notation_id,
@@ -607,9 +614,10 @@ pub async fn replay_pending_receipts(
     state: &crate::AppState,
     limit: i64,
 ) -> Result<(), WebhookError> {
-    let pending = store::signature_webhook_journal::pending_receipts(&state.surreal, limit)
-        .await
-        .map_err(|e| WebhookError::Database(e.to_string()))?;
+    let pending =
+        store::signature_webhook_journal::pending_receipts(&state.application_store, limit)
+            .await
+            .map_err(|e| WebhookError::Database(e.to_string()))?;
     if pending.is_empty() {
         return Ok(());
     }
@@ -643,7 +651,7 @@ async fn replay_one(
         return;
     };
     let signature = match store::signatures::by_provider(
-        &state.surreal,
+        &state.application_store,
         provider,
         &receipt.provider_id,
     )
@@ -680,7 +688,9 @@ async fn replay_one(
         // to consume — acknowledged, and marked so the sweep stops
         // seeing it. Only terminal events are journaled today; this is
         // the honest default if that ever changes.
-        match store::signature_webhook_journal::mark_consumed(&state.surreal, receipt.id).await {
+        match store::signature_webhook_journal::mark_consumed(&state.application_store, receipt.id)
+            .await
+        {
             Ok(()) => {}
             Err(e) => {
                 tracing::error!(receipt_id = %receipt.id, error = %e, "esignature webhook journal: marking a non-terminal receipt consumed failed");
@@ -690,7 +700,11 @@ async fn replay_one(
     };
     match consume_receipt(state, &signature, terminal_state, None).await {
         Ok(()) => {
-            match store::signature_webhook_journal::mark_consumed(&state.surreal, receipt.id).await
+            match store::signature_webhook_journal::mark_consumed(
+                &state.application_store,
+                receipt.id,
+            )
+            .await
             {
                 Ok(()) => tracing::info!(
                     receipt_id = %receipt.id,
@@ -709,7 +723,7 @@ async fn replay_one(
                     // the transient on the receipt so the journal
                     // shows what happened; the next sweep retries it.
                     if let Err(recorded) = store::signature_webhook_journal::record_attempt_failure(
-                        &state.surreal,
+                        &state.application_store,
                         receipt.id,
                         &format!("marking consumed failed after recovery: {e}"),
                     )
@@ -742,9 +756,12 @@ async fn record_replay_failure(
         reason,
         "esignature webhook journal: replay failed; receipt stays pending"
     );
-    if let Err(e) =
-        store::signature_webhook_journal::record_attempt_failure(&state.surreal, receipt.id, reason)
-            .await
+    if let Err(e) = store::signature_webhook_journal::record_attempt_failure(
+        &state.application_store,
+        receipt.id,
+        reason,
+    )
+    .await
     {
         tracing::error!(
             receipt_id = %receipt.id,
@@ -763,9 +780,10 @@ async fn record_progress(
 ) -> Result<(), WebhookError> {
     let provider = store::signatures::SignatureProvider::DocuSign;
     let db = |e: &dyn std::fmt::Display| WebhookError::Database(e.to_string());
-    let Some(signature) = store::signatures::by_provider(&state.surreal, provider, envelope_id)
-        .await
-        .map_err(|e| db(&e))?
+    let Some(signature) =
+        store::signatures::by_provider(&state.application_store, provider, envelope_id)
+            .await
+            .map_err(|e| db(&e))?
     else {
         tracing::warn!(%envelope_id, "esignature webhook: no signature for envelope id");
         return Ok(());
@@ -779,31 +797,37 @@ async fn record_progress(
     let Some(recipient_id) = recipient_id else {
         return Ok(());
     };
-    let Some(notation) = store::notations::find_by_id(&state.surreal, signature.notation_id)
-        .await
-        .map_err(|e| db(&e))?
+    let Some(notation) =
+        store::notations::find_by_id(&state.application_store, signature.notation_id)
+            .await
+            .map_err(|e| db(&e))?
     else {
         tracing::warn!(%envelope_id, "esignature webhook: signature envelope points at a missing notation");
         return Ok(());
     };
-    let Some(template) = store::templates::find_by_id(&state.surreal, notation.template_id)
-        .await
-        .map_err(|e| db(&e))?
+    let Some(template) =
+        store::templates::find_by_id(&state.application_store, notation.template_id)
+            .await
+            .map_err(|e| db(&e))?
     else {
         tracing::warn!(%envelope_id, "esignature webhook: notation points at a missing template");
         return Ok(());
     };
-    let source = store::templates::body(&state.surreal, &state.storage, &template)
+    let source = store::templates::body(&state.application_store, &state.storage, &template)
         .await
         .map_err(|e| db(&e))?;
     let Some(role) = crate::retainer_walk::signer_role_for_recipient(&source, recipient_id) else {
         tracing::warn!(%envelope_id, %recipient_id, "esignature webhook: recipient names no declared signer");
         return Ok(());
     };
-    let recorded =
-        store::signatures::record_signer_completion(&state.surreal, provider, envelope_id, &role)
-            .await
-            .map_err(|e| db(&e))?;
+    let recorded = store::signatures::record_signer_completion(
+        &state.application_store,
+        provider,
+        envelope_id,
+        &role,
+    )
+    .await
+    .map_err(|e| db(&e))?;
     tracing::info!(%envelope_id, %role, recorded, "esignature webhook: signer completed");
     Ok(())
 }
@@ -824,7 +848,7 @@ async fn archive_completed_documents(
 
     let scoped = crate::firm_docusign::for_notation(
         state.signature_provider.as_ref(),
-        &state.surreal,
+        &state.application_store,
         notation_id,
     )
     .await?;
@@ -835,7 +859,7 @@ async fn archive_completed_documents(
         .await?;
 
     file_completed_documents(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         envelope_id,
         notation_id,
@@ -847,7 +871,7 @@ async fn archive_completed_documents(
 }
 
 pub(crate) async fn file_completed_documents(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     envelope_id: &str,
     notation_id: uuid::Uuid,
@@ -932,7 +956,7 @@ pub(crate) async fn file_completed_documents(
 
 /// File a completed envelope without assigning it to an unrelated Notation.
 pub(crate) async fn file_external_completion(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     project: uuid::Uuid,
     envelope: &crate::signature::ExternalEnvelope,
@@ -984,7 +1008,7 @@ pub(crate) async fn file_external_completion(
 /// instrument, with its signing method and date.
 #[allow(clippy::too_many_arguments)]
 async fn file_signed_copy_back(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     project_id: uuid::Uuid,
     template_kind: &str,

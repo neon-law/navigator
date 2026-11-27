@@ -11,11 +11,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use cloud::StorageService;
 use serde::{Deserialize, Serialize};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::{matter, templates as native};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
 pub(crate) const TABLE: &str = "template";
@@ -70,53 +69,6 @@ pub struct Template {
     pub updated_at: DateTime<Utc>,
 }
 
-/// The row read from an explicitly selected frozen Source.
-#[derive(SurrealValue)]
-struct TemplateRow {
-    id: surrealdb::types::RecordId,
-    code: String,
-    title: String,
-    respondent_type: String,
-    project_id: Option<surrealdb::types::RecordId>,
-    firm_id: Option<surrealdb::types::RecordId>,
-    is_current: bool,
-    asset_id: Option<surrealdb::types::RecordId>,
-    form_code: Option<String>,
-    kind: Option<String>,
-    source_commit_sha: Option<String>,
-    body_sha256: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl TemplateRow {
-    /// `None` when the record id is not a native UUID key — a row written
-    /// by something that bypassed [`crate::surreal::record_id`].
-    fn into_template(self) -> Option<Template> {
-        Some(Template {
-            id: record_uuid(&self.id)?,
-            code: self.code,
-            title: self.title,
-            respondent_type: self.respondent_type,
-            project_id: self.project_id.as_ref().and_then(record_uuid),
-            firm_id: self.firm_id.as_ref().and_then(record_uuid),
-            is_current: self.is_current,
-            asset_id: self.asset_id.as_ref().and_then(record_uuid),
-            form_code: self.form_code,
-            kind: self.kind,
-            source_commit_sha: self.source_commit_sha,
-            body_sha256: self.body_sha256,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-/// The projection every read shares, so one field list describes the row
-/// and a new field cannot reach [`TemplateRow`] from only one query.
-const SELECT: &str = "id, code, title, respondent_type, project_id, firm_id, is_current, \
-     asset_id, form_code, kind, source_commit_sha, body_sha256, inserted_at, updated_at";
-
 /// Errors from [`body`].
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateBodyError {
@@ -141,8 +93,6 @@ pub enum TemplateError {
     Authority(#[from] matter::MatterAuthorityError),
     #[error("PostgreSQL Template operation failed")]
     Postgres(#[from] sqlx::Error),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// Another writer owns the unique current key for this version line.
     #[error("that template code already has a current version")]
     CurrentVersionTaken,
@@ -226,35 +176,18 @@ pub(crate) fn current_key_in(scope: Scope, code: &str) -> String {
     format!("{scope}\u{1f}{code}")
 }
 
-fn one(mut response: surrealdb::IndexedResults) -> Result<Option<Template>, TemplateError> {
-    let row: Option<TemplateRow> = response.take(0)?;
-    Ok(row.and_then(TemplateRow::into_template))
-}
-
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Template>, TemplateError> {
-    let rows: Vec<TemplateRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(TemplateRow::into_template)
-        .collect())
-}
-
 /// Resolve a template by id — what a Notation does with the
 /// `template_id` it pinned.
 ///
 /// # Errors
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
-pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Template>, TemplateError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::find_by_id(&pg, id).await;
-    }
-    let response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+pub async fn find_by_id(
+    _db: &ApplicationStore,
+    id: Uuid,
+) -> Result<Option<Template>, TemplateError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::find_by_id(&pg, id).await
 }
 
 /// Resolve many templates by id in one round trip — what a listing does
@@ -263,21 +196,12 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Template>, Te
 /// # Errors
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
-pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Template>, TemplateError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::find_by_ids(&pg, ids).await;
-    }
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let keys: Vec<surrealdb::types::RecordId> =
-        ids.iter().map(|id| record_id(TABLE, *id)).collect();
-    let response = db
-        .query(format!("SELECT {SELECT} FROM $ids ORDER BY code ASC"))
-        .bind(("ids", keys))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn find_by_ids(
+    _db: &ApplicationStore,
+    ids: &[Uuid],
+) -> Result<Vec<Template>, TemplateError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::find_by_ids(&pg, ids).await
 }
 
 /// Resolve a template by `code` for a given Project context. Prefers a
@@ -292,7 +216,7 @@ pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Template>, 
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
 pub async fn resolve(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Option<Uuid>,
     code: &str,
 ) -> Result<Option<Template>, TemplateError> {
@@ -316,7 +240,7 @@ pub async fn resolve(
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
 pub async fn resolve_for_firm(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     firm_id: Uuid,
     code: &str,
 ) -> Result<Option<Template>, TemplateError> {
@@ -327,25 +251,12 @@ pub async fn resolve_for_firm(
 }
 
 /// The Firm that owns `project_id`, if any.
-async fn owning_firm(db: &SurrealDb, project_id: Uuid) -> Result<Option<Uuid>, TemplateError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::owning_firm(&pg, project_id).await;
-    }
-    let mut response = db
-        .query("SELECT VALUE firm_id FROM $project")
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let firms: Vec<Option<surrealdb::types::RecordId>> = response.take(0)?;
-    Ok(firms
-        .into_iter()
-        .flatten()
-        .next()
-        .as_ref()
-        .and_then(record_uuid))
+async fn owning_firm(
+    _db: &ApplicationStore,
+    project_id: Uuid,
+) -> Result<Option<Uuid>, TemplateError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::owning_firm(&pg, project_id).await
 }
 
 /// The current row for an exact `(project_id, code)` — no shared
@@ -356,7 +267,7 @@ async fn owning_firm(db: &SurrealDb, project_id: Uuid) -> Result<Option<Uuid>, T
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
 pub async fn resolve_exact(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Option<Uuid>,
     code: &str,
 ) -> Result<Option<Template>, TemplateError> {
@@ -369,21 +280,12 @@ pub async fn resolve_exact(
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
 pub async fn resolve_in(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     scope: Scope,
     code: &str,
 ) -> Result<Option<Template>, TemplateError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::resolve(&pg, scope, code).await;
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE current_key = $key LIMIT 1"
-        ))
-        .bind(("key", current_key_in(scope, code)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = matter::authority_for(TABLE).await?;
+    native::resolve(&pg, scope, code).await
 }
 
 /// Every version ever written for `(project_id, code)`, newest first —
@@ -397,28 +299,12 @@ pub async fn resolve_in(
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
 pub async fn versions_of(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Option<Uuid>,
     code: &str,
 ) -> Result<Vec<Template>, TemplateError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::versions(&pg, project_id, code).await;
-    }
-    // Matched on `(code, project_id)` rather than `current_key`, which only
-    // a current row carries — that is the whole point of this read.
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE code = $code AND project_id = $project \
-             AND firm_id = NONE ORDER BY id DESC"
-        ))
-        .bind(("code", code.to_string()))
-        .bind((
-            "project",
-            project_id.map(|p| record_id(crate::projects::PROJECT_TABLE, p)),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = matter::authority_for(TABLE).await?;
+    native::versions(&pg, project_id, code).await
 }
 
 /// Every current shared and Project-scoped template, ordered by code —
@@ -432,18 +318,9 @@ pub async fn versions_of(
 /// # Errors
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
-pub async fn list_current(db: &SurrealDb) -> Result<Vec<Template>, TemplateError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::list(&pg, None).await;
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE is_current = true AND firm_id = NONE \
-             ORDER BY code ASC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn list_current(_db: &ApplicationStore) -> Result<Vec<Template>, TemplateError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::list(&pg, None).await
 }
 
 /// Every current template in one Firm's Library, ordered by code.
@@ -451,19 +328,12 @@ pub async fn list_current(db: &SurrealDb) -> Result<Vec<Template>, TemplateError
 /// # Errors
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
-pub async fn list_for_firm(db: &SurrealDb, firm_id: Uuid) -> Result<Vec<Template>, TemplateError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::list(&pg, Some(Scope::Firm(firm_id))).await;
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE is_current = true AND firm_id = $firm ORDER BY code ASC"
-        ))
-        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+pub async fn list_for_firm(
+    _db: &ApplicationStore,
+    firm_id: Uuid,
+) -> Result<Vec<Template>, TemplateError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::list(&pg, Some(Scope::Firm(firm_id))).await
 }
 
 /// Every current template scoped to one Project, ordered by code.
@@ -472,24 +342,11 @@ pub async fn list_for_firm(db: &SurrealDb, firm_id: Uuid) -> Result<Vec<Template
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
 pub async fn list_for_project(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<Template>, TemplateError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::list(&pg, Some(Scope::Project(project_id))).await;
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE is_current = true AND project_id = $project ORDER BY code ASC"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let pg = matter::authority_for(TABLE).await?;
+    native::list(&pg, Some(Scope::Project(project_id))).await
 }
 
 /// Whether any template — current or superseded — is scoped to this
@@ -503,22 +360,12 @@ pub async fn list_for_project(
 /// # Errors
 ///
 /// [`TemplateError`] if storage admission or the lookup fails.
-pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool, TemplateError> {
-    if let Some(pg) = matter::authority_for(TABLE).await? {
-        return native::exists_for_project(&pg, project_id).await;
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT VALUE id FROM {TABLE} WHERE project_id = $project LIMIT 1"
-        ))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(!ids.is_empty())
+pub async fn exists_for_project(
+    _db: &ApplicationStore,
+    project_id: Uuid,
+) -> Result<bool, TemplateError> {
+    let pg = matter::authority_for(TABLE).await?;
+    native::exists_for_project(&pg, project_id).await
 }
 
 /// The spec fields that make up one Template version. Identity for
@@ -587,7 +434,7 @@ impl Saved {
 /// [`TemplateError`] when storage admission, required pins, or the atomic
 /// version write fails.
 pub async fn save_version(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     project_id: Option<Uuid>,
     code: &str,
     version: Version,
@@ -596,9 +443,7 @@ pub async fn save_version(
 }
 
 pub(crate) async fn write_authority() -> Result<crate::postgres::PostgresDb, TemplateError> {
-    matter::authority_for(TABLE)
-        .await?
-        .ok_or_else(|| matter::MatterAuthorityError::Unavailable.into())
+    Ok(matter::authority_for(TABLE).await?)
 }
 
 /// [`save_version`] for any [`Scope`] — how a Firm Library version is
@@ -609,7 +454,7 @@ pub(crate) async fn write_authority() -> Result<crate::postgres::PostgresDb, Tem
 ///
 /// As [`save_version`].
 pub async fn save_version_in(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     scope: Scope,
     code: &str,
     mut version: Version,
@@ -656,7 +501,7 @@ fn normalized_kind(kind: Option<String>) -> Option<String> {
 /// it must carry a body and name the commit it was read from. A
 /// shared-catalog version may omit the commit.
 async fn pin_body(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     scope: Scope,
     version: &Version,
 ) -> Result<Option<String>, TemplateError> {
@@ -696,7 +541,7 @@ async fn pin_body(
 /// that does not exist, storage fails, the bytes do not match the pinned
 /// digest, or they are not UTF-8.
 pub async fn body(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     template: &Template,
 ) -> Result<String, TemplateBodyError> {
@@ -712,7 +557,7 @@ pub async fn body(
 /// As [`body`], and [`TemplateBodyError::DigestMismatch`] when the bytes do
 /// not hash to `pinned_sha256`.
 pub async fn body_pinned_to(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     storage: &Arc<dyn StorageService>,
     template: &Template,
     pinned_sha256: Option<&str>,

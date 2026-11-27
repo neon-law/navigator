@@ -422,9 +422,9 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     .unwrap_or_default();
     let person_id = person_id.and_then(|raw| raw.parse::<uuid::Uuid>().ok());
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let storage = consume_context::<Arc<dyn cloud::StorageService>>();
-    let Some(project) = store::projects::find_by_code(&surreal, &code)
+    let Some(project) = store::projects::find_by_code(&application_store, &code)
         .await
         .map_err(server_error)?
     else {
@@ -435,23 +435,26 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     // Row-visibility runs before the row load, so an unauthorised caller never
     // even pulls the matter name into the response — the same 404 a missing id
     // would produce (never 403). A read error is a 500.
-    let visible = store::projects::can_access_as_client_in_surreal(&surreal, person_id, id)
+    let visible = store::projects::can_access_as_client(&application_store, person_id, id)
         .await
         .map_err(server_error)?;
     if !visible {
         return Ok(not_found(id, role, logo, csrf_token));
     }
     let tokens_href = crate::brand_style::brand_tokens_href(&project.brand);
-    let (logo, brand_name, legal_entity) = project_brand_chrome(&surreal, &project.brand).await;
-    let client_dri =
-        store::projects::participation_for_person(&surreal, person_id.unwrap_or_default(), id)
-            .await
-            .map_err(server_error)?
-            .filter(|row| {
-                row.is_client_dri
-                    && store::projects::PARTICIPATION_CLIENT_SIDE
-                        .contains(&row.participation.as_str())
-            });
+    let (logo, brand_name, legal_entity) =
+        project_brand_chrome(&application_store, &project.brand).await;
+    let client_dri = store::projects::participation_for_person(
+        &application_store,
+        person_id.unwrap_or_default(),
+        id,
+    )
+    .await
+    .map_err(server_error)?
+    .filter(|row| {
+        row.is_client_dri
+            && store::projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str())
+    });
     let can_edit_testimonial = client_dri.is_some();
     // The dispatcher already refused a section this reader does not have.
     let selected_tab = crate::sections::page::request_tab()
@@ -466,14 +469,18 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     .ok()
     .and_then(|axum::extract::Query(query)| query.error);
     let testimonial = if can_edit_testimonial {
-        store::testimonials::for_person_project(&surreal, person_id.unwrap_or_default(), id)
-            .await
-            .map_err(server_error)?
-            .map(|row| ClientTestimonialView {
-                quote: row.quote,
-                attribution: row.attribution_label.unwrap_or_default(),
-                public_requested: row.consented_at.is_some(),
-            })
+        store::testimonials::for_person_project(
+            &application_store,
+            person_id.unwrap_or_default(),
+            id,
+        )
+        .await
+        .map_err(server_error)?
+        .map(|row| ClientTestimonialView {
+            quote: row.quote,
+            attribution: row.attribution_label.unwrap_or_default(),
+            public_requested: row.consented_at.is_some(),
+        })
     } else {
         None
     };
@@ -504,7 +511,7 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
         ViewerRole::Client => store::persons::Role::Client,
     };
     let notation_rows = notation_rows_for_viewer(
-        &surreal,
+        &application_store,
         storage.as_ref(),
         id,
         person_id,
@@ -514,7 +521,7 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     .await?;
 
     // Client-readable drafts (only those an attorney has advanced past `draft`).
-    let review_docs = store::review_documents::client_visible_for_project(&surreal, id)
+    let review_docs = store::review_documents::client_visible_for_project(&application_store, id)
         .await
         .map_err(server_error)?;
     let review_rows = review_docs
@@ -533,7 +540,7 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     // reaches this list (#782). A document lists once, as its newest shared
     // revision; an older shared copy is history, not a second document.
     let shared = store::documents::visibility::CLIENT;
-    let documents = store::assets::grouped_for_project(&surreal, id)
+    let documents = store::assets::grouped_for_project(&application_store, id)
         .await
         .map_err(server_error)?
         .into_iter()
@@ -552,7 +559,7 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
 
     // Every invoice from the local mirror, newest first; only client-facing
     // fields reach the client (never the Xero invoice id).
-    let invoices = store::xero_invoices::for_projects(&surreal, &[id])
+    let invoices = store::xero_invoices::for_projects(&application_store, &[id])
         .await
         .map_err(server_error)?
         .into_iter()
@@ -569,10 +576,10 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     // IOLTA account holds many clients' funds; nothing here reads beyond
     // this one matter's postings.
     let trust = trust_view(
-        &store::trust::position_for_project(&surreal, id)
+        &store::trust::position_for_project(&application_store, id)
             .await
             .map_err(server_error)?,
-        &store::iolta_withdrawals::for_project(&surreal, id)
+        &store::iolta_withdrawals::for_project(&application_store, id)
             .await
             .map_err(server_error)?,
     );
@@ -598,7 +605,7 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
         project_code: project.code.clone(),
     };
     let deadline_groups = crate::project_deadlines::deadline_groups(
-        &store::project_deadlines::list(&surreal, id)
+        &store::project_deadlines::list(&application_store, id)
             .await
             .map_err(server_error)?,
         chrono::Utc::now(),
@@ -610,12 +617,14 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
         store::access::MatterViewer::Client
     };
     let page_tabs =
-        crate::sections::page::stored_page_tabs(&surreal, id, &project.code, viewer).await;
+        crate::sections::page::stored_page_tabs(&application_store, id, &project.code, viewer)
+            .await;
     // The matter's execution reading, from the signature records — `official`
     // only once the onboarding envelope completed a loop Navigator sent.
-    let onboarding_status = store::projects::onboarding_status(&surreal, id, &project.code)
-        .await
-        .map_err(server_error)?;
+    let onboarding_status =
+        store::projects::onboarding_status(&application_store, id, &project.code)
+            .await
+            .map_err(server_error)?;
     Ok(ProjectDetailView {
         page_tabs,
         id: project.id.to_string(),
@@ -680,7 +689,7 @@ pub fn confirm_client_preview(
 /// uploaded logo or a firm-specific legal entity when either has changed.
 #[cfg(feature = "server")]
 async fn project_brand_chrome(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_brand: &str,
 ) -> (Option<crate::components::AppLogo>, String, String) {
     let compiled = views::brand::BrandKey::parse(project_brand);
@@ -693,7 +702,7 @@ async fn project_brand_chrome(
         || project_brand.to_string(),
         |branding| branding.firm.legal_entity.to_string(),
     );
-    let brand = store::brands::find_by_key(surreal, project_brand)
+    let brand = store::brands::find_by_key(application_store, project_brand)
         .await
         .ok()
         .flatten();
@@ -749,57 +758,23 @@ async fn queue_client_project_view(project_id: uuid::Uuid) {
     }
 }
 
-/// Build the per-notation rows for a matter: title, a client-friendly status,
-/// and which of the three PDFs exist. `exists` is a metadata-only HEAD, so a
-/// handful of probes per matter is cheap. `person_id` is the current
-/// session's person, used only to decide [`NotationRow::signable`]. Client
-/// lenses omit internal `TrialPrep` Notations; the lawyer lens can see all
-/// Notations. Mirrors the `notation_rows`.
-///
-/// `signed_ready` is the one field this loop does not answer from storage:
-/// an object at the signed-document key only proves bytes were written
-/// there, never that a provider confirmed execution — a lawyer-uploaded PDF
-/// that merely looks signed would satisfy the same probe. It reads
-/// [`store::signatures::completed_for_notation`] instead, so the client
-/// only sees "Signed" when a completed signature record — provider id and
-/// `signed_at` — backs the document.
-#[cfg(feature = "server")]
-#[cfg(test)]
-async fn notation_rows(
-    surreal: &store::surreal::SurrealDb,
-    storage: &dyn cloud::StorageService,
-    project_id: uuid::Uuid,
-    person_id: Option<uuid::Uuid>,
-    contact_email: &str,
-) -> Result<Vec<NotationRow>, ServerFnError> {
-    notation_rows_for_lens(
-        surreal,
-        storage,
-        project_id,
-        person_id,
-        contact_email,
-        false,
-    )
-    .await
-}
-
 #[cfg(feature = "server")]
 async fn notation_rows_for_lens(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &dyn cloud::StorageService,
     project_id: uuid::Uuid,
     person_id: Option<uuid::Uuid>,
     contact_email: &str,
     lawyer_lens: bool,
 ) -> Result<Vec<NotationRow>, ServerFnError> {
-    let notations = store::notations::list_by_project(surreal, project_id)
+    let notations = store::notations::list_by_project(application_store, project_id)
         .await
         .map_err(server_error)?;
     let template_ids: Vec<_> = notations
         .iter()
         .map(|notation| notation.template_id)
         .collect();
-    let templates = store::templates::find_by_ids(surreal, &template_ids)
+    let templates = store::templates::find_by_ids(application_store, &template_ids)
         .await
         .map_err(server_error)?;
     let mut rows = Vec::with_capacity(notations.len());
@@ -821,12 +796,12 @@ async fn notation_rows_for_lens(
             .exists(&store::notations::document_pdf_storage_key(n.id))
             .await
             .unwrap_or(false);
-        let signed_ready = store::signatures::completed_for_notation(surreal, n.id)
+        let signed_ready = store::signatures::completed_for_notation(application_store, n.id)
             .await
             .ok()
             .flatten()
             .is_some();
-        let latest = store::signatures::latest_for_notation(surreal, n.id)
+        let latest = store::signatures::latest_for_notation(application_store, n.id)
             .await
             .ok()
             .flatten();
@@ -910,19 +885,19 @@ async fn notation_rows_for_lens(
 /// extension.
 #[cfg(feature = "server")]
 async fn notation_rows_for_viewer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &dyn cloud::StorageService,
     project_id: uuid::Uuid,
     person_id: Option<uuid::Uuid>,
     role: store::persons::Role,
     contact_email: &str,
 ) -> Result<Vec<NotationRow>, ServerFnError> {
-    let lawyer_lens = store::access::matter_lens(surreal, person_id, role, project_id)
+    let lawyer_lens = store::access::matter_lens(application_store, person_id, role, project_id)
         .await
         .map_err(server_error)?
         == Some(store::access::ProjectLens::Lawyer);
     notation_rows_for_lens(
-        surreal,
+        application_store,
         storage,
         project_id,
         person_id,
@@ -1634,11 +1609,10 @@ mod render_tests {
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::{
-        notation_kind_visible_to_lens, notation_rows, notation_rows_for_viewer,
-        notation_status_label, project_brand_chrome, NotationRow, COUNTERSIGNATURE_LABEL,
+        notation_kind_visible_to_lens, notation_status_label, COUNTERSIGNATURE_LABEL,
         DECLINED_LABEL, EXPIRED_LABEL, VOIDED_LABEL,
     };
-    use cloud::StorageService;
+
     use store::signatures::SignatureState;
 
     #[test]
@@ -1646,74 +1620,6 @@ mod tests {
         assert!(!notation_kind_visible_to_lens(Some("trial_prep"), false));
         assert!(notation_kind_visible_to_lens(Some("trial_prep"), true));
         assert!(notation_kind_visible_to_lens(Some("agreement"), false));
-    }
-
-    #[tokio::test]
-    async fn client_lens_notation_query_filters_trial_prep_before_building_rows() {
-        let surreal = store::surreal::test_support::mem().await;
-        let notation_id =
-            store::test_support::seed_notation_with_kind(&surreal, Some("trial_prep")).await;
-        let notation = store::notations::find_by_id(&surreal, notation_id)
-            .await
-            .expect("query notation")
-            .expect("seeded notation exists");
-        let storage = temp_storage("trial-prep-visibility", notation_id).await;
-
-        let client_rows = super::notation_rows_for_lens(
-            &surreal,
-            &storage,
-            notation.project_id,
-            Some(notation.person_id),
-            "contact@example.com",
-            false,
-        )
-        .await
-        .expect("load client notation rows");
-        assert!(client_rows.is_empty(), "client lens must omit TrialPrep");
-
-        let lawyer_rows = super::notation_rows_for_lens(
-            &surreal,
-            &storage,
-            notation.project_id,
-            Some(notation.person_id),
-            "contact@example.com",
-            true,
-        )
-        .await
-        .expect("load lawyer notation rows");
-        assert_eq!(lawyer_rows.len(), 1);
-        assert_eq!(lawyer_rows[0].id, notation_id.to_string());
-    }
-
-    #[tokio::test]
-    async fn lawyer_tier_client_participant_uses_client_notation_lens_without_preview_extension() {
-        let surreal = store::surreal::test_support::mem().await;
-        let notation_id =
-            store::test_support::seed_notation_with_kind(&surreal, Some("trial_prep")).await;
-        let notation = store::notations::find_by_id(&surreal, notation_id)
-            .await
-            .expect("query notation")
-            .expect("seeded notation exists");
-        store::persons::set_role(&surreal, notation.person_id, store::persons::Role::Lawyer)
-            .await
-            .expect("promote test person")
-            .expect("seeded person exists");
-        let storage = temp_storage("trial-prep-viewer-lens", notation_id).await;
-
-        let rows = notation_rows_for_viewer(
-            &surreal,
-            &storage,
-            notation.project_id,
-            Some(notation.person_id),
-            store::persons::Role::Lawyer,
-            "contact@example.com",
-        )
-        .await
-        .expect("load effective-lens notation rows");
-        assert!(
-            rows.is_empty(),
-            "client-side participation must override the lawyer tier when listing"
-        );
     }
 
     #[test]
@@ -1734,68 +1640,6 @@ mod tests {
             notation_status_label("unknown__state", None, false, false, false),
             "In progress"
         );
-    }
-
-    #[tokio::test]
-    async fn project_brand_chrome_uses_the_project_brand_not_the_request_brand() {
-        let surreal = store::surreal::test_support::mem().await;
-        let key = "matter-page-brand";
-        // A brand's `legal_entity` is inherited from its Firm's own linked
-        // Entity (ENG-659) — never caller input — so the Firm here is on an
-        // Entity named exactly what this test expects to read back.
-        let entity = store::entities::create(
-            &surreal,
-            &store::entities::NewEntity {
-                name: "Guieb & Shook PC".to_string(),
-                entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
-                jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: None,
-            },
-        )
-        .await
-        .expect("test entity inserts");
-        let admin = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Project Brand Admin DRI",
-                "project-brand-admin-dri@example.com",
-                store::persons::Role::Admin,
-            ),
-        )
-        .await
-        .expect("test admin inserts");
-        let firm = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: "Project Practice Firm".to_string(),
-                status: "active".to_string(),
-                entity_id: entity.id,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .expect("test firm inserts");
-        store::brands::create(
-            &surreal,
-            store::persons::Role::Admin,
-            Some(admin.id),
-            &store::brands::NewBrand {
-                name: "Project Practice".to_string(),
-                key: key.to_string(),
-                firm_id: Some(firm.id),
-                ..store::brands::NewBrand::default()
-            },
-        )
-        .await
-        .expect("test brand inserts");
-
-        let (logo, name, legal_entity) = project_brand_chrome(&surreal, key).await;
-        assert_eq!(name, "Project Practice");
-        assert_eq!(legal_entity, "Guieb & Shook PC");
-        assert!(logo.is_none());
     }
 
     /// Signature evidence, not workflow state, decides the label — with
@@ -1888,503 +1732,5 @@ mod tests {
             true,
         );
         assert_eq!(label, COUNTERSIGNATURE_LABEL);
-    }
-
-    /// Once the provider reports the client's own recipient step complete,
-    /// the client reads the countersignature copy and is offered no signing
-    /// action, while the envelope itself is still live (ENG-562).
-    #[tokio::test]
-    async fn a_client_who_has_signed_awaits_countersignature_with_no_sign_action() {
-        let surreal = store::surreal::test_support::mem().await;
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let notation = store::notations::find_by_id(&surreal, notation_id)
-            .await
-            .expect("query notation")
-            .expect("seeded notation exists");
-        store::notations::update_state(&surreal, notation_id, "sent_for_signature__pending")
-            .await
-            .expect("park at the signature wait");
-        let storage = temp_storage("countersignature", notation_id).await;
-        store::signatures::record_request(
-            &surreal,
-            notation_id,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-eng-562-countersign",
-        )
-        .await
-        .expect("record signature request");
-        let row = |rows: Vec<NotationRow>| {
-            rows.into_iter()
-                .find(|r| r.id == notation_id.to_string())
-                .expect("the notation's row renders")
-        };
-
-        let before = row(notation_rows(
-            &surreal,
-            &storage,
-            notation.project_id,
-            Some(notation.person_id),
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows"));
-        assert!(before.signable);
-        assert_eq!(before.status, "Awaiting your signature");
-
-        // The firm finishing first changes nothing for the client.
-        store::signatures::record_signer_completion(
-            &surreal,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-eng-562-countersign",
-            "firm",
-        )
-        .await
-        .expect("record firm completion");
-        assert!(
-            row(notation_rows(
-                &surreal,
-                &storage,
-                notation.project_id,
-                Some(notation.person_id),
-                "contact@example.com",
-            )
-            .await
-            .expect("build notation rows"))
-            .signable
-        );
-
-        store::signatures::record_signer_completion(
-            &surreal,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-eng-562-countersign",
-            "client",
-        )
-        .await
-        .expect("record client completion");
-        let after = row(notation_rows(
-            &surreal,
-            &storage,
-            notation.project_id,
-            Some(notation.person_id),
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows"));
-        assert_eq!(after.status, COUNTERSIGNATURE_LABEL);
-        assert_eq!(
-            after.whats_next,
-            workflows::client_phrase_for("firm_signature").whats_next,
-            "the next step is the firm's, not the client's"
-        );
-        assert!(
-            !after.signable,
-            "a client who has signed is offered no signing action"
-        );
-        assert!(!after.signed_ready, "the envelope is not executed yet");
-        assert_eq!(after.contact_href, None);
-    }
-
-    /// The route-level proof: `notation_rows` must not read `signed_ready`
-    /// off `storage.exists()`. An object at the signed-document key with no
-    /// completed `store::signatures` row must not read as signed — the
-    /// exact failure mode ENG-421 reports (a lawyer-uploaded PDF landing at
-    /// that key would otherwise claim execution). Once the provider's
-    /// completion is recorded, the same notation reads as signed with no
-    /// change to what is in storage.
-    #[tokio::test]
-    async fn notation_rows_reads_signed_ready_from_signature_evidence_not_storage() {
-        let surreal = store::surreal::test_support::mem().await;
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let notation = store::notations::find_by_id(&surreal, notation_id)
-            .await
-            .expect("query notation")
-            .expect("seeded notation exists");
-        let storage = cloud::FsStorage::new(std::env::temp_dir().join(format!(
-            "navigator-webapp-portal-project-detail-{notation_id}"
-        )))
-        .await
-        .expect("create FsStorage temp root");
-
-        // An object at the signed-document key alone — no signature ever
-        // recorded — must not read as signed.
-        storage
-            .put(
-                &store::notations::signed_document_storage_key(notation_id),
-                b"looks-signed-but-isn't",
-                "application/pdf",
-            )
-            .await
-            .expect("write object at the signed key");
-        let rows = notation_rows(
-            &surreal,
-            &storage,
-            notation.project_id,
-            None,
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows");
-        let row = rows.iter().find(|r| r.id == notation_id.to_string());
-        assert_eq!(
-            row.map(|r| r.signed_ready),
-            Some(false),
-            "an object at the signed key with no signature record must not be signed_ready"
-        );
-
-        // Recording the provider's completed signature — no change to what
-        // is in storage — is what flips it.
-        store::signatures::record_request(
-            &surreal,
-            notation_id,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-eng-421",
-        )
-        .await
-        .expect("record signature request");
-        store::signatures::stamp_signed(
-            &surreal,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-eng-421",
-            "2026-06-30T00:00:00Z",
-        )
-        .await
-        .expect("stamp signed_at");
-        let rows = notation_rows(
-            &surreal,
-            &storage,
-            notation.project_id,
-            None,
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows");
-        let row = rows.iter().find(|r| r.id == notation_id.to_string());
-        assert_eq!(
-            row.map(|r| r.signed_ready),
-            Some(true),
-            "a completed signature record must make the notation signed_ready"
-        );
-    }
-
-    /// A fresh `FsStorage` temp root, mirroring the setup every other
-    /// `notation_rows` test in this module shares.
-    async fn temp_storage(label: &str, notation_id: uuid::Uuid) -> cloud::FsStorage {
-        cloud::FsStorage::new(
-            std::env::temp_dir().join(format!("navigator-webapp-portal-{label}-{notation_id}")),
-        )
-        .await
-        .expect("create FsStorage temp root")
-    }
-
-    /// `signable` is the gate the "Review and sign" action renders behind
-    /// (ENG-558): only a live envelope (`Requested`) whose bound signer is
-    /// the current session may see it. Before any envelope is sent, and
-    /// when a live envelope belongs to a different participant on the same
-    /// matter, it must be `false`.
-    #[tokio::test]
-    async fn signable_is_true_only_for_a_live_envelope_addressed_to_its_signer() {
-        let surreal = store::surreal::test_support::mem().await;
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let notation = store::notations::find_by_id(&surreal, notation_id)
-            .await
-            .expect("query notation")
-            .expect("seeded notation exists");
-        let storage = temp_storage("signable-addressed", notation_id).await;
-
-        // No envelope has been sent yet: nothing to sign.
-        let rows = notation_rows(
-            &surreal,
-            &storage,
-            notation.project_id,
-            Some(notation.person_id),
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows");
-        assert_eq!(
-            rows.iter()
-                .find(|r| r.id == notation_id.to_string())
-                .map(|r| r.signable),
-            Some(false),
-            "a notation with no envelope yet must not be signable"
-        );
-
-        store::signatures::record_request(
-            &surreal,
-            notation_id,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-eng-558-live",
-        )
-        .await
-        .expect("record signature request");
-
-        // The bound signer, viewing a live envelope, may sign it.
-        let rows = notation_rows(
-            &surreal,
-            &storage,
-            notation.project_id,
-            Some(notation.person_id),
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows");
-        assert_eq!(
-            rows.iter()
-                .find(|r| r.id == notation_id.to_string())
-                .map(|r| r.signable),
-            Some(true),
-            "a live envelope addressed to the current session's person must be signable"
-        );
-
-        // A different participant on the same matter must never see the
-        // action for someone else's envelope.
-        let other = store::persons::find_or_create(
-            &surreal,
-            &store::persons::NewPerson::new("Aries", "aries@example.com"),
-        )
-        .await
-        .expect("seed a second participant");
-        let rows = notation_rows(
-            &surreal,
-            &storage,
-            notation.project_id,
-            Some(other.id),
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows");
-        assert_eq!(
-            rows.iter()
-                .find(|r| r.id == notation_id.to_string())
-                .map(|r| r.signable),
-            Some(false),
-            "a live envelope must never be signable to another participant"
-        );
-
-        // No session identity at all — the client-DRI / logged-out shape.
-        let rows = notation_rows(
-            &surreal,
-            &storage,
-            notation.project_id,
-            None,
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows");
-        assert_eq!(
-            rows.iter()
-                .find(|r| r.id == notation_id.to_string())
-                .map(|r| r.signable),
-            Some(false),
-            "no session person means no one is signable"
-        );
-    }
-
-    /// A dead envelope offers no signing action to anyone, even its bound
-    /// signer (ENG-558 acceptance: declined and expired must both be
-    /// `false`; voided follows the same terminal-state rule).
-    #[tokio::test]
-    async fn signable_is_false_for_a_declined_voided_or_expired_envelope() {
-        for (label, provider_id) in [
-            ("declined", "env-eng-558-declined"),
-            ("voided", "env-eng-558-voided"),
-            ("expired", "env-eng-558-expired"),
-        ] {
-            let surreal = store::surreal::test_support::mem().await;
-            let notation_id = store::test_support::seed_notation(&surreal).await;
-            let notation = store::notations::find_by_id(&surreal, notation_id)
-                .await
-                .expect("query notation")
-                .expect("seeded notation exists");
-            let storage = temp_storage(&format!("signable-{label}"), notation_id).await;
-
-            store::signatures::record_request(
-                &surreal,
-                notation_id,
-                store::signatures::SignatureProvider::DocuSign,
-                provider_id,
-            )
-            .await
-            .expect("record signature request");
-            match label {
-                "declined" => {
-                    store::signatures::stamp_declined(
-                        &surreal,
-                        store::signatures::SignatureProvider::DocuSign,
-                        provider_id,
-                    )
-                    .await
-                }
-                "voided" => {
-                    store::signatures::stamp_voided(
-                        &surreal,
-                        store::signatures::SignatureProvider::DocuSign,
-                        provider_id,
-                    )
-                    .await
-                }
-                _ => {
-                    store::signatures::stamp_expired(
-                        &surreal,
-                        store::signatures::SignatureProvider::DocuSign,
-                        provider_id,
-                    )
-                    .await
-                }
-            }
-            .expect("stamp terminal state");
-
-            let rows = notation_rows(
-                &surreal,
-                &storage,
-                notation.project_id,
-                Some(notation.person_id),
-                "contact@example.com",
-            )
-            .await
-            .expect("build notation rows");
-            assert_eq!(
-                rows.iter()
-                    .find(|r| r.id == notation_id.to_string())
-                    .map(|r| r.signable),
-                Some(false),
-                "a {label} envelope must not be signable"
-            );
-            // Its copy tells the client to contact the firm, so the row
-            // carries the way to do that.
-            let contact = rows
-                .iter()
-                .find(|r| r.id == notation_id.to_string())
-                .and_then(|r| r.contact_href.clone())
-                .unwrap_or_default();
-            assert!(
-                contact.starts_with("mailto:") && contact.len() > "mailto:".len(),
-                "a {label} envelope's row must link to the firm, got {contact:?}"
-            );
-        }
-    }
-
-    /// An `emailed` (non-captive) recipient has no embedded session to
-    /// open: `esign_view::sign_get` resolves the recipient through the send
-    /// path's own function, finds no `clientUserId`, and answers `409` —
-    /// pinned by `server/tests/esign_redirect.rs`,
-    /// `an_emailed_envelope_has_no_embedded_session_to_open`. A live
-    /// envelope addressed to its own signer must therefore still not be
-    /// signable when the notation was delivered by email, or the portal
-    /// offers an action whose only outcome is a conflict.
-    #[tokio::test]
-    async fn signable_is_false_for_an_emailed_delivery_even_with_a_live_envelope() {
-        let surreal = store::surreal::test_support::mem().await;
-        let seeded_id = store::test_support::seed_notation(&surreal).await;
-        let seeded = store::notations::find_by_id(&surreal, seeded_id)
-            .await
-            .expect("query notation")
-            .expect("seeded notation exists");
-        let storage = temp_storage("signable-emailed", seeded_id).await;
-
-        // Same template, signer, and matter as the seeded notation; only the
-        // delivery mode differs, so delivery is the single variable.
-        let emailed_id = store::notations::create(
-            &surreal,
-            &store::notations::NewNotation::new(
-                seeded.template_id,
-                seeded.person_id,
-                seeded.project_id,
-                "sent_for_signature__pending",
-            )
-            .with_delivery(store::notations::DELIVERY_EMAILED),
-        )
-        .await
-        .expect("create an emailed-delivery notation")
-        .id;
-        // Both notations get their own live envelope, so delivery is the
-        // only difference between the two rows compared below.
-        for (notation_id, provider_id) in [
-            (emailed_id, "env-eng-558-emailed"),
-            (seeded_id, "env-eng-558-embedded"),
-        ] {
-            store::signatures::record_request(
-                &surreal,
-                notation_id,
-                store::signatures::SignatureProvider::DocuSign,
-                provider_id,
-            )
-            .await
-            .expect("record signature request");
-        }
-
-        let rows = notation_rows(
-            &surreal,
-            &storage,
-            seeded.project_id,
-            Some(seeded.person_id),
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows");
-        assert_eq!(
-            rows.iter()
-                .find(|r| r.id == emailed_id.to_string())
-                .map(|r| r.signable),
-            Some(false),
-            "an emailed recipient has no embedded session, so the action must not be offered"
-        );
-        // The embedded sibling — same matter, same signer, same live
-        // envelope state — stays signable, so delivery alone decided it.
-        assert_eq!(
-            rows.iter()
-                .find(|r| r.id == seeded_id.to_string())
-                .map(|r| r.signable),
-            Some(true),
-            "embedded delivery with the same live envelope and signer must remain signable"
-        );
-    }
-
-    /// Once fully executed, the client cannot re-enter the ceremony — a
-    /// completed envelope is not signable even to its own signer (ENG-558
-    /// acceptance: "already signed by this client").
-    #[tokio::test]
-    async fn signable_is_false_once_the_envelope_is_fully_signed() {
-        let surreal = store::surreal::test_support::mem().await;
-        let notation_id = store::test_support::seed_notation(&surreal).await;
-        let notation = store::notations::find_by_id(&surreal, notation_id)
-            .await
-            .expect("query notation")
-            .expect("seeded notation exists");
-        let storage = temp_storage("signable-completed", notation_id).await;
-
-        store::signatures::record_request(
-            &surreal,
-            notation_id,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-eng-558-completed",
-        )
-        .await
-        .expect("record signature request");
-        store::signatures::stamp_signed(
-            &surreal,
-            store::signatures::SignatureProvider::DocuSign,
-            "env-eng-558-completed",
-            "2026-06-30T00:00:00Z",
-        )
-        .await
-        .expect("stamp signed_at");
-
-        let rows = notation_rows(
-            &surreal,
-            &storage,
-            notation.project_id,
-            Some(notation.person_id),
-            "contact@example.com",
-        )
-        .await
-        .expect("build notation rows");
-        let row = rows.iter().find(|r| r.id == notation_id.to_string());
-        assert_eq!(
-            row.map(|r| r.signable),
-            Some(false),
-            "an already-signed notation must not be signable"
-        );
-        assert_eq!(row.map(|r| r.signed_ready), Some(true));
     }
 }

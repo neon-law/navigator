@@ -205,10 +205,7 @@ fn report(namespace: &str, jobs: &[JobObs], workloads: &[WorkloadObs]) -> (Strin
             let _ = writeln!(out, "       ↳ {remedy}");
         }
     }
-    out +=
-        "\nRestate ingress/registration is a separate axis: a 401 (stale RESTATE_AUTH_TOKEN) or \
-            404 (service not re-registered) shows in the Restate Cloud console → Invocations, not \
-            here. See docs/observability.md and docs/durable-workflows.md.";
+    out += "\nCheck web and DBOS ingress logs for workflow admission and status. See docs/durable-workflows.md.";
     let crit = findings
         .iter()
         .filter(|f| f.severity == Severity::Critical)

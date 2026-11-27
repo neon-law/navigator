@@ -29,22 +29,12 @@ pub enum TenancyError {
 }
 
 /// Source selection is confined to the explicit importer context.
-pub(crate) fn enabled() -> bool {
-    #[cfg(test)]
-    if let Ok(enabled) = TEST_TENANCY_AUTHORITY.try_with(|enabled| *enabled) {
-        return enabled;
-    }
-    !crate::postgres_mirror::reading_source()
-}
-
 pub(crate) async fn db() -> Result<crate::postgres::PostgresDb, TenancyError> {
     #[cfg(test)]
     if let Ok(pg) = TEST_TENANCY_DB.try_with(Clone::clone) {
         return Ok(pg);
     }
-    crate::postgres::PostgresDb::configured()
-        .await?
-        .ok_or(TenancyError::Configuration)
+    Ok(crate::postgres::PostgresDb::application().await?)
 }
 
 #[cfg(test)]

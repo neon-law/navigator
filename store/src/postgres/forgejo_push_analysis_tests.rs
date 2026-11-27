@@ -33,8 +33,8 @@ fn delivery() -> NewPushReceipt {
 }
 
 async fn postgres() -> Option<PostgresDb> {
-    let (options, database) = crate::postgres_mirror::tests::fresh_schema().await?;
-    Some(crate::postgres_mirror::tests::connect(&options, &database).await)
+    let (options, database) = crate::postgres::fixtures::fresh_schema().await?;
+    Some(crate::postgres::fixtures::connect(&options, &database).await)
 }
 
 fn forge(server: &MockServer) -> cloud::ForgejoForge {

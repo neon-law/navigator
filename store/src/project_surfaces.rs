@@ -26,9 +26,9 @@ use cloud::forge::{ForgeError, ForgeService};
 use cloud::workspace::documents_prefix;
 use cloud::DriveError;
 
+use crate::application_store::ApplicationStore;
 use crate::persons;
 use crate::projects::{self, set_drive_folder_id, ProjectCommandError, ProjectStoreError};
-use crate::surreal::SurrealDb;
 pub use model::project_surfaces::{
     DriveFolderCheck, ProjectHandles, ProjectSurfaces, SurfaceStatus, DRIVE_FOLDER_CHECK_HEADER,
 };
@@ -220,14 +220,14 @@ pub enum SurfaceError {
 /// external resource. The Project row remains authoritative for links; DRI
 /// emails are derived from its participation markers and Person rows.
 pub async fn read_handles(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<ProjectHandles, SurfaceError> {
-    let project = projects::find_by_id(surreal, project_id)
+    let project = projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| SurfaceError::Db(error.to_string()))?
         .ok_or(SurfaceError::NotFound)?;
-    let participations = projects::participations_for_project(surreal, project_id)
+    let participations = projects::participations_for_project(application_store, project_id)
         .await
         .map_err(|error| SurfaceError::Db(error.to_string()))?;
     let dri_ids: Vec<_> = participations
@@ -237,7 +237,7 @@ pub async fn read_handles(
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
-    let people = crate::persons::find_by_ids(surreal, &dri_ids)
+    let people = crate::persons::find_by_ids(application_store, &dri_ids)
         .await
         .map_err(|error| SurfaceError::Db(error.to_string()))?;
     let found_ids: std::collections::HashSet<_> = people.iter().map(|person| person.id).collect();
@@ -297,7 +297,7 @@ pub async fn read_handles(
 /// still opens matters; an admin reconcile later fills in whichever service
 /// the deployment has configured.
 pub async fn reconcile<D, F>(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     drive: Option<&D>,
     forge: Option<&F>,
@@ -306,7 +306,7 @@ where
     D: DriveService + ?Sized,
     F: ForgeService + ?Sized,
 {
-    let project = projects::find_by_id(surreal, project_id)
+    let project = projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| SurfaceError::Db(error.to_string()))?
         .ok_or(SurfaceError::NotFound)?;
@@ -327,13 +327,13 @@ where
             // absent folder is created.
             let (folder_id, status) =
                 if let Some(existing) = drive.find_folder_by_name(&project.code).await? {
-                    set_drive_folder_id(surreal, project_id, Some(&existing.id))
+                    set_drive_folder_id(application_store, project_id, Some(&existing.id))
                         .await?
                         .ok_or(SurfaceError::NotFound)?;
                     (existing.id, SurfaceStatus::Adopted)
                 } else {
                     let folder = drive.create_folder(&project.code).await?;
-                    set_drive_folder_id(surreal, project_id, Some(&folder.id))
+                    set_drive_folder_id(application_store, project_id, Some(&folder.id))
                         .await?
                         .ok_or(SurfaceError::NotFound)?;
                     (folder.id, SurfaceStatus::Created)
@@ -348,7 +348,7 @@ where
         };
 
     if let (Some(drive), Some(folder_id)) = (drive, drive_folder_id.as_deref()) {
-        grant_drive_ingest_membership(surreal, project_id, drive, folder_id).await?;
+        grant_drive_ingest_membership(application_store, project_id, drive, folder_id).await?;
     }
 
     let (repository_url, repository_status, repository_detail) =
@@ -356,7 +356,7 @@ where
             (Some(existing.to_string()), SurfaceStatus::Present, None)
         } else if let Some(forge) = forge {
             let repository = forge.ensure_repository(&project.code).await?;
-            record_provisioned_repository(surreal, project_id, &repository.url).await?;
+            record_provisioned_repository(application_store, project_id, &repository.url).await?;
             (Some(repository.url), SurfaceStatus::Created, None)
         } else {
             (
@@ -386,7 +386,7 @@ where
 /// With `NAVIGATOR_FORGE_BACKEND=forgejo`, the repository is created in the
 /// Project's Firm namespace with that Firm's own encrypted token.
 pub async fn reconcile_from_env(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<ProjectSurfaces, SurfaceError> {
     let drive = if provider_configured(&DRIVE_CONFIGURATION_KEYS, |key| std::env::var(key).ok()) {
@@ -396,7 +396,8 @@ pub async fn reconcile_from_env(
     };
     if drive.is_some() {
         let report = Box::pin(crate::project_folder_reconcile::reconcile_from_env(
-            surreal, project_id,
+            application_store,
+            project_id,
         ))
         .await
         .map_err(|_| SurfaceError::Db("Drive folder reconciliation failed".to_string()))?;
@@ -410,14 +411,21 @@ pub async fn reconcile_from_env(
     match cloud::ForgeBackend::from_lookup(lookup)? {
         cloud::ForgeBackend::GitHub => {
             let forge = forge_from_env()?;
-            reconcile(surreal, project_id, drive.as_ref(), forge.as_ref()).await
+            reconcile(
+                application_store,
+                project_id,
+                drive.as_ref(),
+                forge.as_ref(),
+            )
+            .await
         }
         cloud::ForgeBackend::Forgejo => {
             let kms = cloud::runtime_kms_from_env().await;
-            let forge = forgejo_for_project(surreal, project_id, kms.as_ref(), lookup).await?;
+            let forge =
+                forgejo_for_project(application_store, project_id, kms.as_ref(), lookup).await?;
             let root =
                 lookup(cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV).unwrap_or_default();
-            let seed = match scaffold_inputs(surreal, project_id).await {
+            let seed = match scaffold_inputs(application_store, project_id).await {
                 Ok(seed) => seed,
                 Err(error) => {
                     tracing::error!(
@@ -429,7 +437,7 @@ pub async fn reconcile_from_env(
                 }
             };
             reconcile_forgejo(
-                surreal,
+                application_store,
                 project_id,
                 drive.as_ref(),
                 &forge,
@@ -478,7 +486,7 @@ fn is_firm_forges_repository(url: &str, site: &ForgeSite<'_>) -> bool {
 /// logged, and the next pass — a retry through the admin door or the
 /// nightly ops reconcile — repairs it.
 async fn reconcile_forgejo<D, F>(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     drive: Option<&D>,
     forge: &F,
@@ -489,7 +497,7 @@ where
     D: DriveService + ?Sized,
     F: cloud::forgejo_governance::GovernedForge + ?Sized,
 {
-    let surfaces = reconcile(surreal, project_id, drive, Some(forge)).await?;
+    let surfaces = reconcile(application_store, project_id, drive, Some(forge)).await?;
     let Some(url) = surfaces.repository_url.as_deref() else {
         return Ok(surfaces);
     };
@@ -563,11 +571,11 @@ impl ScaffoldInputs {
 /// Resolve the scaffold coordinates from the deployment environment and the
 /// Project's participation.
 async fn scaffold_inputs(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<ScaffoldInputs, SurfaceError> {
-    let (lawyer_dri, client_dri) = dri_emails(surreal, project_id).await?;
-    let project = crate::projects::find_by_id(surreal, project_id)
+    let (lawyer_dri, client_dri) = dri_emails(application_store, project_id).await?;
+    let project = crate::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| SurfaceError::Db(error.to_string()))?
         .ok_or(SurfaceError::NotFound)?;
@@ -608,10 +616,10 @@ async fn manifest_legal_plan(project: &projects::Project) -> Result<Option<Strin
 /// same derivation [`read_handles`] reports in full, narrowed to the one
 /// email per side the scaffold manifest carries.
 async fn dri_emails(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<(String, String), SurfaceError> {
-    let participations = projects::participations_for_project(surreal, project_id)
+    let participations = projects::participations_for_project(application_store, project_id)
         .await
         .map_err(|error| SurfaceError::Db(error.to_string()))?;
     let dri_ids: Vec<_> = participations
@@ -621,7 +629,7 @@ async fn dri_emails(
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
-    let people = crate::persons::find_by_ids(surreal, &dri_ids)
+    let people = crate::persons::find_by_ids(application_store, &dri_ids)
         .await
         .map_err(|error| SurfaceError::Db(error.to_string()))?;
     let emails: std::collections::HashMap<_, _> = people
@@ -690,15 +698,15 @@ where
 /// [`SurfaceError::ForgejoUnavailable`] naming each missing setting, or a
 /// store error.
 pub async fn forgejo_for_project(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     kms: &dyn cloud::RuntimeKms,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<cloud::ForgejoForge, SurfaceError> {
-    let project = projects::find_by_id(surreal, project_id)
+    let project = projects::find_by_id(application_store, project_id)
         .await?
         .ok_or(SurfaceError::NotFound)?;
-    forgejo_for_firm(surreal, project.firm_id, kms, lookup).await
+    forgejo_for_firm(application_store, project.firm_id, kms, lookup).await
 }
 
 /// Resolve Forgejo for an already authorized owning Firm.
@@ -707,7 +715,7 @@ pub async fn forgejo_for_project(
 /// # Errors
 /// Returns a configuration, credential or store error.
 pub async fn forgejo_for_firm(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     firm_id: Option<Uuid>,
     kms: &dyn cloud::RuntimeKms,
     lookup: impl Fn(&str) -> Option<String>,
@@ -715,7 +723,7 @@ pub async fn forgejo_for_firm(
     let root = lookup(cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV)
         .filter(|value| !value.trim().is_empty());
     let firm = match firm_id {
-        Some(firm_id) => crate::firms::find_by_id(surreal, firm_id)
+        Some(firm_id) => crate::firms::find_by_id(application_store, firm_id)
             .await
             .map_err(|error| SurfaceError::Db(error.to_string()))?,
         None => None,
@@ -723,7 +731,7 @@ pub async fn forgejo_for_firm(
     let token = match firm.as_ref() {
         Some(firm) => {
             match crate::firm_secrets::resolve_firm_credential(
-                surreal,
+                application_store,
                 firm.id,
                 crate::firm_secrets::IntegrationProvider::Forgejo,
                 crate::firm_secrets::IntegrationSecretKind::ForgejoAccessToken,
@@ -761,12 +769,9 @@ pub async fn forgejo_for_firm(
 }
 
 async fn forgejo_namespace(firm: Uuid, slug: String) -> Result<String, SurfaceError> {
-    let Some(pg) = crate::postgres::PostgresDb::configured()
+    let pg = crate::postgres::PostgresDb::application()
         .await
-        .map_err(|error| SurfaceError::Db(error.to_string()))?
-    else {
-        return Ok(slug);
-    };
+        .map_err(|error| SurfaceError::Db(error.to_string()))?;
     let recorded = crate::firms::forgejo_organization::find(&pg, firm)
         .await
         .map_err(|error| SurfaceError::Db(error.to_string()))?;
@@ -785,8 +790,8 @@ pub fn forge_from_env() -> Result<Option<cloud::forge::GitHubForge>, ForgeError>
 
 /// Best-effort wrapper for matter-open doors: a Drive or forge fault is
 /// logged rather than rolling the open back. Retry is [`reconcile`].
-pub async fn reconcile_after_open(surreal: &SurrealDb, project_id: Uuid) {
-    if let Err(error) = Box::pin(reconcile_from_env(surreal, project_id)).await {
+pub async fn reconcile_after_open(application_store: &ApplicationStore, project_id: Uuid) {
+    if let Err(error) = Box::pin(reconcile_from_env(application_store, project_id)).await {
         tracing::error!(
             %error,
             project_id = %project_id,
@@ -801,7 +806,7 @@ pub async fn reconcile_after_open(surreal: &SurrealDb, project_id: Uuid) {
 /// authorization decision inside Navigator, and it is not a forge grant —
 /// GitHub membership APIs are not called from this module.
 async fn grant_drive_ingest_membership<D>(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     drive: &D,
     folder_id: &str,
@@ -809,18 +814,22 @@ async fn grant_drive_ingest_membership<D>(
 where
     D: DriveService + ?Sized,
 {
-    let rows = projects::participations_for_project(surreal, project_id).await?;
+    let rows = projects::participations_for_project(application_store, project_id).await?;
     for row in rows {
-        let Some(person) = persons::find_by_id(surreal, row.person_id)
+        let Some(person) = persons::find_by_id(application_store, row.person_id)
             .await
             .map_err(|error| SurfaceError::Db(error.to_string()))?
         else {
             continue;
         };
-        let viewer =
-            crate::access::matter_viewer(surreal, Some(person.id), person.role, project_id)
-                .await
-                .map_err(SurfaceError::Db)?;
+        let viewer = crate::access::matter_viewer(
+            application_store,
+            Some(person.id),
+            person.role,
+            project_id,
+        )
+        .await
+        .map_err(SurfaceError::Db)?;
         if !viewer.is_some_and(crate::access::MatterViewer::is_firm_side) {
             continue;
         }
@@ -843,13 +852,18 @@ where
 }
 
 async fn record_provisioned_repository(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     url: &str,
 ) -> Result<(), SurfaceError> {
-    projects::record_provisioned_repository(surreal, project_id, url, &Utc::now().to_rfc3339())
-        .await?
-        .ok_or(SurfaceError::NotFound)?;
+    projects::record_provisioned_repository(
+        application_store,
+        project_id,
+        url,
+        &Utc::now().to_rfc3339(),
+    )
+    .await?
+    .ok_or(SurfaceError::NotFound)?;
     Ok(())
 }
 
@@ -880,15 +894,12 @@ mod tests {
         .await;
     }
 
-    use super::{
-        read_handles, reconcile, reconcile_forgejo, source_state, ForgeSite, ProjectSurfaces,
-        ScaffoldInputs, SourceState, SurfaceError, SurfaceStatus,
-    };
-    use crate::persons::{self, NewPerson, Role};
-    use crate::projects::{self, DriSide, OpenMatterCommand};
-    use crate::test_support::{mem_surreal, seed_entity, seed_firm_with_brand};
-    use cloud::drive::{DriveMemberKind, DriveRole, DriveService, FakeDrive};
-    use cloud::forge::{FakeForge, ForgeError, ForgeRepository, ForgeService};
+    use super::{source_state, SourceState, SurfaceError};
+
+    use crate::projects::{self};
+
+    use cloud::drive::{DriveService, FakeDrive};
+
     use cloud::workspace::documents_prefix;
 
     #[test]
@@ -923,207 +934,6 @@ mod tests {
         }));
     }
 
-    /// A forge that always refuses `ensure_repository` — for proving that a
-    /// failed provisioning attempt leaves `forge_provisioned_at` (and
-    /// `repository_url`) untouched rather than stamping a repository that
-    /// was never actually recorded.
-    struct FailingForge;
-
-    #[async_trait::async_trait]
-    impl ForgeService for FailingForge {
-        async fn find_repository(
-            &self,
-            _project_code: &str,
-        ) -> Result<Option<ForgeRepository>, ForgeError> {
-            Ok(None)
-        }
-
-        async fn ensure_repository(
-            &self,
-            _project_code: &str,
-        ) -> Result<ForgeRepository, ForgeError> {
-            Err(ForgeError::Authentication)
-        }
-
-        async fn head_commit_sha(&self, _project_code: &str) -> Result<Option<String>, ForgeError> {
-            Ok(None)
-        }
-
-        async fn head_commit_committed_at(
-            &self,
-            _project_code: &str,
-        ) -> Result<Option<String>, ForgeError> {
-            Ok(None)
-        }
-
-        async fn delete_repository(&self, _project_code: &str) -> Result<(), ForgeError> {
-            Err(ForgeError::Authentication)
-        }
-
-        async fn read_file(
-            &self,
-            _project_code: &str,
-            _path: &str,
-        ) -> Result<Option<String>, ForgeError> {
-            Ok(None)
-        }
-    }
-
-    async fn open_acme(surreal: &crate::surreal::SurrealDb) -> projects::Project {
-        seed_firm_with_brand(surreal, "neon").await;
-        let entity_id = seed_entity(surreal).await;
-        let lawyer = persons::create(
-            surreal,
-            &NewPerson::with_role("Lawyer", "lawyer@example.com", Role::Lawyer),
-        )
-        .await
-        .expect("lawyer");
-        let client = persons::create(
-            surreal,
-            &NewPerson::with_role("Client", "client@example.com", Role::Client),
-        )
-        .await
-        .expect("client");
-        projects::open_matter(
-            surreal,
-            &OpenMatterCommand {
-                firm_id: None,
-                name: "Acme matter".into(),
-                code: "acme".into(),
-                client_id: client.id,
-                entity_id,
-                jurisdiction_id: None,
-                description: None,
-                brand: "neon".to_string(),
-                attestation: true,
-                acting_person_id: lawyer.id,
-                closed_at: None,
-            },
-        )
-        .await
-        .expect("open")
-    }
-
-    #[tokio::test]
-    async fn read_handles_returns_sorted_project_coordinates_without_writing() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let lawyer = persons::find_by_email_ci(&surreal, "lawyer@example.com")
-            .await
-            .expect("find lawyer")
-            .expect("lawyer exists");
-        let client = persons::find_by_email_ci(&surreal, "client@example.com")
-            .await
-            .expect("find client")
-            .expect("client exists");
-        projects::designate_dri_in_surreal(&surreal, project.id, lawyer.id, DriSide::Lawyer)
-            .await
-            .expect("designate lawyer DRI");
-        projects::designate_dri_in_surreal(&surreal, project.id, client.id, DriSide::Client)
-            .await
-            .expect("designate client DRI");
-        projects::set_repository_url(&surreal, project.id, Some("https://github.com/org/acme"))
-            .await
-            .expect("repository URL");
-        projects::set_internal_slack_channel_url(
-            &surreal,
-            project.id,
-            "https://slack.example.com/archives/private",
-        )
-        .await
-        .expect("private Slack channel");
-        projects::set_private_notion_page_url(
-            &surreal,
-            project.id,
-            "https://notion.example.com/private",
-        )
-        .await
-        .expect("private Notion page");
-
-        let handles = read_handles(&surreal, project.id)
-            .await
-            .expect("read handles");
-
-        assert_eq!(handles.code, "acme");
-        assert_eq!(
-            handles.repository_url.as_deref(),
-            Some("https://github.com/org/acme")
-        );
-        assert_eq!(handles.lawyer_dri, ["lawyer@example.com"]);
-        assert_eq!(handles.client_dri, ["client@example.com"]);
-        assert_eq!(
-            handles.private_slack_channel.as_deref(),
-            Some("https://slack.example.com/archives/private")
-        );
-        assert_eq!(
-            handles.private_notion_page.as_deref(),
-            Some("https://notion.example.com/private")
-        );
-    }
-
-    #[tokio::test]
-    async fn read_handles_refuses_an_unknown_project() {
-        let surreal = mem_surreal().await;
-        let error = read_handles(&surreal, uuid::Uuid::now_v7())
-            .await
-            .expect_err("unknown Project cannot be read");
-        assert!(matches!(error, SurfaceError::NotFound));
-    }
-
-    /// ENG-928: a DRI participation surviving the Person it names must not
-    /// 500 this read — it must be skipped and reported, so
-    /// `navigator project set --from-live` and the Project gate still see
-    /// every other coordinate. `store::people_commands::delete_person` now
-    /// refuses to create this state going forward; this proves the read
-    /// side stays safe for a row that predates that guard (or one written
-    /// straight to the store, as a migration or a hand-run query might).
-    #[tokio::test]
-    async fn read_handles_skips_a_dangling_dri_and_reports_it() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let lawyer = persons::find_by_email_ci(&surreal, "lawyer@example.com")
-            .await
-            .expect("find lawyer")
-            .expect("lawyer exists");
-        let client = persons::find_by_email_ci(&surreal, "client@example.com")
-            .await
-            .expect("find client")
-            .expect("client exists");
-        projects::designate_dri_in_surreal(&surreal, project.id, lawyer.id, DriSide::Lawyer)
-            .await
-            .expect("designate lawyer DRI");
-        projects::designate_dri_in_surreal(&surreal, project.id, client.id, DriSide::Client)
-            .await
-            .expect("designate client DRI");
-
-        // Delete the lawyer Person directly at the store layer — the same
-        // shape a legacy row or a straight-to-store write left behind,
-        // bypassing the command-layer guard that now refuses this.
-        persons::delete(&surreal, lawyer.id)
-            .await
-            .expect("delete the lawyer Person out from under the DRI row");
-
-        let handles = read_handles(&surreal, project.id)
-            .await
-            .expect("a dangling DRI must not fail the whole read");
-
-        assert!(
-            handles.lawyer_dri.is_empty(),
-            "the dangling lawyer DRI must not appear as an email: {:?}",
-            handles.lawyer_dri
-        );
-        assert_eq!(
-            handles.client_dri,
-            ["client@example.com"],
-            "the client DRI, which is still a real Person, must read through untouched"
-        );
-        assert_eq!(
-            handles.dangling_dri_person_ids,
-            vec![lawyer.id],
-            "the dangling participation must be named, not silently dropped"
-        );
-    }
-
     #[test]
     fn the_documents_prefix_is_the_project_code() {
         assert_eq!(documents_prefix("acme"), "projects/acme/documents");
@@ -1143,171 +953,6 @@ mod tests {
         assert!(
             !production.contains("collaborator"),
             "Project participation must not grant forge membership"
-        );
-    }
-
-    #[tokio::test]
-    async fn reconcile_creates_the_drive_folder_and_the_repository() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let forge = FakeForge::new();
-
-        let surfaces = reconcile(&surreal, project.id, Some(&drive), Some(&forge))
-            .await
-            .expect("reconcile");
-
-        assert_eq!(
-            surfaces,
-            ProjectSurfaces {
-                code: project.code.clone(),
-                documents_prefix: format!("projects/{}/documents", project.code),
-                drive_folder_id: Some("folder-1".into()),
-                drive_status: SurfaceStatus::Created,
-                drive_detail: None,
-                repository_url: Some(format!(
-                    "https://forge.example/an-organization/{}",
-                    project.code
-                )),
-                repository_status: SurfaceStatus::Created,
-                repository_detail: None,
-            }
-        );
-
-        let reloaded = projects::find_by_id(&surreal, project.id)
-            .await
-            .expect("load")
-            .expect("exists");
-        assert_eq!(reloaded.drive_folder_id.as_deref(), Some("folder-1"));
-        assert_eq!(
-            reloaded.repository_url.as_deref(),
-            Some(format!("https://forge.example/an-organization/{}", project.code).as_str())
-        );
-        assert!(reloaded.forge_provisioned_at.is_some());
-
-        let members = drive.members("folder-1");
-        let emails: Vec<&str> = members
-            .iter()
-            .map(|(member, role)| {
-                assert_eq!(member.kind, DriveMemberKind::User);
-                assert_eq!(*role, DriveRole::Writer);
-                member.email.as_str()
-            })
-            .collect();
-        assert!(emails.contains(&"lawyer@example.com"), "{emails:?}");
-        assert!(
-            !emails.contains(&"client@example.com"),
-            "clients never receive a working-root grant: {emails:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_second_reconcile_adopts_and_does_not_duplicate() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let forge = FakeForge::new();
-
-        let first = reconcile(&surreal, project.id, Some(&drive), Some(&forge))
-            .await
-            .expect("first");
-        let second = reconcile(&surreal, project.id, Some(&drive), Some(&forge))
-            .await
-            .expect("second");
-
-        assert_eq!(first.drive_folder_id, second.drive_folder_id);
-        assert_eq!(first.repository_url, second.repository_url);
-        assert_eq!(first.drive_status, SurfaceStatus::Created);
-        assert_eq!(first.repository_status, SurfaceStatus::Created);
-        assert_eq!(
-            second.drive_status,
-            SurfaceStatus::Present,
-            "the second pass found the folder already recorded rather than creating it again"
-        );
-        assert_eq!(
-            second.drive_detail.as_deref(),
-            Some(super::DRIVE_FOLDER_ALREADY_SET),
-            "the report says the recorded folder was adopted, not created"
-        );
-        assert_eq!(second.repository_status, SurfaceStatus::Present);
-        assert_eq!(forge.repository_count(), 1);
-        let folders = drive.list_folders().await.expect("list");
-        assert_eq!(folders.len(), 1);
-        assert_eq!(folders[0].name, project.code);
-    }
-
-    #[tokio::test]
-    async fn an_existing_drive_folder_is_adopted_not_recreated() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let already = drive
-            .create_folder(&project.code)
-            .await
-            .expect("pre-create");
-        let forge = FakeForge::new();
-
-        let surfaces = reconcile(&surreal, project.id, Some(&drive), Some(&forge))
-            .await
-            .expect("adopt");
-        assert_eq!(
-            surfaces.drive_folder_id.as_deref(),
-            Some(already.id.as_str())
-        );
-        assert_eq!(
-            surfaces.drive_status,
-            SurfaceStatus::Adopted,
-            "adopting an untracked external folder is reported as its own outcome, \
-             distinct from a fresh create, so `project setup` never claims to \
-             have made a folder it only found"
-        );
-        let folders = drive.list_folders().await.expect("list");
-        assert_eq!(folders.len(), 1);
-
-        // Adoption records the pre-existing folder on the Project row, so a
-        // later reconcile takes the "present" branch and never touches Drive.
-        let reloaded = projects::find_by_id(&surreal, project.id)
-            .await
-            .expect("load")
-            .expect("exists");
-        assert_eq!(
-            reloaded.drive_folder_id.as_deref(),
-            Some(already.id.as_str())
-        );
-    }
-
-    /// A folder set by hand before setup runs is adopted as it stands: setup
-    /// creates nothing, records nothing new, and says so.
-    #[tokio::test]
-    async fn a_folder_set_by_hand_is_adopted_and_nothing_is_created() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let existing = drive
-            .create_folder("working-folder")
-            .await
-            .expect("a folder made before the Project");
-        projects::set_drive_folder_id(&surreal, project.id, Some(&existing.id))
-            .await
-            .expect("set by hand")
-            .expect("exists");
-
-        let surfaces = reconcile(&surreal, project.id, Some(&drive), None::<&FakeForge>)
-            .await
-            .expect("adopt");
-        assert_eq!(
-            surfaces.drive_folder_id.as_deref(),
-            Some(existing.id.as_str())
-        );
-        assert_eq!(surfaces.drive_status, SurfaceStatus::Present);
-        assert_eq!(
-            surfaces.drive_detail.as_deref(),
-            Some(super::DRIVE_FOLDER_ALREADY_SET)
-        );
-        assert_eq!(
-            drive.list_folders().await.expect("list").len(),
-            1,
-            "no folder named for the code is created beside the one set"
         );
     }
 
@@ -1341,123 +986,6 @@ mod tests {
                 .expect("skipped"),
             super::DriveFolderCheck::Skipped
         );
-    }
-
-    #[tokio::test]
-    async fn a_recorded_repository_url_is_left_alone() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        projects::set_repository_url(
-            &surreal,
-            project.id,
-            Some("https://git.example.internal/client-org/acme"),
-        )
-        .await
-        .expect("record a URL on another forge");
-        let drive = FakeDrive::default();
-        let forge = FakeForge::new();
-
-        let surfaces = reconcile(&surreal, project.id, Some(&drive), Some(&forge))
-            .await
-            .expect("leave recorded URL");
-        assert_eq!(
-            surfaces.repository_url.as_deref(),
-            Some("https://git.example.internal/client-org/acme")
-        );
-        assert_eq!(surfaces.repository_status, SurfaceStatus::Present);
-        assert_eq!(forge.repository_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn missing_services_skip_those_surfaces() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let surfaces = reconcile(&surreal, project.id, None::<&FakeDrive>, None::<&FakeForge>)
-            .await
-            .expect("skip");
-        assert_eq!(
-            surfaces.documents_prefix,
-            format!("projects/{}/documents", project.code)
-        );
-        assert_eq!(surfaces.drive_folder_id, None);
-        assert_eq!(surfaces.drive_status, SurfaceStatus::Skipped);
-        assert_eq!(
-            surfaces.drive_detail.as_deref(),
-            Some("Drive provider is not configured")
-        );
-        assert_eq!(surfaces.repository_url, None);
-        assert_eq!(surfaces.repository_status, SurfaceStatus::Skipped);
-        assert_eq!(
-            surfaces.repository_detail.as_deref(),
-            Some("repository provider is not configured")
-        );
-    }
-
-    #[tokio::test]
-    async fn unknown_project_is_not_found() {
-        let surreal = mem_surreal().await;
-        let error = reconcile(
-            &surreal,
-            uuid::Uuid::now_v7(),
-            None::<&FakeDrive>,
-            None::<&FakeForge>,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, SurfaceError::NotFound));
-    }
-
-    #[tokio::test]
-    async fn a_failed_forge_attempt_stamps_nothing() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let forge = FailingForge;
-
-        let error = reconcile(&surreal, project.id, None::<&FakeDrive>, Some(&forge))
-            .await
-            .unwrap_err();
-        assert!(matches!(error, SurfaceError::Forge(_)));
-
-        let reloaded = projects::find_by_id(&surreal, project.id)
-            .await
-            .expect("load")
-            .expect("exists");
-        assert_eq!(reloaded.repository_url, None);
-        assert_eq!(
-            reloaded.forge_provisioned_at, None,
-            "a failed create/adopt attempt must never stamp forge_provisioned_at"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_retry_never_moves_the_first_success_stamp() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let forge = FakeForge::new();
-
-        reconcile(&surreal, project.id, None::<&FakeDrive>, Some(&forge))
-            .await
-            .expect("first reconcile stamps forge_provisioned_at");
-        let first_stamp = projects::find_by_id(&surreal, project.id)
-            .await
-            .expect("load")
-            .expect("exists")
-            .forge_provisioned_at
-            .expect("stamped on first success");
-
-        // A second reconcile finds `repository_url` already recorded and
-        // takes the "present" branch, never the forge, so nothing re-stamps.
-        reconcile(&surreal, project.id, None::<&FakeDrive>, Some(&forge))
-            .await
-            .expect("second reconcile is a no-op adopt");
-        let second_stamp = projects::find_by_id(&surreal, project.id)
-            .await
-            .expect("load")
-            .expect("exists")
-            .forge_provisioned_at
-            .expect("still stamped");
-
-        assert_eq!(first_stamp, second_stamp);
     }
 
     #[test]
@@ -1558,375 +1086,5 @@ mod tests {
             inserted_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         }
-    }
-
-    /// The ForgeSite the `FakeForge` answers for: its own host and
-    /// organization, so a recorded fake URL passes the ownership check.
-    fn forge_site() -> ForgeSite<'static> {
-        ForgeSite {
-            root: "https://forge.example",
-            owner: "an-organization",
-        }
-    }
-
-    /// Scaffold coordinates matching what the Acme matter derives: a
-    /// deployment host so seeding engages, this workspace's version, and no
-    /// designated DRIs, which the manifest carries as empty strings.
-    fn seed_inputs() -> ScaffoldInputs {
-        ScaffoldInputs {
-            host: Some("staging.neonlaw.com".to_string()),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            lawyer_dri: String::new(),
-            client_dri: String::new(),
-            legal_plan: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn a_fresh_forgejo_repository_is_seeded_then_governed() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let forge = FakeForge::default();
-
-        let surfaces = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &seed_inputs(),
-        )
-        .await
-        .expect("reconcile");
-
-        assert_eq!(surfaces.repository_status, SurfaceStatus::Created);
-        assert_eq!(
-            forge.initialize_writes(),
-            1,
-            "the canonical scaffold is exactly one first commit"
-        );
-        assert_eq!(
-            forge.governance_reconciles(),
-            1,
-            "governance follows seeding"
-        );
-        assert_eq!(
-            forge.call_log(),
-            vec![
-                ("ensure", project.code.clone()),
-                ("initialize", project.code.clone()),
-                ("govern", project.code.clone()),
-            ],
-            "the scaffold is written to main before the protection that would refuse it"
-        );
-        let source = project_scaffold::ScaffoldSource {
-            code: &project.code,
-            host: "staging.neonlaw.com",
-            lawyer_dri: "",
-            client_dri: "",
-            legal_plan: None,
-            version: env!("CARGO_PKG_VERSION"),
-        };
-        let mut expected: Vec<String> = project_scaffold::forgejo_seed_files(&source)
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect();
-        expected.sort_unstable();
-        assert_eq!(forge.committed_paths(&project.code), expected);
-    }
-
-    #[tokio::test]
-    async fn a_lost_seed_reply_writes_nothing_twice_and_still_governs() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let forge = FakeForge::default();
-        forge.lose_next_write_reply();
-
-        let first = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &seed_inputs(),
-        )
-        .await
-        .expect("the provision stands even though the seed reply was lost");
-        assert_eq!(first.repository_status, SurfaceStatus::Created);
-        assert_eq!(
-            forge.initialize_writes(),
-            1,
-            "the write landed before the reply was lost"
-        );
-        assert_eq!(
-            forge.governance_reconciles(),
-            1,
-            "governance still followed"
-        );
-
-        let second = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &seed_inputs(),
-        )
-        .await
-        .expect("retry");
-        assert_eq!(second.repository_status, SurfaceStatus::Present);
-        assert_eq!(
-            forge.initialize_writes(),
-            1,
-            "the retry writes nothing twice: the head already binds the digest"
-        );
-        assert_eq!(forge.governance_reconciles(), 2);
-    }
-
-    #[tokio::test]
-    async fn an_adopted_repository_is_governed_and_its_drift_repaired() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let forge = FakeForge::default();
-        forge
-            .ensure_repository(&project.code)
-            .await
-            .expect("forge-level repository");
-        forge.set_governance_drift(
-            &project.code,
-            &["main.enable_push", "repository.allow_squash_merge"],
-        );
-
-        let surfaces = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &seed_inputs(),
-        )
-        .await
-        .expect("reconcile");
-
-        assert_eq!(
-            surfaces.repository_status,
-            SurfaceStatus::Created,
-            "a forge-level repository the Project row never recorded is adopted this pass"
-        );
-        assert_eq!(forge.governance_reconciles(), 1, "adoption is governed too");
-        assert_eq!(
-            forge.initialize_writes(),
-            1,
-            "the adopted repository is empty, so the scaffold seeds it"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_recorded_url_on_another_forge_is_never_touched() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let forge = FakeForge::default();
-        projects::set_repository_url(
-            &surreal,
-            project.id,
-            Some("https://git.example.internal/client-org/acme"),
-        )
-        .await
-        .expect("repository URL");
-
-        let surfaces = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &seed_inputs(),
-        )
-        .await
-        .expect("reconcile");
-
-        assert_eq!(surfaces.repository_status, SurfaceStatus::Present);
-        assert_eq!(
-            forge.governance_reconciles(),
-            0,
-            "a matter whose source deliberately lives elsewhere keeps it"
-        );
-        assert_eq!(forge.initialize_writes(), 0);
-        assert!(forge.call_log().is_empty());
-    }
-
-    #[tokio::test]
-    async fn an_empty_recorded_repository_recovers_when_the_coordinates_arrive() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let forge = FakeForge::default();
-        let no_host = ScaffoldInputs {
-            host: None,
-            ..seed_inputs()
-        };
-
-        let first = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &no_host,
-        )
-        .await
-        .expect("reconcile without deployment coordinates");
-        assert_eq!(first.repository_status, SurfaceStatus::Created);
-        assert_eq!(
-            forge.initialize_writes(),
-            0,
-            "without the host the manifest's gate audience would be a lie"
-        );
-        assert_eq!(forge.governance_reconciles(), 1, "governance needs no host");
-
-        let second = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &seed_inputs(),
-        )
-        .await
-        .expect("reconcile with coordinates");
-        assert_eq!(second.repository_status, SurfaceStatus::Present);
-        assert_eq!(
-            forge.initialize_writes(),
-            1,
-            "the recorded empty repository is seeded on a later pass"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_repository_holding_other_source_is_preserved_and_still_governed() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let forge = FakeForge::default();
-        let mut foreign = std::collections::BTreeMap::new();
-        foreign.insert("attorney-notes.md".to_string(), "hand-written".to_string());
-        // The attorney's repository already exists on the forge, holding
-        // source Navigator never wrote; register it before committing to it.
-        forge
-            .ensure_repository(&project.code)
-            .await
-            .expect("pre-existing repository");
-        forge
-            .initialize_source(
-                &project.code,
-                &foreign,
-                "not-the-canonical-digest",
-                "Attorney notes",
-            )
-            .await
-            .expect("foreign source");
-
-        let surfaces = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &seed_inputs(),
-        )
-        .await
-        .expect("reconcile");
-
-        assert_eq!(surfaces.repository_status, SurfaceStatus::Created);
-        assert_eq!(
-            forge.initialize_writes(),
-            1,
-            "only the attorney's own first commit ever wrote"
-        );
-        assert_eq!(forge.governance_reconciles(), 1, "still governed");
-        assert_eq!(
-            forge
-                .read_file(&project.code, "attorney-notes.md")
-                .await
-                .expect("read"),
-            Some("hand-written".to_string()),
-            "the existing source is preserved, never replaced"
-        );
-    }
-
-    /// A governed repository swept again is not re-protected unnecessarily:
-    /// the second pass re-locks governance (finding no drift to repair),
-    /// re-derives the scaffold digest and writes nothing, and never ensures
-    /// a second repository — the whole point of a repeated backfill run.
-    #[tokio::test]
-    async fn an_already_governed_repository_is_not_reprotected_on_the_next_pass() {
-        let surreal = mem_surreal().await;
-        let project = open_acme(&surreal).await;
-        let drive = FakeDrive::default();
-        let forge = FakeForge::default();
-
-        let first = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &seed_inputs(),
-        )
-        .await
-        .expect("first pass");
-        assert_eq!(first.repository_status, SurfaceStatus::Created);
-
-        let second = reconcile_forgejo(
-            &surreal,
-            project.id,
-            Some(&drive),
-            &forge,
-            forge_site(),
-            &seed_inputs(),
-        )
-        .await
-        .expect("second pass");
-
-        assert_eq!(second.repository_status, SurfaceStatus::Present);
-        assert_eq!(
-            second.repository_url, first.repository_url,
-            "the URL never moves"
-        );
-        assert_eq!(
-            forge.repository_count(),
-            1,
-            "no second repository is invented"
-        );
-        assert_eq!(
-            forge.ensure_calls(),
-            1,
-            "a recorded repository is not re-ensured"
-        );
-        assert_eq!(
-            forge.initialize_writes(),
-            1,
-            "the scaffold is not rewritten: the head already binds the digest"
-        );
-        assert_eq!(
-            forge.governance_reconciles(),
-            2,
-            "governance is re-locked on every pass"
-        );
-        assert_eq!(
-            forge.call_log(),
-            vec![
-                ("ensure", project.code.clone()),
-                ("initialize", project.code.clone()),
-                ("govern", project.code.clone()),
-                ("initialize", project.code.clone()),
-                ("govern", project.code.clone()),
-            ],
-            "the second pass re-derives the digest and re-locks governance, but writes nothing"
-        );
     }
 }

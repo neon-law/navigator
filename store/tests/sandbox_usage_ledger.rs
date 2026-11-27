@@ -7,15 +7,15 @@
 //! no double-spend under parallel debits, and a rollover that grants a
 //! fresh period without rewriting the closed one.
 
+use store::application_store::ApplicationStore;
 use store::sandbox_usage::{self, MeterDecision, SandboxUsageError, MONTHLY_GRANT_CENTS};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 /// A subscriber nobody else's test knows — the ledger keys rows on the
 /// unique `(person_id, period)` key, so distinct persons never collide.
 async fn subscriber() -> Uuid {
     store::persons::create(
-        &SurrealDb::uninitialized(),
+        &ApplicationStore::uninitialized(),
         &store::persons::NewPerson::new(
             "Synthetic subscriber",
             format!("subscriber-{}@example.com", Uuid::new_v4()),
@@ -40,7 +40,7 @@ fn charge(decision: MeterDecision) -> (i64, i64) {
 #[tokio::test]
 async fn grant_makes_one_row_with_the_monthly_credit() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
 
         let row = sandbox_usage::grant(&db, who, "2026-11").await.unwrap();
@@ -59,7 +59,7 @@ async fn grant_makes_one_row_with_the_monthly_credit() {
 #[tokio::test]
 async fn grant_is_idempotent_and_never_resets_a_spent_row() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
         sandbox_usage::grant(&db, who, "2026-11").await.unwrap();
         charge(
@@ -82,7 +82,7 @@ async fn grant_is_idempotent_and_never_resets_a_spent_row() {
 #[tokio::test]
 async fn debit_125_of_500_leaves_375() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
         sandbox_usage::grant(&db, who, "2026-11").await.unwrap();
 
@@ -108,7 +108,7 @@ async fn debit_125_of_500_leaves_375() {
 #[tokio::test]
 async fn the_crossing_debit_of_501_completes_and_flags_overage() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
         sandbox_usage::grant(&db, who, "2026-11").await.unwrap();
 
@@ -133,7 +133,7 @@ async fn the_crossing_debit_of_501_completes_and_flags_overage() {
 #[tokio::test]
 async fn the_debit_after_crossing_is_exhausted() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
         sandbox_usage::grant(&db, who, "2026-11").await.unwrap();
         charge(
@@ -157,7 +157,7 @@ async fn the_debit_after_crossing_is_exhausted() {
 #[tokio::test]
 async fn spending_to_exactly_zero_is_not_crossing() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
         sandbox_usage::grant(&db, who, "2026-11").await.unwrap();
 
@@ -190,7 +190,7 @@ async fn spending_to_exactly_zero_is_not_crossing() {
 #[tokio::test]
 async fn the_overage_flag_counts_the_price_once() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
         sandbox_usage::grant(&db, who, "2026-11").await.unwrap();
 
@@ -227,7 +227,7 @@ async fn the_overage_flag_counts_the_price_once() {
 #[tokio::test]
 async fn debit_on_first_touch_self_grants() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
 
         // No grant call: a subscriber's first completion of a month gets the
@@ -251,7 +251,7 @@ async fn debit_on_first_touch_self_grants() {
 #[tokio::test]
 async fn two_parallel_tabs_never_double_spend() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = store::postgres::PostgresDb::application().await.unwrap();
         let who = subscriber().await;
         sandbox_usage::grant(&db, who, "2026-11").await.unwrap();
@@ -299,7 +299,7 @@ async fn two_parallel_tabs_never_double_spend() {
 #[tokio::test(flavor = "multi_thread")]
 async fn parallel_first_touch_debits_settle_on_one_row() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = store::postgres::PostgresDb::application().await.unwrap();
         let who = subscriber().await;
 
@@ -363,7 +363,7 @@ async fn parallel_first_touch_debits_settle_on_one_row() {
 #[tokio::test]
 async fn rollover_grants_a_fresh_period_and_closed_rows_survive() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
 
         // The closing month: spent into overage.
@@ -404,7 +404,7 @@ async fn rollover_grants_a_fresh_period_and_closed_rows_survive() {
 #[tokio::test]
 async fn overage_rows_only_report_rows_that_owe() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let owing = subscriber().await;
         let inside = subscriber().await;
         sandbox_usage::grant(&db, owing, "2026-11").await.unwrap();
@@ -445,7 +445,7 @@ fn billing_period_spells_months_canonically() {
 #[tokio::test]
 async fn a_malformed_period_is_refused_not_forked() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = store::postgres::PostgresDb::application().await.unwrap();
         let who = subscriber().await;
 
@@ -490,7 +490,7 @@ async fn a_malformed_period_is_refused_not_forked() {
 #[tokio::test]
 async fn a_negative_debit_is_refused() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let who = subscriber().await;
 
         assert!(matches!(
@@ -510,7 +510,7 @@ async fn a_negative_debit_is_refused() {
 #[tokio::test]
 async fn find_reports_a_period_with_no_row_as_none() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         assert!(sandbox_usage::find(&db, subscriber().await, "2026-11")
             .await
             .unwrap()

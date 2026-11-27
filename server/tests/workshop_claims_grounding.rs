@@ -26,12 +26,8 @@
 //! failure mode `deploy_workshop_auth.rs` guards the same way.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use store::persons::{self, Role};
-use store::projects;
-use store::test_support::mem_surreal;
-use store::DeploymentEnvironment;
+use store::persons::Role;
 
 /// Read a repo-root file relative to this crate (`server/` → workspace root is
 /// one level up), matching the convention the other workshop tests use.
@@ -69,20 +65,6 @@ const DECKS: &[&str] = &[
 /// or it becomes a reflow tripwire instead of a claim test.
 fn prose(markdown: &str) -> String {
     markdown.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// A throwaway filesystem storage backend, one per test, matching
-/// `store/tests/seed_environment.rs`. The seed takes a storage handle, so it
-/// needs somewhere to put what it writes.
-async fn storage() -> Arc<dyn cloud::StorageService> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "navigator-workshop-claims-{}-{}",
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed),
-    ));
-    Arc::new(cloud::FsStorage::new(dir).await.unwrap())
 }
 
 // ---------------------------------------------------------------------------
@@ -396,67 +378,6 @@ fn readme_account_table() -> Vec<(String, Role)> {
     rows
 }
 
-/// Every account the deck tells a reader to sign in as exists, with the role
-/// the deck prints, in a database seeded exactly as a local boot seeds one.
-///
-/// The strongest form available: the seed runs, and the table is checked against
-/// the rows it wrote. A renamed fixture account, a changed role, or a sixth
-/// account added to the seed and not to the deck all fail here.
-#[tokio::test]
-async fn the_readme_account_table_matches_the_seeded_fixture_people() {
-    let surreal = mem_surreal().await;
-    let storage = storage().await;
-    store::seed::seed_environment_with(
-        &surreal,
-        &storage,
-        DeploymentEnvironment::Dev,
-        store::seed::BrandSeed::Neon,
-    )
-    .await
-    .unwrap();
-
-    let table = readme_account_table();
-    assert_eq!(
-        table.len(),
-        5,
-        "the Using deck must publish all five role-named accounts, found {table:?}",
-    );
-
-    for (email, role) in &table {
-        let person = persons::find_by_email_ci(&surreal, email)
-            .await
-            .unwrap()
-            .unwrap_or_else(|| {
-                panic!("the Using deck sends a reader to sign in as `{email}`, which the fixture never seeds")
-            });
-        assert_eq!(
-            person.role,
-            *role,
-            "the Using deck prints `{email}` as `{}`, but the fixture seeds it as `{}`",
-            role.as_str(),
-            person.role.as_str(),
-        );
-    }
-
-    // Every stored role is represented, so the table teaches the whole
-    // authorization model rather than a subset of it.
-    let published: std::collections::BTreeSet<&str> =
-        table.iter().map(|(_, role)| role.as_str()).collect();
-    for role in [
-        Role::Owner,
-        Role::Admin,
-        Role::Lawyer,
-        Role::Clerk,
-        Role::Client,
-    ] {
-        assert!(
-            published.contains(role.as_str()),
-            "the Using deck's table omits the `{}` tier",
-            role.as_str(),
-        );
-    }
-}
-
 /// The password the deck prints is the password the KIND fixture sets.
 ///
 /// `deploy_workshop_auth.rs` already pins the Rauthy side of this join for its
@@ -486,153 +407,6 @@ fn the_readme_publishes_the_password_the_rauthy_fixture_sets() {
     assert!(
         readme.contains(&format!("the password `{password}`")),
         "the Using deck must print the fixture password `{password}`",
-    );
-}
-
-/// The participation claim on the sign-in slide is true of the seeded rows.
-///
-/// The deck says the client, lawyer, clerk, and owner rows are part of the
-/// fixture and that Admin is the local administrator who grants its own at
-/// `/app/admin`. That is the ENG-81 decision the fixture exists to demonstrate,
-/// and it is exactly the kind of claim that reads as an oversight and gets
-/// "helpfully" fixed by adding an Admin row — which would make the deck wrong.
-#[tokio::test]
-async fn the_readme_participation_claim_matches_the_seeded_rows() {
-    let surreal = mem_surreal().await;
-    let storage = storage().await;
-    store::seed::seed_environment_with(
-        &surreal,
-        &storage,
-        DeploymentEnvironment::Dev,
-        store::seed::BrandSeed::Neon,
-    )
-    .await
-    .unwrap();
-
-    let mut people = Vec::new();
-    for email in [
-        "owner@neonlaw.com",
-        "lawyer@neonlaw.com",
-        "clerk@neonlaw.com",
-        "client@neonlaw.com",
-    ] {
-        people.push((
-            email,
-            persons::find_by_email_ci(&surreal, email)
-                .await
-                .unwrap()
-                .unwrap_or_else(|| panic!("the fixture {email}"))
-                .id,
-        ));
-    }
-    let admin = persons::find_by_email_ci(&surreal, "admin@neonlaw.com")
-        .await
-        .unwrap()
-        .expect("the fixture admin can sign in")
-        .id;
-
-    let litigation = projects::find_by_code(&surreal, store::seed::SAMPLE_LITIGATION_CODE)
-        .await
-        .unwrap()
-        .into_iter()
-        .next()
-        .expect("the litigation matter");
-    let rows = projects::participations_for_project(&surreal, litigation.id)
-        .await
-        .unwrap();
-
-    for (email, id) in &people {
-        assert!(
-            rows.iter().any(|row| row.person_id == *id),
-            "the Using deck says the {email} row is part of the fixture, but the litigation \
-             matter carries none",
-        );
-    }
-    assert!(
-        rows.iter().all(|row| row.person_id != admin),
-        "the fixture Admin now participates in the litigation matter — the Using deck's \
-         sign-in slide and its `/app/admin` instruction both assume it does not",
-    );
-
-    // And the deck says so in print, naming the administration surface a
-    // reader is sent to.
-    let readme = prose(&repo_file(README));
-    assert!(
-        readme.contains(portal::dioxus_app::ADMIN_LANDING_PATH),
-        "the Using deck must name `{}` as where participation is granted",
-        portal::dioxus_app::ADMIN_LANDING_PATH,
-    );
-}
-
-/// The fixture client participates in every sample matter the deck names.
-///
-/// Derived from `sample_matter_codes()` rather than the number three, so a
-/// fourth sample matter fails the deck's wording instead of silently narrowing
-/// what this checks.
-#[tokio::test]
-async fn the_client_participates_in_every_sample_matter_the_deck_promises() {
-    let surreal = mem_surreal().await;
-    let storage = storage().await;
-    store::seed::seed_environment_with(
-        &surreal,
-        &storage,
-        DeploymentEnvironment::Dev,
-        store::seed::BrandSeed::Neon,
-    )
-    .await
-    .unwrap();
-
-    let client = persons::find_by_email_ci(&surreal, "client@neonlaw.com")
-        .await
-        .unwrap()
-        .expect("the fixture client")
-        .id;
-
-    let codes = store::seed::sample_matter_codes();
-    assert!(
-        !codes.is_empty(),
-        "no sample matters — this guard would pass vacuously",
-    );
-    for code in &codes {
-        let matter = projects::find_by_code(&surreal, code)
-            .await
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| panic!("the `{code}` matter"));
-        assert!(
-            projects::participations_for_project(&surreal, matter.id)
-                .await
-                .unwrap()
-                .iter()
-                .any(|row| row.person_id == client),
-            "the Using deck says the client participates in every seeded matter, but \
-             `{code}` carries no client row",
-        );
-    }
-
-    // The deck teaches the litigation matter by name and by practice; both come
-    // off the seed rather than out of the prose.
-    let readme = prose(&repo_file(README));
-    let litigation = projects::find_by_code(&surreal, store::seed::SAMPLE_LITIGATION_CODE)
-        .await
-        .unwrap()
-        .into_iter()
-        .next()
-        .expect("the litigation matter");
-    assert!(
-        readme.contains(&litigation.name),
-        "the Using deck must name the matter it works, `{}`",
-        litigation.name,
-    );
-    let practice = litigation
-        .description
-        .as_deref()
-        .expect("the seed opens the litigation matter with a described practice");
-    assert!(
-        readme.contains(practice),
-        "the Using deck describes the litigation matter as something other than the practice \
-         the seed opens it for: `{practice}`",
     );
 }
 

@@ -34,7 +34,7 @@ pub struct KeysView {
 #[server]
 pub async fn keys_view() -> Result<KeysView, ServerFnError> {
     crate::admin_listing::require_owner().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let csrf = dioxus_fullstack_core::FullstackContext::extract::<
         axum::Extension<crate::csrf::CsrfToken>,
         _,
@@ -45,7 +45,7 @@ pub async fn keys_view() -> Result<KeysView, ServerFnError> {
         store::deployment_secret_changes::accepts_changes_from(|key| std::env::var(key).ok());
     let rows = if production {
         store::deployment_secret_changes::latest(
-            &surreal,
+            &application_store,
             store::persons::Role::Owner,
             store::DeploymentEnvironment::Production,
         )

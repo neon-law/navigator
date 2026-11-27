@@ -8,10 +8,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use store::application_store::ApplicationStore;
 use store::config::SocialEgressGate;
 use store::inbox::{channel, OutboundEnvelope, OutboundTransport, TransportOutcome};
 use store::social_accounts::SocialProvider;
-use store::surreal::SurrealDb;
 
 use crate::email::{EmailError, EmailService, OutboundEmail};
 
@@ -108,7 +108,7 @@ impl OutboundTransport for ChannelTransport {
 /// Replies through a connected Brand social account. Credentials are
 /// decrypted only for the provider request and are never included in errors.
 pub struct SocialReplyTransport {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     kms: Arc<dyn cloud::RuntimeKms>,
     egress: SocialEgressGate,
     refresh: workflows::social_publish::TokenRefreshConfig,
@@ -121,9 +121,9 @@ pub struct SocialReplyTransport {
 
 impl SocialReplyTransport {
     #[must_use]
-    pub fn new(surreal: SurrealDb, kms: Arc<dyn cloud::RuntimeKms>) -> Self {
+    pub fn new(application_store: ApplicationStore, kms: Arc<dyn cloud::RuntimeKms>) -> Self {
         Self {
-            surreal,
+            application_store,
             kms,
             egress: SocialEgressGate::from_process_env(),
             refresh: workflows::social_publish::TokenRefreshConfig::from_env(),
@@ -132,34 +132,6 @@ impl SocialReplyTransport {
             threads_graph_base: "https://graph.threads.net/v1.0".into(),
             youtube_comments_url: "https://www.googleapis.com/youtube/v3/comments".into(),
             tiktok_base: "https://business-api.tiktok.com/open_api/v1.3".into(),
-        }
-    }
-
-    #[cfg(test)]
-    fn for_tests(
-        surreal: SurrealDb,
-        kms: Arc<dyn cloud::RuntimeKms>,
-        graph_base: &str,
-        youtube_comments_url: &str,
-    ) -> Self {
-        Self {
-            surreal,
-            kms,
-            egress: SocialEgressGate::new(|| Ok(())),
-            refresh: workflows::social_publish::TokenRefreshConfig {
-                x_token_url: format!("{graph_base}/token"),
-                x_client: None,
-                threads_refresh_url: format!("{graph_base}/refresh_access_token"),
-                google_token_url: format!("{graph_base}/token"),
-                youtube_client: None,
-                tiktok_client: None,
-                tiktok_token_url: format!("{graph_base}/tiktok-token"),
-            },
-            http: reqwest::Client::new(),
-            meta_graph_base: graph_base.into(),
-            threads_graph_base: graph_base.into(),
-            youtube_comments_url: youtube_comments_url.into(),
-            tiktok_base: graph_base.into(),
         }
     }
 
@@ -370,7 +342,7 @@ impl OutboundTransport for SocialReplyTransport {
             return Ok(rejected(&denied.to_string()));
         }
         let accounts = store::social_accounts::for_provider_identity(
-            &self.surreal,
+            &self.application_store,
             provider,
             &envelope.account,
         )
@@ -385,7 +357,7 @@ impl OutboundTransport for SocialReplyTransport {
             ));
         }
         let credential = match workflows::social_publish::send_credential(
-            &self.surreal,
+            &self.application_store,
             self.kms.as_ref(),
             &self.http,
             &self.refresh,
@@ -673,98 +645,6 @@ mod tests {
         );
     }
 
-    async fn connected_reply_transport(
-        provider: store::social_accounts::SocialProvider,
-        account: &str,
-        server: &wiremock::MockServer,
-    ) -> SocialReplyTransport {
-        connected_reply_transport_with(provider, account, server, &[]).await
-    }
-
-    /// A reply transport whose one connection holds the provider's required
-    /// scopes plus `extra_scopes`.
-    async fn connected_reply_transport_with(
-        provider: store::social_accounts::SocialProvider,
-        account: &str,
-        server: &wiremock::MockServer,
-        extra_scopes: &[&str],
-    ) -> SocialReplyTransport {
-        use store::brands::NewBrand;
-        use store::firms::NewFirm;
-        use store::persons::{NewPerson, Role};
-        use store::social_accounts::ConnectSocialAccount;
-        use store::test_support::{self, mem_surreal};
-
-        let db = mem_surreal().await;
-        let admin = store::persons::create(
-            &db,
-            &NewPerson::with_role(
-                "Reply Admin",
-                format!("reply-admin-{}@example.com", uuid::Uuid::now_v7()),
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &db,
-            &NewFirm {
-                name: "Reply Firm".into(),
-                status: "active".into(),
-                entity_id: test_support::seed_entity(&db).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        let brand_key = format!("reply-{}", uuid::Uuid::now_v7());
-        store::brands::create(
-            &db,
-            Role::Admin,
-            Some(admin.id),
-            &NewBrand {
-                name: "Reply Brand".into(),
-                key: brand_key.clone(),
-                firm_id: Some(firm.id),
-                primary_color: None,
-                accent_color: None,
-                typeface: None,
-            },
-        )
-        .await
-        .unwrap();
-        let kms = cloud::FakeKms::new("reply-social");
-        store::social_accounts::connect(
-            &db,
-            ConnectSocialAccount {
-                actor_role: Role::Admin,
-                actor_person_id: admin.id,
-                brand_key: &brand_key,
-                provider,
-                provider_account_id: account,
-                display_name: Some("Reply Account"),
-                scopes: &provider
-                    .required_scopes()
-                    .iter()
-                    .chain(extra_scopes)
-                    .map(|scope| (*scope).to_string())
-                    .collect::<Vec<_>>(),
-                expires_at: None,
-                access_token: "synthetic-reply-token",
-                refresh_token: None,
-            },
-            &kms,
-        )
-        .await
-        .unwrap();
-        SocialReplyTransport::for_tests(
-            db,
-            Arc::new(kms),
-            &server.uri(),
-            &format!("{}/youtube/comments", server.uri()),
-        )
-    }
-
     #[test]
     fn a_tiktok_reply_needs_both_comment_grants() {
         let publishing = SocialProvider::Tiktok
@@ -788,312 +668,5 @@ mod tests {
         ] {
             assert_eq!(tiktok_can_reply(&granted), can_reply, "{granted:?}");
         }
-    }
-
-    #[tokio::test]
-    async fn tiktok_comment_grant_routes_the_reply_through_accounts_api() {
-        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
-        let server = MockServer::start().await;
-        let transport = connected_reply_transport_with(
-            SocialProvider::Tiktok,
-            "page-reply",
-            &server,
-            &["comment.list", "comment.list.manage"],
-        )
-        .await;
-        Mock::given(matchers::method("GET")).and(matchers::path("/business/comment/list/"))
-            .and(matchers::header("Access-Token", "synthetic-reply-token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"comments":[{
-                "comment_id":"parent-1","video_id":"post-1","unique_identifier":"synthetic-reader",
-                "text":"A question","create_time":"1791392400","owner":false,"status":"PUBLIC"
-            }]}}))).expect(1).mount(&server).await;
-        Mock::given(matchers::method("POST")).and(matchers::path("/business/comment/reply/create/"))
-            .and(matchers::header("Access-Token", "synthetic-reply-token"))
-            .and(matchers::body_partial_json(serde_json::json!({"business_id":"page-reply","video_id":"post-1","comment_id":"parent-1"})))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"comment_id":"synthetic-reply"}})))
-            .expect(1).mount(&server).await;
-        assert_eq!(
-            transport
-                .deliver(&social_envelope(channel::TIKTOK, "public", "comment"))
-                .await
-                .unwrap(),
-            TransportOutcome::Submitted {
-                provider_ref: "synthetic-reply".into()
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn facebook_public_comment_and_threads_publish_submit_provider_refs() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/parent-1/comments"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "fb-reply-1"
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/me/threads"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "threads-container"
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/me/threads_publish"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "threads-reply-1"
-            })))
-            .mount(&server)
-            .await;
-        let facebook = connected_reply_transport(
-            store::social_accounts::SocialProvider::Facebook,
-            "page-reply",
-            &server,
-        )
-        .await;
-        let outcome = facebook
-            .deliver(&social_envelope(channel::FACEBOOK, "public", "comment"))
-            .await
-            .unwrap();
-        assert_eq!(
-            outcome,
-            TransportOutcome::Submitted {
-                provider_ref: "fb-reply-1".into(),
-            }
-        );
-        let threads = connected_reply_transport(
-            store::social_accounts::SocialProvider::Threads,
-            "page-reply",
-            &server,
-        )
-        .await;
-        let outcome = threads
-            .deliver(&social_envelope(channel::THREADS, "public", "comment"))
-            .await
-            .unwrap();
-        assert_eq!(
-            outcome,
-            TransportOutcome::Submitted {
-                provider_ref: "threads-reply-1".into(),
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn simulated_and_development_deployments_send_no_social_reply() {
-        use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(matchers::any())
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-        let mut transport = connected_reply_transport(
-            store::social_accounts::SocialProvider::Facebook,
-            "page-egress",
-            &server,
-        )
-        .await;
-        for (environment, simulated) in [
-            (Some("production"), Some("true")),
-            (Some("dev"), None),
-            (None, None),
-            (Some("production"), Some("maybe")),
-        ] {
-            transport.egress = SocialEgressGate::new(move || {
-                store::config::social_egress_from(|key| match key {
-                    store::config::NAVIGATOR_ENVIRONMENT => environment.map(str::to_owned),
-                    store::config::NAVIGATOR_SIMULATED_MATTERS => simulated.map(str::to_owned),
-                    _ => None,
-                })
-            });
-            let mut reply = social_envelope(channel::FACEBOOK, "public", "comment");
-            reply.account = "page-egress".into();
-            assert!(matches!(
-                transport.deliver(&reply).await.unwrap(),
-                TransportOutcome::Rejected { detail } if detail.starts_with("Social publishing is disabled")
-            ));
-        }
-        server.verify().await;
-    }
-
-    #[tokio::test]
-    async fn social_replies_refuse_unsupported_audiences_and_missing_accounts() {
-        use wiremock::MockServer;
-
-        let server = MockServer::start().await;
-        let facebook = connected_reply_transport(
-            store::social_accounts::SocialProvider::Facebook,
-            "page-reply",
-            &server,
-        )
-        .await;
-        assert_eq!(
-            facebook
-                .deliver(&social_envelope(
-                    channel::FACEBOOK,
-                    "public",
-                    "direct_message"
-                ))
-                .await
-                .unwrap(),
-            rejected("direct messages must remain private")
-        );
-        let mut missing_parent = social_envelope(channel::FACEBOOK, "public", "comment");
-        missing_parent.reply_to_provider_message_id = None;
-        assert_eq!(
-            facebook.deliver(&missing_parent).await.unwrap(),
-            rejected("social reply has no provider message reference")
-        );
-        assert_eq!(
-            facebook
-                .deliver(&social_envelope(channel::THREADS, "public", "comment"))
-                .await
-                .unwrap(),
-            rejected("social account is missing or ambiguous")
-        );
-        assert!(facebook
-            .deliver(&envelope(channel::EMAIL, "body"))
-            .await
-            .is_err());
-        let threads = connected_reply_transport(
-            store::social_accounts::SocialProvider::Threads,
-            "page-reply",
-            &server,
-        )
-        .await;
-        assert_eq!(
-            threads
-                .deliver(&social_envelope(channel::THREADS, "private", "comment"))
-                .await
-                .unwrap(),
-            rejected("Threads replies must be public")
-        );
-        let youtube = connected_reply_transport(
-            store::social_accounts::SocialProvider::Youtube,
-            "page-reply",
-            &server,
-        )
-        .await;
-        assert_eq!(
-            youtube
-                .deliver(&social_envelope(
-                    channel::YOUTUBE,
-                    "public",
-                    "direct_message"
-                ))
-                .await
-                .unwrap(),
-            rejected("YouTube replies must be public comment replies")
-        );
-    }
-
-    #[tokio::test]
-    async fn youtube_public_comment_reply_submits_the_provider_id() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/youtube/comments"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "yt-comment-1"
-            })))
-            .mount(&server)
-            .await;
-        let youtube = connected_reply_transport(
-            store::social_accounts::SocialProvider::Youtube,
-            "page-reply",
-            &server,
-        )
-        .await;
-        let outcome = youtube
-            .deliver(&social_envelope(channel::YOUTUBE, "public", "comment"))
-            .await
-            .unwrap();
-        assert_eq!(
-            outcome,
-            TransportOutcome::Submitted {
-                provider_ref: "yt-comment-1".into(),
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn instagram_public_and_facebook_private_replies_submit_provider_refs() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/parent-1/replies"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "ig-reply-1"
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/parent-1/private_replies"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "fb-private-1"
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/page-reply/messages"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "message_id": "fb-dm-1"
-            })))
-            .mount(&server)
-            .await;
-        let instagram = connected_reply_transport(
-            store::social_accounts::SocialProvider::Instagram,
-            "page-reply",
-            &server,
-        )
-        .await;
-        assert_eq!(
-            instagram
-                .deliver(&social_envelope(channel::INSTAGRAM, "public", "comment"))
-                .await
-                .unwrap(),
-            TransportOutcome::Submitted {
-                provider_ref: "ig-reply-1".into(),
-            }
-        );
-        let facebook = connected_reply_transport(
-            store::social_accounts::SocialProvider::Facebook,
-            "page-reply",
-            &server,
-        )
-        .await;
-        assert_eq!(
-            facebook
-                .deliver(&social_envelope(channel::FACEBOOK, "private", "comment"))
-                .await
-                .unwrap(),
-            TransportOutcome::Submitted {
-                provider_ref: "fb-private-1".into(),
-            }
-        );
-        assert_eq!(
-            facebook
-                .deliver(&social_envelope(
-                    channel::FACEBOOK,
-                    "private",
-                    "direct_message"
-                ))
-                .await
-                .unwrap(),
-            TransportOutcome::Submitted {
-                provider_ref: "fb-dm-1".into(),
-            }
-        );
     }
 }

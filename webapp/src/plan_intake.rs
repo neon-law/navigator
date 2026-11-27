@@ -83,12 +83,12 @@ pub struct PlanIntakePage {
 #[server]
 pub async fn plan_intake_page() -> Result<PlanIntakePage, ServerFnError> {
     let role = crate::admin_listing::require_lawyer().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let actor = crate::inbox::person_id()
         .await
         .ok_or_else(|| ServerFnError::new("firm access required"))?;
     let brand = views::brand::brand_key();
-    let firm = store::plan_intake::review_firm(&surreal, actor, brand.as_str())
+    let firm = store::plan_intake::review_firm(&application_store, actor, brand.as_str())
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let pg = store::postgres::PostgresDb::from_env()
@@ -98,7 +98,7 @@ pub async fn plan_intake_page() -> Result<PlanIntakePage, ServerFnError> {
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let mut rows = Vec::new();
-    for row in store::plan_intake::list_by_firm(&surreal, firm)
+    for row in store::plan_intake::list_by_firm(&application_store, firm)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
     {
@@ -107,14 +107,14 @@ pub async fn plan_intake_page() -> Result<PlanIntakePage, ServerFnError> {
             let pending_id = row.pending_project_id();
             let mut view = row_view(row, plan);
             if let Some(id) = pending_id {
-                let roles = store::projects::participations_for_project(&surreal, id)
+                let roles = store::projects::participations_for_project(&application_store, id)
                     .await
                     .map_err(|error| ServerFnError::new(error.to_string()))?;
                 if roles
                     .iter()
                     .any(|role| role.is_lawyer_dri && role.person_id == actor)
                 {
-                    if let Some(project) = store::projects::find_by_id(&surreal, id)
+                    if let Some(project) = store::projects::find_by_id(&application_store, id)
                         .await
                         .map_err(|error| ServerFnError::new(error.to_string()))?
                     {

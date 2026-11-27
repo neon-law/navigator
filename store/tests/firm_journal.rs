@@ -5,7 +5,7 @@ use uuid::Uuid;
 mod journal_fixture;
 use journal_fixture::entry;
 
-async fn firm(db: &store::surreal::SurrealDb) -> Uuid {
+async fn firm(db: &store::application_store::ApplicationStore) -> Uuid {
     let admin = store::persons::create(
         db,
         &store::persons::NewPerson::with_role(
@@ -30,7 +30,7 @@ async fn firm(db: &store::surreal::SurrealDb) -> Uuid {
     .id
 }
 
-async fn project_brand(db: &store::surreal::SurrealDb, firm: Uuid) -> String {
+async fn project_brand(db: &store::application_store::ApplicationStore, firm: Uuid) -> String {
     let admin = store::firms::memberships_for_firm(db, firm)
         .await
         .unwrap()
@@ -59,7 +59,7 @@ async fn project_brand(db: &store::surreal::SurrealDb, firm: Uuid) -> String {
     key
 }
 
-async fn entity(db: &store::surreal::SurrealDb) -> Uuid {
+async fn entity(db: &store::application_store::ApplicationStore) -> Uuid {
     let suffix = Uuid::now_v7();
     let jurisdiction = store::jurisdictions::create(
         db,
@@ -106,7 +106,7 @@ fn exact_units_never_balance_unlike_assets_or_accept_overprecision() {
 async fn concurrent_duplicate_commands_survive_retry_and_refuse_changed_payload() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let firm = firm(&db).await;
         let e = entry(firm, "manual:one");
         let (a, b) = tokio::join!(post(&db, &pg, &e), post(&db, &pg, &e));
@@ -162,7 +162,7 @@ fn pending_outages_incomplete_coverage_and_unvalued_assets_never_reconcile_as_ze
 async fn a_provider_movement_cannot_be_imported_again_under_another_command_key() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let firm = firm(&db).await;
         let mut first = entry(firm, "source-one");
         first.sources = vec![SourceSnapshot::synthetic("USD", 2, "10000").source];
@@ -184,7 +184,7 @@ async fn a_provider_movement_cannot_be_imported_again_under_another_command_key(
 async fn firm_allocation_and_receipt_boundaries_are_checked_in_store_commands() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let firm = firm(&db).await;
         let other = self::firm(&db).await;
         let project = store::projects::create(
@@ -247,7 +247,7 @@ fn bank_and_xero_account_ids_can_evidence_one_navigator_account() {
 async fn preview_runs_real_constraints_without_persisting_entries() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let firm = firm(&db).await;
         let event = entry(firm, "preview-only");
         assert_eq!(preview(&db, &pg, &event).await.unwrap(), event.id);
@@ -262,7 +262,7 @@ async fn preview_runs_real_constraints_without_persisting_entries() {
 async fn reconciliation_preview_missing_source_and_approved_retry_are_audited() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let firm = firm(&db).await;
         let project = store::projects::create(
             &db,
@@ -449,7 +449,7 @@ fn property_award_is_not_receipt_and_conversion_keeps_assets_separate() {
 async fn concurrent_repayments_cannot_exceed_reviewed_project_costs() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let firm = firm(&db).await;
         let reviewer = store::persons::create(
             &db,
@@ -663,7 +663,7 @@ fn crypto_transfer_requires_scoped_locator_finality_and_exact_separate_fees() {
 async fn chain_transfer_locators_are_distinct_but_transaction_fee_is_unique() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let firm = firm(&db).await;
         let mut first = entry(firm, "chain:instruction:0");
         let unit = Unit::Crypto {
@@ -735,7 +735,7 @@ async fn chain_transfer_locators_are_distinct_but_transaction_fee_is_unique() {
 async fn verified_signals_only_match_existing_firm_sources_and_are_idempotent() {
     store::test_support::with_postgres(async {
         let pg = PostgresDb::application().await.unwrap();
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let firm = firm(&db).await;
         let mut e = entry(firm, "signal-source");
         let source = SourceReference {
@@ -933,7 +933,7 @@ fn invoice_installments_remain_distinct_and_a_payment_can_allocate_across_projec
 #[tokio::test]
 async fn postgres_journal_store_preserves_preview_idempotency_and_reversal_boundaries() {
     store::test_support::with_postgres(async {
-        let db = store::surreal::SurrealDb::uninitialized();
+        let db = store::application_store::ApplicationStore::uninitialized();
         let journal = JournalStore::from_env().await.unwrap();
         let firm = firm(&db).await;
         let e = entry(firm, "manual:postgres");

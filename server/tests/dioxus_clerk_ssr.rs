@@ -30,13 +30,13 @@ const INDEX_HTML: &str = "<!DOCTYPE html>\n\
 
 /// Insert a person with an explicit role.
 async fn insert_person(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     name: &str,
     email: &str,
     role: store::persons::Role,
 ) -> Uuid {
     store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role(name.to_string(), email.to_string(), role),
     )
     .await
@@ -49,33 +49,33 @@ async fn insert_person(
 /// `store::access::supervised_projects` hides a matter whose supervisor is not a
 /// currently licensed `lawyer`/`admin` person.
 async fn seed_supervised_project(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     name: &str,
     clerk_id: Uuid,
     lawyer_id: Uuid,
 ) -> store::projects::Project {
-    store::test_support::seed_compiled_brands_postgres(surreal).await;
+    store::test_support::seed_compiled_brands_postgres(application_store).await;
     let project = store::projects::create(
-        surreal,
+        application_store,
         &store::projects::NewProject {
             code: format!("atlas-{}", Uuid::now_v7()),
             name: name.to_string(),
             status: "open".into(),
-            entity_id: store::test_support::seed_entity(surreal).await,
+            entity_id: store::test_support::seed_entity(application_store).await,
             ..Default::default()
         },
     )
     .await
     .expect("insert project");
-    store::projects::designate_dri_in_surreal(
-        surreal,
+    store::projects::designate_dri(
+        application_store,
         project.id,
         lawyer_id,
         store::projects::DriSide::Lawyer,
     )
     .await
     .expect("designate supervising lawyer");
-    store::projects::add_participation(surreal, project.id, clerk_id, "clerk")
+    store::projects::add_participation(application_store, project.id, clerk_id, "clerk")
         .await
         .expect("assign Clerk to project");
     project
@@ -95,8 +95,8 @@ fn staged_bundle() -> tempfile::TempDir {
 /// `#[server]` loaders query through. The supervising lawyer the Clerk
 /// lens names is a `persons` row — a config that omits the store renders
 /// a 500.
-fn clerk_config(surreal: &store::surreal::SurrealDb) -> ServeConfig {
-    let provider_surreal = surreal.clone();
+fn clerk_config(application_store: &store::application_store::ApplicationStore) -> ServeConfig {
+    let provider_surreal = application_store.clone();
     ServeConfig::new().context_providers(Arc::new(vec![Box::new(move || {
         Box::new(provider_surreal.clone()) as Box<dyn Any>
     })
@@ -146,7 +146,7 @@ async fn fetch(router: Router, uri: &str) -> (StatusCode, String) {
 }
 
 async fn render_clerk_list(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     role: webapp::people::ViewerRole,
     person_id: Option<Uuid>,
 ) -> (StatusCode, String) {
@@ -158,7 +158,7 @@ async fn render_clerk_list(
     let router: Router = Router::<FullstackState>::new()
         .route("/app/projects", get(render_handler))
         .with_state(FullstackState::new(
-            clerk_config(surreal),
+            clerk_config(application_store),
             webapp::clerk::ClerkProjects,
         ))
         .layer(person)
@@ -168,7 +168,7 @@ async fn render_clerk_list(
 }
 
 async fn render_clerk_detail(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_code: &str,
     role: webapp::people::ViewerRole,
     person_id: Option<Uuid>,
@@ -181,7 +181,7 @@ async fn render_clerk_detail(
     let router: Router = Router::<FullstackState>::new()
         .route("/app/projects/{code}", get(render_handler))
         .with_state(FullstackState::new(
-            clerk_config(surreal),
+            clerk_config(application_store),
             webapp::clerk::ClerkProjectDetail,
         ))
         .layer(person)
@@ -193,25 +193,29 @@ async fn render_clerk_detail(
 #[tokio::test]
 async fn clerk_list_ssrs_supervised_matters_and_names_the_supervisor() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let lawyer = insert_person(
-            &surreal,
+            &application_store,
             "Aries Attorney",
             "aries@test.invalid",
             store::persons::Role::Lawyer,
         )
         .await;
         let clerk = insert_person(
-            &surreal,
+            &application_store,
             "Cleo Clerk",
             "cleo@test.invalid",
             store::persons::Role::Clerk,
         )
         .await;
-        let project = seed_supervised_project(&surreal, "Atlas LLC", clerk, lawyer).await;
+        let project = seed_supervised_project(&application_store, "Atlas LLC", clerk, lawyer).await;
 
-        let (status, html) =
-            render_clerk_list(&surreal, webapp::people::ViewerRole::Clerk, Some(clerk)).await;
+        let (status, html) = render_clerk_list(
+            &application_store,
+            webapp::people::ViewerRole::Clerk,
+            Some(clerk),
+        )
+        .await;
 
         assert_eq!(status, StatusCode::OK);
         assert!(
@@ -257,17 +261,21 @@ async fn clerk_list_ssrs_supervised_matters_and_names_the_supervisor() {
 #[tokio::test]
 async fn clerk_list_empty_state_explains_how_a_matter_appears() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let clerk = insert_person(
-            &surreal,
+            &application_store,
             "Cleo Clerk",
             "cleo@test.invalid",
             store::persons::Role::Clerk,
         )
         .await;
 
-        let (status, html) =
-            render_clerk_list(&surreal, webapp::people::ViewerRole::Clerk, Some(clerk)).await;
+        let (status, html) = render_clerk_list(
+            &application_store,
+            webapp::people::ViewerRole::Clerk,
+            Some(clerk),
+        )
+        .await;
 
         assert_eq!(status, StatusCode::OK);
         assert!(
@@ -285,22 +293,22 @@ async fn clerk_list_empty_state_explains_how_a_matter_appears() {
 #[tokio::test]
 async fn clerk_list_is_not_found_for_a_lawyer() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let lawyer = insert_person(
-            &surreal,
+            &application_store,
             "Aries Attorney",
             "aries@test.invalid",
             store::persons::Role::Lawyer,
         )
         .await;
         let clerk = insert_person(
-            &surreal,
+            &application_store,
             "Cleo Clerk",
             "cleo@test.invalid",
             store::persons::Role::Clerk,
         )
         .await;
-        seed_supervised_project(&surreal, "Atlas LLC", clerk, lawyer).await;
+        seed_supervised_project(&application_store, "Atlas LLC", clerk, lawyer).await;
 
         // A lawyer does not use the Clerk surface: it is hidden from them, not
         // merely refused. Admin's general embedded Rego policy bypass must not reach it either, so
@@ -310,7 +318,7 @@ async fn clerk_list_is_not_found_for_a_lawyer() {
             ("admin", webapp::people::ViewerRole::Admin),
             ("client", webapp::people::ViewerRole::Client),
         ] {
-            let (status, html) = render_clerk_list(&surreal, role, Some(lawyer)).await;
+            let (status, html) = render_clerk_list(&application_store, role, Some(lawyer)).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{label}: {html}");
             assert!(!html.contains("Atlas LLC"), "{label}: {html}");
         }
@@ -321,25 +329,25 @@ async fn clerk_list_is_not_found_for_a_lawyer() {
 #[tokio::test]
 async fn clerk_detail_shows_the_matter_facts_and_the_limited_access_notice() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let lawyer = insert_person(
-            &surreal,
+            &application_store,
             "Aries Attorney",
             "aries@test.invalid",
             store::persons::Role::Lawyer,
         )
         .await;
         let clerk = insert_person(
-            &surreal,
+            &application_store,
             "Cleo Clerk",
             "cleo@test.invalid",
             store::persons::Role::Clerk,
         )
         .await;
-        let project = seed_supervised_project(&surreal, "Atlas LLC", clerk, lawyer).await;
+        let project = seed_supervised_project(&application_store, "Atlas LLC", clerk, lawyer).await;
 
         let (status, html) = render_clerk_detail(
-            &surreal,
+            &application_store,
             &project.code,
             webapp::people::ViewerRole::Clerk,
             Some(clerk),
@@ -371,33 +379,34 @@ async fn clerk_detail_shows_the_matter_facts_and_the_limited_access_notice() {
 #[tokio::test]
 async fn clerk_detail_is_not_found_for_an_unsupervised_matter() {
     store::test_support::with_required_postgres(async {
-        let surreal = store::surreal::SurrealDb::uninitialized();
+        let application_store = store::application_store::ApplicationStore::uninitialized();
         let lawyer = insert_person(
-            &surreal,
+            &application_store,
             "Aries Attorney",
             "aries@test.invalid",
             store::persons::Role::Lawyer,
         )
         .await;
         let clerk = insert_person(
-            &surreal,
+            &application_store,
             "Cleo Clerk",
             "cleo@test.invalid",
             store::persons::Role::Clerk,
         )
         .await;
         let other_clerk = insert_person(
-            &surreal,
+            &application_store,
             "Otto Clerk",
             "otto@test.invalid",
             store::persons::Role::Clerk,
         )
         .await;
-        let project = seed_supervised_project(&surreal, "Atlas LLC", other_clerk, lawyer).await;
+        let project =
+            seed_supervised_project(&application_store, "Atlas LLC", other_clerk, lawyer).await;
 
         // Another Clerk's matter is not merely refused — it does not exist here.
         let (status, html) = render_clerk_detail(
-            &surreal,
+            &application_store,
             &project.code,
             webapp::people::ViewerRole::Clerk,
             Some(clerk),
@@ -408,7 +417,7 @@ async fn clerk_detail_is_not_found_for_an_unsupervised_matter() {
 
         // So is an id that resolves to no matter at all.
         let (status, _) = render_clerk_detail(
-            &surreal,
+            &application_store,
             "missing-project",
             webapp::people::ViewerRole::Clerk,
             Some(clerk),

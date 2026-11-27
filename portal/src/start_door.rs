@@ -233,7 +233,7 @@ async fn inject_start_content(
         || configured_lawyer(&state.app, brand, &service_id)
             .await
             .is_some())
-        && store::firms::firm_id_for_brand_key(&state.app.surreal, brand.as_str())
+        && store::firms::firm_id_for_brand_key(&state.app.application_store, brand.as_str())
             .await
             .ok()
             .flatten()
@@ -346,7 +346,7 @@ async fn configured_lawyer(
         outcome = "configuration_selected",
         "start door lawyer source selected"
     );
-    let person = match store::persons::find_by_email_ci(&state.surreal, email).await {
+    let person = match store::persons::find_by_email_ci(&state.application_store, email).await {
         Ok(person) => person,
         Err(error) => {
             tracing::error!(
@@ -375,7 +375,7 @@ async fn configured_lawyer(
         return None;
     };
     if !person.role.is_lawyer_tier()
-        || !store::persons::is_admitted(&state.surreal, person.id)
+        || !store::persons::is_admitted(&state.application_store, person.id)
             .await
             .ok()
             .unwrap_or(false)
@@ -410,12 +410,15 @@ async fn start_personal_formation(
             },
         );
     }
-    let template =
-        store::templates::resolve(&app.surreal, None, store::personal_projects::FORMATION)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("shared formation template missing"))?;
+    let template = store::templates::resolve(
+        &app.application_store,
+        None,
+        store::personal_projects::FORMATION,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("shared formation template missing"))?;
     let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
-        &app.surreal,
+        &app.application_store,
         Some(&app.storage),
         &template,
     )
@@ -495,7 +498,7 @@ async fn post_start(
         return (StatusCode::OK, catalog.start.refusal.clone()).into_response();
     };
     let snapshot = match workflows::notation_session::questionnaire_snapshot_for_template(
-        &state.app.surreal,
+        &state.app.application_store,
         Some(&state.app.storage),
         &template,
     )
@@ -516,7 +519,7 @@ async fn post_start(
         }
     };
     match open_intake_matter(
-        &state.app.surreal,
+        &state.app.application_store,
         &template,
         snapshot,
         IntakeClient::Existing(person_id),
@@ -545,7 +548,7 @@ async fn post_start(
             let mut proposed = 0usize;
             for (state_name, term) in offer_terms(&offer) {
                 match workflows::notation_session::record_extracted_answer(
-                    &state.app.surreal,
+                    &state.app.application_store,
                     Some(&state.app.storage),
                     opened.rows.notation_id,
                     state_name,
@@ -639,26 +642,32 @@ async fn start_template(
     service_template: &str,
     repo: Option<&repos::RepoStore>,
 ) -> Option<store::templates::Template> {
-    let firm_id = store::firms::firm_id_for_brand_key(&app.surreal, brand.as_str())
+    let firm_id = store::firms::firm_id_for_brand_key(&app.application_store, brand.as_str())
         .await
         .ok()
         .flatten();
     let Some(firm_id) = firm_id else {
-        return store::templates::resolve(&app.surreal, None, service_template)
+        return store::templates::resolve(&app.application_store, None, service_template)
             .await
             .ok()
             .flatten();
     };
     let library = match repo {
         Some(repo) => {
-            store::firm_library::sync_or_default(&app.surreal, &app.storage, repo, firm_id).await
+            store::firm_library::sync_or_default(
+                &app.application_store,
+                &app.storage,
+                repo,
+                firm_id,
+            )
+            .await
         }
         None => None,
     };
     if let Some(retainer) = library.and_then(|synced| synced.retainer) {
         return Some(retainer);
     }
-    store::templates::resolve_for_firm(&app.surreal, firm_id, service_template)
+    store::templates::resolve_for_firm(&app.application_store, firm_id, service_template)
         .await
         .ok()
         .flatten()

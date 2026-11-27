@@ -5,10 +5,10 @@
 //! `glossary_term` table may hold — remain in `store/tests/glossary_terms.rs`.
 
 use super::{all, by_slug, materialize, terms, Term};
+use crate::application_store::ApplicationStore;
 use crate::postgres::catalog;
+use crate::postgres::fixtures::{connect, fresh_schema};
 use crate::postgres::PostgresDb;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
-use crate::surreal::SurrealDb;
 
 async fn database() -> Option<PostgresDb> {
     let (options, database) = fresh_schema().await?;
@@ -23,20 +23,20 @@ async fn materialize_is_idempotent_and_updates_in_place() {
     let Some(pg) = database().await else {
         return;
     };
-    let surreal = SurrealDb::uninitialized();
+    let application_store = ApplicationStore::uninitialized();
     catalog::with_test_db(pg, async move {
-        let written = materialize(&surreal, terms())
+        let written = materialize(&application_store, terms())
             .await
             .expect("first materialize");
         assert!(written > 25, "expected the full vocabulary, got {written}");
-        let after_first = all(&surreal).await.expect("all").len();
+        let after_first = all(&application_store).await.expect("all").len();
         assert_eq!(after_first, written);
 
-        materialize(&surreal, terms())
+        materialize(&application_store, terms())
             .await
             .expect("second materialize");
         assert_eq!(
-            all(&surreal).await.expect("all").len(),
+            all(&application_store).await.expect("all").len(),
             after_first,
             "a re-run must converge, not append a second row per term"
         );
@@ -48,14 +48,16 @@ async fn materialize_is_idempotent_and_updates_in_place() {
             description: "A lawyer reviews the work.".to_string(),
             body: "Rewritten body.".to_string(),
         };
-        materialize(&surreal, &[edited]).await.expect("edit");
-        let row = by_slug(&surreal, "lawyer-review")
+        materialize(&application_store, &[edited])
+            .await
+            .expect("edit");
+        let row = by_slug(&application_store, "lawyer-review")
             .await
             .expect("lookup")
             .expect("lawyer-review row");
         assert_eq!(row.body, "Rewritten body.");
         assert_eq!(
-            all(&surreal).await.expect("all").len(),
+            all(&application_store).await.expect("all").len(),
             after_first,
             "editing a term must not create a rival row under the same slug"
         );
@@ -71,11 +73,13 @@ async fn a_term_referenced_by_slug_resolves_to_its_definition() {
     let Some(pg) = database().await else {
         return;
     };
-    let surreal = SurrealDb::uninitialized();
+    let application_store = ApplicationStore::uninitialized();
     catalog::with_test_db(pg, async move {
-        materialize(&surreal, terms()).await.expect("materialize");
+        materialize(&application_store, terms())
+            .await
+            .expect("materialize");
 
-        let referenced = by_slug(&surreal, "lawyer-review")
+        let referenced = by_slug(&application_store, "lawyer-review")
             .await
             .expect("lookup")
             .expect("a composition referencing `lawyer-review` must resolve");
@@ -87,7 +91,7 @@ async fn a_term_referenced_by_slug_resolves_to_its_definition() {
 
         // #894 also adds Template, absent until now despite #850 existing to
         // document its four-part anatomy.
-        let template = by_slug(&surreal, "template")
+        let template = by_slug(&application_store, "template")
             .await
             .expect("lookup")
             .expect("Template must be a real term");
@@ -97,7 +101,7 @@ async fn a_term_referenced_by_slug_resolves_to_its_definition() {
         );
 
         assert!(
-            by_slug(&surreal, "not-a-real-term")
+            by_slug(&application_store, "not-a-real-term")
                 .await
                 .expect("lookup")
                 .is_none(),

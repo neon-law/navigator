@@ -1,5 +1,5 @@
 use super::*;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 use chrono::{Days, SubsecRound, TimeDelta, TimeZone};
 
 fn message(sent_at: DateTime<Utc>) -> NewSentEmail {

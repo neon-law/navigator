@@ -112,7 +112,7 @@ fn filing_action_view(
 
 #[cfg(feature = "server")]
 async fn attachment_filing_views(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     triage: &store::inbox_triage::InboxTriage,
     filing: &FilingActionView,
     approval: &store::inbox_triage::FilingApproval,
@@ -174,11 +174,11 @@ struct FilingFlash {
 #[server]
 pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
     let role = crate::admin_listing::require_firm_person().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
     let actor = crate::inbox::person_id()
         .await
         .ok_or_else(|| ServerFnError::new("firm access required"))?;
-    let rows = store::inbox_triage::list_for_review(&surreal, actor)
+    let rows = store::inbox_triage::list_for_review(&application_store, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let attachment_filing_enabled = workflows::trigger::inbox_attachment_filing_enabled();
@@ -187,7 +187,7 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
         // Per-row project choices come from the row's Firm — an Owner sees
         // rows from every Firm, and each override form offers only that
         // Firm's projects.
-        let projects = store::inbox::projects_in_firm(&surreal, row.triage.firm_id)
+        let projects = store::inbox::projects_in_firm(&application_store, row.triage.firm_id)
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
             .into_iter()
@@ -197,16 +197,17 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
             })
             .collect();
         let href = format!("/app/inbox/{}", row.conversation_id);
-        let approval = store::inbox_triage::filing_action_for_review(&surreal, actor, &row)
-            .await
-            .map_err(|_| ServerFnError::new("could not load the filing proposal"))?;
+        let approval =
+            store::inbox_triage::filing_action_for_review(&application_store, actor, &row)
+                .await
+                .map_err(|_| ServerFnError::new("could not load the filing proposal"))?;
         let filing_action = approval.map(|approval| filing_action_view(&href, &approval));
         let attachment_filings = if let Some((filing, approval)) = filing_action
             .as_ref()
             .zip(approval)
             .filter(|_| attachment_filing_enabled)
         {
-            attachment_filing_views(&surreal, &row.triage, filing, &approval).await?
+            attachment_filing_views(&application_store, &row.triage, filing, &approval).await?
         } else {
             Vec::new()
         };

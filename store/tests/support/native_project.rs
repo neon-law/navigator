@@ -1,7 +1,7 @@
 //! Valid native Project references shared by the PostgreSQL integration tests.
+use store::application_store::ApplicationStore;
 use store::persons::Role;
 use store::projects::{NewProject, Project};
-use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 /// Create only the references an ordinary Project insert requires.
@@ -9,7 +9,7 @@ pub async fn input(code: &str) -> NewProject {
     store::postgres::PostgresDb::application()
         .await
         .expect("admitted PostgreSQL fixture");
-    let db = SurrealDb::uninitialized();
+    let db = ApplicationStore::uninitialized();
     let unique = Uuid::new_v4();
     let jurisdiction = store::jurisdictions::create(
         &db,
@@ -94,7 +94,7 @@ pub async fn input(code: &str) -> NewProject {
 
 /// Insert through the same admitted domain accessor as the application.
 pub async fn create(code: &str) -> Project {
-    store::projects::create(&SurrealDb::uninitialized(), &input(code).await)
+    store::projects::create(&ApplicationStore::uninitialized(), &input(code).await)
         .await
         .unwrap()
 }

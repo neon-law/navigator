@@ -17,7 +17,12 @@ async fn authorize(
     firm: Uuid,
 ) -> Result<(), ApiError> {
     let allowed = store::firm_capability::FirmCapability::ManageFirmAssumptions
-        .resolve(&state.surreal, session.role, session.person_id, firm)
+        .resolve(
+            &state.application_store,
+            session.role,
+            session.person_id,
+            firm,
+        )
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     if !allowed.is_allowed() {

@@ -64,8 +64,7 @@ pub enum Existing {
 pub async fn native_pool() -> Result<crate::postgres::PostgresDb, FiImportError> {
     crate::inbox::inbox_authority()
         .await
-        .map_err(|_| FiImportError::Storage)?
-        .ok_or(FiImportError::Storage)
+        .map_err(|_| FiImportError::Storage)
 }
 
 /// Read-only preflight. Apply verifies the persisted winner again because

@@ -8,13 +8,10 @@
 //! id is derived here rather than typed in.
 
 use serde::Deserialize;
-use surrealdb::types::SurrealValue;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::social::{self as authority, SocialAuthorityError};
 use crate::social_accounts::SocialProvider;
-use crate::surreal::SurrealDb;
-
-const TABLE: &str = "social_handle";
 
 /// A Brand's handle on one provider.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -34,23 +31,10 @@ pub enum SocialHandleError {
     InvalidHandle(String),
 }
 
-impl From<surrealdb::Error> for SocialHandleError {
-    fn from(value: surrealdb::Error) -> Self {
-        Self::Db(value.to_string())
-    }
-}
-
 impl From<SocialAuthorityError> for SocialHandleError {
     fn from(value: SocialAuthorityError) -> Self {
         Self::Db(value.to_string())
     }
-}
-
-#[derive(SurrealValue)]
-struct HandleRow {
-    brand_key: String,
-    provider: String,
-    handle: String,
 }
 
 /// Whether `provider` names a provider Navigator publishes to.
@@ -86,7 +70,7 @@ pub fn is_valid_handle(handle: &str) -> bool {
 ///
 /// An unknown provider, an invalid handle, or a database failure.
 pub async fn set(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     brand_key: &str,
     provider: &str,
     handle: &str,
@@ -97,9 +81,7 @@ pub async fn set(
     if !is_valid_handle(handle) {
         return Err(SocialHandleError::InvalidHandle(handle.to_string()));
     }
-    let pg = authority::authority()
-        .await?
-        .ok_or(SocialAuthorityError::Unavailable)?;
+    let pg = authority::authority().await?;
     let query = sqlx::query(
         "INSERT INTO social_handle (brand_key, provider, handle) VALUES ($1, $2, $3) \
          ON CONFLICT (brand_key, provider) DO UPDATE SET handle = EXCLUDED.handle",
@@ -111,57 +93,24 @@ pub async fn set(
     Ok(())
 }
 
-/// Every handle SurrealDB holds, for the PostgreSQL parity check.
-pub(crate) async fn all(db: &SurrealDb) -> Result<Vec<SocialHandle>, SocialHandleError> {
-    let mut response = db
-        .query(format!("SELECT brand_key, provider, handle FROM {TABLE}"))
-        .await?
-        .check()?;
-    let rows: Vec<HandleRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .map(|row| SocialHandle {
-            brand_key: row.brand_key,
-            provider: row.provider,
-            handle: row.handle,
-        })
-        .collect())
-}
-
 /// The Brand's recorded handle on a provider, if any.
 ///
 /// # Errors
 ///
 /// A database failure.
 pub async fn find(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     brand_key: &str,
     provider: &str,
 ) -> Result<Option<SocialHandle>, SocialHandleError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(h) AS row FROM social_handle h \
-             WHERE h.brand_key = $1 AND h.provider = $2",
-        )
-        .bind(brand_key.to_owned())
-        .bind(provider.to_owned());
-        return Ok(authority::maybe(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT brand_key, provider, handle FROM {TABLE} \
-             WHERE brand_key = $brand AND provider = $provider LIMIT 1"
-        ))
-        .bind(("brand", brand_key.to_string()))
-        .bind(("provider", provider.to_string()))
-        .await?
-        .check()?;
-    let row: Option<HandleRow> = response.take(0)?;
-    Ok(row.map(|row| SocialHandle {
-        brand_key: row.brand_key,
-        provider: row.provider,
-        handle: row.handle,
-    }))
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(h) AS row FROM social_handle h \
+         WHERE h.brand_key = $1 AND h.provider = $2",
+    )
+    .bind(brand_key.to_owned())
+    .bind(provider.to_owned());
+    Ok(authority::maybe(&pg, query).await?)
 }
 
 /// The provider's own permalink for a post, when the handle and the post id
@@ -195,16 +144,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_context_refuses_handle_writes() {
-        let db = SurrealDb::uninitialized();
-        let result = crate::postgres_mirror::from_source(set(&db, "neon", "x", "Synthetic")).await;
-        assert!(matches!(result, Err(SocialHandleError::Db(_))));
-    }
-
-    #[tokio::test]
     async fn a_brand_holds_one_handle_per_provider() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             test_support::seed_compiled_brands_postgres(&db).await;
             assert!(find(&db, "neon", "x").await.unwrap().is_none());
             set(&db, "neon", "x", "NeonLawUSA").await.unwrap();

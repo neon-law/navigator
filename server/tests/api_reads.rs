@@ -37,7 +37,7 @@ static REPO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(())
 struct Fixture {
     _repo_guard: tokio::sync::MutexGuard<'static, ()>,
     app: axum::Router,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
     storage: std::sync::Arc<dyn cloud::StorageService>,
     project_id: Uuid,
     project_code: String,
@@ -70,7 +70,10 @@ struct TierBearers {
 /// does, and a Clerk. The unassigned pair is the point: it is what proves the
 /// privileged tiers reach matter *content* through the participation ledger
 /// like everybody else (ENG-81) rather than through their tier.
-async fn seed_tier_bearers(surreal: &store::surreal::SurrealDb, project_id: Uuid) -> TierBearers {
+async fn seed_tier_bearers(
+    application_store: &store::application_store::ApplicationStore,
+    project_id: Uuid,
+) -> TierBearers {
     let mut seeded = Vec::new();
     for (name, email, role, seated) in [
         ("Owner", "owner@example.com", Role::Owner, false),
@@ -84,13 +87,13 @@ async fn seed_tier_bearers(surreal: &store::surreal::SurrealDb, project_id: Uuid
         ("Clerk", "clerk@example.com", Role::Clerk, false),
     ] {
         let person = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(name, email, role),
         )
         .await
         .unwrap();
         if seated {
-            store::projects::add_participation(surreal, project_id, person.id, "lawyer")
+            store::projects::add_participation(application_store, project_id, person.id, "lawyer")
                 .await
                 .unwrap();
         }
@@ -108,13 +111,13 @@ async fn seed_tier_bearers(surreal: &store::surreal::SurrealDb, project_id: Uuid
 /// Seed a notation on the matter and a playbook for the firm, so the reads
 /// under test return content rather than empty arrays. Returns the notation id.
 async fn seed_matter_content(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     entity_id: Uuid,
     respondent_id: Uuid,
 ) -> Uuid {
     let tmpl = store::templates::save_version(
-        surreal,
+        application_store,
         None,
         "test__read_walk",
         store::templates::Version {
@@ -130,14 +133,14 @@ async fn seed_matter_content(
     .unwrap()
     .into_model();
     let notation_id = store::notations::create(
-        surreal,
+        application_store,
         &store::notations::NewNotation::new(tmpl.id, respondent_id, project_id, "BEGIN"),
     )
     .await
     .unwrap()
     .id;
     store::playbooks::create(
-        surreal,
+        application_store,
         &store::playbooks::NewPlaybook {
             entity_id,
             name: "Vendor MSA",
@@ -193,11 +196,11 @@ async fn seed_fixture_entity_and_brand(pg: &PostgresDb) -> Uuid {
 async fn build_fixture() -> Fixture {
     let repo_guard = REPO_ENV_LOCK.lock().await;
     repo_store();
-    let surreal = store::surreal::SurrealDb::uninitialized();
+    let application_store = store::application_store::ApplicationStore::uninitialized();
     let pg = PostgresDb::application().await.unwrap();
     let entity_id = seed_fixture_entity_and_brand(&pg).await;
     let project = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: format!("matter-{}", Uuid::now_v7()),
             name: "Matter".into(),
@@ -208,16 +211,20 @@ async fn build_fixture() -> Fixture {
     )
     .await
     .unwrap();
-    store::projects::set_private_notion_page_url(&surreal, project.id, PRIVATE_NOTION)
+    store::projects::set_private_notion_page_url(&application_store, project.id, PRIVATE_NOTION)
         .await
         .unwrap()
         .expect("the fixture matter records a private Notion page");
-    store::projects::set_internal_slack_channel_id(&surreal, project.id, INTERNAL_SLACK_ID)
-        .await
-        .unwrap()
-        .expect("the fixture matter records a firm-only Slack channel");
+    store::projects::set_internal_slack_channel_id(
+        &application_store,
+        project.id,
+        INTERNAL_SLACK_ID,
+    )
+    .await
+    .unwrap()
+    .expect("the fixture matter records a firm-only Slack channel");
     store::projects::update_project(
-        &surreal,
+        &application_store,
         project.id,
         &store::projects::UpdateProjectCommand {
             calendar_id: Some(PROJECT_CALENDAR.into()),
@@ -228,43 +235,44 @@ async fn build_fixture() -> Fixture {
     .await
     .expect("the fixture matter records a calendar and a booking link");
     let lawyer = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role("Lawyer", "lawyer@example.com", Role::Lawyer),
     )
     .await
     .unwrap();
-    store::projects::add_participation(&surreal, project.id, lawyer.id, "lawyer")
+    store::projects::add_participation(&application_store, project.id, lawyer.id, "lawyer")
         .await
         .unwrap();
     let client = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role("Client", "client@example.com", Role::Client),
     )
     .await
     .unwrap();
-    store::projects::add_participation(&surreal, project.id, client.id, "client")
+    store::projects::add_participation(&application_store, project.id, client.id, "client")
         .await
         .unwrap();
     let outsider = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role("Outsider", "outsider@example.com", Role::Lawyer),
     )
     .await
     .unwrap();
-    let tiers = seed_tier_bearers(&surreal, project.id).await;
+    let tiers = seed_tier_bearers(&application_store, project.id).await;
 
-    let notation_id = seed_matter_content(&surreal, project.id, entity_id, client.id).await;
+    let notation_id =
+        seed_matter_content(&application_store, project.id, entity_id, client.id).await;
 
     let state = AppState {
         sessions: SessionStore::new(KEY),
-        ..portal::test_support::app_state(surreal.clone()).await
+        ..portal::test_support::app_state(application_store.clone()).await
     };
     let storage = state.storage.clone();
     Fixture {
         _repo_guard: repo_guard,
         storage,
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
-        surreal,
+        application_store,
         project_id: project.id,
         project_code: project.code.clone(),
         notation_id,
@@ -388,7 +396,7 @@ async fn client_portal_uses_the_host_brand_for_the_list_detail_and_api() {
 
 async fn seed_sibling_brand(fx: &Fixture) -> (store::projects::Project, store::projects::Project) {
     let pg = PostgresDb::application().await.unwrap();
-    let project = store::projects::find_by_id(&fx.surreal, fx.project_id)
+    let project = store::projects::find_by_id(&fx.application_store, fx.project_id)
         .await
         .unwrap()
         .unwrap();
@@ -405,12 +413,12 @@ async fn seed_sibling_brand(fx: &Fixture) -> (store::projects::Project, store::p
         .await
         .unwrap();
     for key in ["neon", "delete-your-data"] {
-        store::firms::move_brand(&fx.surreal, Role::Owner, None, key, firm)
+        store::firms::move_brand(&fx.application_store, Role::Owner, None, key, firm)
             .await
             .unwrap();
     }
     store::firms::update(
-        &fx.surreal,
+        &fx.application_store,
         Role::Owner,
         None,
         firm,
@@ -422,7 +430,7 @@ async fn seed_sibling_brand(fx: &Fixture) -> (store::projects::Project, store::p
     .await
     .unwrap();
     store::projects::update_project(
-        &fx.surreal,
+        &fx.application_store,
         project.id,
         &store::projects::UpdateProjectCommand {
             firm_id: Some(firm),
@@ -433,7 +441,7 @@ async fn seed_sibling_brand(fx: &Fixture) -> (store::projects::Project, store::p
     .await
     .unwrap();
     let sibling = store::projects::create(
-        &fx.surreal,
+        &fx.application_store,
         &store::projects::NewProject {
             code: "sibling-matter".into(),
             name: "Sibling Matter".into(),
@@ -471,7 +479,7 @@ async fn seed_confirmed_plan_project(fx: &Fixture, project: &store::projects::Pr
     .await
     .unwrap();
     store::projects::set_plan_columns(
-        &fx.surreal,
+        &fx.application_store,
         &pg,
         project.id,
         &store::projects::PlanColumns {
@@ -483,7 +491,7 @@ async fn seed_confirmed_plan_project(fx: &Fixture, project: &store::projects::Pr
     .await
     .unwrap();
     store::projects::set_repository_url(
-        &fx.surreal,
+        &fx.application_store,
         project.id,
         Some("https://forge.example.test/example-firm/sibling-matter"),
     )
@@ -497,7 +505,7 @@ async fn seed_confirmed_plan_project(fx: &Fixture, project: &store::projects::Pr
         ),
     ] {
         store::documents::ingest_bytes(
-            &fx.surreal,
+            &fx.application_store,
             &fx.storage,
             &store::documents::IngestArgs {
                 project_id: project.id,
@@ -530,28 +538,33 @@ async fn check_two_brand_portal() {
     let lawyer = login(&fx.lawyer);
     let clerk = login(&fx.clerk);
     for id in [project.id, sibling.id] {
-        store::projects::designate_dri_in_surreal(
-            &fx.surreal,
+        store::projects::designate_dri(
+            &fx.application_store,
             id,
             lawyer.person_id.unwrap(),
             store::projects::DriSide::Lawyer,
         )
         .await
         .unwrap();
-        store::projects::add_participation(&fx.surreal, id, clerk.person_id.unwrap(), "clerk")
-            .await
-            .unwrap();
+        store::projects::add_participation(
+            &fx.application_store,
+            id,
+            clerk.person_id.unwrap(),
+            "clerk",
+        )
+        .await
+        .unwrap();
     }
     store::projects::add_participation(
-        &fx.surreal,
+        &fx.application_store,
         sibling.id,
         client.person_id.unwrap(),
         "client",
     )
     .await
     .unwrap();
-    store::projects::designate_dri_in_surreal(
-        &fx.surreal,
+    store::projects::designate_dri(
+        &fx.application_store,
         sibling.id,
         client.person_id.unwrap(),
         store::projects::DriSide::Client,
@@ -737,7 +750,7 @@ async fn check_two_brand_portal() {
         StatusCode::NOT_FOUND
     );
     let nonparticipant = store::persons::create(
-        &fx.surreal,
+        &fx.application_store,
         &store::persons::NewPerson::with_role(
             "Other Client",
             "other-client@example.com",
@@ -1007,9 +1020,13 @@ async fn finance_read_is_404_until_a_run_stores_a_result_then_matches_the_contra
             "no run yet: the portal falls back to its fixture on a 404"
         );
 
-        store::finance_aggregate::upsert(&fx.surreal, fx.project_id, &finance_report("run-1"))
-            .await
-            .unwrap();
+        store::finance_aggregate::upsert(
+            &fx.application_store,
+            fx.project_id,
+            &finance_report("run-1"),
+        )
+        .await
+        .unwrap();
 
         for bearer in [&fx.lawyer, &fx.client] {
             let resp = get(&fx, &path, Some(bearer)).await;
@@ -1103,7 +1120,7 @@ async fn notation_inventory_lists_unpersisted_repository_blueprints_and_current_
             ("drafts/gamma.md", body),
         ],
     );
-    let templates_before = store::templates::list_for_project(&fx.surreal, fx.project_id)
+    let templates_before = store::templates::list_for_project(&fx.application_store, fx.project_id)
         .await
         .unwrap();
     let inventory = inventory_json(&fx).await;
@@ -1125,14 +1142,14 @@ async fn notation_inventory_lists_unpersisted_repository_blueprints_and_current_
         "three repository blueprints plus the fixture run"
     );
     assert_eq!(
-        store::templates::list_for_project(&fx.surreal, fx.project_id)
+        store::templates::list_for_project(&fx.application_store, fx.project_id)
             .await
             .unwrap(),
         templates_before,
         "listing must not persist templates"
     );
     assert_eq!(
-        store::notations::list_by_project(&fx.surreal, fx.project_id)
+        store::notations::list_by_project(&fx.application_store, fx.project_id)
             .await
             .unwrap()
             .len(),
@@ -1166,7 +1183,7 @@ async fn notation_inventory_keeps_started_workflows_pinned_when_repository_main_
         let body = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
         commit_board_sources(&fx, &[("drafts/onboarding__letter.md", body.as_bytes())]);
         let pinned = store::template_source::persist_from_repo(
-            &fx.surreal,
+            &fx.application_store,
             &fx.storage,
             &repo_store(),
             fx.project_id,
@@ -1175,13 +1192,13 @@ async fn notation_inventory_keeps_started_workflows_pinned_when_repository_main_
         .await
         .unwrap()
         .template;
-        let respondent = store::notations::find_by_id(&fx.surreal, fx.notation_id)
+        let respondent = store::notations::find_by_id(&fx.application_store, fx.notation_id)
             .await
             .unwrap()
             .unwrap()
             .person_id;
         let run = store::notations::create(
-            &fx.surreal,
+            &fx.application_store,
             &store::notations::NewNotation::new(
                 pinned.id,
                 respondent,
@@ -1234,11 +1251,15 @@ async fn notation_inventory_keeps_started_workflows_pinned_when_repository_main_
             .contains(&serde_json::json!("generate_pdf__engagement_pdf")));
         assert!(!current["template_stale"].as_bool().unwrap());
         assert_eq!(
-            store::templates::resolve(&fx.surreal, Some(fx.project_id), "onboarding__letter")
-                .await
-                .unwrap()
-                .unwrap()
-                .id,
+            store::templates::resolve(
+                &fx.application_store,
+                Some(fx.project_id),
+                "onboarding__letter"
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
             pinned.id,
             "reading main must not replace the persisted version"
         );
@@ -1253,7 +1274,7 @@ async fn notation_inventory_flags_a_run_without_a_pinned_digest_through_the_temp
         let body = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
         commit_board_sources(&fx, &[("drafts/onboarding__letter.md", body.as_bytes())]);
         let pinned = store::template_source::persist_from_repo(
-            &fx.surreal,
+            &fx.application_store,
             &fx.storage,
             &repo_store(),
             fx.project_id,
@@ -1262,13 +1283,13 @@ async fn notation_inventory_flags_a_run_without_a_pinned_digest_through_the_temp
         .await
         .unwrap()
         .template;
-        let respondent = store::notations::find_by_id(&fx.surreal, fx.notation_id)
+        let respondent = store::notations::find_by_id(&fx.application_store, fx.notation_id)
             .await
             .unwrap()
             .unwrap()
             .person_id;
         let run = store::notations::create(
-            &fx.surreal,
+            &fx.application_store,
             &store::notations::NewNotation::new(
                 pinned.id,
                 respondent,
@@ -1501,12 +1522,12 @@ async fn people_merge_preserves_billing_history_and_reports_conflict_to_lawyer()
         let fx = build_fixture().await;
         let pg = PostgresDb::application().await.unwrap();
         let dropped = store::persons::create(
-            &fx.surreal,
+            &fx.application_store,
             &store::persons::NewPerson::with_role(
                 "Synthetic billing author", "billing-author@example.test", Role::Lawyer,
             ),
         ).await.unwrap();
-        store::projects::add_participation(&fx.surreal, fx.project_id, dropped.id, "lawyer")
+        store::projects::add_participation(&fx.application_store, fx.project_id, dropped.id, "lawyer")
             .await.unwrap();
         let annotation = store::billing_annotations::Annotation {
             id: Uuid::new_v4(), change_id: "k".repeat(32), commit_id: "a".repeat(40),
@@ -1514,7 +1535,7 @@ async fn people_merge_preserves_billing_history_and_reports_conflict_to_lawyer()
         };
         store::billing_annotations::stage(&pg, fx.project_id, dropped.id, &annotation)
             .await.unwrap();
-        store::persons::set_role(&fx.surreal, dropped.id, Role::Client)
+        store::persons::set_role(&fx.application_store, dropped.id, Role::Client)
             .await.unwrap().unwrap();
         let before: serde_json::Value = sqlx::query_scalar(
             "SELECT to_jsonb(a) FROM billing_annotation a WHERE id=$1",
@@ -1544,7 +1565,7 @@ async fn people_merge_preserves_billing_history_and_reports_conflict_to_lawyer()
         ).bind(annotation.id).fetch_one(pg.pool()).await.unwrap();
         assert_eq!(after, before);
         for email in ["client@example.com", "billing-author@example.test"] {
-            assert!(store::persons::find_by_email_ci(&fx.surreal, email).await.unwrap().is_some());
+            assert!(store::persons::find_by_email_ci(&fx.application_store, email).await.unwrap().is_some());
         }
     }).await;
 }
@@ -1650,9 +1671,11 @@ async fn assert_document_project_query_failure(upload: bool) {
         .await
         .unwrap();
     assert!(PostgresDb::application().await.is_ok());
-    assert!(store::projects::find_by_code(&fx.surreal, &fx.project_code)
-        .await
-        .is_err());
+    assert!(
+        store::projects::find_by_code(&fx.application_store, &fx.project_code)
+            .await
+            .is_err()
+    );
     assert_eq!(
         document_status(&fx, &fx.project_code, Some(&fx.lawyer), upload).await,
         StatusCode::INTERNAL_SERVER_ERROR
@@ -1728,25 +1751,30 @@ async fn lower_tiers_cannot_transfer_client_authentication_into_an_owner_but_own
     store::test_support::with_postgres(async {
         let fx = build_fixture().await;
         let pg = PostgresDb::application().await.unwrap();
-        let owner = store::persons::find_by_email_ci(&fx.surreal, "owner@example.com")
+        let owner = store::persons::find_by_email_ci(&fx.application_store, "owner@example.com")
             .await
             .unwrap()
             .unwrap();
         assert!(owner.microsoft_subject.is_none());
         let dropped = store::persons::create(
-            &fx.surreal,
+            &fx.application_store,
             &store::persons::NewPerson::new("Synthetic merge client", "merge-client@example.test"),
         )
         .await
         .unwrap();
         let subject = format!("synthetic-merge-provider-{}", Uuid::new_v4());
-        store::persons::link_microsoft_subject(&fx.surreal, dropped.id, &subject)
+        store::persons::link_microsoft_subject(&fx.application_store, dropped.id, &subject)
             .await
             .unwrap()
             .unwrap();
-        store::projects::add_participation(&fx.surreal, fx.project_id, dropped.id, "client")
-            .await
-            .unwrap();
+        store::projects::add_participation(
+            &fx.application_store,
+            fx.project_id,
+            dropped.id,
+            "client",
+        )
+        .await
+        .unwrap();
         let before = merge_identity_snapshot(&pg).await;
         for (auth, status) in [
             (None, StatusCode::UNAUTHORIZED),
@@ -1764,7 +1792,7 @@ async fn lower_tiers_cannot_transfer_client_authentication_into_an_owner_but_own
             }
             assert_eq!(merge_identity_snapshot(&pg).await, before);
             assert_eq!(
-                store::persons::find_by_microsoft_subject(&fx.surreal, &subject)
+                store::persons::find_by_microsoft_subject(&fx.application_store, &subject)
                     .await
                     .unwrap()
                     .unwrap()
@@ -1781,7 +1809,7 @@ async fn lower_tiers_cannot_transfer_client_authentication_into_an_owner_but_own
         .await;
         assert_eq!(accepted.status(), StatusCode::OK);
         assert_eq!(
-            store::persons::find_by_microsoft_subject(&fx.surreal, &subject)
+            store::persons::find_by_microsoft_subject(&fx.application_store, &subject)
                 .await
                 .unwrap()
                 .unwrap()
@@ -1789,17 +1817,19 @@ async fn lower_tiers_cannot_transfer_client_authentication_into_an_owner_but_own
             owner.id
         );
         assert_eq!(
-            store::persons::find_by_any_email(&fx.surreal, &dropped.email)
+            store::persons::find_by_any_email(&fx.application_store, &dropped.email)
                 .await
                 .unwrap()
                 .unwrap()
                 .id,
             owner.id
         );
-        assert!(store::persons::find_by_id(&fx.surreal, dropped.id)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            store::persons::find_by_id(&fx.application_store, dropped.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     })
     .await;
 }
@@ -1808,12 +1838,12 @@ async fn lower_tiers_cannot_transfer_client_authentication_into_an_owner_but_own
 async fn lawyer_can_merge_an_eligible_client_into_a_lawyer_identity() {
     store::test_support::with_postgres(async {
         let fx = build_fixture().await;
-        let lawyer = store::persons::find_by_email_ci(&fx.surreal, "lawyer@example.com")
+        let lawyer = store::persons::find_by_email_ci(&fx.application_store, "lawyer@example.com")
             .await
             .unwrap()
             .unwrap();
         let dropped = store::persons::create(
-            &fx.surreal,
+            &fx.application_store,
             &store::persons::NewPerson::new(
                 "Synthetic eligible client",
                 "eligible-merge@example.test",
@@ -1821,23 +1851,30 @@ async fn lawyer_can_merge_an_eligible_client_into_a_lawyer_identity() {
         )
         .await
         .unwrap();
-        store::projects::add_participation(&fx.surreal, fx.project_id, dropped.id, "client")
-            .await
-            .unwrap();
+        store::projects::add_participation(
+            &fx.application_store,
+            fx.project_id,
+            dropped.id,
+            "client",
+        )
+        .await
+        .unwrap();
         let response = merge_route(&fx, &lawyer.email, &dropped.email, Some(&fx.lawyer)).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            store::persons::find_by_any_email(&fx.surreal, &dropped.email)
+            store::persons::find_by_any_email(&fx.application_store, &dropped.email)
                 .await
                 .unwrap()
                 .unwrap()
                 .id,
             lawyer.id
         );
-        assert!(store::persons::find_by_id(&fx.surreal, dropped.id)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            store::persons::find_by_id(&fx.application_store, dropped.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     })
     .await;
 }

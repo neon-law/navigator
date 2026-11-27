@@ -25,7 +25,7 @@ async fn claim(
 }
 
 async fn receipt(pg: &PostgresDb) -> Uuid {
-    let source = crate::surreal::SurrealDb::uninitialized();
+    let source = crate::application_store::ApplicationStore::uninitialized();
     let id = crate::email_receipts::ensure(
         &source,
         &crate::email_receipts::NewEmailReceipt {

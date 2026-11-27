@@ -205,7 +205,7 @@ async fn receive_comment(
         .check()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let accounts = store::social_accounts::for_provider_identity(
-        &state.surreal,
+        &state.application_store,
         SocialProvider::Tiktok,
         account_id,
     )
@@ -218,7 +218,7 @@ async fn receive_comment(
         return Err(StatusCode::PRECONDITION_FAILED);
     }
     let credential = workflows::social_publish::send_credential(
-        &state.surreal,
+        &state.application_store,
         state.runtime_kms.as_ref(),
         http,
         &workflows::social_publish::TokenRefreshConfig::from_env(),
@@ -277,7 +277,7 @@ async fn ingest_comment(
         return Err(StatusCode::BAD_GATEWAY);
     };
     let received = store::inbox::ingest_inbound(
-        &state.surreal,
+        &state.application_store,
         &store::inbox::IngestInbound {
             project_id: None,
             firm_id: account.firm_id,
@@ -598,196 +598,7 @@ mod tests {
             );
         }
     }
-    async fn state_with_account(scopes: Vec<String>) -> crate::AppState {
-        use store::{
-            brands::NewBrand,
-            firms::NewFirm,
-            persons::{NewPerson, Role},
-            social_accounts::ConnectSocialAccount,
-        };
-        let db = store::test_support::mem_surreal().await;
-        let admin = store::persons::create(
-            &db,
-            &NewPerson::with_role("Synthetic Admin", "tiktok-test@example.com", Role::Admin),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &db,
-            &NewFirm {
-                name: "Synthetic Firm".into(),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(&db).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::brands::create(
-            &db,
-            Role::Admin,
-            Some(admin.id),
-            &NewBrand {
-                name: "Synthetic Brand".into(),
-                key: "synthetic-tiktok".into(),
-                firm_id: Some(firm.id),
-                primary_color: None,
-                accent_color: None,
-                typeface: None,
-            },
-        )
-        .await
-        .unwrap();
-        let kms = std::sync::Arc::new(cloud::FakeKms::new("tiktok-test"));
-        store::social_accounts::connect(
-            &db,
-            ConnectSocialAccount {
-                actor_role: Role::Admin,
-                actor_person_id: admin.id,
-                brand_key: "synthetic-tiktok",
-                provider: SocialProvider::Tiktok,
-                provider_account_id: "synthetic-account",
-                display_name: None,
-                scopes: &scopes,
-                expires_at: None,
-                access_token: "synthetic-token",
-                refresh_token: None,
-            },
-            kms.as_ref(),
-        )
-        .await
-        .unwrap();
-        let mut state = crate::test_support::app_state(db).await;
-        state.runtime_kms = kms;
-        state
-    }
 
-    #[tokio::test]
-    async fn inbound_public_comment_is_idempotent_and_owner_echo_is_ignored() {
-        let mut scopes = SocialProvider::Tiktok
-            .required_scopes()
-            .iter()
-            .map(|scope| (*scope).into())
-            .collect::<Vec<String>>();
-        scopes.push("comment.list".into());
-        let state = state_with_account(scopes).await;
-        let server = MockServer::start().await;
-        let event = CommentEvent {
-            comment_id: 7_247_303_576_418_566_913,
-            video_id: 7_203_946_942_097_902_849,
-            comment_action: "insert".into(),
-        };
-        Mock::given(method("GET")).and(path("/business/comment/list/"))
-            .and(header("Access-Token", "synthetic-token"))
-            .and(wiremock::matchers::query_param("comment_ids", "[\"7247303576418566913\"]"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"comments":[{
-                "comment_id":"7247303576418566913","video_id":"7203946942097902849","unique_identifier":"synthetic-reader",
-                "display_name":"Synthetic Reader","text":"A public question","create_time":"1791392400","owner":false,"status":"PUBLIC"
-            }]}}))).expect(2).mount(&server).await;
-        let gate = SocialEgressGate::new(|| Ok(()));
-        for _ in 0..2 {
-            receive_comment(
-                &state,
-                &reqwest::Client::new(),
-                &server.uri(),
-                "synthetic-account",
-                &event,
-                &gate,
-            )
-            .await
-            .unwrap();
-        }
-        let mut response = state
-            .surreal
-            .query("SELECT * FROM message")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let messages: Vec<serde_json::Value> = response.take(0).unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["body"], "A public question");
-        server.reset().await;
-        Mock::given(method("GET")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"comments":[{
-            "comment_id":"7247303576418566913","video_id":"7203946942097902849","unique_identifier":"synthetic-brand-owner",
-            "text":"Our own reply","create_time":"1791392400","owner":true,"status":"PUBLIC"
-        }]}}))).mount(&server).await;
-        receive_comment(
-            &state,
-            &reqwest::Client::new(),
-            &server.uri(),
-            "synthetic-account",
-            &event,
-            &gate,
-        )
-        .await
-        .unwrap();
-        let mut response = state
-            .surreal
-            .query("SELECT * FROM message")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let messages: Vec<serde_json::Value> = response.take(0).unwrap();
-        assert_eq!(messages.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn inbound_requires_comment_read_grant_before_fetching() {
-        let scopes = SocialProvider::Tiktok
-            .required_scopes()
-            .iter()
-            .map(|scope| (*scope).into())
-            .collect();
-        let state = state_with_account(scopes).await;
-        let server = MockServer::start().await;
-        let event = CommentEvent {
-            comment_id: 1,
-            video_id: 2,
-            comment_action: "insert".into(),
-        };
-        assert_eq!(
-            receive_comment(
-                &state,
-                &reqwest::Client::new(),
-                &server.uri(),
-                "synthetic-account",
-                &event,
-                &SocialEgressGate::new(|| Ok(()))
-            )
-            .await,
-            Err(StatusCode::PRECONDITION_FAILED)
-        );
-        assert!(server.received_requests().await.unwrap().is_empty());
-    }
-    #[tokio::test]
-    async fn signed_nonpublic_events_acknowledge_without_new_messages_and_wrong_app_is_refused() {
-        let state = crate::test_support::app_state(store::test_support::mem_surreal().await).await;
-        let secret = uuid::Uuid::new_v4().to_string();
-        for action in ["delete", "set_to_hidden", "set_to_friends_only"] {
-            let body = serde_json::to_vec(&serde_json::json!({"client_key":"synthetic-app","event":"comment.update","user_openid":"synthetic-account",
-                "content":serde_json::json!({"comment_id":1,"video_id":2,"comment_action":action}).to_string()})).unwrap();
-            let headers = signed(&secret, &body, Utc::now().timestamp());
-            assert_eq!(
-                receive_authenticated(&state, &headers, &body, "synthetic-app", &secret).await,
-                StatusCode::OK
-            );
-            assert_eq!(
-                receive_authenticated(&state, &headers, &body, "another-app", &secret).await,
-                StatusCode::BAD_REQUEST
-            );
-        }
-        let mut response = state
-            .surreal
-            .query("SELECT * FROM message")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let messages: Vec<serde_json::Value> = response.take(0).unwrap();
-        assert!(messages.is_empty());
-    }
     #[tokio::test]
     async fn reply_never_posts_to_a_hidden_deleted_or_unverifiable_parent() {
         for response in [

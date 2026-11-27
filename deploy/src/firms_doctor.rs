@@ -36,10 +36,10 @@ pub fn run() -> ExitCode {
 }
 
 async fn diagnose() -> Result<Vec<store::firms::AdminDriStatus>> {
-    let surreal = crate::application_store()
+    let application_store = crate::application_store()
         .await
         .context("verify PostgreSQL application authority")?;
-    store::firms::admin_dri_invariant_report(&surreal)
+    store::firms::admin_dri_invariant_report(&application_store)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
 }

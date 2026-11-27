@@ -1,11 +1,11 @@
 use super::*;
+use crate::application_store::ApplicationStore;
+use crate::postgres::fixtures::{connect, fresh_schema};
+use crate::postgres::history::Family;
 use crate::postgres::{
     fixtures::{activate_family, workflow_fixture},
     matter::with_test_db,
 };
-use crate::postgres_backfill::family::Family;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
-use crate::surreal::SurrealDb;
 use crate::{assets, notation_documents as documents, notations};
 use std::{sync::Arc, time::Duration};
 
@@ -39,7 +39,7 @@ async fn bare_asset(pg: &PostgresDb) -> assets::Asset {
     let directory = tempfile::tempdir().unwrap();
     let storage: Arc<dyn cloud::StorageService> =
         Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
-    let db = SurrealDb::uninitialized();
+    let db = ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         let id = assets::ingest_content(
             &db,
@@ -106,7 +106,7 @@ async fn verified_history_restores_orphans_without_widening_normal_writes() {
         vec![version.clone()],
     )
     .await;
-    let db = SurrealDb::uninitialized();
+    let db = ApplicationStore::uninitialized();
     with_test_db(pg.clone(), async {
         assert!(assets::restore_archived(&db, &asset).await.is_err());
         assert!(documents::restore_archived_document(&db, &document)
@@ -189,7 +189,7 @@ async fn reset_winning_before_archive_lease_refuses_completion_and_retry_converg
     let pg = connect(&options, &database).await;
     let (_, note, _) = workflow_fixture(&pg).await;
     activate_family(&pg, Family::Notation).await;
-    let db = SurrealDb::uninitialized();
+    let db = ApplicationStore::uninitialized();
     let archived = with_test_db(pg.clone(), notations::find_by_id(&db, note))
         .await
         .unwrap()
@@ -237,7 +237,7 @@ async fn queued_reset_cannot_deadlock_inner_archive_writes_or_remove_restored_fa
     let pg = connect(&options, &database).await;
     let (_, note, _) = workflow_fixture(&pg).await;
     activate_family(&pg, Family::Notation).await;
-    let db = SurrealDb::uninitialized();
+    let db = ApplicationStore::uninitialized();
     let archived = with_test_db(pg.clone(), notations::find_by_id(&db, note))
         .await
         .unwrap()
@@ -261,7 +261,7 @@ async fn queued_reset_cannot_deadlock_inner_archive_writes_or_remove_restored_fa
         .unwrap();
     let reset_pg = pg.clone();
     let reset = tokio::spawn(async move {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         with_test_db(reset_pg, crate::notation_reset::delete_draft(&db, note)).await
     });
     tokio::time::timeout(Duration::from_secs(5),async{

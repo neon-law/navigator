@@ -9,7 +9,7 @@ use serde_json::json;
 use super::forgejo_push_webhook_journal as journal;
 use super::forgejo_push_webhook_journal::{NewPushReceipt, ReceiptStatus};
 use super::PostgresDb;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 
 /// A `push/<change-id>` bookmark update, the shape a jj push produces.
 fn ref_updates() -> serde_json::Value {

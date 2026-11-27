@@ -53,11 +53,16 @@ async fn ensure_project_access(
         return Err(ApiError::NotFound);
     };
     let visible = if lawyer_only {
-        store::access::can_see_project_as_lawyer(&state.surreal, Some(person), role, project_id)
-            .await
-            .map_err(ApiError::Db)?
+        store::access::can_see_project_as_lawyer(
+            &state.application_store,
+            Some(person),
+            role,
+            project_id,
+        )
+        .await
+        .map_err(ApiError::Db)?
     } else {
-        store::access::can_see_project(&state.surreal, Some(person), role, project_id)
+        store::access::can_see_project(&state.application_store, Some(person), role, project_id)
             .await
             .map_err(ApiError::Db)?
     };
@@ -101,7 +106,7 @@ pub(crate) async fn list(
         Err(response) => return Ok(response),
     };
     let rows = if session.role == Role::Client {
-        costs::list_client_visible(&state.surreal, &pg, project_id).await
+        costs::list_client_visible(&state.application_store, &pg, project_id).await
     } else {
         costs::list_for_project(&pg, project_id).await
     };
@@ -162,7 +167,7 @@ pub(crate) async fn create(
         Err(response) => return Ok(response),
     };
     match Box::pin(costs::create(
-        &state.surreal,
+        &state.application_store,
         &pg,
         project_id,
         actor_id,
@@ -233,7 +238,7 @@ pub(crate) async fn link_invoice(
     ensure_project_access(&state, session.person_id, session.role, project_id, true).await?;
     Ok(
         match costs::link_invoice(
-            &state.surreal,
+            &state.application_store,
             &pg,
             cost_id,
             actor_id,

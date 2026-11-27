@@ -13,7 +13,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
-use store::{case_stages, postgres_mirror};
+use store::case_stages;
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
@@ -62,9 +62,10 @@ async fn ensure_firm_side(
     role: store::persons::Role,
     project_id: Uuid,
 ) -> Result<(), ApiError> {
-    let viewer = store::access::matter_viewer(&state.surreal, person_id, role, project_id)
-        .await
-        .map_err(ApiError::Db)?;
+    let viewer =
+        store::access::matter_viewer(&state.application_store, person_id, role, project_id)
+            .await
+            .map_err(ApiError::Db)?;
     match viewer {
         Some(viewer) if viewer.is_firm_side() => Ok(()),
         _ => Err(ApiError::NotFound),
@@ -86,53 +87,13 @@ async fn postgres(
     })
 }
 
-/// Open the stage store with its dependency rows mirrored: `set_stage` reads
-/// the parent Project row (with its `firm_id`) in PostgreSQL, and the history
-/// insert references the actor's Person row — so a Project or participant
-/// added before the mirror was enabled would otherwise be wrongly refused
-/// there. Mirroring the participation rows also carries their Persons, which
-/// covers every actor this door can admit.
-///
-/// Shared with the form doors in [`crate::project_stage_forms`], so the JSON
-/// and browser entry points cannot drift.
+/// Open PostgreSQL for the authorized operation.
 pub(crate) async fn prepared_store(
-    surreal: &store::surreal::SurrealDb,
+    _application_store: &store::application_store::ApplicationStore,
     operation: &'static str,
     project_id: Uuid,
 ) -> Result<store::postgres::PostgresDb, Response> {
-    let pg = postgres(operation, project_id).await?;
-    let mirrored = async {
-        postgres_mirror::mirror(
-            surreal,
-            &pg,
-            &postgres_mirror::MirrorKey::Project(project_id),
-        )
-        .await?;
-        let participations = store::projects::participations_for_project(surreal, project_id)
-            .await
-            .map_err(|_| postgres_mirror::MirrorError::Source)?;
-        for role in participations {
-            postgres_mirror::mirror(
-                surreal,
-                &pg,
-                &postgres_mirror::MirrorKey::ProjectParticipation(role.id),
-            )
-            .await?;
-        }
-        Ok::<_, postgres_mirror::MirrorError>(())
-    }
-    .await;
-    if let Err(store_error) = mirrored {
-        tracing::warn!(
-            event = "case_stage_mirror_failed",
-            operation,
-            outcome = "store_error",
-            project_id = %project_id,
-            store_error = %store_error
-        );
-        return Err(refused(StatusCode::SERVICE_UNAVAILABLE));
-    }
-    Ok(pg)
+    postgres(operation, project_id).await
 }
 
 /// `GET /app/api/projects/{id}/stages` — the matter's stage read: the Firm's
@@ -144,7 +105,7 @@ pub(crate) async fn list(
     Path(project_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let Some(project) = store::projects::find_by_id(&state.surreal, project_id)
+    let Some(project) = store::projects::find_by_id(&state.application_store, project_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
     else {
@@ -193,7 +154,7 @@ pub(crate) async fn set(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state.surreal, "set", project_id).await {
+    let pg = match prepared_store(&state.application_store, "set", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };

@@ -11,13 +11,11 @@
 //! query to find — which is what makes the client lens toggle-blind by
 //! construction rather than by remembering to filter.
 
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::matter;
 use crate::projects;
-use crate::relationship_logs::{self, NewRelationshipLog};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 use serde_json::json;
 
 /// A per-matter capability.
@@ -80,8 +78,6 @@ pub enum ModuleError {
     /// around the `CHECK`.
     #[error("`{0}` is not a recognized module")]
     UnknownModule(String),
-    #[error("SurrealDB: {0}")]
-    Surreal(#[from] surrealdb::Error),
     #[error("audit trail: {0}")]
     Audit(#[from] crate::relationship_logs::RelationshipLogError),
     #[error(transparent)]
@@ -102,34 +98,6 @@ pub struct ProjectModule {
     pub updated_at: String,
 }
 
-#[derive(SurrealValue)]
-struct ProjectModuleRow {
-    id: surrealdb::types::RecordId,
-    project_id: surrealdb::types::RecordId,
-    module: String,
-    enabled_at: String,
-    enabled_by_person_id: Option<surrealdb::types::RecordId>,
-    inserted_at: String,
-    updated_at: String,
-}
-
-impl ProjectModuleRow {
-    fn into_project_module(self) -> Option<ProjectModule> {
-        Some(ProjectModule {
-            id: record_uuid(&self.id)?,
-            project_id: record_uuid(&self.project_id)?,
-            module: self.module,
-            enabled_at: self.enabled_at,
-            enabled_by_person_id: self.enabled_by_person_id.as_ref().and_then(record_uuid),
-            inserted_at: self.inserted_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
-const SELECT: &str =
-    "id, project_id, module, enabled_at, enabled_by_person_id, inserted_at, updated_at";
-
 /// Enable `module` on `project_id`, recording who did it.
 ///
 /// Idempotent: enabling an already-enabled module returns the existing row
@@ -142,64 +110,15 @@ const SELECT: &str =
 /// # Errors
 /// Propagates any database error.
 pub async fn enable(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     module: Module,
     actor_person_id: Option<Uuid>,
 ) -> Result<ProjectModule, ModuleError> {
-    if let Some(pg) = matter::authority_for("project_module").await? {
-        return matter::toggle_module(&pg, project_id, module, actor_person_id, true)
-            .await?
-            .ok_or(ModuleError::WriteReturnedNothing);
-    }
-
-    if let Some(existing) = find(surreal, project_id, module).await? {
-        return Ok(existing);
-    }
-
-    if projects::find_by_id(surreal, project_id).await?.is_none() {
-        return Err(projects::ProjectStoreError::NoSuchProject(project_id).into());
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let written = surreal
-        .query(format!(
-            "CREATE $id SET project_id = $project_id, module = $module, enabled_at = $now, \
-             enabled_by_person_id = $actor, inserted_at = $now, updated_at = $now RETURN {SELECT}"
-        ))
-        .bind(("id", record_id("project_module", Uuid::now_v7())))
-        .bind(("project_id", record_id("project", project_id)))
-        .bind(("module", module.as_str().to_string()))
-        .bind(("actor", actor_person_id.map(|id| record_id("person", id))))
-        .bind(("now", now))
-        .await
-        .and_then(surrealdb::IndexedResults::check);
-    let row = match written {
-        Ok(mut response) => {
-            let row: Option<ProjectModuleRow> = response.take(0)?;
-            row.and_then(ProjectModuleRow::into_project_module)
-                .ok_or(ModuleError::WriteReturnedNothing)?
-        }
-        Err(error)
-            if crate::surreal::retry::unique_violation(&error) == Some("project_module_pair") =>
-        {
-            find(surreal, project_id, module)
-                .await?
-                .ok_or(ModuleError::WriteReturnedNothing)?
-        }
-        Err(error) => return Err(error.into()),
-    };
-    crate::postgres_mirror::records::after_write(surreal, "project_module", row.id).await;
-
-    log_toggle(
-        surreal,
-        project_id,
-        module,
-        actor_person_id,
-        "module_enabled",
-    )
-    .await?;
-    Ok(row)
+    let pg = matter::authority_for("project_module").await?;
+    matter::toggle_module(&pg, project_id, module, actor_person_id, true)
+        .await?
+        .ok_or(ModuleError::WriteReturnedNothing)
 }
 
 /// Disable `module` on `project_id`, recording who did it.
@@ -215,38 +134,17 @@ pub async fn enable(
 /// # Errors
 /// Propagates any database error.
 pub async fn disable(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     module: Module,
     actor_person_id: Option<Uuid>,
 ) -> Result<bool, ModuleError> {
-    if let Some(pg) = matter::authority_for("project_module").await? {
-        return Ok(
-            matter::toggle_module(&pg, project_id, module, actor_person_id, false)
-                .await?
-                .is_some(),
-        );
-    }
-
-    let Some(existing) = find(surreal, project_id, module).await? else {
-        return Ok(false);
-    };
-
-    surreal
-        .query("DELETE $id")
-        .bind(("id", record_id("project_module", existing.id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    crate::postgres_mirror::records::after_write(surreal, "project_module", existing.id).await;
-    log_toggle(
-        surreal,
-        project_id,
-        module,
-        actor_person_id,
-        "module_disabled",
+    let pg = matter::authority_for("project_module").await?;
+    Ok(
+        matter::toggle_module(&pg, project_id, module, actor_person_id, false)
+            .await?
+            .is_some(),
     )
-    .await?;
-    Ok(true)
 }
 
 /// Every module enabled on `project_id`.
@@ -262,35 +160,19 @@ pub async fn disable(
 /// [`ModuleError::UnknownModule`] if a stored value is outside the closed
 /// set, or a database error.
 pub async fn list_for_project(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
 ) -> Result<Vec<Module>, ModuleError> {
-    if let Some(pg) = matter::authority_for("project_module").await? {
-        let rows: Vec<ProjectModule> = matter::select(
-            &pg,
-            "project_module",
-            json!({"project_id": project_id}),
-            &["module"],
-        )
-        .await?;
-        return rows
-            .into_iter()
-            .map(|row| Module::parse(&row.module).ok_or(ModuleError::UnknownModule(row.module)))
-            .collect();
-    }
-
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM project_module WHERE project_id = $project_id ORDER BY module"
-        ))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ProjectModuleRow> = response.take(0)?;
-    rows.iter()
-        .map(|r| {
-            Module::parse(&r.module).ok_or_else(|| ModuleError::UnknownModule(r.module.clone()))
-        })
+    let pg = matter::authority_for("project_module").await?;
+    let rows: Vec<ProjectModule> = matter::select(
+        &pg,
+        "project_module",
+        json!({"project_id": project_id}),
+        &["module"],
+    )
+    .await?;
+    rows.into_iter()
+        .map(|row| Module::parse(&row.module).ok_or(ModuleError::UnknownModule(row.module)))
         .collect()
 }
 
@@ -299,63 +181,25 @@ pub async fn list_for_project(
 /// # Errors
 /// Propagates any database error.
 pub async fn is_enabled(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     project_id: Uuid,
     module: Module,
 ) -> Result<bool, ModuleError> {
-    Ok(find(surreal, project_id, module).await?.is_some())
+    Ok(find(application_store, project_id, module).await?.is_some())
 }
 
 async fn find(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     module: Module,
 ) -> Result<Option<ProjectModule>, ModuleError> {
-    if let Some(pg) = matter::authority_for("project_module").await? {
-        return Ok(matter::find(
-            &pg,
-            "project_module",
-            json!({"project_id": project_id, "module": module.as_str()}),
-        )
-        .await?);
-    }
-
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM ONLY project_module WHERE project_id = $project_id AND module = $module LIMIT 1"
-        ))
-        .bind(("project_id", record_id("project", project_id)))
-        .bind(("module", module.as_str().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ProjectModuleRow> = response.take(0)?;
-    Ok(row.and_then(ProjectModuleRow::into_project_module))
-}
-
-/// Append the audit entry for a toggle.
-///
-/// PostgreSQL toggles append their audit inside the ledger transaction; this
-/// helper serves the compatibility accessor.
-async fn log_toggle(
-    surreal: &SurrealDb,
-    project_id: Uuid,
-    module: Module,
-    actor_person_id: Option<Uuid>,
-    action: &str,
-) -> Result<(), relationship_logs::RelationshipLogError> {
-    relationship_logs::record(
-        surreal,
-        &NewRelationshipLog {
-            actor_person_id,
-            subject_type: "project".to_string(),
-            subject_id: project_id,
-            action: action.to_string(),
-            detail: module.as_str().to_string(),
-            project_id: Some(project_id),
-        },
+    let pg = matter::authority_for("project_module").await?;
+    Ok(matter::find(
+        &pg,
+        "project_module",
+        json!({"project_id": project_id, "module": module.as_str()}),
     )
-    .await
-    .map(|_| ())
+    .await?)
 }
 
 #[cfg(test)]

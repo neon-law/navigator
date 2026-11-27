@@ -28,8 +28,8 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
             .await
             .expect("open synthetic object store"),
     );
-    let surreal = store::surreal::SurrealDb::uninitialized();
-    let (project, _) = crate::support::native_project::matter(&surreal).await;
+    let application_store = store::application_store::ApplicationStore::uninitialized();
+    let (project, _) = crate::support::native_project::matter(&application_store).await;
     let project_id = project.id;
     let project_code = project.code;
     storage
@@ -43,9 +43,11 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
     let postgres = db.store();
     let settings = dbos_engine::config(&db.url, APP_VERSION);
     let executor = dbos::DBOS::new(settings.clone());
-    let workflow =
-        dbos_finance_aggregate::register(&executor, Context::new(surreal.clone(), storage.clone()))
-            .expect("register FinanceAggregate");
+    let workflow = dbos_finance_aggregate::register(
+        &executor,
+        Context::new(application_store.clone(), storage.clone()),
+    )
+    .expect("register FinanceAggregate");
     executor.launch().await.expect("launch DBOS");
     let router = workflows_service::health::router_with_dbos_ingress(
         WorkerIngress {
@@ -53,7 +55,7 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
                 "synthetic-service-token".into(),
                 workflow.clone(),
                 executor.clone(),
-                surreal.clone(),
+                application_store.clone(),
                 postgres.clone(),
             )),
             ..WorkerIngress::default()
@@ -147,7 +149,7 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
             StatusCode::ACCEPTED
         );
     }
-    let (other_project, _) = crate::support::native_project::matter(&surreal).await;
+    let (other_project, _) = crate::support::native_project::matter(&application_store).await;
     let other_project_id = other_project.id;
     let conflicting = Request::builder()
         .method("POST")
@@ -281,7 +283,7 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
         serde_json::from_slice(&object.bytes).expect("valid report JSON");
     assert_eq!(stored.run_id, report.run_id);
     assert_eq!(
-        store::finance_aggregate::latest_for_project(&surreal, project_id)
+        store::finance_aggregate::latest_for_project(&application_store, project_id)
             .await
             .expect("query synthetic report row")
             .expect("report row exists"),
@@ -295,7 +297,7 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
     let recovered = dbos::DBOS::new(settings);
     let recovered_workflow = dbos_finance_aggregate::register(
         &recovered,
-        Context::new(surreal.clone(), storage.clone()),
+        Context::new(application_store.clone(), storage.clone()),
     )
     .expect("register recovered FinanceAggregate");
     recovered.launch().await.expect("launch recovered DBOS");

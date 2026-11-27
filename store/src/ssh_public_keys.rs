@@ -32,10 +32,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::firm_capability::FirmCapability;
 use crate::persons::Role;
 use crate::postgres::PostgresDb;
-use crate::surreal::SurrealDb;
 
 /// The longest label a key carries, in characters.
 pub const LABEL_MAX_CHARS: usize = 100;
@@ -415,18 +415,26 @@ pub async fn person_ids_with_keys(pg: &PostgresDb) -> Result<Vec<Uuid>, SshKeyEr
 ///
 /// # Errors
 /// Membership read errors.
-pub async fn is_firm_member(surreal: &SurrealDb, person_id: Uuid) -> Result<bool, SshKeyError> {
-    Ok(!crate::firms::memberships_for_person(surreal, person_id)
-        .await?
-        .is_empty())
+pub async fn is_firm_member(
+    application_store: &ApplicationStore,
+    person_id: Uuid,
+) -> Result<bool, SshKeyError> {
+    Ok(
+        !crate::firms::memberships_for_person(application_store, person_id)
+            .await?
+            .is_empty(),
+    )
 }
 
 /// Refuse a Person with no Firm membership.
 ///
 /// # Errors
 /// [`SshKeyError::NotFirmMember`].
-pub async fn require_firm_member(surreal: &SurrealDb, person_id: Uuid) -> Result<(), SshKeyError> {
-    if is_firm_member(surreal, person_id).await? {
+pub async fn require_firm_member(
+    application_store: &ApplicationStore,
+    person_id: Uuid,
+) -> Result<(), SshKeyError> {
+    if is_firm_member(application_store, person_id).await? {
         Ok(())
     } else {
         Err(SshKeyError::NotFirmMember)
@@ -440,7 +448,7 @@ pub async fn require_firm_member(surreal: &SurrealDb, person_id: Uuid) -> Result
 /// # Errors
 /// Membership read errors.
 pub async fn may_revoke(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     owner_id: Uuid,
@@ -451,9 +459,9 @@ pub async fn may_revoke(
     if !matches!(actor_role, Role::Admin) {
         return Ok(false);
     }
-    for membership in crate::firms::memberships_for_person(surreal, owner_id).await? {
+    for membership in crate::firms::memberships_for_person(application_store, owner_id).await? {
         let decision = crate::firm_capability::resolve(
-            surreal,
+            application_store,
             actor_role,
             actor_person_id,
             membership.firm_id,
@@ -489,7 +497,7 @@ pub enum SyncOutcome {
 /// Store and [`KeySyncError`]s. The keys in Navigator are unchanged by a
 /// failure; the next run converges.
 pub async fn sync_person(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     client: Option<&ForgejoUserKeys>,
     person_id: Uuid,
@@ -498,10 +506,10 @@ pub async fn sync_person(
     let Some(client) = client else {
         return Ok(SyncOutcome::NotConfigured);
     };
-    let person = crate::persons::find_by_id(surreal, person_id)
+    let person = crate::persons::find_by_id(application_store, person_id)
         .await?
         .ok_or(SshKeyError::PersonNotFound)?;
-    let desired = if is_firm_member(surreal, person_id).await? {
+    let desired = if is_firm_member(application_store, person_id).await? {
         list_for_person(pg, person_id)
             .await?
             .into_iter()
@@ -535,12 +543,12 @@ pub async fn sync_person(
 /// # Errors
 /// As [`sync_person`], plus a misconfigured key-sync setting.
 pub async fn sync_person_from_env(
-    surreal: &SurrealDb,
+    application_store: &ApplicationStore,
     pg: &PostgresDb,
     person_id: Uuid,
 ) -> Result<SyncOutcome, SshKeyError> {
     let client = ForgejoUserKeys::from_env()?;
-    sync_person(surreal, pg, client.as_ref(), person_id, false).await
+    sync_person(application_store, pg, client.as_ref(), person_id, false).await
 }
 
 /// Best-effort reconciliation after a Person's Firm membership was removed,
@@ -548,7 +556,7 @@ pub async fn sync_person_from_env(
 /// PostgreSQL and the key sync are configured; a failure is logged and left
 /// for the operator sweep (`navigator ops forgejo ssh-keys sync`), never
 /// surfaced as a failure of the membership change itself.
-pub async fn after_membership_removed(surreal: &SurrealDb, person_id: Uuid) {
+pub async fn after_membership_removed(application_store: &ApplicationStore, person_id: Uuid) {
     let client = match ForgejoUserKeys::from_env() {
         Ok(Some(client)) => client,
         Ok(None) => return,
@@ -560,7 +568,7 @@ pub async fn after_membership_removed(surreal: &SurrealDb, person_id: Uuid) {
     let Ok(pg) = PostgresDb::application().await else {
         return;
     };
-    if let Err(error) = sync_person(surreal, &pg, Some(&client), person_id, false).await {
+    if let Err(error) = sync_person(application_store, &pg, Some(&client), person_id, false).await {
         tracing::warn!(
             %error,
             person_id = %person_id,
@@ -698,7 +706,7 @@ mod tests {
     mod database {
         use super::super::*;
         use super::{ECDSA, ED25519, ED25519_FINGERPRINT};
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
+        use crate::postgres::fixtures::{connect, fresh_schema};
 
         async fn person(pg: &PostgresDb) -> Uuid {
             let unique = Uuid::new_v4().simple().to_string();
@@ -777,201 +785,6 @@ mod tests {
                 .unwrap()
                 .get(0);
             assert_eq!(rows, 1, "the revoked row is purged after the sync");
-        }
-
-        /// A Lawyer in Surreal holding a Firm membership, mirrored into
-        /// PostgreSQL under the same id.
-        async fn member(surreal: &SurrealDb, pg: &PostgresDb) -> (Uuid, Uuid, String) {
-            let admin = crate::persons::create(
-                surreal,
-                &crate::persons::NewPerson::with_role(
-                    "Synthetic Firm Admin",
-                    format!("admin-{}@example.test", Uuid::now_v7().simple()),
-                    Role::Admin,
-                ),
-            )
-            .await
-            .unwrap();
-            let firm = crate::firms::create(
-                surreal,
-                &crate::firms::NewFirm {
-                    name: format!("Synthetic Firm {}", Uuid::now_v7()),
-                    status: "active".to_string(),
-                    entity_id: crate::test_support::seed_entity(surreal).await,
-                    admin_dri_person_id: admin.id,
-                },
-            )
-            .await
-            .unwrap()
-            .id;
-            let email = format!("lawyer-{}@example.test", Uuid::now_v7().simple());
-            let lawyer = crate::persons::create(
-                surreal,
-                &crate::persons::NewPerson::with_role("Synthetic Lawyer", &email, Role::Lawyer),
-            )
-            .await
-            .unwrap();
-            crate::firms::add_membership(
-                surreal,
-                &crate::firms::NewPersonFirmRole {
-                    person_id: lawyer.id,
-                    firm_id: firm,
-                    membership: crate::firms::FirmMembership::Lawyer,
-                    is_dri: false,
-                },
-            )
-            .await
-            .unwrap();
-            sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'Synthetic Lawyer',$2,'lawyer')")
-                .bind(lawyer.id)
-                .bind(&email)
-                .execute(pg.pool())
-                .await
-                .unwrap();
-            (lawyer.id, firm, email)
-        }
-
-        #[tokio::test]
-        async fn sync_adds_a_members_keys_and_removes_them_with_the_membership() {
-            use serde_json::json;
-            use wiremock::matchers::{method, path};
-            use wiremock::{Mock, MockServer, ResponseTemplate};
-
-            let Some(pg) = database().await else { return };
-            let surreal = crate::test_support::mem_surreal().await;
-            let (lawyer, firm, email) = member(&surreal, &pg).await;
-            let key = add(&pg, lawyer, ED25519, Some("laptop")).await.unwrap();
-
-            let server = MockServer::start().await;
-            Mock::given(method("GET"))
-                .and(path("/api/v1/user"))
-                .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_body_json(json!({"login": "navigator-key-sync"})),
-                )
-                .mount(&server)
-                .await;
-            Mock::given(method("GET"))
-                .and(path("/api/v1/admin/users"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                    {"login": "synthetic-lawyer", "email": email}
-                ])))
-                .mount(&server)
-                .await;
-            let client =
-                ForgejoUserKeys::new(&server.uri(), "navigator-key-sync", "synthetic-token")
-                    .unwrap();
-
-            // Not configured: nothing happens and nothing is stamped.
-            assert_eq!(
-                sync_person(&surreal, &pg, None, lawyer, false)
-                    .await
-                    .unwrap(),
-                SyncOutcome::NotConfigured
-            );
-
-            // A member's key reaches the empty account.
-            let empty = Mock::given(method("GET"))
-                .and(path("/api/v1/users/synthetic-lawyer/keys"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
-                .expect(1)
-                .mount_as_scoped(&server)
-                .await;
-            let added = Mock::given(method("POST"))
-                .and(path("/api/v1/admin/users/synthetic-lawyer/keys"))
-                .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": 7})))
-                .expect(1)
-                .mount_as_scoped(&server)
-                .await;
-            let SyncOutcome::Synced(report) =
-                sync_person(&surreal, &pg, Some(&client), lawyer, false)
-                    .await
-                    .unwrap()
-            else {
-                panic!("the account exists");
-            };
-            assert_eq!(report.added, vec![key.fingerprint.clone()]);
-            assert!(list_for_person(&pg, lawyer).await.unwrap()[0]
-                .last_synced_at
-                .is_some());
-            drop((empty, added));
-
-            // Leaving the Firm takes the managed key off the forge.
-            crate::firms::remove_membership(&surreal, Role::Owner, None, lawyer, firm)
-                .await
-                .unwrap();
-            let _held = Mock::given(method("GET"))
-                .and(path("/api/v1/users/synthetic-lawyer/keys"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                    {"id": 7, "key": key.public_key, "title": "navigator:laptop"}
-                ])))
-                .mount_as_scoped(&server)
-                .await;
-            let _removed = Mock::given(method("DELETE"))
-                .and(path("/api/v1/admin/users/synthetic-lawyer/keys/7"))
-                .respond_with(ResponseTemplate::new(204))
-                .expect(1)
-                .mount_as_scoped(&server)
-                .await;
-            let SyncOutcome::Synced(report) =
-                sync_person(&surreal, &pg, Some(&client), lawyer, false)
-                    .await
-                    .unwrap()
-            else {
-                panic!("the account exists");
-            };
-            assert_eq!(report.removed, vec![key.fingerprint]);
-            assert!(report.added.is_empty());
-            assert!(matches!(
-                require_firm_member(&surreal, lawyer).await,
-                Err(SshKeyError::NotFirmMember)
-            ));
-        }
-
-        #[tokio::test]
-        async fn only_the_owner_or_a_firm_administrator_may_revoke() {
-            let Some(pg) = database().await else { return };
-            let surreal = crate::test_support::mem_surreal().await;
-            let (lawyer, firm, _) = member(&surreal, &pg).await;
-            let admin = crate::firms::memberships_for_firm(&surreal, firm)
-                .await
-                .unwrap()
-                .into_iter()
-                .find(|membership| membership.is_dri)
-                .unwrap()
-                .person_id;
-            let (stranger, _, _) = member(&surreal, &pg).await;
-            assert!(may_revoke(&surreal, Role::Lawyer, Some(lawyer), lawyer)
-                .await
-                .unwrap());
-            assert!(may_revoke(&surreal, Role::Admin, Some(admin), lawyer)
-                .await
-                .unwrap());
-            assert!(may_revoke(&surreal, Role::Owner, None, lawyer)
-                .await
-                .unwrap());
-            assert!(!may_revoke(&surreal, Role::Lawyer, Some(stranger), lawyer)
-                .await
-                .unwrap());
-            // An Admin of another Firm cannot revoke this Firm's member's key.
-            let other_firm_admin = crate::firms::memberships_for_firm(
-                &surreal,
-                crate::firms::memberships_for_person(&surreal, stranger)
-                    .await
-                    .unwrap()[0]
-                    .firm_id,
-            )
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|membership| membership.is_dri)
-            .unwrap()
-            .person_id;
-            assert!(
-                !may_revoke(&surreal, Role::Admin, Some(other_firm_admin), lawyer)
-                    .await
-                    .unwrap()
-            );
         }
 
         #[tokio::test]

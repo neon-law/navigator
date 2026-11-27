@@ -43,7 +43,6 @@ NAVIGATOR_FORGEJO_ADMISSION_DOMAINS = "example.invalid"
 NAVIGATOR_ASSETS_BUCKET = "example-assets"
 NAVIGATOR_DOCUMENTS_BUCKET = "example-documents"
 NAVIGATOR_EXPORTS_BUCKET = "example-exports"
-NAVIGATOR_SURREAL_ARCHIVES_BUCKET = "example-surreal-archives"
 NAVIGATOR_LOGS_BUCKET = "example-deployment-logs"
 NAVIGATOR_APPLICATIONS_BUCKET = "example-applications"
 NAVIGATOR_ARCHIVES_BUCKET = "example-archives"
@@ -61,10 +60,6 @@ NAVIGATOR_PRIMARY_DOMAIN = "example.invalid"
 CANONICAL_HOST = "navigator.example.invalid"
 NAV_BASE_URL = "https://navigator.example.invalid/"
 NAVIGATOR_ASSET_BASE_URL = "https://navigator.example.invalid/assets"
-NAVIGATOR_WORKFLOWS_HOST = "workflows.example.invalid"
-NAVIGATOR_WORKFLOWS_URL = "https://workflows.example.invalid/"
-# Public Restate Cloud request-signing key; synthetic fixture value.
-RESTATE_IDENTITY_KEY = "publickeyv1_test-identity-key"
 SLACK_GENERAL_CHANNEL_ID = "C0000000002"
 SLACK_FINANCE_CHANNEL_ID = "C0000000001"
 SLACK_MESSAGES_CHANNEL_ID = "C0000000003"
@@ -89,13 +84,6 @@ NAVIGATOR_GITHUB_APP_ID = "100000"
 NAVIGATOR_META_APP_ID = "1000000000000001"
 NAVIGATOR_THREADS_APP_ID = "2000000000000002"
 
-# --- SurrealDB -------------------------------------------------------------
-# Coordinates, deliberately plaintext; the root credentials are key material.
-# `wss://` because the three-topology contract in `store/src/surreal/mod.rs`
-# expects it of a cloud deployment.
-NAVIGATOR_SURREAL_ENDPOINT = "wss://example-deployment.surreal.example/rpc"
-NAVIGATOR_SURREAL_NAMESPACE = "navigator"
-NAVIGATOR_SURREAL_DATABASE = "navigator"
 
 NAVIGATOR_LINKEDIN_CLIENT_ID = "synthetic-linkedin-client"
 

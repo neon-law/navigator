@@ -7,7 +7,7 @@ use billing_workflows::sandbox_reset::{self, OverageOutcome, SandboxResetReport}
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use dbos::{StepOptions, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
-use store::{postgres::PostgresDb, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, postgres::PostgresDb};
 
 pub type SandboxResetWorkflow =
     WorkflowRef<SandboxResetStart, SandboxResetReport, SandboxResetError>;
@@ -47,17 +47,17 @@ fn within_replay_window(anchor: DateTime<Utc>, now: DateTime<Utc>) -> bool {
 pub fn register(
     dbos: &DBOS,
     postgres: PostgresDb,
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
 ) -> dbos::Result<SandboxResetWorkflow> {
     dbos.register_workflow("SandboxCreditReset", move |request: SandboxResetStart| {
-        let (postgres, surreal) = (postgres.clone(), surreal.clone());
-        async move { run(postgres, surreal, request).await }
+        let (postgres, application_store) = (postgres.clone(), application_store.clone());
+        async move { run(postgres, application_store, request).await }
     })
 }
 
 async fn run(
     postgres: PostgresDb,
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     request: SandboxResetStart,
 ) -> dbos::Result<SandboxResetReport, SandboxResetError> {
     let month = period_start(&request.period)
@@ -65,13 +65,13 @@ async fn run(
         .ok_or(dbos::Error::Application(SandboxResetError::InvalidPeriod))?;
     let closed_period = store::sandbox_usage::billing_period(month.year(), month.month());
     let granted = dbos::step("grant", || async {
-        sandbox_reset::grant_active_subscribers(&postgres, &surreal, &request.period)
+        sandbox_reset::grant_active_subscribers(&postgres, &application_store, &request.period)
             .await
             .map_err(|_| dbos::Error::Application(SandboxResetError::Store))
     })
     .await?;
     let overages = dbos::step("closed-overage-roster", || async {
-        sandbox_reset::closed_overage_roster(&surreal, &closed_period)
+        sandbox_reset::closed_overage_roster(&application_store, &closed_period)
             .await
             .map_err(|_| dbos::Error::Application(SandboxResetError::Store))
     })
@@ -99,9 +99,9 @@ async fn run(
                 ..StepOptions::default()
             },
             || {
-                let (postgres, surreal, period, overage) = (
+                let (postgres, application_store, period, overage) = (
                     postgres.clone(),
-                    surreal.clone(),
+                    application_store.clone(),
                     closed_period.clone(),
                     overage.clone(),
                 );
@@ -113,7 +113,12 @@ async fn run(
                     }
                     tokio::time::timeout(
                         INVOICE_TIMEOUT,
-                        sandbox_reset::invoice_one_from_env(&postgres, &surreal, &period, overage),
+                        sandbox_reset::invoice_one_from_env(
+                            &postgres,
+                            &application_store,
+                            &period,
+                            overage,
+                        ),
                     )
                     .await
                     .map_err(|_| dbos::Error::Application(SandboxResetError::Invoice))?

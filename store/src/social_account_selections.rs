@@ -1,15 +1,14 @@
 //! Intended provider destinations, independent of OAuth credentials.
 use crate::{
+    application_store::ApplicationStore,
     persons::Role,
     postgres::social as authority,
     social_accounts::{SocialAccountError, SocialProvider},
-    surreal::SurrealDb,
 };
 use serde::Deserialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, SurrealValue, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SocialAccountSelection {
     pub brand_key: String,
     pub provider: String,
@@ -18,7 +17,7 @@ pub struct SocialAccountSelection {
 
 /// Save one destination without altering an authorized account or scheduled Post.
 pub async fn save(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     role: Role,
     actor: Uuid,
     brand: &str,
@@ -42,9 +41,7 @@ pub async fn save(
     if !crate::social_handles::is_valid_handle(identity) {
         return Err(SocialAccountError::MissingAccountIdentity);
     }
-    let pg = authority::authority()
-        .await?
-        .ok_or(authority::SocialAuthorityError::Unavailable)?;
+    let pg = authority::authority().await?;
     // One destination per Brand and provider: a later save replaces it.
     let query = sqlx::query(
         "INSERT INTO social_account_selection (id, firm_id, brand_key, provider, \
@@ -63,7 +60,7 @@ pub async fn save(
 
 /// Read only the selected Brand's non-secret destinations.
 pub async fn for_brand(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     brand: &str,
 ) -> Result<Vec<SocialAccountSelection>, SocialAccountError> {
     let Some(firm) = crate::brands::find_by_key(db, brand)
@@ -73,24 +70,21 @@ pub async fn for_brand(
     else {
         return Ok(Vec::new());
     };
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(s) AS row FROM social_account_selection s \
-             WHERE s.brand_key = $1 AND s.firm_id = $2 ORDER BY s.provider",
-        )
-        .bind(brand.to_owned())
-        .bind(firm);
-        return Ok(authority::rows(&pg, query).await?);
-    }
-    let mut response = db.query("SELECT brand_key, provider, provider_account_id FROM social_account_selection WHERE brand_key = $brand AND firm_id = $firm ORDER BY provider").bind(("brand", brand.to_string())).bind(("firm", crate::surreal::record_id("firm", firm))).await?.check()?;
-    Ok(response.take(0)?)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(s) AS row FROM social_account_selection s \
+         WHERE s.brand_key = $1 AND s.firm_id = $2 ORDER BY s.provider",
+    )
+    .bind(brand.to_owned())
+    .bind(firm);
+    Ok(authority::rows(&pg, query).await?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{brands::NewBrand, firms::NewFirm, persons::NewPerson, test_support};
-    async fn practice(db: &SurrealDb, name: &str) -> (Uuid, Uuid, String) {
+    async fn practice(db: &ApplicationStore, name: &str) -> (Uuid, Uuid, String) {
         let admin = crate::persons::create(
             db,
             &NewPerson::with_role(
@@ -134,7 +128,7 @@ mod tests {
     #[tokio::test]
     async fn saved_destinations_reload_without_authorization_and_remain_brand_scoped() {
         test_support::with_required_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let (_, actor, brand) = practice(&db, "selected").await;
             let (_, other_actor, other_brand) = practice(&db, "other").await;
             save(

@@ -111,8 +111,12 @@ async fn state_with_reset(
     idp: &MockServer,
     metadata: &MockServer,
     password_door: bool,
-) -> (AppState, store::surreal::SurrealDb, Arc<CapturingEmail>) {
-    let surreal = store::surreal::SurrealDb::uninitialized();
+) -> (
+    AppState,
+    store::application_store::ApplicationStore,
+    Arc<CapturingEmail>,
+) {
+    let application_store = store::application_store::ApplicationStore::uninitialized();
     let captured = Arc::new(CapturingEmail::new());
     let email: Arc<dyn EmailService> = captured.clone();
     let state = AppState {
@@ -141,14 +145,14 @@ async fn state_with_reset(
                 .unwrap(),
         ),
         policy: policy::PolicyClient::passthrough(),
-        ..portal::test_support::app_state(surreal.clone()).await
+        ..portal::test_support::app_state(application_store.clone()).await
     };
-    (state, surreal, captured)
+    (state, application_store, captured)
 }
 
-async fn seed_person(surreal: &store::surreal::SurrealDb, email: &str) {
+async fn seed_person(application_store: &store::application_store::ApplicationStore, email: &str) {
     store::persons::create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role("Libra", email, store::persons::Role::Lawyer),
     )
     .await
@@ -241,8 +245,8 @@ async fn full_reset_flow_sets_a_new_password_and_signs_in() {
 async fn check_full_reset() {
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
-    let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
-    seed_person(&surreal, "libra@example.com").await;
+    let (state, application_store, email) = state_with_reset(&idp, &meta, true).await;
+    seed_person(&application_store, "libra@example.com").await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     // 1. Open the request form, grab the CSRF pair.
@@ -312,7 +316,7 @@ async fn reset_mail_uses_the_requesting_brands_sender_theme_and_links() {
 async fn check_branded_reset() {
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
-    let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
+    let (state, application_store, email) = state_with_reset(&idp, &meta, true).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     for (host, person, sender, brand) in [
         (
@@ -328,7 +332,7 @@ async fn check_branded_reset() {
             views::brand::BrandKey::Vesta,
         ),
     ] {
-        seed_person(&surreal, person).await;
+        seed_person(&application_store, person).await;
         let request = |method| {
             Request::builder()
                 .method(method)
@@ -397,7 +401,7 @@ async fn request_for_unknown_email_is_neutral_and_sends_nothing() {
 async fn check_unknown_email() {
     let meta = mount_metadata().await;
     let idp = mount_idp(json!({}), None).await; // lookup finds nobody
-    let (state, _surreal, email) = state_with_reset(&idp, &meta, true).await;
+    let (state, _application_store, email) = state_with_reset(&idp, &meta, true).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     let form = get(&app, "/auth/password/reset").await;
@@ -427,8 +431,8 @@ async fn check_google_notice() {
     // it mails a "you sign in with Google" notice instead of a reset link.
     let meta = mount_metadata().await;
     let idp = mount_idp(google_user("libra@example.com"), None).await;
-    let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
-    seed_person(&surreal, "libra@example.com").await;
+    let (state, application_store, email) = state_with_reset(&idp, &meta, true).await;
+    seed_person(&application_store, "libra@example.com").await;
     let pg = store::postgres::PostgresDb::application().await.unwrap();
     sqlx::query(
         "INSERT INTO brand (id, name, brand_key, typeface, logo_content_type, logo_object_key)
@@ -495,8 +499,8 @@ async fn request_with_bad_csrf_is_rejected() {
 async fn check_bad_csrf() {
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
-    let (state, surreal, _email) = state_with_reset(&idp, &meta, true).await;
-    seed_person(&surreal, "libra@example.com").await;
+    let (state, application_store, _email) = state_with_reset(&idp, &meta, true).await;
+    seed_person(&application_store, "libra@example.com").await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     let resp = post_form(
@@ -517,7 +521,7 @@ async fn an_unknown_reset_token_shows_the_dead_link_page() {
 async fn check_expired_link() {
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
-    let (state, _surreal, _email) = state_with_reset(&idp, &meta, true).await;
+    let (state, _application_store, _email) = state_with_reset(&idp, &meta, true).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     let resp = get(&app, "/auth/password/reset/new?token=never-minted").await;
@@ -536,7 +540,7 @@ async fn check_disabled_routes() {
     // surface at all (the routes simply don't mount → 404).
     let meta = mount_metadata().await;
     let idp = mount_idp(password_user("libra@example.com"), None).await;
-    let (state, _surreal, _email) =
+    let (state, _application_store, _email) =
         state_with_reset(&idp, &meta, /* password_door = */ false).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
@@ -561,8 +565,8 @@ async fn check_unverified_sign_in() {
         })),
     )
     .await;
-    let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
-    seed_person(&surreal, "libra@example.com").await;
+    let (state, application_store, email) = state_with_reset(&idp, &meta, true).await;
+    seed_person(&application_store, "libra@example.com").await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     // Open the sign-in form for the login CSRF pair.
@@ -649,8 +653,8 @@ async fn check_first_password() {
         .expect(1)
         .mount(&idp)
         .await;
-    let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
-    seed_person(&surreal, "ada@example.com").await;
+    let (state, application_store, email) = state_with_reset(&idp, &meta, true).await;
+    seed_person(&application_store, "ada@example.com").await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     let form = get(&app, "/auth/password/reset").await;

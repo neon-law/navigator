@@ -1,6 +1,6 @@
 use super::postgres;
 use super::*;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 
 async fn database() -> Option<PostgresDb> {
     let (options, database) = fresh_schema().await?;
@@ -60,47 +60,5 @@ async fn history_is_the_owners_turns_in_append_order_and_purge_removes_them() {
     assert!(postgres::history(&pg, owner).await.unwrap().is_empty());
     assert_eq!(postgres::history(&pg, stranger).await.unwrap().len(), 1);
     assert_eq!(postgres::purge(&pg, owner).await.unwrap(), 0);
-    pg.0.close().await;
-}
-
-#[tokio::test]
-async fn surreal_turns_copy_once_with_their_identity() {
-    let Some(pg) = database().await else { return };
-    let surreal = crate::test_support::mem_surreal().await;
-    let owner = person(&pg).await;
-    let turn = append(&surreal, new_turn(owner, TurnKind::Prompt, "earlier"))
-        .await
-        .unwrap();
-
-    let copied = postgres::copy_from_surreal(&surreal, &pg).await.unwrap();
-    assert_eq!((copied.applied, copied.failures.len()), (1, 0));
-    assert_eq!(
-        postgres::copy_from_surreal(&surreal, &pg)
-            .await
-            .unwrap()
-            .applied,
-        0
-    );
-    let copied_turn = postgres::history(&pg, owner).await.unwrap();
-    assert_eq!(copied_turn.len(), 1);
-    assert_eq!(copied_turn[0].id, turn.id);
-    assert_eq!(copied_turn[0].content, turn.content);
-
-    // A turn whose owner PostgreSQL does not hold is refused by id, never
-    // by content.
-    let orphan = append(
-        &surreal,
-        new_turn(Uuid::now_v7(), TurnKind::Prompt, "Synthetic secret"),
-    )
-    .await
-    .unwrap();
-    let refused = postgres::copy_from_surreal(&surreal, &pg).await.unwrap();
-    assert_eq!(refused.applied, 0);
-    assert_eq!(refused.failures.len(), 1);
-    let (table, id, reason) = &refused.failures[0];
-    assert_eq!(*table, TABLE);
-    assert_eq!(id.as_deref(), Some(orphan.id.to_string().as_str()));
-    assert!(reason.contains("23503"), "{reason}");
-    assert!(!reason.contains("Synthetic secret"));
     pg.0.close().await;
 }

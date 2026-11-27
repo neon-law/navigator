@@ -16,9 +16,7 @@ authority. The schema and parity inventory live under `store/postgres/`.
 
 Apply migrations through the target's authority boundary before application boot. Fresh native creation and its explicit
 bound upgrade own their migration step; do not run an independent migrator around that upgrade intent. Captured
-deployments use `navigator-migrate` ([tooling](../../../docs/postgres-tooling.md)). Request handlers and the runtime
-importer perform no DDL. [SurrealDB compatibility](../../../docs/surreal-compatibility.md) holds the remaining
-source-engine contracts; [surreal-migrations](../surreal-migrations/SKILL.md) governs changes to those live paths.
+deployments use `navigator-migrate` ([tooling](../../../docs/postgres-tooling.md)). Request handlers perform no DDL.
 
 ## The image
 

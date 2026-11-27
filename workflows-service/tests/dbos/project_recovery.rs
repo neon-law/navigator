@@ -305,8 +305,8 @@ async fn the_store_source_drives_a_recorded_generation_to_commit() {
     store::test_support::with_postgres(async {
         let pg = store::postgres::PostgresDb::application().await.unwrap();
         store::postgres::PostgresDb::with_application_db(pg.clone(), async {
-            let surreal = store::surreal::SurrealDb::uninitialized();
-            let (project, admin) = native_project::matter(&surreal).await;
+            let application_store = store::application_store::ApplicationStore::uninitialized();
+            let (project, admin) = native_project::matter(&application_store).await;
             let firm = project
                 .firm_id
                 .expect("synthetic Project belongs to the Firm");
@@ -315,7 +315,7 @@ async fn the_store_source_drives_a_recorded_generation_to_commit() {
             let archive: Arc<dyn cloud::StorageService> =
                 Arc::new(store::test_support::MemoryStorage::default());
             let source = StoreRecoverySource::new(
-                surreal.clone(),
+                application_store.clone(),
                 pg.clone(),
                 Arc::clone(&documents),
                 Arc::clone(&archive),
@@ -328,7 +328,7 @@ async fn the_store_source_drives_a_recorded_generation_to_commit() {
                 .is_empty());
 
             let authority = store::project_archives::authorize(
-                &surreal,
+                &application_store,
                 store::persons::Role::Admin,
                 admin,
                 firm,
@@ -336,7 +336,7 @@ async fn the_store_source_drives_a_recorded_generation_to_commit() {
             .await
             .expect("the Firm admin may archive");
             let stores = store::project_archives::ArchiveStores {
-                surreal: &surreal,
+                application_store: &application_store,
                 pg: &pg,
                 documents: &documents,
                 archive: &archive,

@@ -6,9 +6,9 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
+use store::application_store::ApplicationStore;
 use store::durable_object_handover::{self, Capture, HandoverError};
 use store::postgres::PostgresDb;
-use store::surreal::SurrealDb;
 use tower::ServiceExt;
 use uuid::Uuid;
 use workflows::object_handover::{self, Readback};
@@ -29,7 +29,7 @@ struct Matter {
     entity: Uuid,
 }
 
-async fn matter(db: &SurrealDb) -> Matter {
+async fn matter(db: &ApplicationStore) -> Matter {
     let (project, admin) = native_project::matter(db).await;
     Matter {
         project: project.id,
@@ -40,7 +40,7 @@ async fn matter(db: &SurrealDb) -> Matter {
     }
 }
 
-async fn new_project(db: &SurrealDb, firm: Uuid, brand: &str, entity: Uuid) -> Uuid {
+async fn new_project(db: &ApplicationStore, firm: Uuid, brand: &str, entity: Uuid) -> Uuid {
     native_project::new_project(db, firm, brand, entity)
         .await
         .id
@@ -274,7 +274,7 @@ async fn missing_slack_workflow(worker: &dbos::DBOS, id: &str) {
 #[tokio::test]
 async fn captured_objects_activate_only_after_parity_and_run_native_without_source() {
     with_fixture(true,|pg,url|async move {
-        let db=SurrealDb::uninitialized();
+        let db=ApplicationStore::uninitialized();
         let first=matter(&db).await;let second=new_project(&db,first.firm,&first.brand,first.entity).await;
         let notation=Uuid::new_v4();let source=Source::controlled(notation,first.project);let capture=source.capture(&pg).await;
         assert!(durable_object_handover::require_native_ownership(&pg).await.is_err());
@@ -356,7 +356,7 @@ async fn counts(pg: &PostgresDb) -> (i64, i64) {
 #[tokio::test]
 async fn pending_native_start_and_partial_interruption_cannot_leave_a_half_import() {
     with_fixture(true,|pg,_|async move {
-        let db=SurrealDb::uninitialized();let first=matter(&db).await;
+        let db=ApplicationStore::uninitialized();let first=matter(&db).await;
         let notation=Uuid::new_v4();let source=Source::controlled(notation,first.project);let capture=source.capture(&pg).await;
         let operation=Uuid::new_v4();
         store::notation_machine_state::operations::admit(&pg,operation,notation,"synthetic-start-fingerprint").await.unwrap();
@@ -391,7 +391,7 @@ async fn pending_native_start_and_partial_interruption_cannot_leave_a_half_impor
 #[tokio::test]
 async fn native_drift_unknown_keys_and_inventory_changes_refuse_without_overwrite() {
     with_fixture(true, |pg, _| async move {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let first = matter(&db).await;
         let notation = Uuid::new_v4();
         let source = Source::controlled(notation, first.project);
@@ -440,7 +440,7 @@ async fn native_drift_unknown_keys_and_inventory_changes_refuse_without_overwrit
     })
     .await;
     with_fixture(true, |pg, _| async move {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let first = matter(&db).await;
         let source = Source::controlled(Uuid::new_v4(), first.project);
         let capture = source.capture(&pg).await;
@@ -463,7 +463,12 @@ async fn native_drift_unknown_keys_and_inventory_changes_refuse_without_overwrit
     .await;
 }
 
-async fn connect_slack(db: &SurrealDb, matter: &Matter, kms: &dyn cloud::RuntimeKms, value: &str) {
+async fn connect_slack(
+    db: &ApplicationStore,
+    matter: &Matter,
+    kms: &dyn cloud::RuntimeKms,
+    value: &str,
+) {
     store::firm_secrets::put(
         db,
         store::firm_secrets::SecretPutRequest {
@@ -483,13 +488,13 @@ async fn connect_slack(db: &SurrealDb, matter: &Matter, kms: &dyn cloud::Runtime
 #[tokio::test]
 async fn explicit_context_pool_keeps_real_firm_credentials_separate_from_ambient_database() {
     with_fixture(false, |pg, _| async move {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let first = matter(&db).await;
         let kms = Arc::new(cloud::FakeKms::new("synthetic-key-version"));
         connect_slack(&db, &first, kms.as_ref(), "synthetic-first-token").await;
         let first_pg = pg.clone();
         with_fixture(false, move |second_pg, _| async move {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let second = matter(&db).await;
             connect_slack(&db, &second, kms.as_ref(), "synthetic-second-token").await;
             let bots = FirmSlackBots::new(kms.clone());
@@ -549,7 +554,7 @@ async fn explicit_context_pool_keeps_real_firm_credentials_separate_from_ambient
 #[tokio::test]
 async fn uncaptured_native_machine_or_pending_start_refuses_global_activation() {
     with_fixture(true, |pg, _| async move {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let first = matter(&db).await;
         let source = Source::controlled(Uuid::new_v4(), first.project);
         let capture = source.capture(&pg).await;
@@ -579,7 +584,7 @@ async fn uncaptured_native_machine_or_pending_start_refuses_global_activation() 
     })
     .await;
     with_fixture(true, |pg, _| async move {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let first = matter(&db).await;
         let source = Source::controlled(Uuid::new_v4(), first.project);
         let capture = source.capture(&pg).await;
@@ -679,7 +684,7 @@ impl SlackBot for CheckpointBot {
 #[tokio::test]
 async fn executor_restart_after_provider_checkpoint_recovers_only_the_missing_receipt() {
     with_fixture(false,|pg,url|async move {
-        let db=SurrealDb::uninitialized();let first=matter(&db).await;
+        let db=ApplicationStore::uninitialized();let first=matter(&db).await;
         let bot=Arc::new(CheckpointBot {inner:workflows::CapturingSlackBot::new(),first:std::sync::atomic::AtomicBool::new(true),posted:tokio::sync::Notify::new(),release:tokio::sync::Notify::new()});
         let worker=dbos::DBOS::new(workflows::dbos_engine::config(&url,"test"));
         let workflow=dbos_project_slack::register(&worker,dbos_project_slack::Context::new(db.clone(),Arc::new(SharedSlackBot(bot.clone())),pg.clone(),false)).unwrap();
@@ -726,15 +731,15 @@ async fn executor_restart_after_provider_checkpoint_recovers_only_the_missing_re
 #[tokio::test]
 async fn workflow_metadata_preserves_canonical_project_delete_guards_and_capture_audit() {
     with_fixture(false,|pg,_|async move {
-        let db=SurrealDb::uninitialized();let first=matter(&db).await;
+        let db=ApplicationStore::uninitialized();let first=matter(&db).await;
         let audit:i64=sqlx::query_scalar("SELECT count(*) FROM durable_object_handover").fetch_one(pg.pool()).await.unwrap();assert_eq!(audit,1);
-        store::projects::delete_project_with_surreal(&db,first.project).await.unwrap();
+        store::projects::delete_project(&db,first.project).await.unwrap();
         assert!(store::projects::find_by_id(&db,first.project).await.unwrap().is_none());
         let metadata:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM project_slack_handover WHERE project_id=$1)").bind(first.project).fetch_one(pg.pool()).await.unwrap();assert!(!metadata);
         let remaining:i64=sqlx::query_scalar("SELECT count(*) FROM durable_object_handover").fetch_one(pg.pool()).await.unwrap();assert_eq!(remaining,audit);
         let protected=new_project(&db,first.firm,&first.brand,first.entity).await;
         store::projects::add_participation(&db,protected,first.admin,"lawyer").await.unwrap();
-        assert!(matches!(store::projects::delete_project_with_surreal(&db,protected).await,Err(store::projects::ProjectCommandError::Referenced(table)) if table=="person_project_roles"));
+        assert!(matches!(store::projects::delete_project(&db,protected).await,Err(store::projects::ProjectCommandError::Referenced(table)) if table=="person_project_roles"));
         assert!(store::projects::find_by_id(&db,protected).await.unwrap().is_some());
         let metadata:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM project_slack_handover WHERE project_id=$1)").bind(protected).fetch_one(pg.pool()).await.unwrap();assert!(metadata);
     }).await;
@@ -749,7 +754,7 @@ async fn workflow_metadata_preserves_canonical_project_delete_guards_and_capture
 #[tokio::test]
 async fn captured_object_epoch_is_admitted_and_invalid_or_unavailable_epochs_refuse() {
     with_fixture(true, |pg, _url| async move {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let first = matter(&db).await;
         let source = Source::controlled(Uuid::new_v4(), first.project);
         let capture = source.capture(&pg).await;

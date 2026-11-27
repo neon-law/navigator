@@ -83,9 +83,7 @@ impl From<PostgresError> for AttorneyCalendarError {
 /// cannot be reached, and [`AttorneyCalendarError::InvalidId`] when `email`
 /// is not a calendar id.
 pub async fn record_sign_in(person_id: Uuid, email: &str) -> Result<(), AttorneyCalendarError> {
-    let Some(pg) = PostgresDb::configured().await? else {
-        return Ok(());
-    };
+    let pg = PostgresDb::application().await?;
     let email = email.trim();
     if !is_valid_calendar_id(email) {
         return Err(AttorneyCalendarError::InvalidId);
@@ -111,9 +109,7 @@ pub async fn record_sign_in(person_id: Uuid, email: &str) -> Result<(), Attorney
 /// [`AttorneyCalendarError::NotConfigured`] when no host is set, and
 /// [`AttorneyCalendarError::Unavailable`] when the host cannot be reached.
 pub async fn postgres() -> Result<PostgresDb, AttorneyCalendarError> {
-    PostgresDb::configured()
-        .await?
-        .ok_or(AttorneyCalendarError::NotConfigured)
+    Ok(PostgresDb::application().await?)
 }
 
 /// Insert a primary calendar when the Person has none.
@@ -472,7 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn sign_in_records_one_primary_and_keeps_an_extra_calendar_freebusy() {
-        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+        let Some((options, database)) = crate::postgres::fixtures::fresh_schema().await else {
             return;
         };
         let pg = crate::postgres::PostgresDb::connect(options.database(&database))

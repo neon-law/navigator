@@ -62,10 +62,10 @@ enum EntityWriteOutcome {
 
 async fn fixture() -> (
     portal::AppState,
-    store::surreal::SurrealDb,
+    store::application_store::ApplicationStore,
     store::entities::Entity,
 ) {
-    let db = store::surreal::SurrealDb::uninitialized();
+    let db = store::application_store::ApplicationStore::uninitialized();
     let suffix = Uuid::now_v7();
     let kind = store::entity_types::create(&db, &format!("Synthetic kind {suffix}"))
         .await
@@ -97,7 +97,7 @@ async fn fixture() -> (
     (portal::test_support::app_state(db.clone()).await, db, firm)
 }
 async fn move_anchor_aside(
-    _db: &store::surreal::SurrealDb,
+    _db: &store::application_store::ApplicationStore,
     firm: &store::entities::Entity,
     aside_name: &str,
 ) {
@@ -132,7 +132,7 @@ async fn native_router(state: portal::AppState) -> axum::Router {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_creates_cannot_fork_the_firm_anchor() {
     store::test_support::with_postgres(async {
-    let (state, surreal, firm) = fixture().await;
+    let (state, application_store, firm) = fixture().await;
     let (type_id, jur_id) = (firm.entity_type_id, firm.jurisdiction_id);
 
     // Stand in for the white-label window: the protected name is configured
@@ -142,7 +142,7 @@ async fn concurrent_creates_cannot_fork_the_firm_anchor() {
     // `entity_firm_anchor` index — not the name — is what a create now
     // collides with, so a rename that left the key would make every racer
     // below fail rather than exactly one succeed.
-    move_anchor_aside(&surreal, &firm, "Placeholder Holdings LLC").await;
+    move_anchor_aside(&application_store, &firm, "Placeholder Holdings LLC").await;
 
     let app = native_router(state).await;
     let (cookie, csrf) = admin_session_cookie_and_csrf();
@@ -187,7 +187,7 @@ async fn concurrent_creates_cannot_fork_the_firm_anchor() {
     }
     assert_eq!(created, 1, "exactly one racer may create the anchor");
 
-    let rows = store::entities::all(&surreal)
+    let rows = store::entities::all(&application_store)
         .await
         .unwrap()
         .into_iter()
@@ -214,20 +214,20 @@ async fn a_delete_racing_a_rename_into_the_firm_name_never_removes_the_anchor() 
     // The invariant this asserts holds regardless of who wins the race: a
     // rename that reports minting the anchor is never undone by the racing
     // delete. The owned fixture exercises the competing operations directly.
-        let (state, surreal, firm) = fixture().await;
+        let (state, application_store, firm) = fixture().await;
         let (type_id, jur_id) = (firm.entity_type_id, firm.jurisdiction_id);
 
         // Open the white-label window so a rename can mint the anchor: move the
         // seeded row aside directly, which the surface itself refuses to do.
         move_anchor_aside(
-            &surreal,
+            &application_store,
             &firm,
             "Placeholder Holdings LLC",
         )
         .await;
 
         let victim = store::entities::create(
-            &surreal,
+            &application_store,
             &store::entities::NewEntity {
                 name: "Acme LLC".to_string(),
                 entity_type_id: type_id,
@@ -285,7 +285,7 @@ async fn a_delete_racing_a_rename_into_the_firm_name_never_removes_the_anchor() 
         };
         let (delete_status, renamed) = (delete.await.unwrap(), rename.await.unwrap());
 
-        let anchor_rows: Vec<_> = store::entities::all(&surreal)
+        let anchor_rows: Vec<_> = store::entities::all(&application_store)
             .await
             .unwrap()
             .into_iter()
@@ -319,18 +319,18 @@ async fn a_rename_racing_a_rename_into_the_firm_name_never_loses_the_anchor() {
     // guard, and rename the freshly protected firm away. The invariant holds
     // no matter who wins: a rename that reports minting the anchor is never
     // undone, and the firm name is never split into duplicates.
-        let (state, surreal, firm) = fixture().await;
+        let (state, application_store, firm) = fixture().await;
         let (type_id, jur_id) = (firm.entity_type_id, firm.jurisdiction_id);
 
         move_anchor_aside(
-            &surreal,
+            &application_store,
             &firm,
             "Placeholder Holdings LLC",
         )
         .await;
 
         let victim = store::entities::create(
-            &surreal,
+            &application_store,
             &store::entities::NewEntity {
                 name: "Acme LLC".to_string(),
                 entity_type_id: type_id,
@@ -391,7 +391,7 @@ async fn a_rename_racing_a_rename_into_the_firm_name_never_loses_the_anchor() {
         let (minted_the_anchor, _to_ordinary_status) =
             (into_firm.await.unwrap(), to_ordinary.await.unwrap());
 
-        let anchor_rows: Vec<_> = store::entities::all(&surreal)
+        let anchor_rows: Vec<_> = store::entities::all(&application_store)
             .await
             .unwrap()
             .into_iter()

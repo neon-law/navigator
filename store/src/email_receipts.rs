@@ -2,12 +2,11 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::communications::{self as authority, CommunicationsAuthorityError};
 use crate::postgres::PostgresDb;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 pub mod summary_recovery;
 
@@ -61,39 +60,11 @@ pub struct Ensured {
 pub enum EmailReceiptError {
     #[error("delivery lookup: {0}")]
     Delivery(#[from] crate::email_deliveries::EmailDeliveryError),
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Postgres(#[from] CommunicationsAuthorityError),
     #[error("writing an email receipt returned no usable row")]
     WriteReturnedNothing,
 }
-
-#[derive(SurrealValue)]
-struct EmailReceiptRow {
-    id: surrealdb::types::RecordId,
-    receiving_mailbox: String,
-    deployment: String,
-    firm_id: Option<surrealdb::types::RecordId>,
-    provider_account: Option<String>,
-    sender_authenticated: Option<bool>,
-    raw_digest: String,
-    source_message_id: Option<String>,
-    archive_key: String,
-    letter_id: surrealdb::types::RecordId,
-    processing_state: String,
-    delivery_state: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-#[derive(SurrealValue)]
-struct CountRow {
-    count: i64,
-}
-
-const SELECT: &str = "id, receiving_mailbox, deployment, firm_id, provider_account, sender_authenticated, raw_digest, source_message_id, \
-                      archive_key, letter_id, processing_state, delivery_state, inserted_at, updated_at";
 
 /// A PostgreSQL receipt as `row`, its state taken from its delivery, which
 /// is authoritative over the receipt's own column (see `with_delivery_state`).
@@ -105,221 +76,68 @@ macro_rules! pg_receipt {
     };
 }
 
-impl EmailReceiptRow {
-    fn into_receipt(self) -> Option<EmailReceipt> {
-        Some(EmailReceipt {
-            id: record_uuid(&self.id)?,
-            receiving_mailbox: self.receiving_mailbox,
-            deployment: self.deployment,
-            firm_id: self.firm_id.as_ref().and_then(record_uuid),
-            provider_account: self.provider_account,
-            sender_authenticated: self.sender_authenticated.unwrap_or(false),
-            raw_digest: self.raw_digest,
-            source_message_id: self.source_message_id,
-            archive_key: self.archive_key,
-            letter_id: record_uuid(&self.letter_id)?,
-            processing_state: self.processing_state,
-            delivery_state: self.delivery_state,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
 pub async fn ensure(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     new: &NewEmailReceipt<'_>,
 ) -> Result<Ensured, EmailReceiptError> {
-    if let Some(pg) = authority::authority().await? {
-        return Box::pin(ensure_pg(&pg, new)).await;
-    }
-    if let Some(receipt) = find(db, new.receiving_mailbox, new.deployment, new.raw_digest).await? {
-        crate::postgres_mirror::after_write(
-            db,
-            crate::postgres_mirror::MirrorKey::EmailReceipt(receipt.id),
-        )
-        .await;
-        return Ok(Ensured {
-            receipt,
-            deduped: true,
-        });
-    }
-
-    let id = Uuid::now_v7();
-    let created = db
-        .query(format!(
-            "CREATE $id SET \
-             receiving_mailbox = $receiving_mailbox, deployment = $deployment, \
-             firm_id = $firm_id, provider_account = $provider_account, sender_authenticated = $sender_authenticated, \
-             raw_digest = $raw_digest, source_message_id = $source_message_id, \
-             archive_key = $archive_key, letter_id = $letter_id, \
-             processing_state = $processing_state, delivery_state = $delivery_state \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("receiving_mailbox", new.receiving_mailbox.to_string()))
-        .bind(("deployment", new.deployment.to_string()))
-        .bind((
-            "firm_id",
-            new.firm_id.map(|id| record_id(crate::firms::TABLE, id)),
-        ))
-        .bind(("provider_account", new.provider_account.map(str::to_string)))
-        .bind(("sender_authenticated", new.sender_authenticated))
-        .bind(("raw_digest", new.raw_digest.to_string()))
-        .bind((
-            "source_message_id",
-            new.source_message_id.map(str::to_string),
-        ))
-        .bind(("archive_key", new.archive_key.to_string()))
-        .bind(("letter_id", record_id(crate::letters::TABLE, new.letter_id)))
-        .bind(("processing_state", PROCESSING_PENDING.to_string()))
-        .bind(("delivery_state", DELIVERY_NOT_ATTEMPTED.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check);
-
-    let mut response = match created {
-        Ok(response) => response,
-        Err(error) if is_duplicate(&error) => {
-            let receipt = find(db, new.receiving_mailbox, new.deployment, new.raw_digest)
-                .await?
-                .ok_or(EmailReceiptError::Db(error))?;
-            return Ok(Ensured {
-                receipt,
-                deduped: true,
-            });
-        }
-        Err(error) => return Err(EmailReceiptError::Db(error)),
-    };
-    let row: Option<EmailReceiptRow> = response.take(0)?;
-    let receipt = row
-        .and_then(EmailReceiptRow::into_receipt)
-        .ok_or(EmailReceiptError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::EmailReceipt(receipt.id),
-    )
-    .await;
-    Ok(Ensured {
-        receipt,
-        deduped: false,
-    })
+    let pg = authority::authority().await?;
+    Box::pin(ensure_pg(&pg, new)).await
 }
 
 pub async fn find(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     receiving_mailbox: &str,
     deployment: &str,
     raw_digest: &str,
 ) -> Result<Option<EmailReceipt>, EmailReceiptError> {
-    if let Some(pg) = authority::authority().await? {
-        return Ok(find_pg(&pg, receiving_mailbox, deployment, raw_digest).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE receiving_mailbox = $receiving_mailbox \
-             AND deployment = $deployment AND raw_digest = $raw_digest LIMIT 1"
-        ))
-        .bind(("receiving_mailbox", receiving_mailbox.to_string()))
-        .bind(("deployment", deployment.to_string()))
-        .bind(("raw_digest", raw_digest.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<EmailReceiptRow> = response.take(0)?;
-    with_delivery_state(db, row).await
+    let pg = authority::authority().await?;
+    Ok(find_pg(&pg, receiving_mailbox, deployment, raw_digest).await?)
 }
 
 /// Find a receipt by its opaque durable-workflow key.
 pub async fn find_by_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<EmailReceipt>, EmailReceiptError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(concat!(pg_receipt!(), " WHERE r.id = $1")).bind(id);
-        return Ok(authority::maybe(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<EmailReceiptRow> = response.take(0)?;
-    with_delivery_state(db, row).await
+    let pg = authority::authority().await?;
+    let query = sqlx::query(concat!(pg_receipt!(), " WHERE r.id = $1")).bind(id);
+    Ok(authority::maybe(&pg, query).await?)
 }
 
 // The delivery record is authoritative, including for receipts stored before
 // a delivery existed. Reading it avoids a second writable copy of the status.
-async fn with_delivery_state(
-    db: &SurrealDb,
-    row: Option<EmailReceiptRow>,
-) -> Result<Option<EmailReceipt>, EmailReceiptError> {
-    let Some(mut receipt) = row.and_then(EmailReceiptRow::into_receipt) else {
-        return Ok(None);
-    };
-    if let Some(delivery) = crate::email_deliveries::find(db, receipt.id).await? {
-        receipt.delivery_state = delivery.state;
-    }
-    Ok(Some(receipt))
-}
 
-pub async fn mark_archived(db: &SurrealDb, id: Uuid) -> Result<(), EmailReceiptError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "UPDATE email_receipt SET processing_state = $2, updated_at = now() WHERE id = $1",
-        )
-        .bind(id)
-        .bind(PROCESSING_ARCHIVED);
-        authority::execute(&pg, query).await?;
-        return Ok(());
-    }
-    db.query("UPDATE $id SET processing_state = $state, updated_at = time::now()")
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("state", PROCESSING_ARCHIVED.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::EmailReceipt(id))
-        .await;
+pub async fn mark_archived(_db: &ApplicationStore, id: Uuid) -> Result<(), EmailReceiptError> {
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "UPDATE email_receipt SET processing_state = $2, updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .bind(PROCESSING_ARCHIVED);
+    authority::execute(&pg, query).await?;
     Ok(())
 }
 
 /// Receipts past a caller-supplied deadline without authoritative confirmation.
 /// Includes partial archives and missed triggers; contains no message content.
 pub async fn list_overdue(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     before: DateTime<Utc>,
 ) -> Result<Vec<EmailReceipt>, EmailReceiptError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(r) AS row FROM email_receipt r WHERE r.inserted_at < $1 \
-             AND NOT EXISTS (SELECT 1 FROM email_delivery d WHERE d.receipt_id = r.id \
-             AND d.state = 'confirmed') ORDER BY r.inserted_at",
-        )
-        .bind(before);
-        return Ok(authority::rows(&pg, query).await?);
-    }
-    let mut response = db.query(format!(
-        "SELECT {SELECT} FROM {TABLE} WHERE inserted_at < $before AND id NOT IN \
-         (SELECT VALUE receipt_id FROM email_delivery WHERE state = 'confirmed') ORDER BY inserted_at"
-    ))
-        .bind(("before", surrealdb::types::Datetime::from(before)))
-        .await.and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<EmailReceiptRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(EmailReceiptRow::into_receipt)
-        .collect())
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(r) AS row FROM email_receipt r WHERE r.inserted_at < $1 \
+         AND NOT EXISTS (SELECT 1 FROM email_delivery d WHERE d.receipt_id = r.id \
+         AND d.state = 'confirmed') ORDER BY r.inserted_at",
+    )
+    .bind(before);
+    Ok(authority::rows(&pg, query).await?)
 }
 
-pub async fn count(db: &SurrealDb) -> Result<i64, EmailReceiptError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query("SELECT to_jsonb(count(*)) AS row FROM email_receipt");
-        return Ok(authority::maybe(&pg, query).await?.unwrap_or(0));
-    }
-    let mut response = db
-        .query(format!("SELECT count() FROM {TABLE} GROUP ALL"))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<CountRow> = response.take(0)?;
-    Ok(rows.first().map_or(0, |row| row.count))
+pub async fn count(_db: &ApplicationStore) -> Result<i64, EmailReceiptError> {
+    let pg = authority::authority().await?;
+    let query = sqlx::query("SELECT to_jsonb(count(*)) AS row FROM email_receipt");
+    Ok(authority::maybe(&pg, query).await?.unwrap_or(0))
 }
 
 fn find_pg<'a>(
@@ -371,10 +189,6 @@ async fn ensure_pg(
         receipt,
         deduped: inserted == 0,
     })
-}
-
-fn is_duplicate(error: &surrealdb::Error) -> bool {
-    crate::surreal::retry::unique_violation(error) == Some("email_receipt_identity")
 }
 
 #[cfg(test)]

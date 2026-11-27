@@ -1,6 +1,6 @@
 //! Legal Plan Claim actors retain their original immutable collection evidence.
 use serde_json::Value;
-use store::{plan_claims, postgres::PostgresDb, surreal::SurrealDb};
+use store::{application_store::ApplicationStore, plan_claims, postgres::PostgresDb};
 use uuid::Uuid;
 
 async fn claim_rows(pg: &PostgresDb) -> Vec<Value> {
@@ -13,7 +13,12 @@ async fn claim_rows(pg: &PostgresDb) -> Vec<Value> {
     rows
 }
 
-async fn history(pg: &PostgresDb, db: &SurrealDb, project: &store::projects::Project, actor: Uuid) {
+async fn history(
+    pg: &PostgresDb,
+    db: &ApplicationStore,
+    project: &store::projects::Project,
+    actor: Uuid,
+) {
     let firm = project.firm_id.unwrap();
     let plan = store::legal_plans::create(
         pg,
@@ -107,7 +112,7 @@ async fn history(pg: &PostgresDb, db: &SurrealDb, project: &store::projects::Pro
 #[tokio::test]
 async fn retained_claim_actor_refuses_merge_without_rewriting_collection_or_identity_history() {
     store::test_support::with_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let pg = PostgresDb::application().await.unwrap();
         let parent = super::native_project::create("synthetic-claim-merge-boundary").await;
         let scenario = super::merge_fixture::Scenario::seed(&db, &pg, &parent).await;

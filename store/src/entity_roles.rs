@@ -17,14 +17,12 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::Row;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::PostgresDb;
 use crate::postgres_graph::{ensure_vertices, graph_authority, load_edge};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
 
-const TABLE: &str = "entity_role";
 const PERSON_TABLE: &str = "person";
 const ENTITY_TABLE: &str = "entity";
 
@@ -41,33 +39,8 @@ pub struct EntityRole {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct EntityRoleRow {
-    r#in: surrealdb::types::RecordId,
-    out: surrealdb::types::RecordId,
-    role: String,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl EntityRoleRow {
-    fn into_role(self) -> Option<EntityRole> {
-        Some(EntityRole {
-            person_id: record_uuid(&self.r#in)?,
-            entity_id: record_uuid(&self.out)?,
-            role: self.role,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const SELECT: &str = "in, out, role, inserted_at, updated_at";
-
 #[derive(Debug, thiserror::Error)]
 pub enum EntityRoleError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or one this module
     /// could not read back.
     #[error("writing an entity role returned no usable row")]
@@ -87,14 +60,6 @@ pub enum EntityRoleError {
     Graph(#[from] crate::postgres_graph::GraphError),
 }
 
-fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityRole>, EntityRoleError> {
-    let rows: Vec<EntityRoleRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(EntityRoleRow::into_role)
-        .collect())
-}
-
 /// Record one structural tie: in PostgreSQL (the relational row, then
 /// the graph's `HAS_ROLE` edge) wherever it is configured, else in
 /// SurrealDB ([`graph_authority`]).
@@ -109,19 +74,17 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityRole>, Enti
 /// PostgreSQL write fails, or [`EntityRoleError::Engine`] if graph authority
 /// or an endpoint lookup is unavailable.
 pub async fn grant(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     person_id: Uuid,
     entity_id: Uuid,
     role: &str,
 ) -> Result<EntityRole, EntityRoleError> {
     let role = role.trim();
-    let postgres = authority().await?.ok_or_else(|| {
-        EntityRoleError::Engine("Entity Role writes require PostgreSQL graph authority".into())
-    })?;
+    let postgres = authority().await?;
     grant_in_postgres(db, &postgres, person_id, entity_id, role).await
 }
 
-async fn authority() -> Result<Option<PostgresDb>, EntityRoleError> {
+async fn authority() -> Result<PostgresDb, EntityRoleError> {
     graph_authority().await.map_err(EntityRoleError::Engine)
 }
 
@@ -132,7 +95,7 @@ async fn authority() -> Result<Option<PostgresDb>, EntityRoleError> {
 ///
 /// The vertex-ensure function uses the authoritative Person and Entity names.
 async fn grant_in_postgres(
-    db: &SurrealDb,
+    db: &ApplicationStore,
     postgres: &PostgresDb,
     person_id: Uuid,
     entity_id: Uuid,
@@ -273,37 +236,15 @@ async fn select_in_postgres(
 /// [`EntityRoleError::Db`] or [`EntityRoleError::Sqlx`] if the lookup
 /// fails.
 pub async fn find(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
     entity_id: Uuid,
     role: &str,
 ) -> Result<Option<EntityRole>, EntityRoleError> {
-    match authority().await? {
-        Some(postgres) => find_in_postgres(&postgres, person_id, entity_id, role).await,
-        None => find_in_surreal(db, person_id, entity_id, role).await,
+    {
+        let postgres = authority().await?;
+        find_in_postgres(&postgres, person_id, entity_id, role).await
     }
-}
-
-/// [`find`] against SurrealDB alone — the Surreal engine's read and the
-/// mirror's source.
-pub(crate) async fn find_in_surreal(
-    db: &SurrealDb,
-    person_id: Uuid,
-    entity_id: Uuid,
-    role: &str,
-) -> Result<Option<EntityRole>, EntityRoleError> {
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE in = $person AND out = $entity AND role = $role LIMIT 1"
-        ))
-        .bind(("person", record_id(PERSON_TABLE, person_id)))
-        .bind(("entity", record_id(ENTITY_TABLE, entity_id)))
-        .bind(("role", role.trim().to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<EntityRoleRow> = response.take(0)?;
-    Ok(rows.into_iter().next().and_then(EntityRoleRow::into_role))
 }
 
 /// Every structural tie, ordered so a listing is stable.
@@ -312,22 +253,11 @@ pub(crate) async fn find_in_surreal(
 ///
 /// [`EntityRoleError::Db`] or [`EntityRoleError::Sqlx`] if the lookup
 /// fails.
-pub async fn all(db: &SurrealDb) -> Result<Vec<EntityRole>, EntityRoleError> {
-    match authority().await? {
-        Some(postgres) => select_in_postgres(&postgres, "WHERE $1::uuid IS NULL", None).await,
-        None => all_in_surreal(db).await,
+pub async fn all(_db: &ApplicationStore) -> Result<Vec<EntityRole>, EntityRoleError> {
+    {
+        let postgres = authority().await?;
+        select_in_postgres(&postgres, "WHERE $1::uuid IS NULL", None).await
     }
-}
-
-/// [`all`] against SurrealDB alone — the mirror's source.
-pub(crate) async fn all_in_surreal(db: &SurrealDb) -> Result<Vec<EntityRole>, EntityRoleError> {
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
 }
 
 /// Every tie held by one Person.
@@ -336,20 +266,11 @@ pub(crate) async fn all_in_surreal(db: &SurrealDb) -> Result<Vec<EntityRole>, En
 ///
 /// [`EntityRoleError::Db`] if the lookup fails.
 pub async fn for_person(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     person_id: Uuid,
 ) -> Result<Vec<EntityRole>, EntityRoleError> {
-    if let Some(postgres) = authority().await? {
-        return select_in_postgres(&postgres, "WHERE person_id = $1", Some(person_id)).await;
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE in = $person ORDER BY inserted_at ASC"
-        ))
-        .bind(("person", record_id(PERSON_TABLE, person_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let postgres = authority().await?;
+    select_in_postgres(&postgres, "WHERE person_id = $1", Some(person_id)).await
 }
 
 /// Every tie into one Entity.
@@ -358,29 +279,20 @@ pub async fn for_person(
 ///
 /// [`EntityRoleError::Db`] if the lookup fails.
 pub async fn for_entity(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     entity_id: Uuid,
 ) -> Result<Vec<EntityRole>, EntityRoleError> {
-    if let Some(postgres) = authority().await? {
-        return select_in_postgres(&postgres, "WHERE entity_id = $1", Some(entity_id)).await;
-    }
-    let response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE out = $entity ORDER BY inserted_at ASC"
-        ))
-        .bind(("entity", record_id(ENTITY_TABLE, entity_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let postgres = authority().await?;
+    select_in_postgres(&postgres, "WHERE entity_id = $1", Some(entity_id)).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::{all, find, for_entity, for_person, grant};
-    use crate::surreal::SurrealDb;
+    use crate::application_store::ApplicationStore;
     use uuid::Uuid;
 
-    async fn person(db: &SurrealDb, name: &str) -> Uuid {
+    async fn person(db: &ApplicationStore, name: &str) -> Uuid {
         crate::persons::create(
             db,
             &crate::persons::NewPerson::new(name, format!("{}@example.com", Uuid::now_v7())),
@@ -390,7 +302,7 @@ mod tests {
         .id
     }
 
-    async fn entity(db: &SurrealDb, name: &str) -> Uuid {
+    async fn entity(db: &ApplicationStore, name: &str) -> Uuid {
         let kind = crate::entity_types::find_or_create(db, "Synthetic role entity")
             .await
             .unwrap();
@@ -420,7 +332,7 @@ mod tests {
     #[tokio::test]
     async fn a_granted_tie_reads_back_on_both_of_its_ends() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let holder = person(&db, "Tie Holder").await;
             let acme = entity(&db, "Acme LLC").await;
 
@@ -441,7 +353,7 @@ mod tests {
     #[tokio::test]
     async fn granting_the_same_tie_twice_is_one_edge() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let holder = person(&db, "Repeat Holder").await;
             let acme = entity(&db, "Repeat LLC").await;
 
@@ -459,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_grants_of_one_tie_settle_on_a_single_edge() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let holder = person(&db, "Racing Holder").await;
             let acme = entity(&db, "Racing LLC").await;
 
@@ -478,7 +390,7 @@ mod tests {
     #[tokio::test]
     async fn one_person_may_hold_several_roles_in_one_entity() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let holder = person(&db, "Many Hats").await;
             let acme = entity(&db, "Many Hats LLC").await;
 
@@ -504,15 +416,12 @@ mod tests {
     #[tokio::test]
     async fn the_tie_is_traversable_as_a_graph_edge() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let holder = person(&db, "Graph Holder").await;
             let acme = entity(&db, "Graph LLC").await;
             grant(&db, holder, acme, "manages").await.unwrap();
 
-            let pg = crate::postgres_graph::graph_authority()
-                .await
-                .unwrap()
-                .unwrap();
+            let pg = crate::postgres_graph::graph_authority().await.unwrap();
             let edges = crate::postgres_graph::conflict_traversal(
                 &pg,
                 &[crate::conflicts::NodeRef::person(holder)],
@@ -544,12 +453,11 @@ mod tests {
     #[tokio::test]
     async fn an_age_edge_failure_rolls_back_the_authoritative_entity_role() {
         crate::test_support::with_postgres(async {
-            let db = SurrealDb::uninitialized();
+            let db = ApplicationStore::uninitialized();
             let holder = person(&db, "Rollback Holder").await;
             let acme = entity(&db, "Rollback LLC").await;
             let postgres = crate::postgres_graph::graph_authority()
                 .await
-                .unwrap()
                 .unwrap();
             crate::postgres_graph::fail_after_loading_edge(&postgres).await;
             let rejected = grant(&db, holder, acme, "manages").await;

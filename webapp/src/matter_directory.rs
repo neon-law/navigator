@@ -121,18 +121,19 @@ pub async fn matter_directory_view() -> Result<MatterDirectoryView, ServerFnErro
     let viewer_person_id = person_id
         .as_deref()
         .and_then(|id| uuid::Uuid::parse_str(id).ok());
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let entries = store::projects::matter_directory_for(&surreal, store_role, viewer_person_id)
-        .await
-        .map_err(|error| {
-            // A directory that cannot be read is a server error, not a page
-            // that quietly reports zero matters.
-            dioxus_fullstack_core::FullstackContext::commit_http_status(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            );
-            ServerFnError::new(error.to_string())
-        })?;
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let entries =
+        store::projects::matter_directory_for(&application_store, store_role, viewer_person_id)
+            .await
+            .map_err(|error| {
+                // A directory that cannot be read is a server error, not a page
+                // that quietly reports zero matters.
+                dioxus_fullstack_core::FullstackContext::commit_http_status(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    None,
+                );
+                ServerFnError::new(error.to_string())
+            })?;
 
     let mut rows: Vec<MatterRow> = entries
         .into_iter()

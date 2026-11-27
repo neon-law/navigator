@@ -31,7 +31,7 @@ async fn exercise_routes(database: &application_process::ApplicationDatabase) ->
         "native-cron-test",
     ));
     let slack = Arc::new(workflows::CapturingSlackBot::new());
-    let inert = store::surreal::SurrealDb::uninitialized();
+    let inert = store::application_store::ApplicationStore::uninitialized();
     let nightly = nightly::register(
         &executor,
         nightly::Context::new(

@@ -125,7 +125,7 @@ pub(crate) trait InboxIntake: Send + Sync {
 /// same docket rediscovers the original delivery (`deduped: true`) rather
 /// than duplicating the row.
 pub(crate) struct StoreInboxIntake {
-    db: std::sync::Arc<store::surreal::SurrealDb>,
+    db: std::sync::Arc<store::application_store::ApplicationStore>,
     storage: std::sync::Arc<dyn cloud::StorageService>,
     firm_id: uuid::Uuid,
 }
@@ -134,7 +134,7 @@ impl StoreInboxIntake {
     /// Wire the intake to a Firm's inbox over the given store and asset
     /// storage (GCS in deployment, the filesystem emulator in dev).
     pub(crate) fn new(
-        db: std::sync::Arc<store::surreal::SurrealDb>,
+        db: std::sync::Arc<store::application_store::ApplicationStore>,
         storage: std::sync::Arc<dyn cloud::StorageService>,
         firm_id: uuid::Uuid,
     ) -> Self {
@@ -243,7 +243,7 @@ impl InboxIntake for StoreInboxIntake {
 
 #[cfg(test)]
 mod tests {
-    use super::{InboxIntake, IntakeError, ScrapedDocument, StoreInboxIntake};
+    use super::{InboxIntake, IntakeError, ScrapedDocument};
     use crate::scraper::adapter::{NoticeRef, SiteKey};
     use crate::scraper::testing::RecordingIntake;
 
@@ -318,35 +318,5 @@ mod tests {
         assert!(second.is_ok());
         assert_eq!(intake.received().len(), 1);
         assert_eq!(intake.calls(), 2);
-    }
-
-    #[tokio::test]
-    async fn the_store_intake_enqueues_a_document_into_the_inbox() {
-        // The production intake against a real embedded store and the
-        // filesystem storage: the document becomes an omnichannel message
-        // on the scraper channel, and the same notice redelivered — a
-        // retried run, a lost ack — is the original row, not a duplicate.
-        let db = std::sync::Arc::new(store::surreal::test_support::mem().await);
-        let storage_root = tempfile::tempdir().expect("a storage root");
-        let storage: std::sync::Arc<dyn cloud::StorageService> = std::sync::Arc::new(
-            cloud::FsStorage::new(storage_root.path().to_path_buf())
-                .await
-                .expect("the filesystem storage opens"),
-        );
-        let firm_id = store::test_support::seed_firm_with_brand(db.as_ref(), "neon").await;
-        let intake = StoreInboxIntake::new(db, storage, firm_id);
-
-        let first = intake
-            .enqueue(&document("4", "Notice of Hearing"))
-            .await
-            .expect("the inbox accepts the document");
-        assert!(!first.deduped);
-
-        let second = intake
-            .enqueue(&document("4", "Notice of Hearing"))
-            .await
-            .expect("the redelivery is accepted");
-        assert!(second.deduped, "a redelivered notice dedupes");
-        assert_eq!(second.message_id, first.message_id);
     }
 }

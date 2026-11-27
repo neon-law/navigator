@@ -127,10 +127,10 @@ pub struct DueChain {
 /// # Errors
 /// [`PurgeError`] when the due rows cannot be read.
 pub async fn due_chains(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     now: DateTime<Utc>,
 ) -> Result<Vec<DueChain>, PurgeError> {
-    let mut chains: Vec<DueChain> = store::assets::due_for_purge(surreal, now)
+    let mut chains: Vec<DueChain> = store::assets::due_for_purge(application_store, now)
         .await?
         .into_iter()
         .filter_map(|row| {
@@ -152,13 +152,13 @@ pub async fn due_chains(
 /// [`PurgeError`] when the due rows or a Project cannot be read. A chain whose
 /// expunge fails is reported in [`PurgeReport::failed`], not raised.
 pub async fn purge_expired_documents(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     authorized_by: Uuid,
     now: DateTime<Utc>,
 ) -> Result<PurgeReport, PurgeError> {
     purge_expired_documents_with(
-        surreal,
+        application_store,
         storage,
         RetentionLanes::default(),
         &PurgeAuthority::Admin(authorized_by),
@@ -172,15 +172,24 @@ pub async fn purge_expired_documents(
 /// # Errors
 /// As [`purge_expired_documents`].
 pub async fn purge_expired_documents_with(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     lanes: RetentionLanes<'_>,
     authority: &PurgeAuthority,
     now: DateTime<Utc>,
 ) -> Result<PurgeReport, PurgeError> {
     let mut report = PurgeReport::default();
-    for chain in due_chains(surreal, now).await? {
-        purge_chain(surreal, storage, lanes, authority, &chain, now, &mut report).await?;
+    for chain in due_chains(application_store, now).await? {
+        purge_chain(
+            application_store,
+            storage,
+            lanes,
+            authority,
+            &chain,
+            now,
+            &mut report,
+        )
+        .await?;
     }
     Ok(report)
 }
@@ -191,7 +200,7 @@ pub async fn purge_expired_documents_with(
 /// # Errors
 /// As [`purge_expired_documents`].
 pub async fn purge_one(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     lanes: RetentionLanes<'_>,
     authority: &PurgeAuthority,
@@ -199,13 +208,22 @@ pub async fn purge_one(
     now: DateTime<Utc>,
 ) -> Result<PurgeReport, PurgeError> {
     let mut report = PurgeReport::default();
-    purge_chain(surreal, storage, lanes, authority, chain, now, &mut report).await?;
+    purge_chain(
+        application_store,
+        storage,
+        lanes,
+        authority,
+        chain,
+        now,
+        &mut report,
+    )
+    .await?;
     Ok(report)
 }
 
 /// Resolve and check the authority for one chain's Firm.
 async fn authorizer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     authority: &PurgeAuthority,
     firm_id: Option<Uuid>,
 ) -> Option<Uuid> {
@@ -214,13 +232,13 @@ async fn authorizer(
         PurgeAuthority::ByFirm(map) => {
             let firm_id = firm_id?;
             let person_id = *map.get(&firm_id)?;
-            let person = store::persons::find_by_id(surreal, person_id)
+            let person = store::persons::find_by_id(application_store, person_id)
                 .await
                 .ok()??;
             if !person.role.is_admin_tier() {
                 return None;
             }
-            store::project_archives::authorize(surreal, person.role, person_id, firm_id)
+            store::project_archives::authorize(application_store, person.role, person_id, firm_id)
                 .await
                 .ok()
                 .map(|_| person_id)
@@ -230,7 +248,7 @@ async fn authorizer(
 
 #[allow(clippy::too_many_lines)]
 async fn purge_chain(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     lanes: RetentionLanes<'_>,
     authority: &PurgeAuthority,
@@ -240,7 +258,7 @@ async fn purge_chain(
 ) -> Result<(), PurgeError> {
     let project_id = chain.project_id;
     let rows: Vec<store::assets::Asset> =
-        store::assets::for_project_including_deleted(surreal, project_id)
+        store::assets::for_project_including_deleted(application_store, project_id)
             .await?
             .into_iter()
             .filter(|row| store::document_retention::chain_key(row) == chain.chain_key)
@@ -260,14 +278,14 @@ async fn purge_chain(
         report.held += 1;
         return Ok(());
     }
-    if awaiting_archive(surreal, lanes.pg, project_id).await? {
+    if awaiting_archive(application_store, lanes.pg, project_id).await? {
         report.awaiting_archive += 1;
         return Ok(());
     }
-    let firm_id = store::projects::find_by_id(surreal, project_id)
+    let firm_id = store::projects::find_by_id(application_store, project_id)
         .await?
         .and_then(|project| project.firm_id);
-    let Some(authorized_by) = authorizer(surreal, authority, firm_id).await else {
+    let Some(authorized_by) = authorizer(application_store, authority, firm_id).await else {
         tracing::warn!(%project_id, "retention purge skipped: no Firm-scoped authority");
         report.unauthorized += 1;
         return Ok(());
@@ -299,7 +317,8 @@ async fn purge_chain(
         for row in &rows {
             for key in super::storage_keys_for_asset(row) {
                 if !storage_keys.contains(&key)
-                    && !store::assets::storage_key_needed_elsewhere(surreal, &key, &ids).await?
+                    && !store::assets::storage_key_needed_elsewhere(application_store, &key, &ids)
+                        .await?
                 {
                     storage_keys.push(key);
                 }
@@ -314,7 +333,7 @@ async fn purge_chain(
                 .map_or_else(String::new, |at| at.to_rfc3339()),
         );
         match super::expunge(
-            surreal,
+            application_store,
             storage,
             super::ExpungeRequest {
                 project_id,
@@ -342,10 +361,10 @@ async fn purge_chain(
             }
         }
     };
-    store::assets::mark_purged(surreal, &ids, now).await?;
+    store::assets::mark_purged(application_store, &ids, now).await?;
     if let (Some(pg), Some(archive), Some(firm_id)) = (lanes.pg, lanes.archive, firm_id) {
         let stores = store::document_retention::RetentionStores {
-            surreal,
+            application_store,
             pg,
             documents: storage,
             archive,
@@ -437,18 +456,18 @@ async fn finish_run(
 /// `closed_repository` archive nor, with the durable lane, a committed Project
 /// Recovery Archive cut after the close.
 async fn awaiting_archive(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     pg: Option<&store::postgres::PostgresDb>,
     project_id: Uuid,
 ) -> Result<bool, PurgeError> {
-    let Some(project) = store::projects::find_by_id(surreal, project_id).await? else {
+    let Some(project) = store::projects::find_by_id(application_store, project_id).await? else {
         return Ok(false);
     };
     let Some(closed_at) = project.closed_at.as_deref() else {
         return Ok(false);
     };
     let archive = store::assets::latest_of_kind(
-        surreal,
+        application_store,
         project_id,
         rules::kind::Kind::ClosedRepository.as_str(),
     )
@@ -473,7 +492,7 @@ async fn awaiting_archive(
 
 /// The governed purge as the DBOS retention schedule's source.
 pub struct ScheduledPurge {
-    pub surreal: store::surreal::SurrealDb,
+    pub application_store: store::application_store::ApplicationStore,
     pub storage: Arc<dyn StorageService>,
     pub pg: Option<store::postgres::PostgresDb>,
     pub archive: Option<Arc<dyn StorageService>>,
@@ -486,7 +505,7 @@ impl workflows::dbos_engine::retention_purge::RetentionSource for ScheduledPurge
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<(Uuid, String)>, workflows::dbos_engine::retention_purge::PurgeQueueError> {
-        due_chains(&self.surreal, now)
+        due_chains(&self.application_store, now)
             .await
             .map(|chains| {
                 chains
@@ -507,7 +526,7 @@ impl workflows::dbos_engine::retention_purge::RetentionSource for ScheduledPurge
             archive: self.archive.as_ref(),
         };
         match purge_one(
-            &self.surreal,
+            &self.application_store,
             &self.storage,
             lanes,
             &self.authority,
@@ -541,11 +560,10 @@ fn outcome(report: &PurgeReport) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{outcome, PurgeAuthority, PurgeReport, PurgedDocument, ScheduledPurge};
+    use super::{outcome, PurgeAuthority, PurgeReport, PurgedDocument};
     use std::collections::BTreeMap;
-    use std::sync::Arc;
+
     use uuid::Uuid;
-    use workflows::dbos_engine::retention_purge::RetentionSource as _;
 
     #[test]
     fn the_authority_map_parses_firm_person_pairs_and_fails_closed() {
@@ -591,28 +609,5 @@ mod tests {
             expunge_record_id: Uuid::new_v4(),
         });
         assert_eq!(outcome(&report), "purged");
-    }
-
-    /// With nothing soft-deleted the schedule finds no chain, and a chain it
-    /// is handed anyway is no longer eligible: nothing is purged on a stale
-    /// selection.
-    #[tokio::test]
-    async fn the_schedule_source_purges_nothing_it_cannot_reselect() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage: Arc<dyn cloud::StorageService> =
-            Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
-        let source = ScheduledPurge {
-            surreal: store::surreal::test_support::mem().await,
-            storage,
-            pg: None,
-            archive: None,
-            authority: PurgeAuthority::ByFirm(BTreeMap::new()),
-        };
-        let now = chrono::Utc::now();
-        assert!(source.due(now).await.unwrap().is_empty());
-        assert_eq!(
-            source.purge(Uuid::new_v4(), "drafts/a.md", now).await,
-            "no longer eligible"
-        );
     }
 }

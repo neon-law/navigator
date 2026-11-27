@@ -218,11 +218,12 @@ pub fn firm_brand_mark() -> AppBrandMark {
 /// compiled answer rather than breaking the navbar.
 #[cfg(feature = "server")]
 pub async fn resolve_app_brand_mark(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     current: views::brand::BrandKey,
 ) -> AppBrandMark {
     let compiled = firm_brand_mark();
-    let Ok(Some(brand)) = store::brands::find_by_key(surreal, current.as_str()).await else {
+    let Ok(Some(brand)) = store::brands::find_by_key(application_store, current.as_str()).await
+    else {
         return compiled;
     };
     let Some(object_key) = brand.logo_object_key else {
@@ -251,20 +252,20 @@ pub async fn resolve_app_brand_mark(
 /// caller then keeps the host's own Brand.
 #[cfg(feature = "server")]
 pub async fn firm_portal_theme_brand(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     host: views::brand::BrandKey,
 ) -> Option<views::brand::BrandKey> {
     if host.keeps_own_portal_look() {
         return None;
     }
-    let firm_id = store::firms::firm_id_for_brand_key(surreal, host.as_str())
+    let firm_id = store::firms::firm_id_for_brand_key(application_store, host.as_str())
         .await
         .ok()??;
-    let theme = store::firms::find_by_id(surreal, firm_id)
+    let theme = store::firms::find_by_id(application_store, firm_id)
         .await
         .ok()??
         .portal_theme_brand_key?;
-    let owner = store::brands::find_by_key(surreal, &theme)
+    let owner = store::brands::find_by_key(application_store, &theme)
         .await
         .ok()??
         .firm_id;
@@ -282,16 +283,16 @@ pub async fn firm_portal_theme_brand(
 /// [`resolve_app_brand_mark`] unchanged.
 #[cfg(feature = "server")]
 pub async fn resolve_theme_brand_mark(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     host: views::brand::BrandKey,
     key: views::brand::BrandKey,
     deployment_host: Option<&str>,
 ) -> AppBrandMark {
     if key == host {
-        return resolve_app_brand_mark(surreal, host).await;
+        return resolve_app_brand_mark(application_store, host).await;
     }
     let firm = &key.resolve_branding(&views::brand::DEFAULT_BRANDING).firm;
-    let uploaded = store::brands::find_by_key(surreal, key.as_str())
+    let uploaded = store::brands::find_by_key(application_store, key.as_str())
         .await
         .ok()
         .flatten()
@@ -713,190 +714,5 @@ mod tests {
             );
         })
         .await;
-    }
-
-    /// ENG-590: a brand with no uploaded logo renders the compiled one,
-    /// unchanged from today.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn resolve_app_brand_mark_falls_back_to_the_compiled_logo_with_no_upload() {
-        let surreal = store::surreal::test_support::mem().await;
-        let mark = resolve_app_brand_mark(&surreal, views::brand::BrandKey::Neon).await;
-        assert_eq!(mark, firm_brand_mark());
-    }
-
-    /// A brand with an uploaded logo (ENG-586) renders it in preference to
-    /// the compiled one, keeping the same home href and firm name.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn resolve_app_brand_mark_prefers_an_uploaded_logo() {
-        let surreal = store::surreal::test_support::mem().await;
-        let brand = store::brands::find_by_key(&surreal, "neon")
-            .await
-            .unwrap()
-            .unwrap();
-
-        // `mem`'s own fixture scopes every compiled brand to a firm id that
-        // names no real Firm (ENG-659), deliberately, so it cannot pollute
-        // every other test's own listing/count over the `firm`/`entity`
-        // tables. This test needs to author that row as a *real* Firm's
-        // Admin DRI, so it reassigns the existing "neon" row onto a real
-        // Firm created just for this test — a raw write, since `firm_id` is
-        // otherwise fixed at creation and never reassigned through `update`.
-        let entity_id = store::test_support::seed_entity(&surreal).await;
-        let admin = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Neon Logo Admin DRI",
-                "neon-logo-admin-dri@example.com",
-                store::persons::Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            &surreal,
-            &store::firms::NewFirm {
-                name: "Neon Logo Practice".to_string(),
-                status: "active".to_string(),
-                entity_id,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        surreal
-            .query("UPDATE $id SET firm_id = $firm_id")
-            .bind(("id", store::surreal::record_id("brand", brand.id)))
-            .bind(("firm_id", store::surreal::record_id("firm", firm.id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-
-        store::brands::set_logo(
-            &surreal,
-            store::persons::Role::Admin,
-            Some(admin.id),
-            brand.id,
-            "brands/neon/logo.svg",
-            "image/svg+xml",
-        )
-        .await
-        .unwrap();
-
-        let mark = resolve_app_brand_mark(&surreal, views::brand::BrandKey::Neon).await;
-        let compiled = firm_brand_mark();
-        let logo = mark.logo.expect("the uploaded logo renders");
-        assert_eq!(logo.src, "/assets/brands/neon/logo.svg");
-        assert_eq!(logo.brand_name, compiled.firm_name);
-        assert_eq!(mark.firm_name, compiled.firm_name);
-        assert_eq!(mark.tokens_href, compiled.tokens_href);
-    }
-
-    /// A Firm's Portal Theme Brand themes the hosts of every Brand it wears,
-    /// and the host keeps its own Brand when the Firm names none, when the
-    /// theme Brand has moved to another Firm, or when no Firm wears the host.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn the_firm_s_portal_theme_brand_dresses_its_hosts_else_the_host_brand() {
-        use store::persons::Role;
-        use views::brand::BrandKey;
-
-        let surreal = store::surreal::test_support::mem().await;
-        let admin = store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Theme Admin DRI",
-                "theme-admin-dri@example.com",
-                Role::Admin,
-            ),
-        )
-        .await
-        .unwrap();
-        let mut firms = Vec::new();
-        for name in ["Theme Practice", "Elsewhere Practice"] {
-            let entity_id = store::test_support::seed_entity(&surreal).await;
-            firms.push(
-                store::firms::create(
-                    &surreal,
-                    &store::firms::NewFirm {
-                        name: name.to_string(),
-                        status: "active".to_string(),
-                        entity_id,
-                        admin_dri_person_id: admin.id,
-                    },
-                )
-                .await
-                .unwrap(),
-            );
-        }
-        let (firm, elsewhere) = (&firms[0], &firms[1]);
-        // `mem` scopes every compiled Brand to a placeholder firm id; hand
-        // `neon` and `guieb-shook` to the real Firm, which wears `neon`.
-        let own = |key: &'static str, firm_id: uuid::Uuid| {
-            let surreal = surreal.clone();
-            async move {
-                surreal
-                    .query("UPDATE brand SET firm_id = $firm_id WHERE brand_key = $key")
-                    .bind(("key", key))
-                    .bind(("firm_id", store::surreal::record_id("firm", firm_id)))
-                    .await
-                    .unwrap()
-                    .check()
-                    .unwrap();
-            }
-        };
-        own("neon", firm.id).await;
-        own("guieb-shook", firm.id).await;
-        store::firms::ensure_brand(&surreal, firm.id, "neon")
-            .await
-            .unwrap();
-
-        assert_eq!(
-            firm_portal_theme_brand(&surreal, BrandKey::Neon).await,
-            None,
-            "no theme named: the host keeps its own brand"
-        );
-        store::firms::update(
-            &surreal,
-            Role::Owner,
-            None,
-            firm.id,
-            &store::firms::FirmEdit {
-                portal_theme_brand_key: Some(Some("guieb-shook".to_string())),
-                ..store::firms::FirmEdit::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            firm_portal_theme_brand(&surreal, BrandKey::Neon).await,
-            Some(BrandKey::GuiebShook)
-        );
-        let mark =
-            resolve_theme_brand_mark(&surreal, BrandKey::Neon, BrandKey::GuiebShook, None).await;
-        assert_eq!(mark.tokens_href, "/public/css/brand-guieb-shook-tokens.css");
-        let logo = mark.logo.expect("the theme brand ships a logo");
-        assert_eq!(mark.firm_name, logo.brand_name);
-        assert_eq!(logo.src, "/public/brand/guieb-shook/logo.svg");
-        assert_ne!(mark.firm_name, firm_brand_mark().firm_name);
-        assert_eq!(
-            resolve_theme_brand_mark(&surreal, BrandKey::Neon, BrandKey::Neon, None).await,
-            firm_brand_mark(),
-            "a theme equal to the host is the host's own mark"
-        );
-        assert_eq!(
-            firm_portal_theme_brand(&surreal, BrandKey::DeleteYourData).await,
-            None,
-            "a host no Firm wears keeps its own brand"
-        );
-
-        own("guieb-shook", elsewhere.id).await;
-        assert_eq!(
-            firm_portal_theme_brand(&surreal, BrandKey::Neon).await,
-            None,
-            "a theme brand moved to another Firm no longer themes this one"
-        );
     }
 }

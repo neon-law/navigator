@@ -505,7 +505,7 @@ impl SchedulingCalendars {
                 // One owner inventory per Firm also disambiguates equal calendar names.
                 let owner = state
                     .integration_providers
-                    .calendar(&state.surreal, first.project_id)
+                    .calendar(&state.application_store, first.project_id)
                     .await;
                 let calendar_codes = if let Ok(owner) = owner {
                     owner.owned_calendar_codes().await.unwrap_or_default()
@@ -639,7 +639,7 @@ async fn project_busy(
             missing,
         }),
     }
-    for deadline in store::project_deadlines::list(&state.surreal, project.id)
+    for deadline in store::project_deadlines::list(&state.application_store, project.id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
     {
@@ -751,7 +751,7 @@ async fn project_events(
     };
     let calendar = match state
         .integration_providers
-        .calendar(&state.surreal, project.id)
+        .calendar(&state.application_store, project.id)
         .await
     {
         Ok(calendar) => calendar,
@@ -811,7 +811,7 @@ async fn google_firms(
     session: &crate::session::SessionData,
 ) -> Result<Vec<Uuid>, ApiError> {
     let firms = store::firm_capability::allowed_firm_ids(
-        &state.surreal,
+        &state.application_store,
         session.role,
         session.person_id,
         store::firm_capability::FirmCapability::ReadAttorneyCalendars,
@@ -828,9 +828,10 @@ async fn authorized_project(
     session: &crate::session::SessionData,
     code: &str,
 ) -> Result<store::projects::Project, ApiError> {
-    let visible = store::access::visible_projects(&state.surreal, session.person_id, session.role)
-        .await
-        .map_err(ApiError::Db)?;
+    let visible =
+        store::access::visible_projects(&state.application_store, session.person_id, session.role)
+            .await
+            .map_err(ApiError::Db)?;
     let mut matching = visible.into_iter().filter(|project| project.code == code);
     let project = matching.next().ok_or(ApiError::NotFound)?;
     if matching.next().is_some() {
@@ -840,7 +841,7 @@ async fn authorized_project(
         return Err(ApiError::NotFound);
     };
     let allowed = store::firm_capability::resolve(
-        &state.surreal,
+        &state.application_store,
         session.role,
         session.person_id,
         firm_id,
@@ -856,8 +857,8 @@ async fn authorized_project(
     {
         return Err(ApiError::NotFound);
     }
-    let participates = store::projects::can_access_as_lawyer_in_surreal(
-        &state.surreal,
+    let participates = store::projects::can_access_as_lawyer(
+        &state.application_store,
         session.person_id,
         session.role,
         project.id,
@@ -876,7 +877,7 @@ async fn project_attorneys(
     code: &str,
 ) -> Result<(store::projects::Project, Vec<Attorney>), ApiError> {
     let project = authorized_project(state, session, code).await?;
-    let rows = store::projects::participations_for_project(&state.surreal, project.id)
+    let rows = store::projects::participations_for_project(&state.application_store, project.id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
     let mut attorneys = Vec::new();
@@ -886,7 +887,7 @@ async fn project_attorneys(
         {
             continue;
         }
-        let Some(person) = store::persons::find_by_id(&state.surreal, row.person_id)
+        let Some(person) = store::persons::find_by_id(&state.application_store, row.person_id)
             .await
             .map_err(ApiError::Person)?
         else {
@@ -913,16 +914,17 @@ async fn firm_attorneys(
     }
     let mut by_person = BTreeMap::new();
     for firm_id in firms {
-        let memberships = store::firms::memberships_for_firm(&state.surreal, firm_id)
+        let memberships = store::firms::memberships_for_firm(&state.application_store, firm_id)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?;
         for membership in memberships {
             if by_person.contains_key(&membership.person_id) {
                 continue;
             }
-            let Some(person) = store::persons::find_by_id(&state.surreal, membership.person_id)
-                .await
-                .map_err(ApiError::Person)?
+            let Some(person) =
+                store::persons::find_by_id(&state.application_store, membership.person_id)
+                    .await
+                    .map_err(ApiError::Person)?
             else {
                 continue;
             };
@@ -958,7 +960,7 @@ async fn audience(
         if !firm_member(state, session).await? {
             return Err(ApiError::NotFound);
         }
-        let person = store::persons::find_by_id(&state.surreal, person_id)
+        let person = store::persons::find_by_id(&state.application_store, person_id)
             .await
             .map_err(ApiError::Person)?
             .ok_or(ApiError::NotFound)?;

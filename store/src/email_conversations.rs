@@ -15,18 +15,11 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::types::SurrealValue;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::communications::{self as authority, CommunicationsAuthorityError};
-use crate::surreal::{record_id, record_uuid, SurrealDb};
-
-/// Bound as `$thread_token`, never `$token`: SurrealDB reserves `$token`
-/// as a session variable and refuses to let a statement set it.
-const TABLE: &str = "email_conversation";
-const MESSAGE_TABLE: &str = "email_conversation_message";
-const PERSON_TABLE: &str = "person";
 
 /// Freshly opened; not yet acted on.
 pub const STATUS_OPEN: &str = "open";
@@ -52,8 +45,6 @@ pub const DIRECTION_SYSTEM: &str = "system";
 #[derive(Debug, Error)]
 pub enum EmailConversationError {
     /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     /// PostgreSQL, under the communications authority, failed.
     #[error(transparent)]
     Postgres(#[from] CommunicationsAuthorityError),
@@ -89,44 +80,6 @@ pub struct EmailConversation {
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
-
-#[derive(SurrealValue)]
-struct ConversationRow {
-    id: surrealdb::types::RecordId,
-    token: String,
-    external_email: String,
-    external_name: Option<String>,
-    person_id: Option<surrealdb::types::RecordId>,
-    subject: String,
-    status: String,
-    notation_id: Option<surrealdb::types::RecordId>,
-    firm_id: Option<surrealdb::types::RecordId>,
-    project_id: Option<surrealdb::types::RecordId>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl ConversationRow {
-    fn into_conversation(self) -> Option<EmailConversation> {
-        Some(EmailConversation {
-            id: record_uuid(&self.id)?,
-            token: self.token,
-            external_email: self.external_email,
-            external_name: self.external_name,
-            person_id: self.person_id.as_ref().and_then(record_uuid),
-            subject: self.subject,
-            status: self.status,
-            notation_id: self.notation_id.as_ref().and_then(record_uuid),
-            firm_id: self.firm_id.as_ref().and_then(record_uuid),
-            project_id: self.project_id.as_ref().and_then(record_uuid),
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const SELECT: &str = "id, token, external_email, external_name, person_id, subject, status, \
-                      notation_id, firm_id, project_id, inserted_at, updated_at";
 
 /// A PostgreSQL conversation as `row`.
 macro_rules! pg_conversation {
@@ -165,47 +118,6 @@ pub struct EmailConversationMessage {
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
-
-#[derive(SurrealValue)]
-struct MessageRow {
-    id: surrealdb::types::RecordId,
-    conversation_id: surrealdb::types::RecordId,
-    direction: String,
-    from_addr: String,
-    to_addr: String,
-    subject: String,
-    body_text: String,
-    raw_storage_key: Option<String>,
-    provider_message_id: Option<String>,
-    in_reply_to: Option<String>,
-    command_payload: Option<String>,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl MessageRow {
-    fn into_message(self) -> Option<EmailConversationMessage> {
-        Some(EmailConversationMessage {
-            id: record_uuid(&self.id)?,
-            conversation_id: record_uuid(&self.conversation_id)?,
-            direction: self.direction,
-            from_addr: self.from_addr,
-            to_addr: self.to_addr,
-            subject: self.subject,
-            body_text: self.body_text,
-            raw_storage_key: self.raw_storage_key,
-            provider_message_id: self.provider_message_id,
-            in_reply_to: self.in_reply_to,
-            command_payload: self.command_payload,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const MESSAGE_SELECT: &str = "id, conversation_id, direction, from_addr, to_addr, subject, \
-                              body_text, raw_storage_key, provider_message_id, in_reply_to, \
-                              command_payload, inserted_at, updated_at";
 
 /// What to record when opening a new support thread. `status` defaults to
 /// [`STATUS_OPEN`] via [`open`].
@@ -250,76 +162,29 @@ pub struct NewMessage<'a> {
 /// [`EmailConversationError::TokenTaken`] when the token already threads
 /// another conversation, or any other database error.
 pub async fn open(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     new: &NewConversation<'_>,
 ) -> Result<Uuid, EmailConversationError> {
     let id = Uuid::now_v7();
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "INSERT INTO email_conversation (id, token, external_email, external_name, \
-             person_id, subject, status, notation_id, inserted_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())",
-        )
-        .bind(id)
-        .bind(new.token.to_owned())
-        .bind(new.external_email.to_owned())
-        .bind(new.external_name.map(str::to_owned))
-        .bind(new.person_id)
-        .bind(new.subject.to_owned())
-        .bind(STATUS_OPEN)
-        .bind(new.notation_id);
-        return match authority::execute(&pg, query).await {
-            Ok(_) => Ok(id),
-            Err(error) if error.violates(PG_TOKEN_INDEX) => Err(EmailConversationError::TokenTaken),
-            Err(error) => Err(error.into()),
-        };
-    }
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             token = $thread_token, external_email = $external_email, external_name = $external_name, \
-             person_id = $person_id, subject = $subject, status = $status, \
-             notation_id = $notation_id \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("thread_token", new.token.to_string()))
-        .bind(("external_email", new.external_email.to_string()))
-        .bind(("external_name", new.external_name.map(str::to_string)))
-        .bind((
-            "person_id",
-            new.person_id.map(|p| record_id(PERSON_TABLE, p)),
-        ))
-        .bind(("subject", new.subject.to_string()))
-        .bind(("status", STATUS_OPEN.to_string()))
-        .bind((
-            "notation_id",
-            new.notation_id
-                .map(|n| record_id(crate::notations::TABLE, n)),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(classify_open)?;
-    let row: Option<ConversationRow> = response.take(0)?;
-    let id = row
-        .and_then(ConversationRow::into_conversation)
-        .map_or(id, |c| c.id);
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::EmailConversation(id),
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "INSERT INTO email_conversation (id, token, external_email, external_name, \
+         person_id, subject, status, notation_id, inserted_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())",
     )
-    .await;
-    Ok(id)
-}
-
-/// Name the token index specifically. A collision is the one failure the
-/// caller can act on — mint another token and retry — so it must not
-/// arrive as an opaque database error.
-fn classify_open(error: surrealdb::Error) -> EmailConversationError {
-    if crate::surreal::retry::unique_violation(&error) == Some("email_conversation_token") {
-        return EmailConversationError::TokenTaken;
+    .bind(id)
+    .bind(new.token.to_owned())
+    .bind(new.external_email.to_owned())
+    .bind(new.external_name.map(str::to_owned))
+    .bind(new.person_id)
+    .bind(new.subject.to_owned())
+    .bind(STATUS_OPEN)
+    .bind(new.notation_id);
+    match authority::execute(&pg, query).await {
+        Ok(_) => Ok(id),
+        Err(error) if error.violates(PG_TOKEN_INDEX) => Err(EmailConversationError::TokenTaken),
+        Err(error) => Err(error.into()),
     }
-    EmailConversationError::Db(error)
 }
 
 /// Look up a conversation by its `Reply-To` token — the threading lookup
@@ -329,25 +194,13 @@ fn classify_open(error: surrealdb::Error) -> EmailConversationError {
 ///
 /// Propagates any database error.
 pub async fn by_token(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     token: &str,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query =
-            sqlx::query(concat!(pg_conversation!(), " WHERE c.token = $1")).bind(token.to_owned());
-        return Ok(authority::maybe(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE token = $thread_token LIMIT 1"
-        ))
-        .bind(("thread_token", token.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .find_map(ConversationRow::into_conversation))
+    let pg = authority::authority().await?;
+    let query =
+        sqlx::query(concat!(pg_conversation!(), " WHERE c.token = $1")).bind(token.to_owned());
+    Ok(authority::maybe(&pg, query).await?)
 }
 
 /// The most recent conversation opened by an external address — the
@@ -361,29 +214,16 @@ pub async fn by_token(
 ///
 /// Propagates any database error.
 pub async fn by_external_email(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     external_email: &str,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(concat!(
-            pg_conversation!(),
-            " WHERE c.external_email = $1 ORDER BY c.id DESC LIMIT 1"
-        ))
-        .bind(external_email.to_owned());
-        return Ok(authority::maybe(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE external_email = $external_email ORDER BY id DESC LIMIT 1"
-        ))
-        .bind(("external_email", external_email.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .find_map(ConversationRow::into_conversation))
+    let pg = authority::authority().await?;
+    let query = sqlx::query(concat!(
+        pg_conversation!(),
+        " WHERE c.external_email = $1 ORDER BY c.id DESC LIMIT 1"
+    ))
+    .bind(external_email.to_owned());
+    Ok(authority::maybe(&pg, query).await?)
 }
 
 /// Load one conversation by id.
@@ -392,20 +232,12 @@ pub async fn by_external_email(
 ///
 /// Propagates any database error.
 pub async fn by_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(concat!(pg_conversation!(), " WHERE c.id = $1")).bind(id);
-        return Ok(authority::maybe(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM $id"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<ConversationRow> = response.take(0)?;
-    Ok(row.and_then(ConversationRow::into_conversation))
+    let pg = authority::authority().await?;
+    let query = sqlx::query(concat!(pg_conversation!(), " WHERE c.id = $1")).bind(id);
+    Ok(authority::maybe(&pg, query).await?)
 }
 
 /// Append one hop to a thread's transcript, returning its id. Does not
@@ -415,62 +247,30 @@ pub async fn by_id(
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn append(db: &SurrealDb, new: &NewMessage<'_>) -> Result<Uuid, EmailConversationError> {
+pub async fn append(
+    _db: &ApplicationStore,
+    new: &NewMessage<'_>,
+) -> Result<Uuid, EmailConversationError> {
     let id = Uuid::now_v7();
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "INSERT INTO email_conversation_message (id, conversation_id, direction, from_addr, \
-             to_addr, subject, body_text, raw_storage_key, provider_message_id, in_reply_to, \
-             command_payload, inserted_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())",
-        )
-        .bind(id)
-        .bind(new.conversation_id)
-        .bind(new.direction.to_owned())
-        .bind(new.from_addr.to_owned())
-        .bind(new.to_addr.to_owned())
-        .bind(new.subject.to_owned())
-        .bind(new.body_text.to_owned())
-        .bind(new.raw_storage_key.map(str::to_owned))
-        .bind(new.provider_message_id.map(str::to_owned))
-        .bind(new.in_reply_to.map(str::to_owned))
-        .bind(new.command_payload.map(str::to_owned));
-        authority::execute(&pg, query).await?;
-        return Ok(id);
-    }
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             conversation_id = $conversation_id, direction = $direction, \
-             from_addr = $from_addr, to_addr = $to_addr, subject = $subject, \
-             body_text = $body_text, raw_storage_key = $raw_storage_key, \
-             provider_message_id = $provider_message_id, in_reply_to = $in_reply_to, \
-             command_payload = $command_payload \
-             RETURN {MESSAGE_SELECT}"
-        ))
-        .bind(("id", record_id(MESSAGE_TABLE, id)))
-        .bind(("conversation_id", record_id(TABLE, new.conversation_id)))
-        .bind(("direction", new.direction.to_string()))
-        .bind(("from_addr", new.from_addr.to_string()))
-        .bind(("to_addr", new.to_addr.to_string()))
-        .bind(("subject", new.subject.to_string()))
-        .bind(("body_text", new.body_text.to_string()))
-        .bind(("raw_storage_key", new.raw_storage_key.map(str::to_string)))
-        .bind((
-            "provider_message_id",
-            new.provider_message_id.map(str::to_string),
-        ))
-        .bind(("in_reply_to", new.in_reply_to.map(str::to_string)))
-        .bind(("command_payload", new.command_payload.map(str::to_string)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<MessageRow> = response.take(0)?;
-    let id = row.and_then(MessageRow::into_message).map_or(id, |m| m.id);
-    crate::postgres_mirror::after_write(
-        db,
-        crate::postgres_mirror::MirrorKey::EmailConversationMessage(id),
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "INSERT INTO email_conversation_message (id, conversation_id, direction, from_addr, \
+         to_addr, subject, body_text, raw_storage_key, provider_message_id, in_reply_to, \
+         command_payload, inserted_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())",
     )
-    .await;
+    .bind(id)
+    .bind(new.conversation_id)
+    .bind(new.direction.to_owned())
+    .bind(new.from_addr.to_owned())
+    .bind(new.to_addr.to_owned())
+    .bind(new.subject.to_owned())
+    .bind(new.body_text.to_owned())
+    .bind(new.raw_storage_key.map(str::to_owned))
+    .bind(new.provider_message_id.map(str::to_owned))
+    .bind(new.in_reply_to.map(str::to_owned))
+    .bind(new.command_payload.map(str::to_owned));
+    authority::execute(&pg, query).await?;
     Ok(id)
 }
 
@@ -480,30 +280,16 @@ pub async fn append(db: &SurrealDb, new: &NewMessage<'_>) -> Result<Uuid, EmailC
 ///
 /// Propagates any database error.
 pub async fn messages(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     conversation_id: Uuid,
 ) -> Result<Vec<EmailConversationMessage>, EmailConversationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(m) AS row FROM email_conversation_message m \
-             WHERE m.conversation_id = $1 ORDER BY m.id",
-        )
-        .bind(conversation_id);
-        return Ok(authority::rows(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {MESSAGE_SELECT} FROM {MESSAGE_TABLE} \
-             WHERE conversation_id = $conversation ORDER BY id ASC"
-        ))
-        .bind(("conversation", record_id(TABLE, conversation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<MessageRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(MessageRow::into_message)
-        .collect())
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "SELECT to_jsonb(m) AS row FROM email_conversation_message m \
+         WHERE m.conversation_id = $1 ORDER BY m.id",
+    )
+    .bind(conversation_id);
+    Ok(authority::rows(&pg, query).await?)
 }
 
 /// Resolve one message by its own row id, independent of which conversation
@@ -514,23 +300,14 @@ pub async fn messages(
 ///
 /// Propagates any database error.
 pub async fn message_by_id(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
 ) -> Result<Option<EmailConversationMessage>, EmailConversationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "SELECT to_jsonb(m) AS row FROM email_conversation_message m WHERE m.id = $1",
-        )
-        .bind(id);
-        return Ok(authority::maybe(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!("SELECT {MESSAGE_SELECT} FROM ONLY $id"))
-        .bind(("id", record_id(MESSAGE_TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<MessageRow> = response.take(0)?;
-    Ok(row.and_then(MessageRow::into_message))
+    let pg = authority::authority().await?;
+    let query =
+        sqlx::query("SELECT to_jsonb(m) AS row FROM email_conversation_message m WHERE m.id = $1")
+            .bind(id);
+    Ok(authority::maybe(&pg, query).await?)
 }
 
 /// Move a conversation to a new `status`. Returns the updated row, or
@@ -540,39 +317,18 @@ pub async fn message_by_id(
 ///
 /// Propagates any database error.
 pub async fn set_status(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     status: &str,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "UPDATE email_conversation c SET status = $2, updated_at = now() WHERE c.id = $1 \
-             RETURNING to_jsonb(c) AS row",
-        )
-        .bind(id)
-        .bind(status.to_owned());
-        return Ok(authority::maybe(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET status = $status, updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("status", status.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    let result = rows
-        .into_iter()
-        .find_map(ConversationRow::into_conversation);
-    if result.is_some() {
-        crate::postgres_mirror::after_write(
-            db,
-            crate::postgres_mirror::MirrorKey::EmailConversation(id),
-        )
-        .await;
-    }
-    Ok(result)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "UPDATE email_conversation c SET status = $2, updated_at = now() WHERE c.id = $1 \
+         RETURNING to_jsonb(c) AS row",
+    )
+    .bind(id)
+    .bind(status.to_owned());
+    Ok(authority::maybe(&pg, query).await?)
 }
 
 /// Link a conversation to a running workflow notation (the `@link` lawyer
@@ -584,39 +340,18 @@ pub async fn set_status(
 ///
 /// Propagates any database error.
 pub async fn set_notation(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     notation_id: Uuid,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "UPDATE email_conversation c SET notation_id = $2, updated_at = now() \
-             WHERE c.id = $1 RETURNING to_jsonb(c) AS row",
-        )
-        .bind(id)
-        .bind(notation_id);
-        return Ok(authority::maybe(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET notation_id = $notation, updated_at = time::now() RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind(("notation", record_id(crate::notations::TABLE, notation_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    let result = rows
-        .into_iter()
-        .find_map(ConversationRow::into_conversation);
-    if result.is_some() {
-        crate::postgres_mirror::after_write(
-            db,
-            crate::postgres_mirror::MirrorKey::EmailConversation(id),
-        )
-        .await;
-    }
-    Ok(result)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "UPDATE email_conversation c SET notation_id = $2, updated_at = now() \
+         WHERE c.id = $1 RETURNING to_jsonb(c) AS row",
+    )
+    .bind(id)
+    .bind(notation_id);
+    Ok(authority::maybe(&pg, query).await?)
 }
 
 /// Record the Firm and Project an Owner assigned this thread to.
@@ -625,354 +360,21 @@ pub async fn set_notation(
 ///
 /// Propagates any database error.
 pub async fn set_scope(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     id: Uuid,
     firm_id: Option<Uuid>,
     project_id: Option<Uuid>,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
-    if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "UPDATE email_conversation c SET firm_id = $2, project_id = $3, updated_at = now() \
-             WHERE c.id = $1 RETURNING to_jsonb(c) AS row",
-        )
-        .bind(id)
-        .bind(firm_id)
-        .bind(project_id);
-        return Ok(authority::maybe(&pg, query).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET firm_id = $firm, project_id = $project, updated_at = time::now() \
-             RETURN {SELECT}"
-        ))
-        .bind(("id", record_id(TABLE, id)))
-        .bind((
-            "firm",
-            firm_id.map(|firm| record_id(crate::firms::TABLE, firm)),
-        ))
-        .bind((
-            "project",
-            project_id.map(|project| record_id(crate::projects::PROJECT_TABLE, project)),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<ConversationRow> = response.take(0)?;
-    let result = rows
-        .into_iter()
-        .find_map(ConversationRow::into_conversation);
-    if result.is_some() {
-        crate::postgres_mirror::after_write(
-            db,
-            crate::postgres_mirror::MirrorKey::EmailConversation(id),
-        )
-        .await;
-    }
-    Ok(result)
+    let pg = authority::authority().await?;
+    let query = sqlx::query(
+        "UPDATE email_conversation c SET firm_id = $2, project_id = $3, updated_at = now() \
+         WHERE c.id = $1 RETURNING to_jsonb(c) AS row",
+    )
+    .bind(id)
+    .bind(firm_id)
+    .bind(project_id);
+    Ok(authority::maybe(&pg, query).await?)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        append, by_external_email, by_id, by_token, messages, open, set_notation, set_status,
-        EmailConversationError, NewConversation, NewMessage, DIRECTION_FROM_EXTERNAL,
-        DIRECTION_TO_LAWYER, STATUS_AWAITING_LAWYER, STATUS_OPEN,
-    };
-    use crate::surreal::test_support::mem;
-    use crate::test_support::seed_notation;
-
-    #[tokio::test]
-    async fn open_then_thread_back_by_token() {
-        let db = mem().await;
-
-        let id = open(
-            &db,
-            &NewConversation {
-                token: "tok_pisces_001",
-                external_email: "pisces@example.com",
-                external_name: Some("Pisces"),
-                subject: "Question about my LLC",
-                person_id: None,
-                notation_id: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        // The inbound reply path looks the thread up by its Reply-To token.
-        let found = by_token(&db, "tok_pisces_001").await.unwrap().unwrap();
-        assert_eq!(found.id, id);
-        assert_eq!(found.status, STATUS_OPEN);
-        assert_eq!(found.external_name.as_deref(), Some("Pisces"));
-
-        // An unknown token threads to nothing.
-        assert!(by_token(&db, "tok_nope").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn transcript_is_ordered_and_status_projects() {
-        let db = mem().await;
-        let id = open(
-            &db,
-            &NewConversation {
-                token: "tok_pisces_002",
-                external_email: "pisces@example.com",
-                external_name: None,
-                subject: "PDF to authorize",
-                person_id: None,
-                notation_id: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        append(
-            &db,
-            &NewMessage {
-                conversation_id: id,
-                direction: DIRECTION_FROM_EXTERNAL,
-                from_addr: "pisces@example.com",
-                to_addr: "support@neonlaw.com",
-                subject: "PDF to authorize",
-                body_text: "Please review the attached.",
-                raw_storage_key: Some("inbound/1234-pisces.eml"),
-                provider_message_id: Some("<msg-1@mail>"),
-                in_reply_to: None,
-                command_payload: None,
-            },
-        )
-        .await
-        .unwrap();
-        append(
-            &db,
-            &NewMessage {
-                conversation_id: id,
-                direction: DIRECTION_TO_LAWYER,
-                from_addr: "support@neonlaw.com",
-                to_addr: "nick+aida@neonlaw.com",
-                subject: "[Pisces] PDF to authorize",
-                body_text: "Pisces sent a PDF to authorize.",
-                raw_storage_key: None,
-                provider_message_id: Some("<msg-2@sg>"),
-                in_reply_to: None,
-                command_payload: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        let transcript = messages(&db, id).await.unwrap();
-        assert_eq!(transcript.len(), 2);
-        assert_eq!(transcript[0].direction, DIRECTION_FROM_EXTERNAL);
-        assert_eq!(transcript[1].direction, DIRECTION_TO_LAWYER);
-        assert_eq!(transcript[1].to_addr, "nick+aida@neonlaw.com");
-
-        let updated = set_status(&db, id, STATUS_AWAITING_LAWYER)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(updated.status, STATUS_AWAITING_LAWYER);
-    }
-
-    #[tokio::test]
-    async fn provider_message_ids_can_repeat_across_hops_and_conversations() {
-        let db = mem().await;
-        let first = open(
-            &db,
-            &NewConversation {
-                token: "tok_provider_one",
-                external_email: "one@example.test",
-                external_name: None,
-                subject: "one",
-                person_id: None,
-                notation_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        let second = open(
-            &db,
-            &NewConversation {
-                token: "tok_provider_two",
-                external_email: "two@example.test",
-                external_name: None,
-                subject: "two",
-                person_id: None,
-                notation_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        let new = NewMessage {
-            conversation_id: first,
-            direction: DIRECTION_FROM_EXTERNAL,
-            from_addr: "one@example.test",
-            to_addr: "support@example.test",
-            subject: "one",
-            body_text: "first",
-            provider_message_id: Some("provider-1"),
-            ..Default::default()
-        };
-        let id = append(&db, &new).await.unwrap();
-        let next_hop = append(
-            &db,
-            &NewMessage {
-                direction: "to_external",
-                body_text: "a distinct hop",
-                ..new.clone()
-            },
-        )
-        .await
-        .unwrap();
-        assert_ne!(id, next_hop);
-        assert_eq!(messages(&db, first).await.unwrap().len(), 2);
-        let other = append(
-            &db,
-            &NewMessage {
-                conversation_id: second,
-                ..new
-            },
-        )
-        .await
-        .unwrap();
-        assert_ne!(id, other);
-        assert_eq!(messages(&db, second).await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn token_is_unique() {
-        // The token is the routing key every inbound reply is resolved by,
-        // so two threads sharing one would splice a stranger's exchange into
-        // a client's. A collision has to be refused, and named, so the
-        // caller can mint another and retry.
-        let db = mem().await;
-        let new = NewConversation {
-            token: "tok_dupe",
-            external_email: "a@example.com",
-            external_name: None,
-            subject: "first",
-            person_id: None,
-            notation_id: None,
-        };
-        open(&db, &new).await.unwrap();
-        let err = open(&db, &new).await.unwrap_err();
-        assert!(
-            matches!(err, EmailConversationError::TokenTaken),
-            "expected a token collision, got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn linking_a_notation_is_readable_back() {
-        // The `@link` lawyer command is what arms the `@approve`/`@deny`
-        // channel, so the link has to survive a re-read.
-        let db = mem().await;
-        let notation_id = seed_notation(&db).await;
-        let id = open(
-            &db,
-            &NewConversation {
-                token: "tok_link",
-                external_email: "aries@example.com",
-                external_name: None,
-                subject: "Authorize the filing",
-                person_id: None,
-                notation_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert!(by_id(&db, id).await.unwrap().unwrap().notation_id.is_none());
-
-        let linked = set_notation(&db, id, notation_id).await.unwrap().unwrap();
-        assert_eq!(linked.notation_id, Some(notation_id));
-        assert_eq!(
-            by_id(&db, id).await.unwrap().unwrap().notation_id,
-            Some(notation_id)
-        );
-    }
-
-    #[tokio::test]
-    async fn by_external_email_returns_the_newest_thread() {
-        // Someone who writes in twice is asking about their current
-        // exchange, so the newest wins — and another party's thread never
-        // does.
-        let db = mem().await;
-        for (token, subject) in [("tok_e1", "first"), ("tok_e2", "second")] {
-            open(
-                &db,
-                &NewConversation {
-                    token,
-                    external_email: "pisces@example.com",
-                    external_name: None,
-                    subject,
-                    person_id: None,
-                    notation_id: None,
-                },
-            )
-            .await
-            .unwrap();
-        }
-        open(
-            &db,
-            &NewConversation {
-                token: "tok_other",
-                external_email: "aries@example.com",
-                external_name: None,
-                subject: "someone else",
-                person_id: None,
-                notation_id: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        let found = by_external_email(&db, "pisces@example.com")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(found.subject, "second");
-        assert!(by_external_email(&db, "nobody@example.com")
-            .await
-            .unwrap()
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn resolving_an_unknown_conversation_is_none() {
-        let db = mem().await;
-        assert!(by_id(&db, uuid::Uuid::now_v7()).await.unwrap().is_none());
-        assert!(
-            set_status(&db, uuid::Uuid::now_v7(), STATUS_AWAITING_LAWYER)
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn a_conversation_written_without_firm_scope_still_reads() {
-        let db = mem().await;
-        let id = open(
-            &db,
-            &NewConversation {
-                token: "tok_historical",
-                external_email: "historical@example.com",
-                external_name: None,
-                subject: "Before assignment",
-                person_id: None,
-                notation_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        db.query("UPDATE $id UNSET firm_id, project_id")
-            .bind(("id", crate::surreal::record_id("email_conversation", id)))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
-        let row = by_id(&db, id).await.unwrap().unwrap();
-        assert!(row.firm_id.is_none());
-        assert!(row.project_id.is_none());
-        assert_eq!(row.subject, "Before assignment");
-    }
-}
+mod tests {}

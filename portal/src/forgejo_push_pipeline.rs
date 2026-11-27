@@ -44,9 +44,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use cloud::forgejo_push_analysis::{self, PushAnalysis};
+use store::application_store::ApplicationStore;
 use store::postgres::forgejo_push_webhook_journal::{self, ForgejoPushReceipt};
 use store::postgres::PostgresDb;
-use store::surreal::SurrealDb;
 use workflows::notify::{SlackBot, SlackBotClient};
 use workflows::notify_blocks::{push_blocks, ChangeNotice, PushNotice};
 
@@ -73,14 +73,17 @@ pub trait PushCredentials: Send + Sync {
 /// The production resolver: the Firm's own secrets, read fresh per
 /// delivery — a revoked credential stops working on the next push.
 pub struct FirmPushCredentials {
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     kms: Arc<dyn cloud::RuntimeKms>,
 }
 
 impl FirmPushCredentials {
     #[must_use]
-    pub fn new(surreal: SurrealDb, kms: Arc<dyn cloud::RuntimeKms>) -> Self {
-        Self { surreal, kms }
+    pub fn new(application_store: ApplicationStore, kms: Arc<dyn cloud::RuntimeKms>) -> Self {
+        Self {
+            application_store,
+            kms,
+        }
     }
 
     async fn credential(
@@ -91,7 +94,7 @@ impl FirmPushCredentials {
         what: &str,
     ) -> Result<String, String> {
         store::firm_secrets::resolve_project_credential(
-            &self.surreal,
+            &self.application_store,
             project_id,
             provider,
             kind,
@@ -155,7 +158,7 @@ pub struct JjPushPipeline {
     /// The push journal — where the analysis is persisted and the
     /// receipt's durable state is read from.
     journal: Arc<PostgresDb>,
-    surreal: SurrealDb,
+    application_store: ApplicationStore,
     credentials: Arc<dyn PushCredentials>,
     /// `NAVIGATOR_FORGEJO_ROOT_URL`: the Forgejo origin the analysis
     /// reads and the commit links name. `None` fails analysis with the
@@ -171,14 +174,14 @@ impl JjPushPipeline {
     #[must_use]
     pub fn for_deployment(
         journal: Arc<PostgresDb>,
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         kms: Arc<dyn cloud::RuntimeKms>,
     ) -> Self {
         // Clone before the move: the struct literal consumes `surreal`.
-        let credentials = Arc::new(FirmPushCredentials::new(surreal.clone(), kms));
+        let credentials = Arc::new(FirmPushCredentials::new(application_store.clone(), kms));
         Self::with_credentials(
             journal,
-            surreal,
+            application_store,
             credentials,
             forgejo_root_url_from_env(),
             None,
@@ -188,14 +191,14 @@ impl JjPushPipeline {
     #[must_use]
     pub fn with_credentials(
         journal: Arc<PostgresDb>,
-        surreal: SurrealDb,
+        application_store: ApplicationStore,
         credentials: Arc<dyn PushCredentials>,
         forgejo_root_url: Option<String>,
         slack_api_base: Option<String>,
     ) -> Self {
         Self {
             journal,
-            surreal,
+            application_store,
             credentials,
             forgejo_root_url,
             slack_api_base,
@@ -263,7 +266,7 @@ impl JjPushPipeline {
         project_id: Uuid,
         project_code: &str,
     ) -> Result<String, String> {
-        let project = store::projects::find_by_id(&self.surreal, project_id)
+        let project = store::projects::find_by_id(&self.application_store, project_id)
             .await
             .map_err(|error| format!("reading the Project: {error}"))?
             .ok_or_else(|| format!("no Navigator Project with code {project_code}"))?;
@@ -278,7 +281,7 @@ impl JjPushPipeline {
             .map_err(|error| format!("provisioning the Project's Slack channel: {error}"))?;
         let channel_url = cloud::slack_channel_url(&channel.id);
         store::projects::set_internal_slack_channel(
-            &self.surreal,
+            &self.application_store,
             project_id,
             &channel.id,
             &channel_url,
@@ -361,7 +364,7 @@ impl PushConsumer for JjPushPipeline {
 
 impl JjPushPipeline {
     async fn project_id(&self, project_code: &str) -> Result<Uuid, String> {
-        store::projects::id_for_code(&self.surreal, project_code)
+        store::projects::id_for_code(&self.application_store, project_code)
             .await
             .ok_or_else(|| {
                 format!(

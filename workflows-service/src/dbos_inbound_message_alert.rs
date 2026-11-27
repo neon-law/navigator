@@ -90,11 +90,11 @@ async fn run_alert(
 ) -> dbos::Result<InboundMessageAlertReport, InboundMessageAlertError> {
     let message_id = request.message_id;
     let loaded = {
-        let surreal = context.service.surreal().clone();
+        let application_store = context.service.application_store().clone();
         dbos::step("load-inbound-message-context", move || {
-            let surreal = surreal.clone();
+            let application_store = application_store.clone();
             async move {
-                alert_context(&surreal, message_id)
+                alert_context(&application_store, message_id)
                     .await
                     .map_err(|error| match error {
                         AlertContextError::MessageNotFound => {
@@ -140,11 +140,11 @@ async fn run_alert(
     }
 
     let state = {
-        let surreal = context.service.surreal().clone();
+        let application_store = context.service.application_store().clone();
         dbos::step("read-inbound-message-alert-receipt", move || {
-            let surreal = surreal.clone();
+            let application_store = application_store.clone();
             async move {
-                let receipt = store::inbox_alerts::receipt(&surreal, message_id)
+                let receipt = store::inbox_alerts::receipt(&application_store, message_id)
                     .await
                     .map_err(|error| {
                         dbos::Error::Application(InboundMessageAlertError::Store(error.to_string()))

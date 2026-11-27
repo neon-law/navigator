@@ -61,15 +61,15 @@ pub async fn get_clause_editor() -> Result<ClauseEditorView, ServerFnError> {
     .map(|axum::Extension(token)| token.0)
     .unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let Some(flow_label) = notation_flow_label(&surreal, notation_id).await else {
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let Some(flow_label) = notation_flow_label(&application_store, notation_id).await else {
         dioxus_fullstack_core::FullstackContext::commit_http_status(
             axum::http::StatusCode::NOT_FOUND,
             None,
         );
         return Err(ServerFnError::new("notation not found"));
     };
-    let clauses = store::notation_clauses::for_notation(&surreal, notation_id)
+    let clauses = store::notation_clauses::for_notation(&application_store, notation_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
@@ -94,14 +94,14 @@ pub async fn get_clause_editor() -> Result<ClauseEditorView, ServerFnError> {
 /// its template is gone — the editor's `404`.
 #[cfg(feature = "server")]
 async fn notation_flow_label(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: uuid::Uuid,
 ) -> Option<String> {
-    let n = store::notations::find_by_id(surreal, notation_id)
+    let n = store::notations::find_by_id(application_store, notation_id)
         .await
         .ok()
         .flatten()?;
-    let t = store::templates::find_by_id(surreal, n.template_id)
+    let t = store::templates::find_by_id(application_store, n.template_id)
         .await
         .ok()
         .flatten()?;

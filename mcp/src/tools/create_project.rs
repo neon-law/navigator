@@ -100,7 +100,7 @@ struct Args {
 
 #[allow(clippy::too_many_lines)] // one matter-opening flow onto the shared command
 pub async fn call(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     principal: Option<&Principal>,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
@@ -130,7 +130,7 @@ pub async fn call(
             "entity_id is required — open the matter against an existing entity".into(),
         )
     })?;
-    if store::entities::find_by_id(surreal, entity_id)
+    if store::entities::find_by_id(application_store, entity_id)
         .await?
         .is_none()
     {
@@ -146,7 +146,7 @@ pub async fn call(
             "client_dri_person_id is required — open the matter for an existing client".into(),
         )
     })?;
-    let client = store::persons::find_by_id(surreal, client_dri_id)
+    let client = store::persons::find_by_id(application_store, client_dri_id)
         .await?
         .ok_or_else(|| ToolError::NotFound(format!("client_dri_person_id={client_dri_id}")))?;
     if client.role != store::persons::Role::Client {
@@ -169,7 +169,7 @@ pub async fn call(
     // always injects — the same reasoning `create_notation` documents.
     let lawyer_dri = match principal {
         Some(principal) => {
-            let actor = store::persons::find_by_email_ci(surreal, &principal.email)
+            let actor = store::persons::find_by_email_ci(application_store, &principal.email)
                 .await?
                 .ok_or_else(|| {
                     ToolError::NotFound(format!("person with email `{}`", principal.email))
@@ -182,7 +182,7 @@ pub async fn call(
             }
             actor.id
         }
-        None => store::persons::default_firm_dri(surreal)
+        None => store::persons::default_firm_dri(application_store)
             .await?
             .ok_or_else(|| {
                 ToolError::InvalidArguments(
@@ -201,7 +201,7 @@ pub async fn call(
     // affirms the requesting attorney has cleared conflicts); soft findings
     // proceed on it, a blocking conflict is refused.
     let created = store::projects::open_matter(
-        surreal,
+        application_store,
         &store::projects::OpenMatterCommand {
             firm_id: None,
             name,
@@ -221,7 +221,7 @@ pub async fn call(
     .await
     .map_err(open_matter_tool_error)?;
 
-    store::project_surfaces::reconcile_after_open(surreal, created.id).await;
+    store::project_surfaces::reconcile_after_open(application_store, created.id).await;
 
     let summary = format!(
         "Created project id={} ({}, status={}, entity_id={}).",
@@ -289,9 +289,9 @@ mod tests {
 
     /// Seed a `Role::Client` person and return its id — the matter's
     /// client of record, required as `client_dri_person_id`.
-    async fn seed_client(surreal: &store::surreal::SurrealDb) -> Uuid {
+    async fn seed_client(application_store: &store::application_store::ApplicationStore) -> Uuid {
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Libra",
                 "libra@example.com",
@@ -306,9 +306,11 @@ mod tests {
     /// Seed a `Role::Admin` person so `default_firm_dri` can resolve a
     /// lawyer-side DRI for the project. Returns the id so a test can assert
     /// the caller — not this firm default — became the lawyer DRI.
-    async fn seed_firm_principal(surreal: &store::surreal::SurrealDb) -> Uuid {
+    async fn seed_firm_principal(
+        application_store: &store::application_store::ApplicationStore,
+    ) -> Uuid {
         let admin = store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(
                 "Firm Principal",
                 "principal@example.com",
@@ -319,18 +321,18 @@ mod tests {
         .unwrap()
         .id;
         let firm = store::firms::create(
-            surreal,
+            application_store,
             &store::firms::NewFirm {
                 name: crate::test_fixtures::organization_name(),
                 status: "active".to_string(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: store::test_support::seed_entity(application_store).await,
                 admin_dri_person_id: admin,
             },
         )
         .await
         .unwrap();
         store::brands::create(
-            surreal,
+            application_store,
             store::persons::Role::Admin,
             Some(admin),
             &store::brands::NewBrand {
@@ -342,18 +344,27 @@ mod tests {
         )
         .await
         .unwrap();
-        store::firms::attach_brand(surreal, store::persons::Role::Owner, None, firm.id, "neon")
-            .await
-            .unwrap();
+        store::firms::attach_brand(
+            application_store,
+            store::persons::Role::Owner,
+            None,
+            firm.id,
+            "neon",
+        )
+        .await
+        .unwrap();
         admin
     }
 
     /// Seed a `Role::Lawyer` person — a firm attorney who can open matters —
     /// and return its id. This is the caller the fix must record as the
     /// lawyer DRI when it opens a matter through Navigator MCP.
-    async fn seed_lawyer(surreal: &store::surreal::SurrealDb, email: &str) -> Uuid {
+    async fn seed_lawyer(
+        application_store: &store::application_store::ApplicationStore,
+        email: &str,
+    ) -> Uuid {
         store::persons::create(
-            surreal,
+            application_store,
             &store::persons::NewPerson::with_role(email, email, store::persons::Role::Lawyer),
         )
         .await
@@ -361,9 +372,12 @@ mod tests {
         .id
     }
 
-    async fn seed_entity(surreal: &store::surreal::SurrealDb) -> Uuid {
-        crate::test_fixtures::seed_entity_named(surreal, &crate::test_fixtures::organization_name())
-            .await
+    async fn seed_entity(application_store: &store::application_store::ApplicationStore) -> Uuid {
+        crate::test_fixtures::seed_entity_named(
+            application_store,
+            &crate::test_fixtures::organization_name(),
+        )
+        .await
     }
 
     #[test]
@@ -391,12 +405,12 @@ mod tests {
     #[tokio::test]
     async fn a_missing_code_is_refused_rather_than_derived() {
         store::test_support::with_postgres(async {
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        seed_firm_principal(&application_store).await;
         let err = call(
-            &surreal,
+            &application_store,
             None,
             &json!({ "name": "No Code", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
@@ -412,12 +426,12 @@ mod tests {
     #[tokio::test]
     async fn happy_path_inserts_with_defaults() {
         store::test_support::with_postgres(async {
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        seed_firm_principal(&application_store).await;
         let r = call(
-            &surreal,
+            &application_store,
             None,
             &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
@@ -426,7 +440,7 @@ mod tests {
         assert_eq!(r["structuredContent"]["name"], crate::test_fixtures::MATTER.as_str());
         assert_eq!(r["structuredContent"]["status"], "open");
         assert_eq!(r["structuredContent"]["entity_id"], eid.to_string());
-        let all = store::projects::all(&surreal).await.unwrap();
+        let all = store::projects::all(&application_store).await.unwrap();
         assert_eq!(all.len(), 1);
     }).await;
     }
@@ -439,19 +453,19 @@ mod tests {
     #[tokio::test]
     async fn a_duplicate_code_is_a_conflict_not_invalid_arguments() {
         store::test_support::with_postgres(async {
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        seed_firm_principal(&application_store).await;
         call(
-            &surreal,
+            &application_store,
             None,
             &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
         let err = call(
-            &surreal,
+            &application_store,
             None,
             &json!({ "name": format!("{} II", *crate::test_fixtures::MATTER), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
@@ -469,25 +483,25 @@ mod tests {
         // workbench of the attorney who opened it. Seed an admin *and* the
         // acting lawyer attorney; the caller — not the admin — must be the
         // recorded lawyer DRI.
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        let admin = seed_firm_principal(&surreal).await;
-        let lawyer = seed_lawyer(&surreal, "attorney@example.com").await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        let admin = seed_firm_principal(&application_store).await;
+        let lawyer = seed_lawyer(&application_store, "attorney@example.com").await;
         let r = call(
-            &surreal,
+            &application_store,
             Some(&Principal::new("attorney@example.com")),
             &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
         let id: Uuid = serde_json::from_value(r["structuredContent"]["id"].clone()).unwrap();
-        let row = store::projects::find_by_id(&surreal, id)
+        let row = store::projects::find_by_id(&application_store, id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
-            store::projects::participations_for_project(&surreal, row.id)
+            store::projects::participations_for_project(&application_store, row.id)
                 .await
                 .unwrap()
                 .into_iter()
@@ -497,7 +511,7 @@ mod tests {
             "the caller must be the lawyer DRI"
         );
         assert_ne!(
-            store::projects::participations_for_project(&surreal, row.id)
+            store::projects::participations_for_project(&application_store, row.id)
                 .await
                 .unwrap()
                 .into_iter()
@@ -514,25 +528,25 @@ mod tests {
         store::test_support::with_postgres(async {
         // The verified principal email may differ in case from the stored
         // row; resolution matches on lowercase, like `create_notation`.
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
-        let lawyer = seed_lawyer(&surreal, "attorney@example.com").await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        seed_firm_principal(&application_store).await;
+        let lawyer = seed_lawyer(&application_store, "attorney@example.com").await;
         let r = call(
-            &surreal,
+            &application_store,
             Some(&Principal::new("Attorney@Example.com")),
             &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
         let id: Uuid = serde_json::from_value(r["structuredContent"]["id"].clone()).unwrap();
-        let row = store::projects::find_by_id(&surreal, id)
+        let row = store::projects::find_by_id(&application_store, id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
-            store::projects::participations_for_project(&surreal, row.id)
+            store::projects::participations_for_project(&application_store, row.id)
                 .await
                 .unwrap()
                 .into_iter()
@@ -547,24 +561,24 @@ mod tests {
     async fn no_principal_falls_back_to_default_firm_dri() {
         store::test_support::with_postgres(async {
         // The dev/local path with no auth layer keeps the firm default.
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        let admin = seed_firm_principal(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        let admin = seed_firm_principal(&application_store).await;
         let r = call(
-            &surreal,
+            &application_store,
             None,
             &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
         let id: Uuid = serde_json::from_value(r["structuredContent"]["id"].clone()).unwrap();
-        let row = store::projects::find_by_id(&surreal, id)
+        let row = store::projects::find_by_id(&application_store, id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
-            store::projects::participations_for_project(&surreal, row.id)
+            store::projects::participations_for_project(&application_store, row.id)
                 .await
                 .unwrap()
                 .into_iter()
@@ -580,12 +594,12 @@ mod tests {
         store::test_support::with_postgres(async {
         // A `client`-role principal must never own a matter from the firm
         // side, even if it somehow reaches this door.
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        seed_firm_principal(&application_store).await;
         let err = call(
-            &surreal,
+            &application_store,
             Some(&Principal::new("libra@example.com")),
             &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
@@ -593,7 +607,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, ToolError::Forbidden(_)), "got {err:?}");
         assert!(
-            store::projects::all(&surreal).await.unwrap().is_empty(),
+            store::projects::all(&application_store).await.unwrap().is_empty(),
             "no matter is opened for a non-lawyer caller"
         );
     }).await;
@@ -602,12 +616,12 @@ mod tests {
     #[tokio::test]
     async fn unknown_principal_email_is_not_found() {
         store::test_support::with_postgres(async {
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        seed_firm_principal(&application_store).await;
         let err = call(
-            &surreal,
+            &application_store,
             Some(&Principal::new("ghost@example.com")),
             &json!({ "name": crate::test_fixtures::MATTER.as_str(), "code": "synthetic-matter", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
@@ -620,12 +634,12 @@ mod tests {
     #[tokio::test]
     async fn binds_entity_when_provided_and_exists() {
         store::test_support::with_postgres(async {
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        seed_firm_principal(&application_store).await;
         let r = call(
-            &surreal,
+            &application_store,
             None,
             &json!({ "name": crate::test_fixtures::ESTATE.as_str(), "code": "synthetic-estate", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
@@ -648,12 +662,12 @@ mod tests {
         // Every matter open requires the attorney's conflict attestation. Omit
         // it and the shared command refuses the open, opening nothing — the
         // Navigator MCP door onto the same gate the web form and CLI enforce (#355).
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        seed_firm_principal(&application_store).await;
         let err = call(
-            &surreal,
+            &application_store,
             None,
             // Attestation deliberately omitted — every other field resolves.
             &json!({ "name": "Unattested", "code": "unattested", "entity_id": eid, "client_dri_person_id": cid }),
@@ -662,7 +676,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments(_)), "got {err:?}");
         assert!(
-            store::projects::all(&surreal).await.unwrap().is_empty(),
+            store::projects::all(&application_store).await.unwrap().is_empty(),
             "a refused open writes no matter",
         );
     }).await;
@@ -671,10 +685,10 @@ mod tests {
     #[tokio::test]
     async fn unknown_entity_id_returns_not_found() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
+            let application_store = crate::test_fixtures::handle();
             let missing = Uuid::now_v7();
             let err = call(
-                &surreal,
+                &application_store,
                 None,
                 &json!({ "name": "X", "code": "x", "entity_id": missing }),
             )
@@ -688,10 +702,14 @@ mod tests {
     #[tokio::test]
     async fn empty_name_is_invalid() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let err = call(&surreal, None, &json!({ "name": "   ", "code": "matter" }))
-                .await
-                .unwrap_err();
+            let application_store = crate::test_fixtures::handle();
+            let err = call(
+                &application_store,
+                None,
+                &json!({ "name": "   ", "code": "matter" }),
+            )
+            .await
+            .unwrap_err();
             assert!(matches!(err, ToolError::InvalidArguments(_)));
         })
         .await;
@@ -705,12 +723,12 @@ mod tests {
             // sending it must be told — `deny_unknown_fields` rejects it rather
             // than silently opening the matter `open` while the caller believes it
             // set `closed`.
-            let surreal = crate::test_fixtures::handle();
-            let eid = seed_entity(&surreal).await;
-            let cid = seed_client(&surreal).await;
-            seed_firm_principal(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            let eid = seed_entity(&application_store).await;
+            let cid = seed_client(&application_store).await;
+            seed_firm_principal(&application_store).await;
             let err = call(
-                &surreal,
+                &application_store,
                 None,
                 &json!({
                     "name": "Stale", "code": "stale",
@@ -724,7 +742,10 @@ mod tests {
             .unwrap_err();
             assert!(matches!(err, ToolError::InvalidArguments(_)), "got {err:?}");
             assert!(
-                store::projects::all(&surreal).await.unwrap().is_empty(),
+                store::projects::all(&application_store)
+                    .await
+                    .unwrap()
+                    .is_empty(),
                 "a rejected request opens no matter",
             );
         })
@@ -738,26 +759,26 @@ mod tests {
     #[tokio::test]
     async fn open_writes_the_dri_participation_rows() {
         store::test_support::with_postgres(async {
-        let surreal = crate::test_fixtures::handle();
-        let eid = seed_entity(&surreal).await;
-        let cid = seed_client(&surreal).await;
-        seed_firm_principal(&surreal).await;
+        let application_store = crate::test_fixtures::handle();
+        let eid = seed_entity(&application_store).await;
+        let cid = seed_client(&application_store).await;
+        seed_firm_principal(&application_store).await;
         call(
-            &surreal,
+            &application_store,
             None,
             &json!({ "name": "Disclosed", "code": "disclosed", "entity_id": eid, "client_dri_person_id": cid, "attestation": true }),
         )
         .await
         .unwrap();
 
-        let project_row = store::projects::all(&surreal).await.unwrap().pop().unwrap();
-        let rows = store::projects::participations_for_project(&surreal, project_row.id)
+        let project_row = store::projects::all(&application_store).await.unwrap().pop().unwrap();
+        let rows = store::projects::participations_for_project(&application_store, project_row.id)
             .await
             .unwrap()
             .into_iter()
             .map(|r| (r.person_id, r.participation))
             .collect::<Vec<_>>();
-        let lawyer_dri = store::projects::participations_for_project(&surreal, project_row.id)
+        let lawyer_dri = store::projects::participations_for_project(&application_store, project_row.id)
             .await
             .unwrap()
             .into_iter()
@@ -776,8 +797,8 @@ mod tests {
             "the client DRI needs its participation row: {rows:?}"
         );
         assert!(
-            store::projects::can_access_as_lawyer_in_surreal(
-                &surreal,
+            store::projects::can_access_as_lawyer(
+                &application_store,
                 Some(lawyer_dri),
                 store::persons::Role::Lawyer,
                 project_row.id,
@@ -795,12 +816,12 @@ mod tests {
     #[tokio::test]
     async fn a_posted_product_code_is_rejected() {
         store::test_support::with_postgres(async {
-            let surreal = crate::test_fixtures::handle();
-            let eid = seed_entity(&surreal).await;
-            let cid = seed_client(&surreal).await;
-            seed_firm_principal(&surreal).await;
+            let application_store = crate::test_fixtures::handle();
+            let eid = seed_entity(&application_store).await;
+            let cid = seed_client(&application_store).await;
+            seed_firm_principal(&application_store).await;
             let err = call(
-                &surreal,
+                &application_store,
                 None,
                 &json!({
                     "name": "Bad Product", "code": "bad-product",
@@ -814,7 +835,10 @@ mod tests {
             .unwrap_err();
             assert!(matches!(err, ToolError::InvalidArguments(_)), "got {err:?}");
             assert!(
-                store::projects::all(&surreal).await.unwrap().is_empty(),
+                store::projects::all(&application_store)
+                    .await
+                    .unwrap()
+                    .is_empty(),
                 "a rejected request opens no matter",
             );
         })

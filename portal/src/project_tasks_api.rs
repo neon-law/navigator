@@ -14,7 +14,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
-use store::{postgres_mirror, tasks};
+use store::tasks;
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
@@ -65,9 +65,10 @@ async fn ensure_firm_side(
     role: store::persons::Role,
     project_id: Uuid,
 ) -> Result<(), ApiError> {
-    let viewer = store::access::matter_viewer(&state.surreal, person_id, role, project_id)
-        .await
-        .map_err(ApiError::Db)?;
+    let viewer =
+        store::access::matter_viewer(&state.application_store, person_id, role, project_id)
+            .await
+            .map_err(ApiError::Db)?;
     match viewer {
         Some(viewer) if viewer.is_firm_side() => Ok(()),
         _ => Err(ApiError::NotFound),
@@ -91,56 +92,14 @@ async fn postgres(
     })
 }
 
-/// Open the task store with its dependency rows mirrored: `store::tasks`
-/// checks the parent Project row and the assignee's participation in
-/// PostgreSQL, so a Project or participant added before the mirror was
-/// enabled would otherwise be wrongly refused there. Mirroring the
-/// participation rows also carries their Persons (the participation image
-/// ensures the Person first), which is every caller and assignee this door
-/// can reach — both are participation-scoped.
-///
-/// Shared with the form doors in [`crate::project_tasks_forms`], so the JSON
-/// and browser entry points cannot drift.
+/// Open PostgreSQL for the authorized operation.
 pub(crate) async fn prepared_store(
-    surreal: &store::surreal::SurrealDb,
+    _application_store: &store::application_store::ApplicationStore,
     operation: &'static str,
     project_id: Uuid,
     task_id: Option<Uuid>,
 ) -> Result<store::postgres::PostgresDb, Response> {
-    let pg = postgres(operation, project_id, task_id).await?;
-    let mirrored = async {
-        postgres_mirror::mirror(
-            surreal,
-            &pg,
-            &postgres_mirror::MirrorKey::Project(project_id),
-        )
-        .await?;
-        let participations = store::projects::participations_for_project(surreal, project_id)
-            .await
-            .map_err(|_| postgres_mirror::MirrorError::Source)?;
-        for role in participations {
-            postgres_mirror::mirror(
-                surreal,
-                &pg,
-                &postgres_mirror::MirrorKey::ProjectParticipation(role.id),
-            )
-            .await?;
-        }
-        Ok::<_, postgres_mirror::MirrorError>(())
-    }
-    .await;
-    if let Err(store_error) = mirrored {
-        tracing::warn!(
-            event = "project_task_mirror_failed",
-            operation,
-            outcome = "store_error",
-            project_id = %project_id,
-            task_id = ?task_id,
-            store_error = %store_error
-        );
-        return Err(refused(StatusCode::SERVICE_UNAVAILABLE));
-    }
-    Ok(pg)
+    postgres(operation, project_id, task_id).await
 }
 
 /// `GET /app/api/projects/{id}/tasks` — the matter's Tasks tab rows.
@@ -169,7 +128,7 @@ pub(crate) async fn create(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state.surreal, "create", project_id, None).await {
+    let pg = match prepared_store(&state.application_store, "create", project_id, None).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
@@ -195,7 +154,14 @@ pub(crate) async fn assign(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state.surreal, "assign", project_id, Some(task_id)).await {
+    let pg = match prepared_store(
+        &state.application_store,
+        "assign",
+        project_id,
+        Some(task_id),
+    )
+    .await
+    {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
@@ -241,7 +207,14 @@ pub(crate) async fn transition(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state.surreal, "transition", project_id, Some(task_id)).await {
+    let pg = match prepared_store(
+        &state.application_store,
+        "transition",
+        project_id,
+        Some(task_id),
+    )
+    .await
+    {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };

@@ -72,14 +72,14 @@ pub fn is_dispatched_submission(state: &StateName) -> bool {
 /// inline (`DispatchingRuntime`). The `filings` row's `kind` is the
 /// state-name prefix (`mailroom_send`, `filing`, …).
 pub async fn dispatch_compliance(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
     state: &StateName,
     payload: &CompliancePayload,
 ) -> Result<(), ComplianceError> {
     let submitted_at = chrono::Utc::now().to_rfc3339();
     store::filings::record(
-        surreal,
+        application_store,
         &store::filings::NewFiling {
             notation_id,
             kind: state.prefix(),

@@ -80,9 +80,10 @@ async fn require_participant(
     role: Role,
     project_id: Uuid,
 ) -> Result<(), ApiError> {
-    let allowed = store::access::can_see_project(&state.surreal, person_id, role, project_id)
-        .await
-        .map_err(ApiError::Db)?;
+    let allowed =
+        store::access::can_see_project(&state.application_store, person_id, role, project_id)
+            .await
+            .map_err(ApiError::Db)?;
     if allowed {
         Ok(())
     } else {
@@ -102,7 +103,7 @@ fn map_deadline(error: store::project_deadlines::DeadlineError) -> ApiError {
 
 /// The stored Deadline remains authoritative when Google needs a retry.
 async fn mirror_after_write(state: &ApiState, project_id: Uuid) {
-    match store::projects::find_by_id(&state.surreal, project_id).await {
+    match store::projects::find_by_id(&state.application_store, project_id).await {
         Ok(Some(project)) => {
             let result = crate::integrations_api::mirror_one(state, &project, false).await;
             if !matches!(
@@ -125,7 +126,7 @@ pub(crate) async fn list_deadlines(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
-    let rows = store::project_deadlines::list(&state.surreal, id)
+    let rows = store::project_deadlines::list(&state.application_store, id)
         .await
         .map_err(map_deadline)?;
     Ok(Json(rows).into_response())
@@ -150,7 +151,7 @@ pub(crate) async fn create_deadline(
         return Err(ApiError::DeadlineInvalid("Queue this court date with navigator project deadline review queue and confirm its evidence in Navigator.".into()));
     }
     let (due_at, due_on) = store::project_deadlines::resolve_due(
-        &state.surreal,
+        &state.application_store,
         id,
         DeadlineIdentity::Replay(input.replay_key.as_deref()),
         input.due_at.as_deref(),
@@ -159,7 +160,7 @@ pub(crate) async fn create_deadline(
     .await
     .map_err(map_deadline)?;
     let row = store::project_deadlines::create(
-        &state.surreal,
+        &state.application_store,
         &store::project_deadlines::NewDeadline {
             project_id: id,
             title: input.title,
@@ -195,7 +196,7 @@ pub(crate) async fn update_deadline(
     require_participant(&state, session.person_id, session.role, id).await?;
     let (due_at, due_on) = if input.due_at.is_some() || input.due_on.is_some() {
         let (at, on) = store::project_deadlines::resolve_due(
-            &state.surreal,
+            &state.application_store,
             id,
             DeadlineIdentity::Id(deadline_id),
             input.due_at.as_deref(),
@@ -208,7 +209,7 @@ pub(crate) async fn update_deadline(
         (None, None)
     };
     let row = store::project_deadlines::update(
-        &state.surreal,
+        &state.application_store,
         id,
         deadline_id,
         &store::project_deadlines::DeadlinePatch {
@@ -243,7 +244,7 @@ pub(crate) async fn complete_deadline(
     Path((id, deadline_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
-    let row = store::project_deadlines::complete(&state.surreal, id, deadline_id)
+    let row = store::project_deadlines::complete(&state.application_store, id, deadline_id)
         .await
         .map_err(map_deadline)?;
     mirror_after_write(&state, id).await;
@@ -257,7 +258,7 @@ pub(crate) async fn cancel_deadline(
     Path((id, deadline_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
-    let row = store::project_deadlines::cancel(&state.surreal, id, deadline_id)
+    let row = store::project_deadlines::cancel(&state.application_store, id, deadline_id)
         .await
         .map_err(map_deadline)?;
     mirror_after_write(&state, id).await;
@@ -271,7 +272,7 @@ pub(crate) async fn reopen_deadline(
     Path((id, deadline_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
-    let row = store::project_deadlines::reopen(&state.surreal, id, deadline_id)
+    let row = store::project_deadlines::reopen(&state.application_store, id, deadline_id)
         .await
         .map_err(map_deadline)?;
     mirror_after_write(&state, id).await;

@@ -178,7 +178,7 @@ pub async fn upload_logo(
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     match store::brands::set_logo(
-        &state.surreal,
+        &state.application_store,
         session.role,
         session.person_id,
         brand.id,
@@ -276,7 +276,7 @@ pub async fn upload_font(
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     match store::brands::set_font(
-        &state.surreal,
+        &state.application_store,
         session.role,
         session.person_id,
         brand.id,
@@ -307,8 +307,13 @@ async fn authorized_brand_for_key(
     session: &SessionData,
     key: &str,
 ) -> Result<store::brands::Brand, Response> {
-    match store::brands::find_by_key_for_actor(&state.surreal, session.role, session.person_id, key)
-        .await
+    match store::brands::find_by_key_for_actor(
+        &state.application_store,
+        session.role,
+        session.person_id,
+        key,
+    )
+    .await
     {
         Ok(brand) => Ok(brand),
         Err(

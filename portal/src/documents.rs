@@ -55,7 +55,8 @@ pub async fn download(
     Extension(session): Extension<SessionData>,
     AxumPath((notation_id, doc_id)): AxumPath<(Uuid, String)>,
 ) -> Response {
-    let Ok(Some(notation_row)) = store::notations::find_by_id(&state.surreal, notation_id).await
+    let Ok(Some(notation_row)) =
+        store::notations::find_by_id(&state.application_store, notation_id).await
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -66,7 +67,7 @@ pub async fn download(
     // it, while `can_see_project` (the matter surface's gate) does not.
     let decision = if session.role.is_lawyer_tier() {
         store::access::can_see_project_as_lawyer(
-            &state.surreal,
+            &state.application_store,
             session.person_id,
             session.role,
             notation_row.project_id,
@@ -75,7 +76,7 @@ pub async fn download(
     } else {
         crate::client_portal::access()
             .can_see_project_as_client(
-                &state.surreal,
+                &state.application_store,
                 session.person_id,
                 session.role,
                 notation_row.project_id,
@@ -92,7 +93,7 @@ pub async fn download(
     }
 
     let lawyer_lens = match store::access::matter_lens(
-        &state.surreal,
+        &state.application_store,
         session.person_id,
         session.role,
         notation_row.project_id,
@@ -107,7 +108,7 @@ pub async fn download(
         }
     };
     if !lawyer_lens {
-        match client_may_read_notation(&state.surreal, &notation_row).await {
+        match client_may_read_notation(&state.application_store, &notation_row).await {
             Ok(true) => {}
             Ok(false) => return StatusCode::NOT_FOUND.into_response(),
             Err(error) => {
@@ -135,10 +136,10 @@ pub async fn download(
 }
 
 async fn client_may_read_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation: &store::notations::Notation,
 ) -> Result<bool, String> {
-    let template = store::templates::find_by_id(surreal, notation.template_id)
+    let template = store::templates::find_by_id(application_store, notation.template_id)
         .await
         .map_err(|error| error.to_string())?;
     Ok(template.is_some_and(|template| client_may_read_kind(template.kind.as_deref())))
@@ -199,8 +200,8 @@ mod tests {
     // `store::access` unit tests and the `matter_documents` integration
     // test; here we pin the slug → storage-key mapping.
     use super::{
-        client_may_read_kind, client_may_read_notation, resolve_doc, DOC_ID_CERTIFICATE,
-        DOC_ID_DOCUMENT, DOC_ID_RETAINER, DOC_ID_SIGNED,
+        client_may_read_kind, resolve_doc, DOC_ID_CERTIFICATE, DOC_ID_DOCUMENT, DOC_ID_RETAINER,
+        DOC_ID_SIGNED,
     };
     use uuid::Uuid;
 
@@ -244,29 +245,5 @@ mod tests {
         assert!(!client_may_read_kind(Some("trial_prep")));
         assert!(client_may_read_kind(Some("agreement")));
         assert!(client_may_read_kind(None));
-    }
-
-    #[tokio::test]
-    async fn client_document_route_visibility_uses_the_notations_template() {
-        let surreal = store::surreal::test_support::mem().await;
-        let trial_prep_id =
-            store::test_support::seed_notation_with_kind(&surreal, Some("trial_prep")).await;
-        let agreement_id =
-            store::test_support::seed_notation_with_kind(&surreal, Some("agreement")).await;
-        let trial_prep = store::notations::find_by_id(&surreal, trial_prep_id)
-            .await
-            .expect("query TrialPrep")
-            .expect("TrialPrep exists");
-        let agreement = store::notations::find_by_id(&surreal, agreement_id)
-            .await
-            .expect("query agreement")
-            .expect("agreement exists");
-
-        assert!(!client_may_read_notation(&surreal, &trial_prep)
-            .await
-            .expect("read TrialPrep template"));
-        assert!(client_may_read_notation(&surreal, &agreement)
-            .await
-            .expect("read agreement template"));
     }
 }

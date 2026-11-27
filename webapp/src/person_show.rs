@@ -221,8 +221,8 @@ async fn load_person_show(role: ViewerRole) -> Result<PersonShowView, ServerFnEr
     .map(|axum::extract::Query(q)| q)
     .unwrap_or_default();
 
-    let surreal = consume_context::<store::surreal::SurrealDb>();
-    let person = store::persons::find_by_id(&surreal, id)
+    let application_store = consume_context::<store::application_store::ApplicationStore>();
+    let person = store::persons::find_by_id(&application_store, id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
@@ -250,7 +250,7 @@ async fn load_person_show(role: ViewerRole) -> Result<PersonShowView, ServerFnEr
     // CSRF token) rather than read from the environment, so a test can set it
     // on the state without a process-global env var.
     let notion_user_id = store::external_identities::find_by_person_and_system(
-        &surreal,
+        &application_store,
         id,
         store::external_identities::ExternalSystem::Notion,
     )
@@ -272,7 +272,7 @@ async fn load_person_show(role: ViewerRole) -> Result<PersonShowView, ServerFnEr
 
     // The structured phone list, primary first (LAW-206); the legacy
     // free-text column shows as-is when no structured rows exist.
-    let held = store::person_phones::list_phones(&surreal, id)
+    let held = store::person_phones::list_phones(&application_store, id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     let phones = phone_views(held, p.phone.as_deref());

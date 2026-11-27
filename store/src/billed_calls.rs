@@ -211,7 +211,7 @@ pub async fn find_by_call_sid(
 /// attribution inherits that linkage rather than creating a new parked bill.
 pub async fn record_for_conversation(
     pg: &PostgresDb,
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     input: &NewBilledCall,
 ) -> Result<BilledCall, BilledCallError> {
     let _coordinator = CALL_COORDINATOR.lock().await;
@@ -253,7 +253,7 @@ pub async fn record_for_conversation(
 /// write is repairable by repeating the same Project; no new duration is inferred.
 pub(crate) async fn assign_conversation(
     pg: &PostgresDb,
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
@@ -271,7 +271,7 @@ pub(crate) async fn assign_conversation(
 
 pub(crate) async fn assign_conversation_for_triage_review(
     pg: &PostgresDb,
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
@@ -289,7 +289,7 @@ pub(crate) async fn assign_conversation_for_triage_review(
 
 async fn assign_conversation_inner(
     pg: &PostgresDb,
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     actor_id: Uuid,
     conversation_id: Uuid,
     project_id: Uuid,
@@ -379,7 +379,7 @@ async fn assign_conversation_inner(
 /// arbitrary Firm or Brand key.
 pub async fn visible_calls(
     pg: &PostgresDb,
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     actor_id: Uuid,
 ) -> Result<Vec<BilledCall>, crate::inbox::InboxError> {
     let conversations = crate::inbox::list_intake(db, actor_id).await?;
@@ -419,7 +419,7 @@ pub struct ParkedCallMetadata {
 /// missed calls are never converted into zero-duration completed calls.
 pub async fn parked_calls(
     pg: &PostgresDb,
-    db: &crate::surreal::SurrealDb,
+    db: &crate::application_store::ApplicationStore,
     actor: Uuid,
 ) -> Result<Vec<ParkedCallMetadata>, crate::inbox::InboxError> {
     let mut parked = Vec::new();

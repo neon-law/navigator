@@ -311,21 +311,21 @@ pub mod derive {
     /// # Errors
     /// Any store error, as text.
     pub async fn load(
-        surreal: &store::surreal::SurrealDb,
+        application_store: &store::application_store::ApplicationStore,
         project_id: uuid::Uuid,
         lens: PageLens,
     ) -> Result<Vec<AuthorityCard>, String> {
         let lawyer = lens == PageLens::Lawyer;
         let uses = if lawyer {
-            store::authorities::uses_for_project(surreal, project_id).await
+            store::authorities::uses_for_project(application_store, project_id).await
         } else {
-            store::authorities::client_visible_uses(surreal, project_id).await
+            store::authorities::client_visible_uses(application_store, project_id).await
         }
         .map_err(|e| e.to_string())?;
         let mut records = Vec::new();
         for authority_use in uses {
             let Some(authority) = store::authorities::find(
-                surreal,
+                application_store,
                 store::authorities::AuthorityLookup::Id(authority_use.authority_id),
             )
             .await
@@ -334,12 +334,13 @@ pub mod derive {
                 continue;
             };
             let mut citations = Vec::new();
-            for citation in store::authorities::citations_for_use(surreal, authority_use.id)
-                .await
-                .map_err(|e| e.to_string())?
+            for citation in
+                store::authorities::citations_for_use(application_store, authority_use.id)
+                    .await
+                    .map_err(|e| e.to_string())?
             {
                 let verifications = if lawyer {
-                    store::verifications::for_citation(surreal, citation.id)
+                    store::verifications::for_citation(application_store, citation.id)
                         .await
                         .map_err(|e| e.to_string())?
                 } else {

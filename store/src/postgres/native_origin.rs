@@ -346,7 +346,7 @@ pub fn release_contract() -> serde_json::Value {
 }
 
 fn authority_contract() -> serde_json::Value {
-    serde_json::json!(crate::postgres_backfill::family::Family::all()
+    serde_json::json!(crate::postgres::history::Family::all()
         .iter()
         .map(|family| (family.scope(), family.tables()))
         .collect::<Vec<_>>())

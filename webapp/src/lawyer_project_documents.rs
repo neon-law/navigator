@@ -55,16 +55,16 @@ pub struct LawyerDocRow {
 /// it appears on.
 #[cfg(feature = "server")]
 pub(crate) async fn service_lines(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
 ) -> Result<std::collections::HashMap<uuid::Uuid, Vec<String>>, String> {
-    let rows = store::project_service::list(surreal, project_id)
+    let rows = store::project_service::list(application_store, project_id)
         .await
         .map_err(|error| error.to_string())?;
     let mut entries: std::collections::HashMap<uuid::Uuid, String> =
         std::collections::HashMap::new();
     if !rows.is_empty() {
-        for entry in store::cases::docket_for_project(surreal, project_id)
+        for entry in store::cases::docket_for_project(application_store, project_id)
             .await
             .map_err(|error| error.to_string())?
         {

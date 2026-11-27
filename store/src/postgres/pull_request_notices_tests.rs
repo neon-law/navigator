@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use super::pull_request_notices::{find, record, PullRequestNotice};
 use super::PostgresDb;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres::fixtures::{connect, fresh_schema};
 
 async fn postgres() -> Option<PostgresDb> {
     let (options, database) = fresh_schema().await?;

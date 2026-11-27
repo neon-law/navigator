@@ -148,15 +148,15 @@ async fn wait_for_form_navigation(
 }
 
 /// Browser fixtures require activated PostgreSQL history before creating any records.
-async fn postgres_browser_store() -> anyhow::Result<store::surreal::SurrealDb> {
+async fn postgres_browser_store() -> anyhow::Result<store::application_store::ApplicationStore> {
     store::postgres::PostgresDb::application()
         .await
         .context("require PostgreSQL browser fixture history")?;
-    Ok(store::surreal::SurrealDb::uninitialized())
+    Ok(store::application_store::ApplicationStore::uninitialized())
 }
 
 /// Browser fixtures use the live catalog so their record links satisfy PostgreSQL constraints.
-async fn seed_browser_entity(db: &store::surreal::SurrealDb) -> Uuid {
+async fn seed_browser_entity(db: &store::application_store::ApplicationStore) -> Uuid {
     let entity_type = store::entity_types::find_by_name(db, "C-Corp")
         .await
         .expect("browser Entity type lookup")
@@ -183,7 +183,7 @@ async fn seed_browser_entity(db: &store::surreal::SurrealDb) -> Uuid {
 }
 
 async fn seed_browser_project_on_firm(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     firm_id: Option<Uuid>,
     name: &str,
 ) -> store::projects::Project {
@@ -1464,12 +1464,12 @@ async fn visit_acceptance_scenario(c: &Client, id: &str) -> (u16, Result<(), Str
 /// Apply the explicit staging fixture to the task's KIND store, bridge the
 /// Rauthy actors, and publish the generated portal bundle for browser access.
 async fn prepare_browser_fixture() -> anyhow::Result<(usize, usize)> {
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .context("require activated task PostgreSQL store")?;
     let storage = cloud::from_env().await.context("connect to task storage")?;
     let first = store::synthetic_portfolio::apply(
-        &surreal,
+        &application_store,
         &storage,
         store::DeploymentEnvironment::Dev,
         Some(portfolio_acceptance::TARGET),
@@ -1477,7 +1477,7 @@ async fn prepare_browser_fixture() -> anyhow::Result<(usize, usize)> {
     .await
     .context("apply versioned portfolio to task KIND store")?;
     let second = store::synthetic_portfolio::apply(
-        &surreal,
+        &application_store,
         &storage,
         store::DeploymentEnvironment::Dev,
         Some(portfolio_acceptance::TARGET),
@@ -1496,8 +1496,8 @@ async fn prepare_browser_fixture() -> anyhow::Result<(usize, usize)> {
         second.version,
         second.created(),
     );
-    portfolio_acceptance::bridge_acceptance_people(&surreal).await;
-    portfolio_acceptance::add_firm_only_document(&surreal, &storage).await;
+    portfolio_acceptance::bridge_acceptance_people(&application_store).await;
+    portfolio_acceptance::add_firm_only_document(&application_store, &storage).await;
     Ok((first.created(), second.unchanged()))
 }
 
@@ -1506,35 +1506,35 @@ async fn client_can_continue_pending_intake_from_the_matter_page() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
-    let client = store::persons::find_by_email_ci(&surreal, "client@neonlaw.com")
+    let client = store::persons::find_by_email_ci(&application_store, "client@neonlaw.com")
         .await
         .expect("look up the browser-harness client person")
         .expect("the browser harness requires the seeded client");
-    let template = store::templates::resolve(&surreal, None, "onboarding__letter")
+    let template = store::templates::resolve(&application_store, None, "onboarding__letter")
         .await
         .expect("look up the shipped onboarding template")
         .expect("the browser harness requires the shipped onboarding template");
     let unique = Uuid::now_v7();
     let project = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: format!("client-intake-{unique}"),
             name: format!("Client Intake {unique}"),
             status: "open".into(),
-            entity_id: seed_browser_entity(&surreal).await,
+            entity_id: seed_browser_entity(&application_store).await,
             ..Default::default()
         },
     )
     .await
     .expect("seed the synthetic client-intake matter");
-    store::projects::add_participation(&surreal, project.id, client.id, "client")
+    store::projects::add_participation(&application_store, project.id, client.id, "client")
         .await
         .expect("scope the seeded client onto the synthetic matter");
     store::notations::create(
-        &surreal,
+        &application_store,
         &store::notations::NewNotation::new(
             template.id,
             client.id,
@@ -1797,14 +1797,14 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
         );
     }
 
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
-    let notation = store::notations::find_by_id(&surreal, notation_id)
+    let notation = store::notations::find_by_id(&application_store, notation_id)
         .await
         .unwrap()
         .expect("opened retainer");
-    let project = store::projects::find_by_id(&surreal, notation.project_id)
+    let project = store::projects::find_by_id(&application_store, notation.project_id)
         .await
         .unwrap()
         .expect("retainer Project");
@@ -1892,7 +1892,7 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
     )
     .await;
     assert!(
-        store::notation_clauses::for_notation(&surreal, notation_id)
+        store::notation_clauses::for_notation(&application_store, notation_id)
             .await
             .unwrap()
             .iter()
@@ -1942,7 +1942,7 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
     c.close().await.unwrap();
 
     // Read the PostgreSQL journal through the same accessor the worker uses.
-    let mut events = store::notation_events::for_notation(&surreal, notation_id)
+    let mut events = store::notation_events::for_notation(&application_store, notation_id)
         .await
         .expect("read notation_event from PostgreSQL");
     events.retain(|e| e.machine_kind == store::notation_events::MACHINE_QUESTIONNAIRE);
@@ -2634,10 +2634,10 @@ async fn lawyer_walks_the_whole_questionnaire_with_the_keyboard_alone() {
     wait_for_text(&c, "Awaiting attorney review", Duration::from_secs(20)).await;
     c.close().await.unwrap();
 
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
-    let answers = store::answers::for_notation(&surreal, notation_id)
+    let answers = store::answers::for_notation(&application_store, notation_id)
         .await
         .expect("read the notation's answer history");
     let scopes: Vec<_> = answers
@@ -2654,7 +2654,7 @@ async fn lawyer_walks_the_whole_questionnaire_with_the_keyboard_alone() {
         Some("Keyboard answer 6 corrected")
     );
     let latest = store::answers::latest_for_state(
-        &surreal,
+        &application_store,
         scopes[0].question_id,
         "custom_text__engagement_scope",
         scopes[0].person_id,
@@ -3221,35 +3221,35 @@ async fn client_walks_the_whole_intake_with_the_keyboard_alone() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
-    let client = store::persons::find_by_email_ci(&surreal, "client@neonlaw.com")
+    let client = store::persons::find_by_email_ci(&application_store, "client@neonlaw.com")
         .await
         .expect("look up the browser-harness client person")
         .expect("the browser harness requires the seeded client");
-    let template = store::templates::resolve(&surreal, None, "onboarding__letter")
+    let template = store::templates::resolve(&application_store, None, "onboarding__letter")
         .await
         .expect("look up the shipped onboarding template")
         .expect("the browser harness requires the shipped onboarding template");
     let unique = Uuid::now_v7();
     let project = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: format!("keys-intake-{unique}"),
             name: format!("Keys Intake {unique}"),
             status: "open".into(),
-            entity_id: seed_browser_entity(&surreal).await,
+            entity_id: seed_browser_entity(&application_store).await,
             ..Default::default()
         },
     )
     .await
     .expect("seed the synthetic intake matter");
-    store::projects::add_participation(&surreal, project.id, client.id, "client")
+    store::projects::add_participation(&application_store, project.id, client.id, "client")
         .await
         .expect("scope the seeded client onto the synthetic matter");
     store::notations::create(
-        &surreal,
+        &application_store,
         &store::notations::NewNotation::new(
             template.id,
             client.id,
@@ -3698,7 +3698,7 @@ async fn a_client_is_refused_the_clause_library() {
 }
 
 async fn seed_inbox_walkthrough(
-    db: &store::surreal::SurrealDb,
+    db: &store::application_store::ApplicationStore,
     provider_account: &str,
     channel: &str,
     project_id: Option<Uuid>,
@@ -3961,7 +3961,7 @@ async fn a_lawyer_can_approve_one_inbox_attachment_with_an_explicit_kind() {
     client.close().await.unwrap();
 }
 
-async fn seed_inbox_filing_review(db: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
+async fn seed_inbox_filing_review(db: &store::application_store::ApplicationStore) -> (Uuid, Uuid) {
     use store::inbox_triage::{NewInboxTriage, PrivilegeLabel, TriageDisposition};
 
     let firm_id = store::firms::firm_id_for_brand_key(db, "neon")
@@ -4295,19 +4295,19 @@ async fn the_blog_merges_its_listings_and_the_catalog_explains_video_eligibility
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
     let tag = Uuid::now_v7().simple().to_string();
     let video = format!("img/neon/social/e2e-{tag}.mp4");
-    store::posts::record_video(&surreal, "neon", &video, 1080, 1920)
+    store::posts::record_video(&application_store, "neon", &video, 1080, 1920)
         .await
         .expect("record a synthetic portrait upload");
     let slug = format!("e2e-video-{tag}");
     let title = format!("E2E video {tag}");
     let now = chrono::Utc::now();
     store::posts::import_source(
-        &surreal,
+        &application_store,
         &store::posts::SourcePost {
             brand_key: "neon",
             slug: &slug,
@@ -4461,10 +4461,10 @@ async fn admin_adds_a_person_through_the_people_form() {
 
     // The list may not show the row (firm scoping, see above), so read the
     // store directly for the proof that the POST actually wrote the person.
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
-    let created = store::persons::find_by_email_ci(&surreal, &email)
+    let created = store::persons::find_by_email_ci(&application_store, &email)
         .await
         .expect("look up the created person")
         .expect("the native form POST wrote the person row");
@@ -4482,11 +4482,11 @@ async fn admin_uploads_an_avatar_and_sees_the_profile_menu() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
     let person = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role(
             "E2E Avatar Person",
             format!("e2e-avatar-{}@example.com", Uuid::now_v7()),
@@ -4687,21 +4687,21 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
         return;
     };
     // The store the running `web` reads.
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
     login_as_admin(&c).await;
-    let admin = store::persons::find_by_email_ci(&surreal, "admin@neonlaw.com")
+    let admin = store::persons::find_by_email_ci(&application_store, "admin@neonlaw.com")
         .await
         .expect("look up the Admin")
         .expect("seeded Admin");
-    let firm_id = store::firms::firm_id_for_brand_key(&surreal, "neon")
+    let firm_id = store::firms::firm_id_for_brand_key(&application_store, "neon")
         .await
         .expect("look up the Firm")
         .expect("seeded Firm");
     let unique = Uuid::now_v7();
     let candidate = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role(
             format!("Participation E2E {unique}"),
             format!("participation-e2e-{unique}@example.com"),
@@ -4711,7 +4711,7 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
     .await
     .expect("seed participation candidate");
     let client = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role(
             format!("Participation Client {unique}"),
             format!("participation-client-{unique}@example.com"),
@@ -4723,7 +4723,7 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
     // The edit step re-points the row at a second person to prove the write
     // re-derives participation from that person's tier — `clerk`, not `lawyer`.
     let replacement = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role(
             format!("Participation Clerk {unique}"),
             format!("participation-clerk-{unique}@example.com"),
@@ -4733,19 +4733,19 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
     .await
     .expect("seed participation replacement");
     let project = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: format!("participation-e2e-{unique}"),
             name: format!("Participation E2E Matter {unique}"),
             status: "open".into(),
-            entity_id: seed_browser_entity(&surreal).await,
+            entity_id: seed_browser_entity(&application_store).await,
             firm_id: Some(firm_id),
             ..Default::default()
         },
     )
     .await
     .expect("seed project");
-    store::projects::add_participation(&surreal, project.id, admin.id, "admin")
+    store::projects::add_participation(&application_store, project.id, admin.id, "admin")
         .await
         .expect("add the signed-in Admin to the Project");
 
@@ -4758,8 +4758,8 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
     ))
     .await
     .unwrap();
-    store::projects::designate_dri_in_surreal(
-        &surreal,
+    store::projects::designate_dri(
+        &application_store,
         project.id,
         client.id,
         store::projects::DriSide::Client,
@@ -4827,7 +4827,7 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
     wait_for_text(&c, &candidate.name, Duration::from_secs(10)).await;
 
     let participation =
-        store::projects::participation_for_person(&surreal, candidate.id, project.id)
+        store::projects::participation_for_person(&application_store, candidate.id, project.id)
             .await
             .expect("load browser-created participation")
             .expect("browser add inserted participation");
@@ -4869,7 +4869,7 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
     .await
     .unwrap();
     wait_for_text(&c, &replacement.name, Duration::from_secs(10)).await;
-    let persisted = store::projects::participation_by_id(&surreal, participation.id)
+    let persisted = store::projects::participation_by_id(&application_store, participation.id)
         .await
         .expect("load edited participation")
         .expect("edited participation remains");
@@ -4889,16 +4889,18 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
 /// carrying a non-client participation row for them, so the fixture adds
 /// one for `lawyer@neonlaw.com` — the account `login_as_lawyer` drives and
 /// `navigator dev grant-lawyer` seeds.
-async fn seed_lawyer_upload_project(surreal: &store::surreal::SurrealDb) -> String {
-    let lawyer = store::persons::find_by_email_ci(surreal, "lawyer@neonlaw.com")
+async fn seed_lawyer_upload_project(
+    application_store: &store::application_store::ApplicationStore,
+) -> String {
+    let lawyer = store::persons::find_by_email_ci(application_store, "lawyer@neonlaw.com")
         .await
         .expect("look up the browser-harness lawyer person")
         .expect("lawyer@neonlaw.com must exist — `navigator dev grant-lawyer`");
 
-    let entity_id = seed_browser_entity(surreal).await;
+    let entity_id = seed_browser_entity(application_store).await;
     let unique = Uuid::now_v7();
     let project = store::projects::create(
-        surreal,
+        application_store,
         &store::projects::NewProject {
             code: format!("batch-upload-{unique}"),
             name: format!("Batch Upload {unique}"),
@@ -4909,7 +4911,7 @@ async fn seed_lawyer_upload_project(surreal: &store::surreal::SurrealDb) -> Stri
     )
     .await
     .expect("seed the upload project");
-    store::projects::add_participation(surreal, project.id, lawyer.id, "lawyer")
+    store::projects::add_participation(application_store, project.id, lawyer.id, "lawyer")
         .await
         .expect("scope the harness lawyer person onto the project");
 
@@ -4926,10 +4928,10 @@ async fn lawyer_uploads_several_documents_at_once_from_the_project_page() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
-    let project_code = seed_lawyer_upload_project(&surreal).await;
+    let project_code = seed_lawyer_upload_project(&application_store).await;
 
     // Real files on disk — chromedriver uploads from the filesystem, so
     // these can't be synthesized in the page.
@@ -5267,35 +5269,35 @@ async fn notation_questionnaire_has_no_horizontal_overflow_at_any_checked_width(
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
-    let client = store::persons::find_by_email_ci(&surreal, "client@neonlaw.com")
+    let client = store::persons::find_by_email_ci(&application_store, "client@neonlaw.com")
         .await
         .expect("look up the browser-harness client person")
         .expect("the browser harness requires the seeded client");
-    let template = store::templates::resolve(&surreal, None, "onboarding__letter")
+    let template = store::templates::resolve(&application_store, None, "onboarding__letter")
         .await
         .expect("look up the shipped onboarding template")
         .expect("the browser harness requires the shipped onboarding template");
     let unique = Uuid::now_v7();
     let project = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: format!("overflow-check-{unique}"),
             name: format!("Overflow Check {unique}"),
             status: "open".into(),
-            entity_id: seed_browser_entity(&surreal).await,
+            entity_id: seed_browser_entity(&application_store).await,
             ..Default::default()
         },
     )
     .await
     .expect("seed the synthetic overflow-check matter");
-    store::projects::add_participation(&surreal, project.id, client.id, "client")
+    store::projects::add_participation(&application_store, project.id, client.id, "client")
         .await
         .expect("scope the seeded client onto the synthetic matter");
     store::notations::create(
-        &surreal,
+        &application_store,
         &store::notations::NewNotation::new(
             template.id,
             client.id,
@@ -5813,17 +5815,17 @@ async fn clients_sharing_a_project_can_see_each_others_avatar() {
     let Some(admin_browser) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
-    let client = store::persons::find_by_email_ci(&surreal, "client@neonlaw.com")
+    let client = store::persons::find_by_email_ci(&application_store, "client@neonlaw.com")
         .await
         .expect("look up the browser-harness client person")
         .expect("the browser harness requires the seeded client");
     let unique = Uuid::now_v7();
-    let entity_id = seed_browser_entity(&surreal).await;
+    let entity_id = seed_browser_entity(&application_store).await;
     let project = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: format!("shared-avatar-{unique}"),
             name: format!("Shared Avatar {unique}"),
@@ -5834,11 +5836,11 @@ async fn clients_sharing_a_project_can_see_each_others_avatar() {
     )
     .await
     .expect("seed the synthetic shared matter");
-    store::projects::add_participation(&surreal, project.id, client.id, "client")
+    store::projects::add_participation(&application_store, project.id, client.id, "client")
         .await
         .expect("scope the seeded client onto the synthetic matter");
     let fellow = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role(
             "E2E Fellow Client",
             format!("e2e-fellow-{unique}@example.com"),
@@ -5847,7 +5849,7 @@ async fn clients_sharing_a_project_can_see_each_others_avatar() {
     )
     .await
     .expect("seed the synthetic fellow client");
-    store::projects::add_participation(&surreal, project.id, fellow.id, "client")
+    store::projects::add_participation(&application_store, project.id, fellow.id, "client")
         .await
         .expect("scope the fellow client onto the same synthetic matter");
 
@@ -5876,13 +5878,13 @@ async fn clients_on_different_projects_cannot_see_each_others_avatar() {
     let Some(admin_browser) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
     let unique = Uuid::now_v7();
-    let entity_id = seed_browser_entity(&surreal).await;
+    let entity_id = seed_browser_entity(&application_store).await;
     let project = store::projects::create(
-        &surreal,
+        &application_store,
         &store::projects::NewProject {
             code: format!("unshared-avatar-{unique}"),
             name: format!("Unshared Avatar {unique}"),
@@ -5894,7 +5896,7 @@ async fn clients_on_different_projects_cannot_see_each_others_avatar() {
     .await
     .expect("seed the synthetic unshared matter");
     let stranger = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role(
             "E2E Stranger Client",
             format!("e2e-stranger-{unique}@example.com"),
@@ -5903,7 +5905,7 @@ async fn clients_on_different_projects_cannot_see_each_others_avatar() {
     )
     .await
     .expect("seed the synthetic stranger client");
-    store::projects::add_participation(&surreal, project.id, stranger.id, "client")
+    store::projects::add_participation(&application_store, project.id, stranger.id, "client")
         .await
         .expect("scope the stranger client onto a matter client@neonlaw.com is not on");
 
@@ -5932,12 +5934,12 @@ async fn an_unassigned_firm_tier_and_client_cannot_see_an_avatar() {
     let Some(admin_browser) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
     let unique = Uuid::now_v7();
     let synthetic_lawyer = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role(
             "E2E Firm Avatar Person",
             format!("e2e-firm-avatar-{unique}@example.com"),
@@ -5947,7 +5949,7 @@ async fn an_unassigned_firm_tier_and_client_cannot_see_an_avatar() {
     .await
     .expect("seed the synthetic lawyer");
     let synthetic_client = store::persons::create(
-        &surreal,
+        &application_store,
         &store::persons::NewPerson::with_role(
             "E2E Client Avatar Person",
             format!("e2e-client-avatar-{unique}@example.com"),
@@ -6502,33 +6504,33 @@ async fn brand_tiktok_connection_requires_username_without_redundant_checkbox() 
 const SAMPLE_PAGES: &[(&str, &str)] = &[
     (
         store::seed::SAMPLE_LITIGATION_CODE,
-        include_str!("../../portal/tests/litigation_records/fixtures/sample-litigation.pages.yaml"),
+        include_str!("fixtures/sample-litigation.pages.yaml"),
     ),
     (
         store::seed::SAMPLE_ESTATE_CODE,
-        include_str!("../../portal/tests/litigation_records/fixtures/sample-estate.pages.yaml"),
+        include_str!("fixtures/sample-estate.pages.yaml"),
     ),
     (
         store::seed::SAMPLE_TRANSACTIONAL_CODE,
-        include_str!(
-            "../../portal/tests/litigation_records/fixtures/sample-transactional.pages.yaml"
-        ),
+        include_str!("fixtures/sample-transactional.pages.yaml"),
     ),
 ];
 
 /// Store each sample matter's declared pages, as `project sync` would, and
 /// return every `(code, slug)` pair.
-async fn store_sample_pages(surreal: &store::surreal::SurrealDb) -> Vec<(String, String)> {
+async fn store_sample_pages(
+    application_store: &store::application_store::ApplicationStore,
+) -> Vec<(String, String)> {
     let mut declared = Vec::new();
     for (code, yaml) in SAMPLE_PAGES {
         let document: serde_yaml::Value = serde_yaml::from_str(yaml).expect("pages fixture");
         let pages = rules::pages::entries(document.as_mapping().expect("a mapping"))
             .expect("pages entries");
-        let project = store::projects::find_by_code(surreal, code)
+        let project = store::projects::find_by_code(application_store, code)
             .await
             .expect("look up the sample matter")
             .unwrap_or_else(|| panic!("the development seed opens `{code}`"));
-        store::matter_pages::replace_for_project(surreal, project.id, &pages)
+        store::matter_pages::replace_for_project(application_store, project.id, &pages)
             .await
             .expect("store the sample pages");
         declared.extend(pages.into_iter().map(|page| (code.to_string(), page.slug)));
@@ -6543,10 +6545,10 @@ async fn sample_matter_pages_follow_client_brand_and_lawyer_participation() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = postgres_browser_store()
+    let application_store = postgres_browser_store()
         .await
         .expect("require activated PostgreSQL fixture");
-    let declared = store_sample_pages(&surreal).await;
+    let declared = store_sample_pages(&application_store).await;
 
     for (lens, login) in [("client", true), ("lawyer", false)] {
         if login {

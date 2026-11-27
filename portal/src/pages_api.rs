@@ -34,21 +34,26 @@ pub(crate) async fn put_pages(
     Path(id): Path<Uuid>,
     Json(input): Json<PutPagesRequest>,
 ) -> Result<Response, ApiError> {
-    let allowed =
-        store::access::can_see_project(&state.surreal, session.person_id, session.role, id)
-            .await
-            .map_err(ApiError::Db)?;
+    let allowed = store::access::can_see_project(
+        &state.application_store,
+        session.person_id,
+        session.role,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     if !allowed {
         return Err(ApiError::NotFound);
     }
-    let stored = store::matter_pages::replace_for_project(&state.surreal, id, &input.pages)
-        .await
-        .map_err(|error| match error {
-            store::matter_pages::MatterPageError::Invalid(findings) => {
-                ApiError::PagesInvalid(findings.join("; "))
-            }
-            other => ApiError::Db(other.to_string()),
-        })?;
+    let stored =
+        store::matter_pages::replace_for_project(&state.application_store, id, &input.pages)
+            .await
+            .map_err(|error| match error {
+                store::matter_pages::MatterPageError::Invalid(findings) => {
+                    ApiError::PagesInvalid(findings.join("; "))
+                }
+                other => ApiError::Db(other.to_string()),
+            })?;
     Ok(Json(PagesView {
         synced_at: stored.first().map(|page| page.synced_at.clone()),
         pages: stored.into_iter().map(|page| page.entry).collect(),

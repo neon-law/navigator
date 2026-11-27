@@ -50,29 +50,16 @@ pub(crate) type Query<'q> = sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgre
 
 /// The pool to serve from, or `None` when no PostgreSQL host is configured
 /// and for the mirror reading its SurrealDB source.
-pub(crate) fn authority() -> Op<'static, Option<PostgresDb>> {
+pub(crate) fn authority() -> Op<'static, PostgresDb> {
     Box::pin(async {
-        if crate::postgres_mirror::reading_source() {
-            return Ok(None);
-        }
         #[cfg(test)]
         if let Ok(pg) = TEST_SOCIAL_DB.try_with(Clone::clone) {
-            return Ok(Some(pg));
+            return Ok(pg);
         }
-        PostgresDb::configured()
+        PostgresDb::application()
             .await
             .map_err(|_| SocialAuthorityError::Unavailable)
     })
-}
-
-/// Whether PostgreSQL holds these tables: a host is configured. The mirror
-/// then writes them only during the first Mirror Backfill.
-pub(crate) fn configured() -> bool {
-    #[cfg(test)]
-    if TEST_SOCIAL_DB.try_with(|_| ()).is_ok() {
-        return true;
-    }
-    std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_some()
 }
 
 fn decode<T: DeserializeOwned>(row: &sqlx::postgres::PgRow) -> Result<T, SocialAuthorityError> {
@@ -113,12 +100,6 @@ pub(crate) fn maybe<'a, T: DeserializeOwned + Send + 'a>(
 /// Run a statement that returns no row; return how many rows it touched.
 pub(crate) fn execute<'a>(pg: &'a PostgresDb, query: Query<'a>) -> Op<'a, u64> {
     Box::pin(async move { Ok(query.execute(pg.pool()).await?.rows_affected()) })
-}
-
-/// Run `future` with `pg` serving the social content tables.
-#[cfg(test)]
-pub(crate) async fn with_test_db<T>(pg: PostgresDb, future: impl Future<Output = T>) -> T {
-    TEST_SOCIAL_DB.scope(pg, future).await
 }
 
 #[cfg(test)]

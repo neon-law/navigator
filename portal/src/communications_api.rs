@@ -58,9 +58,10 @@ async fn require_participant(
     role: Role,
     project_id: Uuid,
 ) -> Result<(), ApiError> {
-    let allowed = store::access::can_see_project(&state.surreal, person_id, role, project_id)
-        .await
-        .map_err(ApiError::Db)?;
+    let allowed =
+        store::access::can_see_project(&state.application_store, person_id, role, project_id)
+            .await
+            .map_err(ApiError::Db)?;
     if allowed {
         Ok(())
     } else {
@@ -74,7 +75,6 @@ pub(crate) fn map_communication(error: store::communications::CommunicationError
             ApiError::CommunicationInvalid(message)
         }
         store::communications::CommunicationError::NotFound => ApiError::NotFound,
-        store::communications::CommunicationError::Db(error) => ApiError::Db(error.to_string()),
         store::communications::CommunicationError::Postgres(error) => {
             ApiError::Db(error.to_string())
         }
@@ -204,7 +204,7 @@ pub(crate) async fn list_communications(
     require_participant(&state, session.person_id, session.role, id).await?;
     let direction = validate_direction(filter.direction.as_deref())?;
     let attachments_only = filter.attachments.unwrap_or(false);
-    let rows = store::communications::for_project(&state.surreal, id)
+    let rows = store::communications::for_project(&state.application_store, id)
         .await
         .map_err(map_communication)?;
     let mut views = Vec::with_capacity(rows.len());
@@ -213,14 +213,14 @@ pub(crate) async fn list_communications(
         // asset slot plus, for Inbox-projected rows, every provenance-linked
         // asset the import filed (AC10).
         let primary = match row.asset_id {
-            Some(asset_id) => store::assets::find_by_id(&state.surreal, asset_id)
+            Some(asset_id) => store::assets::find_by_id(&state.application_store, asset_id)
                 .await
                 .map_err(ApiError::Asset)?,
             None => None,
         };
         let filed = match row.source_ref.as_deref().and_then(inbox_message_id) {
             Some(message_id) => {
-                store::assets::find_by_source_message_id(&state.surreal, id, message_id)
+                store::assets::find_by_source_message_id(&state.application_store, id, message_id)
                     .await
                     .map_err(ApiError::Asset)?
             }
@@ -251,24 +251,31 @@ pub(crate) async fn download_message_attachment(
     Path((project_id, conversation_id, message_id, asset_id)): Path<(Uuid, Uuid, Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::NotFound)?;
-    let thread =
-        store::inbox::project_thread(&state.surreal, actor_id, project_id, conversation_id)
-            .await
-            .map_err(attachment_inbox_error)?;
+    let thread = store::inbox::project_thread(
+        &state.application_store,
+        actor_id,
+        project_id,
+        conversation_id,
+    )
+    .await
+    .map_err(attachment_inbox_error)?;
     let message = thread
         .messages
         .iter()
         .find(|message| message.id == message_id)
         .ok_or(ApiError::NotFound)?;
-    let links =
-        store::inbox::message_assets(&state.surreal, thread.conversation.firm_id, message_id)
-            .await
-            .map_err(attachment_inbox_error)?;
+    let links = store::inbox::message_assets(
+        &state.application_store,
+        thread.conversation.firm_id,
+        message_id,
+    )
+    .await
+    .map_err(attachment_inbox_error)?;
     let linked = links.into_iter().find(|link| link.asset_id == asset_id);
     if linked.is_none() && message.attachment_asset_id != Some(asset_id) {
         return Err(ApiError::NotFound);
     }
-    let asset = store::assets::inbox_attachment_metadata(&state.surreal, asset_id)
+    let asset = store::assets::inbox_attachment_metadata(&state.application_store, asset_id)
         .await
         .map_err(ApiError::Asset)?
         .ok_or(ApiError::NotFound)?;
@@ -352,7 +359,7 @@ async fn create_sms(
         ));
     }
     if let Some(asset_id) = input.asset_id {
-        store::assets::find_by_id(&state.surreal, asset_id)
+        store::assets::find_by_id(&state.application_store, asset_id)
             .await
             .map_err(ApiError::Asset)?
             .filter(|asset| asset.project_id == Some(project_id) && asset.deleted_at.is_none())
@@ -362,7 +369,7 @@ async fn create_sms(
     // Keep user-supplied identifiers out of the Inbox projection's keyspace.
     let source_ref = source_ref.map(|value| format!("manual-sms:{value}"));
     let ingested = communications::ingest(
-        &state.surreal,
+        &state.application_store,
         &communications::IngestArgs {
             project_id,
             channel,
@@ -378,10 +385,14 @@ async fn create_sms(
     )
     .await
     .map_err(map_communication)?;
-    let row = communications::find(&state.surreal, project_id, ingested.communication_id)
-        .await
-        .map_err(map_communication)?
-        .ok_or_else(|| ApiError::Db("the SMS could not be read back".into()))?;
+    let row = communications::find(
+        &state.application_store,
+        project_id,
+        ingested.communication_id,
+    )
+    .await
+    .map_err(map_communication)?
+    .ok_or_else(|| ApiError::Db("the SMS could not be read back".into()))?;
     if row.asset_id != input.asset_id {
         return Err(ApiError::CommunicationInvalid(
             "source reference already has a different attachment".into(),
@@ -414,7 +425,7 @@ async fn create_email(
         return Err(ApiError::CommunicationInvalid("the body is empty".into()));
     }
     let ingested = store::communications::ingest_email(
-        &state.surreal,
+        &state.application_store,
         &store::communications::IngestArgs {
             project_id,
             channel,
@@ -436,7 +447,7 @@ async fn create_email(
     .map_err(map_communication)?;
     if let Some(call_id) = input.confirms {
         store::communications::confirm_agreements(
-            &state.surreal,
+            &state.application_store,
             project_id,
             call_id,
             ingested.communication_id,
@@ -444,10 +455,14 @@ async fn create_email(
         .await
         .map_err(map_communication)?;
     }
-    store::communications::find(&state.surreal, project_id, ingested.communication_id)
-        .await
-        .map_err(map_communication)?
-        .ok_or_else(|| ApiError::Db("the email could not be read back".into()))
+    store::communications::find(
+        &state.application_store,
+        project_id,
+        ingested.communication_id,
+    )
+    .await
+    .map_err(map_communication)?
+    .ok_or_else(|| ApiError::Db("the email could not be read back".into()))
 }
 
 /// A note is a firm-internal observation: no other party, no linkage.
@@ -501,7 +516,7 @@ pub(crate) async fn create_communication(
         store::communications::channel::CALL => {
             let counterparty = require_counterparty(input.counterparty.as_deref(), "a call")?;
             store::communications::record_call(
-                &state.surreal,
+                &state.application_store,
                 &store::communications::NewCall {
                     project_id: id,
                     author_person_id: session.person_id,
@@ -537,7 +552,7 @@ pub(crate) async fn create_communication(
         store::communications::channel::NOTE => {
             ensure_note_is_unlinked(&input)?;
             store::communications::log_note(
-                &state.surreal,
+                &state.application_store,
                 &store::communications::NewNote {
                     project_id: id,
                     author_person_id: session.person_id,

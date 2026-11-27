@@ -20,7 +20,7 @@ async fn approved_while_offline_is_published_once_after_worker_restart() {
     let pg = fixture.store();
     let (matter, lawyer) = store::postgres::PostgresDb::with_test_db(
         pg.clone(),
-        native_project::matter(&store::surreal::SurrealDb::uninitialized()),
+        native_project::matter(&store::application_store::ApplicationStore::uninitialized()),
     )
     .await;
     sqlx::query("INSERT INTO person_project_role(project_id,person_id,participation) VALUES($1,$2,'lawyer') ON CONFLICT DO NOTHING").bind(matter.id).bind(lawyer).execute(pg.pool()).await.unwrap();

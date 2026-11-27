@@ -11,7 +11,7 @@
 //! its work through `GET /app/api/projects` (to resolve the given code to a
 //! matter id, the same way `navigator project close` does) and
 //! `POST /app/api/project-surfaces/{id}` (the door `model::project_surfaces`
-//! sits behind). It never opens a `SurrealDb` connection of its own — even
+//! sits behind). It never opens a `ApplicationStore` connection of its own — even
 //! against a local deployment, the site's own admin-tier check and the
 //! server's Drive/forge credentials are what run the reconcile, not this
 //! process.

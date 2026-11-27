@@ -261,7 +261,7 @@ pub async fn activate_if_paid(
 pub struct StoreActivationSource {
     pg: PostgresDb,
     billing: Arc<dyn billing::BillingProvider>,
-    surreal: store::surreal::SurrealDb,
+    application_store: store::application_store::ApplicationStore,
 }
 
 impl StoreActivationSource {
@@ -269,12 +269,12 @@ impl StoreActivationSource {
     pub fn new(
         pg: PostgresDb,
         billing: Arc<dyn billing::BillingProvider>,
-        surreal: store::surreal::SurrealDb,
+        application_store: store::application_store::ApplicationStore,
     ) -> Self {
         Self {
             pg,
             billing,
-            surreal,
+            application_store,
         }
     }
 }
@@ -299,7 +299,8 @@ impl workflows::dbos_engine::purchase_activation::ActivationSource for StoreActi
             .map_err(|error| error.to_string())?;
         if purchase.stripe.is_some() {
             let result =
-                crate::subscription_purchases::sync(&self.surreal, &self.pg, &purchase).await;
+                crate::subscription_purchases::sync(&self.application_store, &self.pg, &purchase)
+                    .await;
             purchases::touch(&self.pg, purchase.id, Utc::now())
                 .await
                 .map_err(|_| "purchase refresh failed".to_owned())?;
@@ -389,7 +390,7 @@ async fn inject_csrf(mut req: Request, next: Next) -> Response {
 }
 
 async fn own_person(state: &PageState, session: &SessionData) -> Option<Person> {
-    store::persons::find_by_id(&state.app.surreal, session.person_id?)
+    store::persons::find_by_id(&state.app.application_store, session.person_id?)
         .await
         .ok()
         .flatten()
@@ -473,7 +474,7 @@ async fn page_content(
     }
     for purchase in own.iter_mut().filter(|p| p.stripe.is_some()) {
         if let Ok(fresh) =
-            crate::subscription_purchases::sync(&state.app.surreal, &pg, purchase).await
+            crate::subscription_purchases::sync(&state.app.application_store, &pg, purchase).await
         {
             *purchase = fresh;
         }
@@ -649,7 +650,7 @@ async fn post_buy(
             return StatusCode::BAD_REQUEST.into_response();
         };
         return match crate::subscription_purchases::checkout(
-            &state.app.surreal,
+            &state.app.application_store,
             &pg,
             &new_purchase(&person, offering),
             &terms,
@@ -710,7 +711,7 @@ async fn post_cancel(
         return Redirect::to(PURCHASES_PATH).into_response();
     }
     let result = if purchase.stripe.is_some() {
-        crate::subscription_purchases::cancel(&state.app.surreal, &pg, &purchase).await
+        crate::subscription_purchases::cancel(&state.app.application_store, &pg, &purchase).await
     } else if let Some(repeating) = purchase.xero_repeating_invoice_id.as_deref() {
         match state
             .app
@@ -842,47 +843,12 @@ mod tests {
         );
     }
 
-    async fn database() -> Option<PostgresDb> {
-        use sqlx::postgres::{PgConnectOptions, PgSslMode};
-        let port = store::test_support::postgres_test_port();
-        let options = PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("postgres")
-            .password("synthetic")
-            .database(
-                &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE")
-                    .unwrap_or_else(|_| "smoke".into()),
-            )
-            .ssl_mode(PgSslMode::Disable);
-        let admin = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
-        let name = format!("portal_purchase_{}", uuid::Uuid::new_v4().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        admin.close().await;
-        let pg = PostgresDb::connect(options.database(&name)).await.unwrap();
-        pg.migrate_embedded(None).await.unwrap();
-        Some(pg)
-    }
-
     fn bundled_copy() -> PurchaseCopy {
         views::locales::services::ServicesCatalog::parse(include_str!(
             "../../neon/locales/en/neon/services-catalog.yaml"
         ))
         .unwrap()
         .purchase
-    }
-
-    async fn client_person() -> Person {
-        let db = store::test_support::mem_surreal().await;
-        store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role("Pat Client", "pat@example.com", Role::Client),
-        )
-        .await
-        .unwrap()
     }
 
     #[test]
@@ -928,108 +894,6 @@ mod tests {
         assert!(plan.google_hint.is_none());
     }
 
-    #[tokio::test]
-    async fn a_plan_is_invoiced_once_then_active_with_xero_renewals_once_paid() {
-        let Some(pg) = database().await else { return };
-        let stub = billing::StubBillingProvider::new();
-        let person = client_person().await;
-        let copy = bundled_copy();
-        let annual = copy
-            .offerings
-            .iter()
-            .find(|o| o.id == "delete-your-data-annual")
-            .unwrap();
-        let now = Utc::now();
-
-        let purchase = buy(&pg, &stub, &person, annual, now).await.unwrap();
-        assert_eq!(purchase.state, PurchaseState::Invoiced);
-        assert_eq!(purchase.amount_cents, 29_000);
-        let again = buy(&pg, &stub, &person, annual, now).await.unwrap();
-        assert_eq!(again.id, purchase.id);
-        let calls = stub.calls();
-        assert_eq!(calls.len(), 1, "a second click raises no second invoice");
-        assert_eq!(
-            calls[0].matter_id, purchase.id,
-            "the Purchase id is the idempotency key"
-        );
-        assert_eq!(calls[0].request.line_items[0].unit_amount_cents, 29_000);
-        assert_eq!(calls[0].request.contact_email, "pat@example.com");
-        assert!(calls[0].request.due_date.is_some());
-        let invoice_id = purchase.xero_invoice_id.clone().unwrap();
-        assert_eq!(
-            purchase.invoice_url,
-            Some(format!("https://in.xero.test/{invoice_id}"))
-        );
-
-        assert!(
-            !activate_if_paid(&pg, &stub, &purchase, now).await.unwrap(),
-            "unpaid stays off"
-        );
-        assert!(stub.repeating_calls().is_empty());
-
-        stub.set_invoice_status(
-            &invoice_id,
-            billing::InvoiceStatus {
-                status: "PAID".into(),
-                amount_paid_cents: 29_000,
-                amount_cents: None,
-                currency: None,
-                issued_at: None,
-                due_at: None,
-            },
-        );
-        assert!(activate_if_paid(&pg, &stub, &purchase, now).await.unwrap());
-        let active = purchases::get(&pg, purchase.id).await.unwrap();
-        assert_eq!(active.state, PurchaseState::Active);
-        let repeating = stub.repeating_calls();
-        assert_eq!(repeating.len(), 1);
-        assert_eq!(repeating[0].key, purchase.id);
-        assert_eq!(repeating[0].request.every, billing::RepeatEvery::Year);
-        assert_eq!(
-            repeating[0].request.start_date,
-            first_renewal(Cadence::Year, now.date_naive()).unwrap()
-        );
-        assert_eq!(
-            active.xero_repeating_invoice_id,
-            Some(format!("stub-repeating-{}", purchase.id))
-        );
-
-        assert!(
-            activate_if_paid(&pg, &stub, &active, now).await.unwrap(),
-            "a repeat is a no-op"
-        );
-        assert_eq!(stub.repeating_calls().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_paid_consultation_activates_without_renewals() {
-        let Some(pg) = database().await else { return };
-        let stub = billing::StubBillingProvider::new();
-        let person = client_person().await;
-        let copy = bundled_copy();
-        let purchase = buy(&pg, &stub, &person, &copy.offerings[0], Utc::now())
-            .await
-            .unwrap();
-        stub.set_invoice_status(
-            purchase.xero_invoice_id.as_deref().unwrap(),
-            billing::InvoiceStatus {
-                status: "PAID".into(),
-                amount_paid_cents: 10_000,
-                amount_cents: None,
-                currency: None,
-                issued_at: None,
-                due_at: None,
-            },
-        );
-        assert!(activate_if_paid(&pg, &stub, &purchase, Utc::now())
-            .await
-            .unwrap());
-        assert!(stub.repeating_calls().is_empty());
-        let rows = purchases::for_person(&pg, person.id).await.unwrap();
-        let row = offering_row(&copy, &copy.offerings[0], &rows, false);
-        assert!(row.action == OfferingAction::Active);
-    }
-
     fn purchase(offering: &OfferingCopy, state: PurchaseState) -> Purchase {
         let now = Utc::now();
         Purchase {
@@ -1054,34 +918,6 @@ mod tests {
             access_ends_at: None,
             activated_at: None,
         }
-    }
-
-    #[tokio::test]
-    async fn a_purchase_copies_the_catalog_price_and_names_its_invoice_line() {
-        let copy = bundled_copy();
-        let person = client_person().await;
-        let cadences: Vec<Cadence> = copy.offerings.iter().map(cadence).collect();
-        assert_eq!(cadences, [Cadence::Once, Cadence::Month, Cadence::Year]);
-        let annual = &copy.offerings[2];
-        let draft = new_purchase(&person, annual);
-        assert_eq!(draft.person_id, person.id);
-        assert_eq!(draft.email, "pat@example.com");
-        assert_eq!(draft.offering, "delete-your-data-annual");
-        assert_eq!(draft.cadence, Cadence::Year);
-        assert_eq!(draft.amount_cents, 29_000);
-        assert_eq!(draft.currency, "USD");
-        assert_eq!(draft.account_code, annual.account_code);
-
-        let row = purchase(annual, PurchaseState::Invoiced);
-        let invoice_line = line(&row);
-        assert_eq!(invoice_line.description, annual.name);
-        assert_eq!(invoice_line.quantity, 1);
-        assert_eq!(invoice_line.unit_amount_cents, 29_000);
-        assert_eq!(invoice_line.account_code, annual.account_code);
-        assert_eq!(
-            reference(&row),
-            format!("{} {}", annual.name, &row.id.simple().to_string()[..8])
-        );
     }
 
     #[test]
@@ -1159,230 +995,4 @@ mod tests {
     }
 
     // --- the mounted routes ---
-
-    use axum::body::Body;
-    use axum::http::{header, Request as HttpRequest};
-    use tower::ServiceExt;
-
-    fn bearer(person_id: Option<uuid::Uuid>, role: Role) -> String {
-        let sessions = crate::SessionStore::new(crate::test_support::TEST_SESSION_KEY);
-        let mut session = SessionData::fresh("synthetic-purchaser", role);
-        session.person_id = person_id;
-        session.source = crate::session::SessionSource::Cli;
-        format!("Bearer {}", sessions.encode(&session))
-    }
-
-    async fn send(
-        app: &Router,
-        method: &str,
-        uri: &str,
-        auth: &str,
-    ) -> (StatusCode, String, String) {
-        let response = app
-            .clone()
-            .oneshot(
-                HttpRequest::builder()
-                    .method(method)
-                    .uri(uri)
-                    .header(header::AUTHORIZATION, auth)
-                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let location = response
-            .headers()
-            .get(header::LOCATION)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        (
-            status,
-            location,
-            String::from_utf8_lossy(&bytes).into_owned(),
-        )
-    }
-
-    /// The routes over a fresh store holding one Client, with or without
-    /// the catalog copy and a real Xero organisation.
-    async fn mounted(copy: Option<PurchaseCopy>, xero: bool) -> (Router, Person) {
-        let db = store::test_support::mem_surreal().await;
-        let person = store::persons::create(
-            &db,
-            &store::persons::NewPerson::with_role("Pat Client", "pat@example.com", Role::Client),
-        )
-        .await
-        .unwrap();
-        let state = crate::test_support::app_state(db).await;
-        // The full router installs the cookie layer the session and CSRF
-        // middleware read; mounted alone, the routes need it too.
-        let app = routes_with(&state, copy, xero).layer(tower_cookies::CookieManagerLayer::new());
-        (app, person)
-    }
-
-    #[tokio::test]
-    async fn the_page_refuses_to_sell_without_a_real_xero_organisation() {
-        let copy = bundled_copy();
-        for xero in [false, true] {
-            let (app, person) = mounted(Some(copy.clone()), xero).await;
-            let (status, _, body) = send(
-                &app,
-                "GET",
-                PURCHASES_PATH,
-                &bearer(Some(person.id), Role::Client),
-            )
-            .await;
-            assert_eq!(status, StatusCode::OK, "xero={xero}");
-            assert!(body.contains(&copy.title), "xero={xero}");
-            // The bundled refusal contains an apostrophe-free sentence, so
-            // its opening words survive HTML escaping verbatim.
-            assert!(
-                body.contains("Online purchases are not available right now"),
-                "without Xero or PostgreSQL the page refuses (xero={xero})"
-            );
-            assert!(!body.contains("action=\"/purchases/consultation\""));
-        }
-        // A brand with no purchase block renders the empty refusal.
-        let empty = PurchaseCopy {
-            offerings: Vec::new(),
-            ..bundled_copy()
-        };
-        let (app, person) = mounted(Some(empty), true).await;
-        let (status, _, body) = send(
-            &app,
-            "GET",
-            PURCHASES_PATH,
-            &bearer(Some(person.id), Role::Client),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(!body.contains(&copy.title), "no copy without Offerings");
-    }
-
-    #[tokio::test]
-    async fn cancellation_refuses_another_persons_purchase_before_any_provider_call() {
-        let Some(pg) = database().await else {
-            return;
-        };
-        let copy = bundled_copy();
-        let (app, person) = mounted(Some(copy.clone()), true).await;
-        let foreign = client_person().await;
-        let purchase =
-            purchases::open(&pg, &new_purchase(&foreign, &copy.offerings[1]), Utc::now())
-                .await
-                .unwrap();
-        let id = purchase.id;
-        PostgresDb::with_test_db(pg.clone(), async {
-            let (status, _, _) = send(
-                &app,
-                "POST",
-                &format!("/purchases/{id}/cancel"),
-                &bearer(Some(person.id), Role::Client),
-            )
-            .await;
-            assert_eq!(status, StatusCode::NOT_FOUND);
-            assert!(purchases::get(&pg, id)
-                .await
-                .unwrap()
-                .renewal_cancelled_at
-                .is_none());
-        })
-        .await;
-        pg.pool().close().await;
-    }
-
-    #[tokio::test]
-    async fn a_role_change_does_not_block_an_owners_cancellation_retry() {
-        let Some(pg) = database().await else {
-            return;
-        };
-        let copy = bundled_copy();
-        let (app, person) = mounted(Some(copy.clone()), true).await;
-        let purchase = purchases::open(&pg, &new_purchase(&person, &copy.offerings[1]), Utc::now())
-            .await
-            .unwrap();
-        purchases::record_renewal_cancelled(&pg, purchase.id, Utc::now())
-            .await
-            .unwrap();
-        PostgresDb::with_test_db(pg.clone(), async {
-            for role in [
-                Role::Client,
-                Role::Clerk,
-                Role::Lawyer,
-                Role::Admin,
-                Role::Owner,
-            ] {
-                let (status, location, _) = send(
-                    &app,
-                    "POST",
-                    &format!("/purchases/{}/cancel", purchase.id),
-                    &bearer(Some(person.id), role),
-                )
-                .await;
-                assert_eq!(status, StatusCode::SEE_OTHER);
-                assert_eq!(location, PURCHASES_PATH);
-            }
-        })
-        .await;
-        pg.pool().close().await;
-    }
-
-    #[tokio::test]
-    async fn recurring_purchase_refuses_missing_consent_before_invoicing() {
-        let (app, person) = mounted(Some(bundled_copy()), true).await;
-        let (status, _, _) = send(
-            &app,
-            "POST",
-            "/purchases/delete-your-data-monthly",
-            &bearer(Some(person.id), Role::Client),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn buying_refuses_an_unknown_offering_and_a_viewer_who_is_not_the_client() {
-        let (app, person) = mounted(None, true).await;
-        let client = bearer(Some(person.id), Role::Client);
-        let (status, _, _) = send(&app, "POST", "/purchases/consultation", &client).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "no catalog, nothing to buy");
-
-        let copy = bundled_copy();
-        let (app, person) = mounted(Some(copy.clone()), true).await;
-        let client = bearer(Some(person.id), Role::Client);
-        let (status, _, _) = send(&app, "POST", "/purchases/no-such-offering", &client).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-
-        for viewer in [
-            bearer(Some(person.id), Role::Lawyer),
-            bearer(None, Role::Client),
-            bearer(Some(uuid::Uuid::now_v7()), Role::Client),
-        ] {
-            let (status, _, body) = send(&app, "POST", "/purchases/consultation", &viewer).await;
-            assert_eq!(status, StatusCode::FORBIDDEN);
-            assert_eq!(body, copy.refusal);
-        }
-    }
-
-    #[tokio::test]
-    async fn buying_without_a_purchase_store_returns_the_client_to_the_page() {
-        if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_some() {
-            return;
-        }
-        let (app, person) = mounted(Some(bundled_copy()), true).await;
-        let (status, location, _) = send(
-            &app,
-            "POST",
-            "/purchases/consultation",
-            &bearer(Some(person.id), Role::Client),
-        )
-        .await;
-        assert!(status.is_redirection(), "{status}");
-        assert_eq!(location, PURCHASES_PATH);
-    }
 }

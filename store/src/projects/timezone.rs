@@ -3,7 +3,7 @@
 use chrono_tz::{America, Tz};
 
 use super::{Project, ProjectStoreError};
-use crate::surreal::SurrealDb;
+use crate::application_store::ApplicationStore;
 
 fn jurisdiction_zone(label: &str) -> Option<Tz> {
     let label = label.trim();
@@ -57,7 +57,10 @@ fn venue_zone<'a>(venues: impl Iterator<Item = (Option<&'a str>, Option<&'a str>
 ///
 /// # Errors
 /// Reports an invalid stored zone or a failed jurisdiction or case read.
-pub async fn calendar_timezone(db: &SurrealDb, project: &Project) -> Result<Tz, ProjectStoreError> {
+pub async fn calendar_timezone(
+    db: &ApplicationStore,
+    project: &Project,
+) -> Result<Tz, ProjectStoreError> {
     if let Some(zone) = &project.calendar_timezone {
         return zone
             .parse()

@@ -281,7 +281,7 @@ impl NotationSessionError {
 /// Project; see `docs/notation.md#notation`.
 #[allow(clippy::too_many_arguments)]
 pub async fn start_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn StorageService>>,
     template_code: &str,
@@ -290,7 +290,7 @@ pub async fn start_notation(
     entity_id: Option<Uuid>,
 ) -> Result<StartOutcome, NotationSessionError> {
     start_notation_with_delivery(
-        surreal,
+        application_store,
         runtime,
         storage,
         template_code,
@@ -304,7 +304,7 @@ pub async fn start_notation(
 
 #[allow(clippy::too_many_arguments)]
 async fn start_notation_with_delivery(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn StorageService>>,
     template_code: &str,
@@ -314,12 +314,13 @@ async fn start_notation_with_delivery(
     delivery: store::notations::SigningDelivery,
 ) -> Result<StartOutcome, NotationSessionError> {
     // Prefer a Project-scoped template, falling back to the shared one.
-    let template_row = store::templates::resolve(surreal, Some(project_id), template_code)
-        .await?
-        .ok_or_else(|| NotationSessionError::TemplateNotFound(template_code.into()))?;
+    let template_row =
+        store::templates::resolve(application_store, Some(project_id), template_code)
+            .await?
+            .ok_or_else(|| NotationSessionError::TemplateNotFound(template_code.into()))?;
 
     start_resolved_notation(
-        surreal,
+        application_store,
         runtime,
         storage,
         StartPinnedNotation {
@@ -346,13 +347,13 @@ pub struct StartPinnedNotation<'a> {
 /// # Errors
 /// Refuses another scope or Project, and propagates questionnaire/runtime/store failures.
 pub async fn start_notation_pinned(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn StorageService>>,
     request: StartPinnedNotation<'_>,
 ) -> Result<StartOutcome, NotationSessionError> {
     start_notation_pinned_with_delivery(
-        surreal,
+        application_store,
         runtime,
         storage,
         request,
@@ -363,7 +364,7 @@ pub async fn start_notation_pinned(
 
 /// Start the selected Project version with the specified signing delivery.
 pub async fn start_notation_pinned_with_delivery(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn StorageService>>,
     request: StartPinnedNotation<'_>,
@@ -375,11 +376,11 @@ pub async fn start_notation_pinned_with_delivery(
             request.template.code.clone(),
         ));
     }
-    start_resolved_notation(surreal, runtime, storage, request, delivery).await
+    start_resolved_notation(application_store, runtime, storage, request, delivery).await
 }
 
 async fn start_resolved_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn StorageService>>,
     request: StartPinnedNotation<'_>,
@@ -391,7 +392,7 @@ async fn start_resolved_notation(
         project_id,
         entity_id,
     } = request;
-    let definition = questionnaire_definition_for(surreal, storage, template_row).await?;
+    let definition = questionnaire_definition_for(application_store, storage, template_row).await?;
     let snapshot = questionnaire_snapshot_from_definition(&definition)?;
 
     let mut new_notation = store::notations::NewNotation::new(
@@ -405,7 +406,9 @@ async fn start_resolved_notation(
     if let Some(entity_id) = entity_id {
         new_notation = new_notation.with_entity(entity_id);
     }
-    let notation_id = store::notations::create(surreal, &new_notation).await?.id;
+    let notation_id = store::notations::create(application_store, &new_notation)
+        .await?
+        .id;
 
     runtime
         .start(
@@ -414,7 +417,7 @@ async fn start_resolved_notation(
             definition.spec.inner(),
         )
         .await?;
-    let next = first_step(surreal, &definition, notation_id).await?;
+    let next = first_step(application_store, &definition, notation_id).await?;
     Ok(StartOutcome { notation_id, next })
 }
 
@@ -425,20 +428,28 @@ async fn start_resolved_notation(
 /// Draft that IS in the library but fails validation refuses, exactly as an
 /// invalid Project Draft does.
 async fn persist_from_firm_library(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     repo: &repos::RepoStore,
     project_id: Uuid,
     template_code: &str,
 ) -> Result<(), NotationSessionError> {
-    let firm_id = store::projects::find_by_id(surreal, project_id)
+    let firm_id = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| NotationSessionError::Db(error.to_string()))?
         .and_then(|project| project.firm_id);
     let Some(firm_id) = firm_id else {
         return Ok(());
     };
-    match store::firm_library::persist_draft(surreal, storage, repo, firm_id, template_code).await {
+    match store::firm_library::persist_draft(
+        application_store,
+        storage,
+        repo,
+        firm_id,
+        template_code,
+    )
+    .await
+    {
         Ok(_) => Ok(()),
         Err(store::firm_library::FirmLibraryError::Source(source)) => Err(source.into()),
         Err(other) => Err(NotationSessionError::FirmLibrary(Box::new(other))),
@@ -462,26 +473,26 @@ async fn persist_from_firm_library(
 /// list (`portal::admin::template_opens_a_matter`) reads the very same
 /// classifier — one answer, two callers, no drift.
 pub async fn enforce_engagement_first(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     template_code: &str,
 ) -> Result<(), NotationSessionError> {
-    if store::notations::exists_for_project(surreal, project_id).await? {
+    if store::notations::exists_for_project(application_store, project_id).await? {
         return Ok(());
     }
     let Some(template) =
-        store::templates::resolve(surreal, Some(project_id), template_code).await?
+        store::templates::resolve(application_store, Some(project_id), template_code).await?
     else {
         return Ok(());
     };
-    enforce_engagement_first_resolved(surreal, project_id, &template).await
+    enforce_engagement_first_resolved(application_store, project_id, &template).await
 }
 
 /// Apply the existing engagement rule to the exact version the caller will open.
 /// # Errors
 /// The same engagement-first or store failure as the code-resolving wrapper.
 pub async fn enforce_engagement_first_pinned(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     template: &store::templates::Template,
 ) -> Result<(), NotationSessionError> {
@@ -490,15 +501,15 @@ pub async fn enforce_engagement_first_pinned(
             template.code.clone(),
         ));
     }
-    enforce_engagement_first_resolved(surreal, project_id, template).await
+    enforce_engagement_first_resolved(application_store, project_id, template).await
 }
 
 async fn enforce_engagement_first_resolved(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     template: &store::templates::Template,
 ) -> Result<(), NotationSessionError> {
-    if store::notations::exists_for_project(surreal, project_id).await? {
+    if store::notations::exists_for_project(application_store, project_id).await? {
         return Ok(());
     }
     let kind = template.kind.as_deref().and_then(rules::kind::Kind::parse);
@@ -510,7 +521,7 @@ async fn enforce_engagement_first_resolved(
     if opens {
         return Ok(());
     }
-    if store::projects::find_by_id(surreal, project_id)
+    if store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| NotationSessionError::Db(error.to_string()))?
         .is_some_and(|project| {
@@ -520,7 +531,7 @@ async fn enforce_engagement_first_resolved(
     {
         return Ok(());
     }
-    if store::assets::kinds_by_projects(surreal, &[project_id])
+    if store::assets::kinds_by_projects(application_store, &[project_id])
         .await
         .map_err(|error| NotationSessionError::Db(error.to_string()))?
         .iter()
@@ -548,7 +559,7 @@ async fn enforce_engagement_first_resolved(
 /// notation the same way; there is no separate `import` step.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_notation_from_repo(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: &Arc<dyn StorageService>,
     repo: &repos::RepoStore,
@@ -566,23 +577,34 @@ pub async fn create_notation_from_repo(
     // matter with no per-project authoring. A template that IS in the repo
     // but fails validation still hard-errors — bad paper never opens.
     use store::template_source::TemplateSourceError;
-    if let Err(e) =
-        store::template_source::persist_from_repo(surreal, storage, repo, project_id, template_code)
-            .await
+    if let Err(e) = store::template_source::persist_from_repo(
+        application_store,
+        storage,
+        repo,
+        project_id,
+        template_code,
+    )
+    .await
     {
         match e {
             // Not authored in the repo (or the repo has no commits yet) —
             // try the owning Firm's Library, then the bundled catalog below.
             TemplateSourceError::TemplateNotFound { .. } | TemplateSourceError::RepoEmpty(_) => {
-                persist_from_firm_library(surreal, storage, repo, project_id, template_code)
-                    .await?;
+                persist_from_firm_library(
+                    application_store,
+                    storage,
+                    repo,
+                    project_id,
+                    template_code,
+                )
+                .await?;
             }
             // A template that IS in the repo but is invalid hard-errors.
             other => return Err(other.into()),
         }
     }
     open_persisted(
-        surreal,
+        application_store,
         runtime,
         storage,
         template_code,
@@ -610,7 +632,7 @@ pub struct CheckoutDraft {
 /// As [`create_notation_from_repo`]; an invalid Draft refuses.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_notation_from_checkout(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: &Arc<dyn StorageService>,
     draft: CheckoutDraft,
@@ -621,7 +643,7 @@ pub async fn create_notation_from_checkout(
     delivery: store::notations::SigningDelivery,
 ) -> Result<StartOutcome, NotationSessionError> {
     store::template_source::persist_contents(
-        surreal,
+        application_store,
         storage,
         project_id,
         template_code,
@@ -630,7 +652,7 @@ pub async fn create_notation_from_checkout(
     )
     .await?;
     open_persisted(
-        surreal,
+        application_store,
         runtime,
         storage,
         template_code,
@@ -644,7 +666,7 @@ pub async fn create_notation_from_checkout(
 
 #[allow(clippy::too_many_arguments)]
 async fn open_persisted(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: &Arc<dyn StorageService>,
     template_code: &str,
@@ -656,10 +678,10 @@ async fn open_persisted(
     // The first notation opened on a matter must normally be the engagement
     // that makes it official. The preview-push door enforces the same rule
     // (see [`enforce_engagement_first`]); the decision lives here, once.
-    enforce_engagement_first(surreal, project_id, template_code).await?;
+    enforce_engagement_first(application_store, project_id, template_code).await?;
 
     start_notation_with_delivery(
-        surreal,
+        application_store,
         runtime,
         Some(storage),
         template_code,
@@ -675,11 +697,11 @@ async fn open_persisted(
 /// create Notations directly still freeze the same askable set as
 /// [`start_notation`].
 pub async fn questionnaire_snapshot_for_template(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     template_row: &store::templates::Template,
 ) -> Result<serde_json::Value, NotationSessionError> {
-    let definition = questionnaire_definition_for(surreal, storage, template_row).await?;
+    let definition = questionnaire_definition_for(application_store, storage, template_row).await?;
     questionnaire_snapshot_from_definition(&definition)
 }
 
@@ -687,12 +709,12 @@ pub async fn questionnaire_snapshot_for_template(
 /// and latest answers, including extracted defaults. Review and Re-ask use
 /// [`questionnaire_chain_for_reask`] for the confirmed completed route.
 pub async fn questionnaire_chain_for_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
 ) -> Result<Vec<String>, NotationSessionError> {
-    let (_, definition) = load_notation_and_spec(surreal, storage, notation_id).await?;
-    let taken = recorded_answers(surreal, notation_id).await?;
+    let (_, definition) = load_notation_and_spec(application_store, storage, notation_id).await?;
+    let taken = recorded_answers(application_store, notation_id).await?;
     Ok(definition
         .spec
         .question_order(&taken)
@@ -754,23 +776,24 @@ impl RenderAnswerProjection {
 /// # Errors
 /// Malformed snapshots, unavailable or invalid pinned bodies, and store reads fail closed.
 pub async fn render_answer_projection(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
 ) -> Result<RenderAnswerProjection, NotationSessionError> {
-    answer_projection(surreal, storage, notation_id, false).await
+    answer_projection(application_store, storage, notation_id, false).await
 }
 
 async fn answer_projection(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
     for_reask: bool,
 ) -> Result<RenderAnswerProjection, NotationSessionError> {
-    let (notation, definition) = verified_questionnaire(surreal, storage, notation_id).await?;
-    let mut answers = store::answers::for_notation(surreal, notation_id).await?;
+    let (notation, definition) =
+        verified_questionnaire(application_store, storage, notation_id).await?;
+    let mut answers = store::answers::for_notation(application_store, notation_id).await?;
     let ids: Vec<Uuid> = answers.iter().map(|answer| answer.question_id).collect();
-    let codes: BTreeMap<Uuid, String> = store::questions::find_by_ids(surreal, &ids)
+    let codes: BTreeMap<Uuid, String> = store::questions::find_by_ids(application_store, &ids)
         .await?
         .into_iter()
         .map(|question| (question.id, question.code))
@@ -779,7 +802,7 @@ async fn answer_projection(
         None => {
             // Static documents retain their established label formatting;
             // a catalog label never supplies questionnaire route authority.
-            let choices = store::templates::find_by_id(surreal, notation.template_id)
+            let choices = store::templates::find_by_id(application_store, notation.template_id)
                 .await?
                 .and_then(|template| catalog_spec_yaml(&template.code))
                 .and_then(|yaml| choices_from_yaml(yaml).ok())
@@ -816,11 +839,11 @@ async fn answer_projection(
 }
 
 async fn verified_questionnaire(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
 ) -> Result<(store::notations::Notation, Option<QuestionnaireDefinition>), NotationSessionError> {
-    let notation = store::notations::find_by_id(surreal, notation_id)
+    let notation = store::notations::find_by_id(application_store, notation_id)
         .await?
         .ok_or(NotationSessionError::NotationNotFound(notation_id))?;
     let definition = if let Some(snapshot) = &notation.questionnaire_snapshot {
@@ -830,11 +853,11 @@ async fn verified_questionnaire(
         )
     } else {
         let storage = storage.ok_or(NotationSessionError::QuestionnaireStorageRequired)?;
-        let template = store::templates::find_by_id(surreal, notation.template_id)
+        let template = store::templates::find_by_id(application_store, notation.template_id)
             .await?
             .ok_or(NotationSessionError::NotationNotFound(notation_id))?;
         let body = store::templates::body_pinned_to(
-            surreal,
+            application_store,
             storage,
             &template,
             notation.template_body_sha256.as_deref(),
@@ -890,11 +913,11 @@ fn definition_from_verified_body(
 /// # Errors
 /// Returns notation, verified questionnaire, or answer-read errors.
 pub async fn questionnaire_chain_for_reask(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
 ) -> Result<Vec<String>, NotationSessionError> {
-    let projection = answer_projection(surreal, storage, notation_id, true).await?;
+    let projection = answer_projection(application_store, storage, notation_id, true).await?;
     let values = values_for_answers(&projection.answers, &projection.codes);
     Ok(match &projection.questionnaire {
         RenderQuestionnaire::Absent { .. } => Vec::new(),
@@ -911,10 +934,10 @@ pub async fn questionnaire_chain_for_reask(
 /// `state name → recorded value` — the route resolver's input. Rows
 /// arrive oldest-first, so the last row per state is the latest.
 async fn recorded_answers(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     notation_id: Uuid,
 ) -> Result<BTreeMap<String, String>, NotationSessionError> {
-    let answers = store::answers::for_notation(surreal, notation_id).await?;
+    let answers = store::answers::for_notation(application_store, notation_id).await?;
     Ok(values_for_answers(&answers, &BTreeMap::new()))
 }
 
@@ -945,17 +968,17 @@ fn questionnaire_snapshot_from_definition(
 /// without writing anything. Returns `QuestionnaireComplete` when
 /// the questionnaire has already reached END.
 pub async fn current_step(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
 ) -> Result<NextStep, NotationSessionError> {
-    let (_, definition) = load_notation_and_spec(surreal, storage, notation_id).await?;
+    let (_, definition) = load_notation_and_spec(application_store, storage, notation_id).await?;
     let current_state = runtime
         .current_state(MachineKind::Questionnaire, notation_id)
         .await
         .unwrap_or_else(StateName::begin);
-    next_step_from(surreal, &definition, notation_id, &current_state).await
+    next_step_from(application_store, &definition, notation_id, &current_state).await
 }
 
 /// Persist one answer, advance the questionnaire, and return the
@@ -974,7 +997,7 @@ pub async fn current_step(
 /// but differ in authorship.
 #[allow(clippy::too_many_arguments)]
 pub async fn answer_step(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
@@ -983,7 +1006,7 @@ pub async fn answer_step(
     author: AnswerAuthor<'_>,
 ) -> Result<NextStep, NotationSessionError> {
     answer_step_with_reference(
-        surreal,
+        application_store,
         runtime,
         storage,
         notation_id,
@@ -1002,7 +1025,7 @@ pub async fn answer_step(
 /// `None` for a free-typed answer.
 #[allow(clippy::too_many_arguments)]
 pub async fn answer_step_with_reference(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
@@ -1011,7 +1034,8 @@ pub async fn answer_step_with_reference(
     reference_id: Option<Uuid>,
     author: AnswerAuthor<'_>,
 ) -> Result<NextStep, NotationSessionError> {
-    let (notation_row, definition) = load_notation_and_spec(surreal, storage, notation_id).await?;
+    let (notation_row, definition) =
+        load_notation_and_spec(application_store, storage, notation_id).await?;
     let person_id = notation_row.person_id;
 
     let current_state = runtime
@@ -1023,7 +1047,7 @@ pub async fn answer_step_with_reference(
     // question (or BEGIN), and the route out of it — the recorded
     // answer's own choice edge on a branch state, `_` on a linear
     // one — names the question being answered now.
-    let taken = recorded_answers(surreal, notation_id).await?;
+    let taken = recorded_answers(application_store, notation_id).await?;
     let prior = taken.get(current_state.as_str()).cloned();
     let condition = definition
         .spec
@@ -1044,7 +1068,7 @@ pub async fn answer_step_with_reference(
     }
 
     let canonical_code = question_code_for_state(question_code);
-    let question_row = store::questions::find_by_code(surreal, canonical_code)
+    let question_row = store::questions::find_by_code(application_store, canonical_code)
         .await?
         .ok_or_else(|| NotationSessionError::QuestionNotSeeded(question_code.into()))?;
     // Close the declared choice set before writing, alongside the
@@ -1057,7 +1081,7 @@ pub async fn answer_step_with_reference(
     // `person_id` is the respondent; `authored_by`/`source` record who
     // actually entered it (lawyer on the client's behalf, or the client).
     store::answers::record(
-        surreal,
+        application_store,
         // The walked state name carries the `<type>__<role>` discriminator
         // (`entity__company`); the question row points at the bare code.
         &store::answers::NewAnswer::new(
@@ -1123,7 +1147,7 @@ pub async fn answer_step_with_reference(
     })?;
     Ok(NextStep::NeedsAnswer {
         question: load_question(
-            surreal,
+            application_store,
             &next_state,
             &definition.prompts,
             &definition.choices,
@@ -1197,30 +1221,31 @@ fn is_author_facing_help(state: &str) -> bool {
 /// still missing a client answer. The descriptor is the lawyer walk's,
 /// less any author-facing `help_text` ([`AUTHOR_FACING_HELP_CODES`]).
 pub async fn client_intake_step(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
 ) -> Result<ClientIntakeStep, NotationSessionError> {
-    client_intake_step_at(surreal, storage, notation_id, None).await
+    client_intake_step_at(application_store, storage, notation_id, None).await
 }
 
 /// Resolve the client's first unanswered question, or a previously visited
 /// client-facing question at or before that frontier. This permits correction
 /// while preventing a crafted request from skipping unanswered intake steps.
 pub async fn client_intake_step_at(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
     requested_code: Option<&str>,
 ) -> Result<ClientIntakeStep, NotationSessionError> {
-    let (notation_row, definition) = load_notation_and_spec(surreal, storage, notation_id).await?;
+    let (notation_row, definition) =
+        load_notation_and_spec(application_store, storage, notation_id).await?;
     let person_id = notation_row.person_id;
 
     // Route-aware: the walk's answers so far select the branches, so a
     // question on a pruned branch is no longer part of the client's
     // portion at all (and a still-unanswered branch fans out until its
     // own choice is made).
-    let taken = recorded_answers(surreal, notation_id).await?;
+    let taken = recorded_answers(application_store, notation_id).await?;
     let codes: Vec<String> = definition
         .spec
         .question_order(&taken)
@@ -1231,7 +1256,7 @@ pub async fn client_intake_step_at(
         .iter()
         .map(|code| question_code_for_state(code).to_string())
         .collect();
-    let rows = store::questions::find_by_codes(surreal, &canonical_codes).await?;
+    let rows = store::questions::find_by_codes(application_store, &canonical_codes).await?;
     let by_code: BTreeMap<String, store::questions::Question> =
         rows.into_iter().map(|q| (q.code.clone(), q)).collect();
     let id_to_code: BTreeMap<Uuid, String> =
@@ -1256,7 +1281,8 @@ pub async fn client_intake_step_at(
 
     // One pass over the respondent's answers: latest value per code (for
     // pre-fill) and the set of codes the client has answered themselves.
-    let answers = store::answers::for_person_in_notation(surreal, person_id, notation_id).await?;
+    let answers =
+        store::answers::for_person_in_notation(application_store, person_id, notation_id).await?;
     let mut latest_value: BTreeMap<String, String> = BTreeMap::new();
     let mut client_answer_counts: BTreeMap<String, usize> = BTreeMap::new();
     for a in answers {
@@ -1294,7 +1320,7 @@ pub async fn client_intake_step_at(
         }
         if requested || idx == frontier {
             let mut question = load_question(
-                surreal,
+                application_store,
                 &StateName::from(code.as_str()),
                 &definition.prompts,
                 &definition.choices,
@@ -1308,7 +1334,7 @@ pub async fn client_intake_step_at(
                 .or_else(|| latest_value.get(question_code_for_state(code)))
                 .cloned();
             if prior_value.is_none() {
-                prior_value = address_prior_value(surreal, person_id, code).await?;
+                prior_value = address_prior_value(application_store, person_id, code).await?;
             }
             return Ok(ClientIntakeStep::NeedsAnswer {
                 question,
@@ -1356,7 +1382,7 @@ fn client_question_index(
 /// today (see `TEST_ENTITY_ADDRESS` in this module's tests) — there is no
 /// structured "address answer" shape to match.
 async fn address_prior_value(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     person_id: Uuid,
     code: &str,
 ) -> Result<Option<String>, NotationSessionError> {
@@ -1366,7 +1392,7 @@ async fn address_prior_value(
     if !matches!(type_token, "address" | "addresses") {
         return Ok(None);
     }
-    Ok(store::addresses::for_person(surreal, person_id)
+    Ok(store::addresses::for_person(application_store, person_id)
         .await?
         .into_iter()
         .next_back()
@@ -1393,7 +1419,7 @@ fn format_address_line(address: &store::addresses::Address) -> String {
 /// Rejects a question that is lawyer-only or outside the notation's
 /// questionnaire so a hand-crafted POST can't write an arbitrary answer.
 pub async fn record_client_answer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
     question_code: &str,
@@ -1401,7 +1427,7 @@ pub async fn record_client_answer(
     authored_by: Uuid,
 ) -> Result<(), NotationSessionError> {
     record_client_answer_with_reference(
-        surreal,
+        application_store,
         storage,
         notation_id,
         question_code,
@@ -1418,7 +1444,7 @@ pub async fn record_client_answer(
 /// is embedded in the stored envelope. Pass `None` for a free-typed answer.
 #[allow(clippy::too_many_arguments)]
 pub async fn record_client_answer_with_reference(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
     question_code: &str,
@@ -1426,8 +1452,9 @@ pub async fn record_client_answer_with_reference(
     reference_id: Option<Uuid>,
     authored_by: Uuid,
 ) -> Result<(), NotationSessionError> {
-    let (notation_row, definition) = load_notation_and_spec(surreal, storage, notation_id).await?;
-    let taken = recorded_answers(surreal, notation_id).await?;
+    let (notation_row, definition) =
+        load_notation_and_spec(application_store, storage, notation_id).await?;
+    let taken = recorded_answers(application_store, notation_id).await?;
     if !definition
         .spec
         .question_order(&taken)
@@ -1439,7 +1466,7 @@ pub async fn record_client_answer_with_reference(
         ));
     }
     let canonical_code = question_code_for_state(question_code);
-    let question_row = store::questions::find_by_code(surreal, canonical_code)
+    let question_row = store::questions::find_by_code(application_store, canonical_code)
         .await?
         .ok_or_else(|| NotationSessionError::QuestionNotSeeded(question_code.into()))?;
     let audience = metadata_lookup(&definition.audiences, question_code)
@@ -1451,7 +1478,7 @@ pub async fn record_client_answer_with_reference(
     }
     ensure_declared_choice(&definition.choices, question_code, value)?;
     store::answers::record(
-        surreal,
+        application_store,
         &store::answers::NewAnswer::new(
             question_row.id,
             notation_row.person_id,
@@ -1473,12 +1500,12 @@ pub async fn record_client_answer_with_reference(
 /// Returns notation/snapshot/read errors, an undeclared choice, an off-route
 /// question, or a correction that changes the completed question chain.
 pub async fn validate_reask_answers(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
     answers: &BTreeMap<String, String>,
 ) -> Result<(), NotationSessionError> {
-    let projection = answer_projection(surreal, storage, notation_id, true).await?;
+    let projection = answer_projection(application_store, storage, notation_id, true).await?;
     check_reask_projection(&projection, answers)
 }
 
@@ -1534,7 +1561,7 @@ fn check_reask_route(
 ///
 /// Subsequent document assembly uses the corrected answers in the review context.
 pub async fn record_reask_answer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
     question_code: &str,
@@ -1544,9 +1571,9 @@ pub async fn record_reask_answer(
 ) -> Result<(), NotationSessionError> {
     // The verified frozen or pinned questionnaire supplies the declared
     // choices and completed route before any correction is appended.
-    let projection = answer_projection(surreal, storage, notation_id, true).await?;
+    let projection = answer_projection(application_store, storage, notation_id, true).await?;
     let notation_row = &projection.notation;
-    let flagged = store::reask::flagged_questions(surreal, notation_id).await?;
+    let flagged = store::reask::flagged_questions(application_store, notation_id).await?;
     if !flagged.iter().any(|c| c == question_code) {
         return Err(NotationSessionError::QuestionNotFlagged(
             question_code.into(),
@@ -1557,11 +1584,11 @@ pub async fn record_reask_answer(
         &BTreeMap::from([(question_code.to_owned(), value.to_owned())]),
     )?;
     let canonical_code = question_code_for_state(question_code);
-    let question_row = store::questions::find_by_code(surreal, canonical_code)
+    let question_row = store::questions::find_by_code(application_store, canonical_code)
         .await?
         .ok_or_else(|| NotationSessionError::QuestionNotSeeded(question_code.into()))?;
     store::answers::record(
-        surreal,
+        application_store,
         &store::answers::NewAnswer::new(
             question_row.id,
             notation_row.person_id,
@@ -1575,11 +1602,11 @@ pub async fn record_reask_answer(
 }
 
 async fn load_notation_and_spec(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
 ) -> Result<(store::notations::Notation, QuestionnaireDefinition), NotationSessionError> {
-    let notation_row = store::notations::find_by_id(surreal, notation_id)
+    let notation_row = store::notations::find_by_id(application_store, notation_id)
         .await?
         .ok_or(NotationSessionError::NotationNotFound(notation_id))?;
 
@@ -1591,10 +1618,11 @@ async fn load_notation_and_spec(
             .map_err(|e| NotationSessionError::SnapshotDecode(e.to_string()))?;
         return Ok((notation_row, definition));
     }
-    let template_row = store::templates::find_by_id(surreal, notation_row.template_id)
+    let template_row = store::templates::find_by_id(application_store, notation_row.template_id)
         .await?
         .ok_or(NotationSessionError::NotationNotFound(notation_id))?;
-    let definition = questionnaire_definition_for(surreal, storage, &template_row).await?;
+    let definition =
+        questionnaire_definition_for(application_store, storage, &template_row).await?;
     Ok((notation_row, definition))
 }
 
@@ -1614,7 +1642,7 @@ async fn load_notation_and_spec(
 /// storage (or no `storage` handle) cannot drive a questionnaire and surfaces
 /// [`NotationSessionError::TemplateHasNoQuestionnaire`].
 async fn questionnaire_definition_for(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     template_row: &store::templates::Template,
 ) -> Result<QuestionnaireDefinition, NotationSessionError> {
@@ -1625,7 +1653,8 @@ async fn questionnaire_definition_for(
     // breaks intake for a bundled code.
     if template_row.project_id.is_some() && template_row.asset_id.is_some() {
         if let Some(storage) = storage {
-            if let Ok(body) = store::templates::body(surreal, storage, template_row).await {
+            if let Ok(body) = store::templates::body(application_store, storage, template_row).await
+            {
                 if template_has_questionnaire(&body) {
                     return definition_from_body(&body);
                 }
@@ -1638,7 +1667,7 @@ async fn questionnaire_definition_for(
     let storage = storage.ok_or_else(|| {
         NotationSessionError::TemplateHasNoQuestionnaire(template_row.code.clone())
     })?;
-    let body = store::templates::body(surreal, storage, template_row)
+    let body = store::templates::body(application_store, storage, template_row)
         .await
         .map_err(|_| NotationSessionError::TemplateHasNoQuestionnaire(template_row.code.clone()))?;
     definition_from_body(&body)
@@ -1679,11 +1708,17 @@ fn definition_from_body(body: &str) -> Result<QuestionnaireDefinition, NotationS
 }
 
 async fn first_step(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     definition: &QuestionnaireDefinition,
     notation_id: Uuid,
 ) -> Result<NextStep, NotationSessionError> {
-    next_step_from(surreal, definition, notation_id, &StateName::begin()).await
+    next_step_from(
+        application_store,
+        definition,
+        notation_id,
+        &StateName::begin(),
+    )
+    .await
 }
 
 /// The question now being asked, given the machine's pointer: the
@@ -1691,12 +1726,12 @@ async fn first_step(
 /// route out of it — the recorded answer's own choice edge on a
 /// branch state, `_` on a linear one — names the next question.
 async fn next_step_from(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     definition: &QuestionnaireDefinition,
     notation_id: Uuid,
     current_state: &StateName,
 ) -> Result<NextStep, NotationSessionError> {
-    let taken = recorded_answers(surreal, notation_id).await?;
+    let taken = recorded_answers(application_store, notation_id).await?;
     let prior = taken.get(current_state.as_str()).cloned();
     let Some(next) = definition.spec.route_from(current_state, prior.as_deref()) else {
         return Ok(NextStep::QuestionnaireComplete);
@@ -1705,18 +1740,24 @@ async fn next_step_from(
         return Ok(NextStep::QuestionnaireComplete);
     }
     Ok(NextStep::NeedsAnswer {
-        question: load_question(surreal, &next, &definition.prompts, &definition.choices).await?,
+        question: load_question(
+            application_store,
+            &next,
+            &definition.prompts,
+            &definition.choices,
+        )
+        .await?,
     })
 }
 
 async fn load_question(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     state: &StateName,
     prompts: &BTreeMap<String, String>,
     choices: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<QuestionDescriptor, NotationSessionError> {
     let code = question_code_for_state(state.as_str());
-    let row = store::questions::find_by_code(surreal, code)
+    let row = store::questions::find_by_code(application_store, code)
         .await?
         .ok_or_else(|| NotationSessionError::QuestionNotSeeded(state.0.clone()))?;
     // A template prompt may name the question by interpolation (`What is the
@@ -1750,7 +1791,7 @@ async fn load_question(
 /// directly — rather than through [`start_notation`] — carries no frozen
 /// snapshot, so its spec is read from the template body in storage.
 pub async fn record_extracted_answer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
     state_name: &str,
@@ -1759,7 +1800,7 @@ pub async fn record_extracted_answer(
     // The notation and its questionnaire in one load: the spec supplies the
     // declared choice set this proposal is closed against.
     let (notation_row, definition) =
-        match load_notation_and_spec(surreal, storage, notation_id).await {
+        match load_notation_and_spec(application_store, storage, notation_id).await {
             Ok(loaded) => loaded,
             // A vanished notation is skipped, mirroring the unseeded-question
             // arm below rather than failing the whole coverage run.
@@ -1767,7 +1808,7 @@ pub async fn record_extracted_answer(
             Err(e) => return Err(e.to_string()),
         };
     let canonical = question_code_for_state(state_name);
-    let Some(question_row) = store::questions::find_by_code(surreal, canonical)
+    let Some(question_row) = store::questions::find_by_code(application_store, canonical)
         .await
         .map_err(|e| e.to_string())?
     else {
@@ -1784,7 +1825,7 @@ pub async fn record_extracted_answer(
     }
     let author = AnswerAuthor::extracted();
     store::answers::record(
-        surreal,
+        application_store,
         &store::answers::NewAnswer::new(
             question_row.id,
             notation_row.person_id,
@@ -2005,24 +2046,9 @@ pub fn localize_prompt_for_state(prompt: &str, state: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        answer_step, answer_value_for_state, answered_client_states, current_step,
-        is_author_facing_help, localize_prompt_for_state, questionnaire_chain_for_notation,
-        questionnaire_definition_for, record_reask_answer, start_notation, AnswerAuthor, NextStep,
-        NotationSessionError, QuestionDescriptor, QuestionnaireDefinition, StateName,
-        AUTHOR_FACING_HELP_CODES,
+        answer_value_for_state, answered_client_states, is_author_facing_help,
+        localize_prompt_for_state, NotationSessionError, AUTHOR_FACING_HELP_CODES,
     };
-    use crate::runtime::{SignalContext, StateMachineRuntime};
-    use crate::spec::{MachineKind, QuestionnaireSpec};
-
-    /// The linear-chain question order the pre-branching walker
-    /// produced — what [`QuestionnaireSpec::question_order`] must still
-    /// return for a linear spec with no answers recorded.
-    fn ordered_question_codes(spec: &QuestionnaireSpec) -> Vec<String> {
-        spec.question_order(&BTreeMap::new())
-            .into_iter()
-            .map(|state| state.0)
-            .collect()
-    }
 
     #[test]
     fn a_store_or_template_write_failure_is_not_a_lawyer_fault() {
@@ -2090,2493 +2116,10 @@ mod tests {
         let primitive = answer_value_for_state("custom_text__note", "hello", Some(picked));
         assert_eq!(primitive, store::answers::primitive("hello"));
     }
-    use crate::questionnaire_spec_from_yaml;
-    use crate::runtime::InMemoryRuntime;
-    use cloud::StorageService;
+
     use std::collections::BTreeMap;
-    use std::sync::Arc;
-    use store::answers::{SOURCE_CLIENT, SOURCE_LAWYER};
-    use store::persons::{self, NewPerson};
-    use store::surreal::SurrealDb;
+
     use uuid::Uuid;
-
-    /// The store: persons, projects, templates, questions, answers, the
-    /// notation itself, and the append-only `notation_event` / `reask`
-    /// journal this module writes through.
-    async fn db() -> SurrealDb {
-        store::test_support::mem_surreal().await
-    }
-
-    async fn seed_person(surreal: &SurrealDb, email: &str) -> Uuid {
-        persons::create(surreal, &NewPerson::new(email, email))
-            .await
-            .unwrap()
-            .id
-    }
-
-    async fn seed_retainer_template(surreal: &SurrealDb) {
-        // The retainer template body is bundled via include_str!;
-        // for tests we only need the row to exist with the
-        // matching `code` so the spec lookup hits the bundled YAML.
-        seed_template(surreal, "onboarding__letter", "Retainer").await;
-    }
-
-    async fn seed_template(surreal: &SurrealDb, code: &str, title: &str) {
-        store::templates::save_version(
-            surreal,
-            None,
-            code,
-            store::templates::Version {
-                title: title.into(),
-                respondent_type: "person".into(),
-                asset_id: None,
-                form_code: None,
-                kind: None,
-                source_commit_sha: None,
-            },
-        )
-        .await
-        .unwrap();
-    }
-
-    async fn seed_question(surreal: &SurrealDb, code: &str) {
-        store::questions::create(
-            surreal,
-            &store::questions::NewQuestion::new(code, format!("Prompt for {code}"), "string"),
-        )
-        .await
-        .unwrap();
-    }
-
-    async fn seed_retainer_questions(surreal: &SurrealDb) {
-        // The retainer's leading entity / principal-office questions.
-        seed_question(surreal, "entity").await;
-        seed_question(surreal, "address").await;
-        seed_question(surreal, "person").await;
-        seed_question(surreal, "project").await;
-        seed_question(surreal, "custom_text").await;
-        // The retainer's engagement-start-date question (N120).
-        seed_question(surreal, "custom_datetime").await;
-        // The retainer's governing-law question (ENG-145).
-        seed_question(surreal, "custom_single_choice").await;
-    }
-
-    /// The plausible entity/address values the retainer walk tests answer
-    /// its two leading questions with.
-    const TEST_ENTITY_NAME: &str = "Northstar Ventures LLC";
-    const TEST_ENTITY_ADDRESS: &str = "100 Innovation Way, Reno, NV 89501";
-
-    /// The retainer's questions with the audiences the canonical
-    /// `Question.yaml` declares: the Firm resolves the address and the
-    /// project, so those rows are lawyer-only; the template's own
-    /// `audiences:` narrows only its `custom_*` questions.
-    async fn seed_retainer_questions_with_audiences(surreal: &SurrealDb) {
-        for code in ["address", "project"] {
-            store::questions::create(
-                surreal,
-                &store::questions::NewQuestion::new(code, format!("Prompt for {code}"), "string")
-                    .with_audience(store::questions::AUDIENCE_LAWYER),
-            )
-            .await
-            .unwrap();
-        }
-        for code in [
-            "entity",
-            "person",
-            "custom_text",
-            "custom_datetime",
-            "custom_single_choice",
-        ] {
-            seed_question(surreal, code).await;
-        }
-    }
-
-    #[tokio::test]
-    async fn start_notation_creates_row_and_returns_first_question() {
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-
-        let outcome = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-
-        // Notation row exists, linked to the right person.
-        let row = store::notations::find_by_id(&surreal, outcome.notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(row.person_id, person_id);
-        assert_eq!(row.entity_id, None);
-        assert_eq!(row.state, "BEGIN");
-
-        // First question per retainer questionnaire is entity.
-        match outcome.next {
-            NextStep::NeedsAnswer {
-                question: QuestionDescriptor { code, .. },
-            } => {
-                assert_eq!(code, "entity");
-            }
-            NextStep::QuestionnaireComplete => {
-                panic!("expected NeedsAnswer, got QuestionnaireComplete")
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn a_walked_question_carries_its_authored_help_text() {
-        // `help_text` has no column on the `question` table, so a descriptor
-        // built only from the row would carry none and the guidance the firm
-        // wrote would reach nobody. The walk reads it back from the canonical
-        // seed bytes; assert the authored string so a reader resolving to the
-        // wrong question still fails here.
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-
-        let outcome = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let NextStep::NeedsAnswer { question } = outcome.next else {
-            panic!("expected NeedsAnswer, got QuestionnaireComplete")
-        };
-        assert_eq!(question.code, "entity");
-        assert_eq!(
-            question.help_text.as_deref(),
-            Some("Select the entity record this answer refers to."),
-        );
-    }
-
-    #[tokio::test]
-    async fn record_reask_answer_gates_to_the_flagged_set() {
-        // After a lawyer_review flags one answer, re-collection is scoped to
-        // that answer: the flagged question is re-answerable (client
-        // self-serve or lawyer-on-behalf), an un-flagged one is refused — a
-        // rejected review re-collects the wrong answers, never the whole
-        // questionnaire, and a hand-crafted POST can't rewrite an un-flagged
-        // answer.
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-        let notation_id = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap()
-        .notation_id;
-        let lawyer = store::test_support::dri_person(&surreal).await;
-
-        // The review flags only person__client.
-        store::reask::record_change_request(
-            &surreal,
-            notation_id,
-            lawyer,
-            &["person__client".into()],
-            Some("confirm the client's legal name"),
-        )
-        .await
-        .unwrap();
-
-        // Lawyer re-collect the flagged answer on the client's behalf.
-        record_reask_answer(
-            &surreal,
-            None,
-            notation_id,
-            "person__client",
-            "Libra Jones",
-            None,
-            AnswerAuthor::lawyer(Some(lawyer)),
-        )
-        .await
-        .unwrap();
-
-        // The corrected answer is on record, attributed to lawyer, without
-        // disturbing the completed questionnaire runtime.
-        let row = store::answers::for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .pop()
-            .expect("the corrected answer is on record");
-        assert_eq!(row.source, SOURCE_LAWYER);
-        assert_eq!(row.authored_by_person_id, Some(lawyer));
-        assert!(store::answers::display_value(&row.value).contains("Libra Jones"));
-
-        // An un-flagged question is refused, even for lawyer.
-        let err = record_reask_answer(
-            &surreal,
-            None,
-            notation_id,
-            "project__engagement",
-            "New Co",
-            None,
-            AnswerAuthor::client(Some(person_id)),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(&err, NotationSessionError::QuestionNotFlagged(q) if q == "project__engagement"),
-            "{err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn create_notation_from_repo_auto_saves_the_template_and_opens_pinned() {
-        use super::create_notation_from_repo;
-        // A Project repo carrying its own template blueprint at HEAD (a
-        // corpus body, guaranteed to validate clean).
-        const TEMPLATE: &str =
-            include_str!("../../templates/notations/neon_law/onboarding__letter.md");
-
-        let surreal = db().await;
-        let storage: Arc<dyn StorageService> = Arc::new(
-            cloud::FsStorage::new(std::env::temp_dir().join("navigator-create-from-repo-test"))
-                .await
-                .unwrap(),
-        );
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-        let project = store::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let runtime = InMemoryRuntime::new();
-
-        let dir = tempfile::tempdir().unwrap();
-        let repo = repos::RepoStore::new(dir.path());
-        repo.ensure_code(&project.code).unwrap();
-        repo.commit_as_code(
-            &project.code,
-            repos::Author {
-                name: "Lawyer",
-                email: "lawyer@example.com",
-            },
-            "add Project draft",
-            &[("drafts/onboarding__letter.md", TEMPLATE.as_bytes())],
-        )
-        .unwrap();
-        let head = repo.head_oid_code(&project.code).unwrap().unwrap();
-
-        let outcome = create_notation_from_repo(
-            &surreal,
-            &runtime,
-            &storage,
-            &repo,
-            "onboarding__letter",
-            person_id,
-            project_id,
-            None,
-            store::notations::SigningDelivery::default(),
-        )
-        .await
-        .unwrap();
-
-        // The notation pinned the just-saved, project-scoped version, whose
-        // provenance is the repo commit it was read from — no separate
-        // `import` step ran.
-        let notation = store::notations::find_by_id(&surreal, outcome.notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(notation.person_id, person_id);
-        let pinned = store::templates::find_by_id(&surreal, notation.template_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(pinned.code, "onboarding__letter");
-        assert_eq!(
-            pinned.project_id,
-            Some(project_id),
-            "the version is project-scoped, not the shared catalog"
-        );
-        assert!(pinned.is_current);
-        assert_eq!(pinned.source_commit_sha.as_deref(), Some(head.as_str()));
-
-        // The questionnaire started — the first question is ready to walk.
-        assert!(
-            matches!(outcome.next, NextStep::NeedsAnswer { .. }),
-            "opening the notation must leave the questionnaire ready to answer"
-        );
-    }
-
-    /// LAW-273: a pitch whose only Draft is an offboarding letter with an empty
-    /// questionnaire and a `draft_created → lawyer_review → generate_pdf → END`
-    /// workflow must open that notation. A refusal has to name the template,
-    /// not collapse into an untyped failure.
-    #[tokio::test]
-    async fn a_pitch_offboarding_letter_with_an_empty_questionnaire_opens() {
-        use super::create_notation_from_repo;
-        const TEMPLATE: &str = "\
----
-kind: offboarding
-title: Closing Letter
-respondent_type: person_and_entity
-confidential: true
-questionnaire:
-  BEGIN:
-    _: END
-  END: {}
-workflow:
-  BEGIN:
-    draft_created: lawyer_review
-  lawyer_review:
-    approved: generate_pdf
-    rejected: END
-  generate_pdf:
-    pdf_persisted: END
-  END: {}
----
-
-Dear Client:
-
-This Closing Letter confirms that the Firm has completed its work for the Client on this matter, and that the Firm's
-representation of the Client is now concluded.
-
-## I. Representation concluded
-
-The Firm's representation of the Client on this matter is now concluded. The Firm will take no further action on this
-matter. Should a new need arise, the Client is welcome to open a new matter with the Firm at any time.
-
-## II. Work completed
-
-The Client's project files stay available to download from the portal for three days after this letter is signed.
-
-## III. Fees at closing
-
-Please find the attached PDF of the project fee schedule. If a balance is owed, a check goes to the address on file.
-
-## IV. Your file
-
-The Firm will make reasonable commercial efforts to store the Client's data for ten years after this letter is signed.
-
-## V. Closing
-
-It has been our privilege to do this work alongside you. A future engagement requires a new retainer for a new matter.
-";
-
-        let surreal = db().await;
-        let storage: Arc<dyn StorageService> = Arc::new(
-            cloud::FsStorage::new(std::env::temp_dir().join("navigator-pitch-offboard-test"))
-                .await
-                .unwrap(),
-        );
-        let person_id = seed_person(&surreal, "client@example.com").await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-        let project = store::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(project.status, "open");
-        assert!(!store::notations::exists_for_project(&surreal, project_id)
-            .await
-            .unwrap());
-        let dir = tempfile::tempdir().unwrap();
-        let repo = repos::RepoStore::new(dir.path());
-        repo.ensure_code(&project.code).unwrap();
-        repo.commit_as_code(
-            &project.code,
-            repos::Author {
-                name: "Lawyer",
-                email: "lawyer@example.com",
-            },
-            "add the pitch closing letter",
-            &[("drafts/offboarding__letter.md", TEMPLATE.as_bytes())],
-        )
-        .unwrap();
-
-        let outcome = create_notation_from_repo(
-            &surreal,
-            &InMemoryRuntime::new(),
-            &storage,
-            &repo,
-            "offboarding__letter",
-            person_id,
-            project_id,
-            Some(project.entity_id),
-            store::notations::SigningDelivery::default(),
-        )
-        .await;
-
-        let outcome = outcome.expect("a pitch offboarding letter opens");
-        assert!(
-            matches!(outcome.next, NextStep::QuestionnaireComplete),
-            "an empty questionnaire is already complete: {:?}",
-            outcome.next
-        );
-    }
-
-    #[tokio::test]
-    async fn a_project_repository_miss_opens_the_owning_firms_library_draft() {
-        use super::create_notation_from_repo;
-        const TEMPLATE: &str =
-            include_str!("../../templates/notations/neon_law/onboarding__letter.md");
-        let surreal = db().await;
-        let storage: Arc<dyn StorageService> = Arc::new(
-            cloud::FsStorage::new(std::env::temp_dir().join("navigator-firm-library-notation"))
-                .await
-                .unwrap(),
-        );
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
-        let firm = store::firms::find_by_id(&surreal, firm_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let project_id = store::projects::create(
-            &surreal,
-            &store::projects::NewProject {
-                code: format!("test-project-{}", Uuid::now_v7()),
-                name: "test project".into(),
-                status: "open".into(),
-                entity_id: store::test_support::seed_entity(&surreal).await,
-                firm_id: Some(firm_id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id;
-        let dir = tempfile::tempdir().unwrap();
-        let repo = repos::RepoStore::new(dir.path());
-        repo.commit_as_code(
-            &store::firm_library::repository_name(&firm.slug),
-            repos::Author {
-                name: "Lawyer",
-                email: "lawyer@example.com",
-            },
-            "add the Firm retainer",
-            &[("drafts/firm_retainer.md", TEMPLATE.as_bytes())],
-        )
-        .unwrap();
-
-        let outcome = create_notation_from_repo(
-            &surreal,
-            &InMemoryRuntime::new(),
-            &storage,
-            &repo,
-            "firm_retainer",
-            person_id,
-            project_id,
-            None,
-            store::notations::SigningDelivery::default(),
-        )
-        .await
-        .unwrap();
-        let notation = store::notations::find_by_id(&surreal, outcome.notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let pinned = store::templates::find_by_id(&surreal, notation.template_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(pinned.code, "firm_retainer");
-        assert_eq!(pinned.firm_id, Some(firm_id), "the Firm Library version");
-        assert_eq!(pinned.project_id, None);
-    }
-
-    #[tokio::test]
-    async fn onboarding_with_two_jurisdiction_questions_opens_from_project_repo() {
-        const TEMPLATE: &str = include_str!("../tests/fixtures/onboarding_implicit_end.txt");
-        let surreal = db().await;
-        let assets = tempfile::tempdir().unwrap();
-        let storage: Arc<dyn StorageService> =
-            Arc::new(cloud::FsStorage::new(assets.path()).await.unwrap());
-        let person_id = seed_person(&surreal, "client@example.com").await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-        let project = store::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let runtime = InMemoryRuntime::new();
-        let dir = tempfile::tempdir().unwrap();
-        let repo = repos::RepoStore::new(dir.path());
-        repo.ensure_code(&project.code).unwrap();
-        repo.commit_as_code(
-            &project.code,
-            repos::Author {
-                name: "Tester",
-                email: "tester@example.com",
-            },
-            "add synthetic draft",
-            &[("drafts/onboarding.md", TEMPLATE.as_bytes())],
-        )
-        .unwrap();
-        let outcome = super::create_notation_from_repo(
-            &surreal,
-            &runtime,
-            &storage,
-            &repo,
-            "onboarding",
-            person_id,
-            project_id,
-            None,
-            store::notations::SigningDelivery::default(),
-        )
-        .await
-        .unwrap();
-        assert!(
-            matches!(outcome.next, NextStep::NeedsAnswer { ref question } if question.code == "jurisdiction__governing_law")
-        );
-    }
-
-    #[tokio::test]
-    async fn ambiguous_project_blueprint_roots_block_a_shared_catalog_fallback() {
-        use super::create_notation_from_repo;
-        let surreal = db().await;
-        let storage: Arc<dyn StorageService> = Arc::new(
-            cloud::FsStorage::new(std::env::temp_dir().join("navigator-ambiguous-drafts-test"))
-                .await
-                .unwrap(),
-        );
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-        let project = store::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        store::templates::save_version(
-            &surreal,
-            None,
-            "onboarding__letter",
-            store::templates::Version {
-                title: "Shared letter".into(),
-                respondent_type: "person".into(),
-                asset_id: None,
-                form_code: None,
-                kind: Some("onboarding".into()),
-                source_commit_sha: None,
-            },
-        )
-        .await
-        .unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let repo = repos::RepoStore::new(dir.path());
-        repo.ensure_code(&project.code).unwrap();
-        repo.commit_as_code(
-            &project.code,
-            repos::Author {
-                name: "Lawyer",
-                email: "lawyer@example.com",
-            },
-            "both directories",
-            &[("templates/other.md", b"# Other"), ("drafts/.gitkeep", b"")],
-        )
-        .unwrap();
-
-        let error = create_notation_from_repo(
-            &surreal,
-            &InMemoryRuntime::new(),
-            &storage,
-            &repo,
-            "onboarding__letter",
-            person_id,
-            project_id,
-            None,
-            store::notations::SigningDelivery::default(),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            NotationSessionError::TemplateSource(
-                store::template_source::TemplateSourceError::AmbiguousBlueprintDirectories
-            )
-        ));
-        assert!(!store::notations::exists_for_project(&surreal, project_id)
-            .await
-            .unwrap());
-    }
-
-    /// LAW-372: a Draft read from the Project checkout opens as the
-    /// Project's own version even when the hosted repository store has no
-    /// copy of it and the shared catalog has the same code.
-    #[tokio::test]
-    async fn create_notation_from_checkout_pins_the_checkout_draft_over_the_catalog() {
-        const TEMPLATE: &str =
-            include_str!("../../templates/notations/neon_law/onboarding__letter.md");
-
-        let surreal = db().await;
-        let storage: Arc<dyn StorageService> = Arc::new(
-            cloud::FsStorage::new(std::env::temp_dir().join("navigator-create-from-checkout-test"))
-                .await
-                .unwrap(),
-        );
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-        seed_retainer_template(&surreal).await;
-        let runtime = InMemoryRuntime::new();
-
-        let outcome = super::create_notation_from_checkout(
-            &surreal,
-            &runtime,
-            &storage,
-            super::CheckoutDraft {
-                contents: TEMPLATE.to_string(),
-                commit_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
-            },
-            "onboarding__letter",
-            person_id,
-            project_id,
-            None,
-            store::notations::SigningDelivery::default(),
-        )
-        .await
-        .unwrap();
-
-        let notation = store::notations::find_by_id(&surreal, outcome.notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let pinned = store::templates::find_by_id(&surreal, notation.template_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            pinned.project_id,
-            Some(project_id),
-            "the checkout Draft, not the catalog"
-        );
-        assert_eq!(
-            pinned.source_commit_sha.as_deref(),
-            Some("0123456789abcdef0123456789abcdef01234567")
-        );
-    }
-
-    #[tokio::test]
-    async fn mutual_nda_can_follow_a_filed_onboarding_document_without_an_opening_notation() {
-        let surreal = db().await;
-        let project_id =
-            store::test_support::seed_project_surreal(&surreal, "Example Project").await;
-        seed_template(&surreal, "mutual_nda", "Mutual NDA").await;
-        assert!(matches!(
-            super::enforce_engagement_first(&surreal, project_id, "mutual_nda").await,
-            Err(super::NotationSessionError::EngagementMustBeFirst { .. })
-        ));
-        let temp = tempfile::tempdir().unwrap();
-        let storage: Arc<dyn StorageService> =
-            Arc::new(cloud::FsStorage::new(temp.path()).await.unwrap());
-        store::assets::file_revision(
-            &surreal,
-            &storage,
-            &store::documents::IngestArgs {
-                project_id,
-                source: "upload",
-                filename: "onboarding.pdf",
-                kind: "onboarding",
-                content_type: "application/pdf",
-                description: None,
-                visibility: "internal",
-                secondary_storage_key: None,
-            },
-            &store::documents::DocumentIdentity::default(),
-            b"%PDF-1.7 test document",
-        )
-        .await
-        .unwrap();
-        super::enforce_engagement_first(&surreal, project_id, "mutual_nda")
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn create_notation_from_repo_uses_and_pins_the_shared_catalog_template() {
-        use super::create_notation_from_repo;
-
-        let surreal = db().await;
-        let storage: Arc<dyn StorageService> = Arc::new(
-            cloud::FsStorage::new(std::env::temp_dir().join("navigator-create-from-catalog-test"))
-                .await
-                .unwrap(),
-        );
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-        let project = store::projects::find_by_id(&surreal, project_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let runtime = InMemoryRuntime::new();
-
-        // The Project repository has a history but no local template. Its
-        // notation reference must fall through to the shared catalog rather
-        // than create a matter-scoped copy.
-        let shared = store::templates::save_version(
-            &surreal,
-            None,
-            "onboarding__letter",
-            store::templates::Version {
-                title: "Onboarding Letter".into(),
-                respondent_type: "person_and_entity".into(),
-                asset_id: None,
-                form_code: None,
-                kind: Some("onboarding".into()),
-                source_commit_sha: None,
-            },
-        )
-        .await
-        .unwrap()
-        .into_model();
-        seed_retainer_questions(&surreal).await;
-
-        let dir = tempfile::tempdir().unwrap();
-        let repo = repos::RepoStore::new(dir.path());
-        repo.ensure_code(&project.code).unwrap();
-        repo.commit_as_code(
-            &project.code,
-            repos::Author {
-                name: "Lawyer",
-                email: "lawyer@example.com",
-            },
-            "initialize project",
-            &[("README.md", b"# Project\n".as_slice())],
-        )
-        .unwrap();
-
-        let outcome = create_notation_from_repo(
-            &surreal,
-            &runtime,
-            &storage,
-            &repo,
-            "onboarding__letter",
-            person_id,
-            project_id,
-            None,
-            store::notations::SigningDelivery::default(),
-        )
-        .await
-        .unwrap();
-
-        let notation = store::notations::find_by_id(&surreal, outcome.notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(notation.template_id, shared.id, "pins the catalog version");
-        let pinned = store::templates::find_by_id(&surreal, notation.template_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(pinned.project_id, None, "the catalog row is not copied");
-        assert_eq!(
-            pinned.source_commit_sha, None,
-            "catalog provenance stays bundled"
-        );
-        assert!(
-            store::templates::resolve_exact(&surreal, Some(project_id), "onboarding__letter")
-                .await
-                .unwrap()
-                .is_none(),
-            "a catalog reference does not create a Project-scoped template version"
-        );
-    }
-
-    #[tokio::test]
-    async fn start_notation_freezes_the_questionnaire_snapshot() {
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-
-        let outcome = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-        let nid = outcome.notation_id;
-
-        // The snapshot is written at creation.
-        let row = store::notations::find_by_id(&surreal, nid)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            row.questionnaire_snapshot.is_some(),
-            "start_notation must freeze the askable set"
-        );
-
-        // Overwrite the snapshot with a *different* questionnaire that starts
-        // at project__engagement. The template's bundled spec still
-        // starts at entity, so if resolution re-read the
-        // template it would ask that; reading the frozen snapshot asks
-        // project__engagement.
-        let alt = QuestionnaireDefinition {
-            spec: questionnaire_spec_from_yaml(
-                "questionnaire:\n  BEGIN:\n    _: project__engagement\n  \
-                 project__engagement:\n    _: END\n  END: {}\n",
-            )
-            .unwrap(),
-            prompts: BTreeMap::new(),
-            audiences: BTreeMap::new(),
-            choices: BTreeMap::new(),
-        };
-        store::notations::update_questionnaire_snapshot(
-            &surreal,
-            row.id,
-            serde_json::to_value(&alt).unwrap(),
-        )
-        .await
-        .unwrap();
-
-        let next = current_step(&surreal, &runtime, None, nid).await.unwrap();
-        match next {
-            NextStep::NeedsAnswer { question } => assert_eq!(
-                question.code, "project__engagement",
-                "resolution must read the frozen snapshot, not the template"
-            ),
-            NextStep::QuestionnaireComplete => panic!("expected NeedsAnswer"),
-        }
-    }
-
-    async fn fs_storage() -> Arc<dyn StorageService> {
-        Arc::new(
-            cloud::FsStorage::new(std::env::temp_dir().join("navigator-notation-session-test"))
-                .await
-                .unwrap(),
-        )
-    }
-
-    /// A project-scoped template row for `code` whose markdown body — with a
-    /// `questionnaire:` frontmatter block — is ingested to blob storage.
-    async fn scoped_template_with_blob(
-        surreal: &SurrealDb,
-        storage: &Arc<dyn StorageService>,
-        code: &str,
-        project_id: Uuid,
-        body: &str,
-    ) -> store::templates::Template {
-        let asset_id =
-            store::assets::ingest_content(surreal, storage, body.as_bytes(), "text/markdown")
-                .await
-                .unwrap();
-        store::templates::save_version(
-            surreal,
-            Some(project_id),
-            code,
-            store::templates::Version {
-                title: "Scoped Retainer".into(),
-                respondent_type: "person".into(),
-                asset_id: Some(asset_id),
-                form_code: None,
-                kind: None,
-                source_commit_sha: Some(store::test_support::SYNTHETIC_COMMIT_SHA.into()),
-            },
-        )
-        .await
-        .unwrap()
-        .into_model()
-    }
-
-    /// A project-scoped template with a *bundled* code (`onboarding__letter`,
-    /// whose bundled questionnaire starts at `entity`) that carries its
-    /// own divergent questionnaire blob — that blob's questionnaire must win.
-    #[tokio::test]
-    async fn scoped_template_blob_questionnaire_wins_over_bundled_yaml() {
-        let surreal = db().await;
-        let storage = fs_storage().await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-
-        let divergent = "---\nquestionnaire:\n  BEGIN:\n    _: project__engagement\n  \
-             project__engagement:\n    _: END\n  END: {}\n---\nScoped retainer body.\n";
-        let scoped = scoped_template_with_blob(
-            &surreal,
-            &storage,
-            "onboarding__letter",
-            project_id,
-            divergent,
-        )
-        .await;
-
-        let definition = questionnaire_definition_for(&surreal, Some(&storage), &scoped)
-            .await
-            .unwrap();
-        assert_eq!(
-            ordered_question_codes(&definition.spec),
-            vec!["project__engagement".to_string()],
-            "a project-scoped template's own questionnaire blob must win over the bundled YAML"
-        );
-    }
-
-    /// A project-scoped bundled-code template that overrides only the
-    /// *document body* — a readable blob whose frontmatter carries no
-    /// `questionnaire:` block — must still use the bundled questionnaire, not
-    /// fail. Scoped versions may body-only override a bundled code.
-    #[tokio::test]
-    async fn scoped_body_only_override_falls_back_to_bundled_questionnaire() {
-        let surreal = db().await;
-        let storage = fs_storage().await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-
-        // A frontmatter with a non-questionnaire key, then a body: a genuine
-        // body-only override of the bundled retainer.
-        let body_only = "---\ntitle: Scoped Retainer\n---\n# Retainer\n\nBody-only override.\n";
-        let scoped = scoped_template_with_blob(
-            &surreal,
-            &storage,
-            "onboarding__letter",
-            project_id,
-            body_only,
-        )
-        .await;
-
-        let definition = questionnaire_definition_for(&surreal, Some(&storage), &scoped)
-            .await
-            .expect("a body-only override must fall back to the bundled questionnaire");
-        assert_eq!(
-            ordered_question_codes(&definition.spec),
-            vec![
-                "entity".to_string(),
-                "address__principal_office".to_string(),
-                "person__client".to_string(),
-                "project__engagement".to_string(),
-                "custom_datetime__engagement_start_date".to_string(),
-                "custom_text__engagement_scope".to_string(),
-                "custom_single_choice__governing_law".to_string(),
-            ],
-            "a scoped body-only override keeps the bundled questionnaire"
-        );
-    }
-
-    /// The fallback, pinned in both directions: a bundled (shared) row and a
-    /// project-scoped row with *no* blob both keep yielding the compile-time
-    /// bundled questionnaire.
-    #[tokio::test]
-    async fn bundled_and_blobless_scoped_rows_fall_back_to_bundled_yaml() {
-        let surreal = db().await;
-        let storage = fs_storage().await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-        let bundled_chain = vec![
-            "entity".to_string(),
-            "address__principal_office".to_string(),
-            "person__client".to_string(),
-            "project__engagement".to_string(),
-            "custom_datetime__engagement_start_date".to_string(),
-            "custom_text__engagement_scope".to_string(),
-            "custom_single_choice__governing_law".to_string(),
-        ];
-
-        // Shared bundled row (no project, no blob) → bundled retainer YAML.
-        let shared = store::templates::save_version(
-            &surreal,
-            None,
-            "onboarding__letter",
-            store::templates::Version {
-                title: "Retainer".into(),
-                respondent_type: "person".into(),
-                asset_id: None,
-                form_code: None,
-                kind: None,
-                source_commit_sha: None,
-            },
-        )
-        .await
-        .unwrap()
-        .into_model();
-        let shared_def = questionnaire_definition_for(&surreal, Some(&storage), &shared)
-            .await
-            .unwrap();
-        assert_eq!(
-            ordered_question_codes(&shared_def.spec),
-            bundled_chain,
-            "a bundled row keeps yielding the bundled questionnaire"
-        );
-
-        // Project-scoped row for the same bundled code but with no blob →
-        // still falls back to the bundled YAML.
-        let scoped_no_blob = store::test_support::seed_unpinned_project_template(
-            &surreal,
-            project_id,
-            "onboarding__letter",
-            "Retainer",
-            "person",
-            None,
-        )
-        .await;
-        let scoped_def = questionnaire_definition_for(&surreal, Some(&storage), &scoped_no_blob)
-            .await
-            .unwrap();
-        assert_eq!(
-            ordered_question_codes(&scoped_def.spec),
-            bundled_chain,
-            "a scoped row with no blob falls back to the bundled questionnaire"
-        );
-    }
-
-    /// End-to-end: a scoped-blob template freezes its own questionnaire at
-    /// `start_notation`, and the progress-chain helper the admin walker uses
-    /// reads that frozen snapshot — so the progress total tracks the scoped
-    /// questionnaire, not the bundled spec.
-    #[tokio::test]
-    async fn questionnaire_chain_for_notation_reads_the_scoped_snapshot() {
-        let surreal = db().await;
-        let storage = fs_storage().await;
-        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-
-        let divergent = "---\nquestionnaire:\n  BEGIN:\n    _: project__engagement\n  \
-             project__engagement:\n    _: END\n  END: {}\n---\nScoped retainer body.\n";
-        scoped_template_with_blob(
-            &surreal,
-            &storage,
-            "onboarding__letter",
-            project_id,
-            divergent,
-        )
-        .await;
-        seed_question(&surreal, "project").await;
-
-        let outcome = start_notation(
-            &surreal,
-            &runtime,
-            Some(&storage),
-            "onboarding__letter",
-            person_id,
-            project_id,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let chain = questionnaire_chain_for_notation(&surreal, Some(&storage), outcome.notation_id)
-            .await
-            .unwrap();
-        assert_eq!(
-            chain,
-            vec!["project__engagement".to_string()],
-            "the progress chain must reflect the scoped questionnaire the notation froze"
-        );
-    }
-
-    fn prompt_of(next: &NextStep) -> &str {
-        match next {
-            NextStep::NeedsAnswer { question } => question.prompt.as_str(),
-            NextStep::QuestionnaireComplete => panic!("expected NeedsAnswer"),
-        }
-    }
-
-    #[tokio::test]
-    async fn custom_question_uses_template_prompt_override() {
-        let surreal = db().await;
-        seed_template(&surreal, "nv__dissolution", "Dissolution").await;
-        seed_question(&surreal, "custom_text").await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-
-        let outcome = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "nv__dissolution",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(prompt_of(&outcome.next), "What is the dissolution reason?");
-    }
-
-    #[tokio::test]
-    async fn lawyer_walk_keeps_author_facing_custom_help() {
-        // The suppression is a client-path decision only. The lawyer walk
-        // is a firm-side tool where the author's note is at worst odd, so the
-        // same `custom_text` state still carries the seeded string there —
-        // the CLI and lawyer walker tests downstream depend on it.
-        let surreal = db().await;
-        seed_template(&surreal, "nv__dissolution", "Dissolution").await;
-        seed_question(&surreal, "custom_text").await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-
-        let outcome = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "nv__dissolution",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let NextStep::NeedsAnswer { question } = outcome.next else {
-            panic!("expected NeedsAnswer, got QuestionnaireComplete")
-        };
-        assert!(
-            question.code.starts_with("custom_text__"),
-            "{}",
-            question.code
-        );
-        assert_eq!(
-            question.help_text,
-            store::seed::question_help_text("custom_text"),
-        );
-        assert!(question.help_text.is_some());
-    }
-
-    #[tokio::test]
-    async fn start_notation_unknown_template_is_template_not_found() {
-        let surreal = db().await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-        let err = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "does_not_exist",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap_err();
-        match err {
-            NotationSessionError::TemplateNotFound(c) => assert_eq!(c, "does_not_exist"),
-            other => panic!("expected TemplateNotFound, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn answer_step_walks_to_next_question() {
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-
-        let started = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-        let id = started.notation_id;
-
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "entity",
-            TEST_ENTITY_NAME,
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "address__principal_office",
-            TEST_ENTITY_ADDRESS,
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        let next = answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "person__client",
-            "Libra",
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        match next {
-            NextStep::NeedsAnswer { question } => {
-                assert_eq!(question.code, "project__engagement");
-            }
-            NextStep::QuestionnaireComplete => {
-                panic!("expected NeedsAnswer(project__engagement), got QuestionnaireComplete");
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn answer_step_with_wrong_code_returns_mismatch() {
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-        let started = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let err = answer_step(
-            &surreal,
-            &runtime,
-            None,
-            started.notation_id,
-            "project__engagement",
-            "anything",
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap_err();
-        match err {
-            NotationSessionError::QuestionMismatch { expected, got } => {
-                assert_eq!(expected, "entity");
-                assert_eq!(got, "project__engagement");
-            }
-            other => panic!("expected QuestionMismatch, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn full_walk_ends_at_questionnaire_complete() {
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-        let started = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-        let id = started.notation_id;
-
-        let walk = [
-            ("entity", TEST_ENTITY_NAME),
-            ("address__principal_office", TEST_ENTITY_ADDRESS),
-            ("person__client", "Libra"),
-            ("project__engagement", "Apollo"),
-            ("custom_datetime__engagement_start_date", "2026-09-01"),
-            (
-                "custom_text__engagement_scope",
-                "Draft and file the Apollo formation documents.",
-            ),
-            ("custom_single_choice__governing_law", "nevada"),
-        ];
-        let mut last = NextStep::QuestionnaireComplete;
-        for (i, (code, value)) in walk.iter().enumerate() {
-            last = answer_step(
-                &surreal,
-                &runtime,
-                None,
-                id,
-                code,
-                value,
-                AnswerAuthor::lawyer(None),
-            )
-            .await
-            .unwrap();
-            if i < walk.len() - 1 {
-                let expected_next = walk[i + 1].0;
-                match &last {
-                    NextStep::NeedsAnswer { question } => {
-                        assert_eq!(question.code, expected_next);
-                    }
-                    NextStep::QuestionnaireComplete => {
-                        panic!("step {i}: expected NeedsAnswer, got QuestionnaireComplete");
-                    }
-                }
-            }
-        }
-        assert!(matches!(last, NextStep::QuestionnaireComplete));
-    }
-
-    #[tokio::test]
-    async fn answering_after_complete_is_already_complete() {
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-        let started = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-        let id = started.notation_id;
-        for (code, value) in [
-            ("entity", TEST_ENTITY_NAME),
-            ("address__principal_office", TEST_ENTITY_ADDRESS),
-            ("person__client", "Libra"),
-            ("project__engagement", "Apollo"),
-            ("custom_datetime__engagement_start_date", "2026-09-01"),
-            (
-                "custom_text__engagement_scope",
-                "Draft and file the Apollo formation documents.",
-            ),
-            ("custom_single_choice__governing_law", "nevada"),
-        ] {
-            answer_step(
-                &surreal,
-                &runtime,
-                None,
-                id,
-                code,
-                value,
-                AnswerAuthor::lawyer(None),
-            )
-            .await
-            .unwrap();
-        }
-        // One more should fail.
-        let err = answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "person__client",
-            "again",
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, NotationSessionError::AlreadyComplete));
-    }
-
-    #[tokio::test]
-    async fn current_step_reports_the_question_about_to_be_asked() {
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-        let started = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-        let id = started.notation_id;
-        // Before any answer: should be entity.
-        match current_step(&surreal, &runtime, None, id).await.unwrap() {
-            NextStep::NeedsAnswer { question } => {
-                assert_eq!(question.code, "entity");
-            }
-            NextStep::QuestionnaireComplete => {
-                panic!("expected NeedsAnswer(entity), got QuestionnaireComplete");
-            }
-        }
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "entity",
-            TEST_ENTITY_NAME,
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        // After entity: should be address__principal_office.
-        match current_step(&surreal, &runtime, None, id).await.unwrap() {
-            NextStep::NeedsAnswer { question } => {
-                assert_eq!(question.code, "address__principal_office");
-            }
-            NextStep::QuestionnaireComplete => {
-                panic!(
-                    "expected NeedsAnswer(address__principal_office), got QuestionnaireComplete"
-                );
-            }
-        }
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "address__principal_office",
-            TEST_ENTITY_ADDRESS,
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        // After address: should be person__client.
-        match current_step(&surreal, &runtime, None, id).await.unwrap() {
-            NextStep::NeedsAnswer { question } => {
-                assert_eq!(question.code, "person__client");
-            }
-            NextStep::QuestionnaireComplete => {
-                panic!("expected NeedsAnswer(person__client), got QuestionnaireComplete");
-            }
-        }
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "person__client",
-            "Libra",
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        // After person__client: should be project__engagement.
-        match current_step(&surreal, &runtime, None, id).await.unwrap() {
-            NextStep::NeedsAnswer { question } => {
-                assert_eq!(question.code, "project__engagement");
-            }
-            NextStep::QuestionnaireComplete => {
-                panic!("expected NeedsAnswer(project__engagement), got QuestionnaireComplete");
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn current_step_for_unknown_notation_is_notation_not_found() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let err = current_step(&surreal, &runtime, None, Uuid::nil())
-            .await
-            .unwrap_err();
-        assert!(matches!(err, NotationSessionError::NotationNotFound(_)));
-    }
-
-    #[tokio::test]
-    async fn answer_step_persists_the_answer_row() {
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let runtime = InMemoryRuntime::new();
-        let started = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-        // The questionnaire now leads with entity and address; walk those
-        // first so the runtime is positioned at person__client.
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            started.notation_id,
-            "entity",
-            TEST_ENTITY_NAME,
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            started.notation_id,
-            "address__principal_office",
-            TEST_ENTITY_ADDRESS,
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        // The client self-answered this one through the magic link, so
-        // the row must record both the source and the typist.
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            started.notation_id,
-            "person__client",
-            "Libra",
-            AnswerAuthor::client(Some(person_id)),
-        )
-        .await
-        .unwrap();
-
-        let q = store::questions::find_by_code(&surreal, "person")
-            .await
-            .unwrap()
-            .unwrap();
-        let rows = store::answers::for_question_and_person(
-            &surreal,
-            q.id,
-            person_id,
-            Some("person__client"),
-        )
-        .await
-        .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(store::answers::display_value(&rows[0].value), "Libra");
-        assert_eq!(rows[0].notation_id, Some(started.notation_id));
-        assert_eq!(rows[0].state_name.as_deref(), Some("person__client"));
-        // person_id is the respondent; source + authored_by record who
-        // actually entered it.
-        assert_eq!(rows[0].source, SOURCE_CLIENT);
-        assert_eq!(rows[0].authored_by_person_id, Some(person_id));
-    }
-
-    #[tokio::test]
-    async fn lawyer_entered_answer_records_lawyer_source() {
-        let surreal = db().await;
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let client_id = seed_person(&surreal, "libra@example.com").await;
-        let lawyer_id = seed_person(&surreal, "lawyer@neonlaw.com").await;
-        let runtime = InMemoryRuntime::new();
-        let started = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            client_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-        // The questionnaire now leads with entity and address; walk those
-        // first so the runtime is positioned at person__client.
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            started.notation_id,
-            "entity",
-            TEST_ENTITY_NAME,
-            AnswerAuthor::lawyer(Some(lawyer_id)),
-        )
-        .await
-        .unwrap();
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            started.notation_id,
-            "address__principal_office",
-            TEST_ENTITY_ADDRESS,
-            AnswerAuthor::lawyer(Some(lawyer_id)),
-        )
-        .await
-        .unwrap();
-        // Lawyer types the client's answer on their behalf: the respondent
-        // is the client, the typist is lawyer, the source is `lawyer`.
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            started.notation_id,
-            "person__client",
-            "Libra",
-            AnswerAuthor::lawyer(Some(lawyer_id)),
-        )
-        .await
-        .unwrap();
-        let row = store::answers::latest_for_person(&surreal, client_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(row.person_id, client_id);
-        assert_eq!(row.source, SOURCE_LAWYER);
-        assert_eq!(row.authored_by_person_id, Some(lawyer_id));
-    }
-
-    use super::{
-        address_prior_value, client_intake_step, client_intake_step_at, record_client_answer,
-        ClientIntakeStep,
-    };
-
-    /// LAW-57: a client-facing address-shaped question with no answer yet
-    /// pre-fills from the person's stored [`store::addresses::Address`].
-    #[tokio::test]
-    async fn address_prior_value_prefills_from_the_persons_stored_address() {
-        let surreal = db().await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        store::addresses::create(
-            &surreal,
-            &store::addresses::NewAddress {
-                person_id: Some(person_id),
-                line1: "1 Fremont St".into(),
-                city: "Las Vegas".into(),
-                region: "NV".into(),
-                postal_code: "89101".into(),
-                country: "US".into(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-
-        let value = address_prior_value(&surreal, person_id, "address__principal_office")
-            .await
-            .unwrap();
-        assert_eq!(
-            value.as_deref(),
-            Some("1 Fremont St, Las Vegas, NV 89101, US")
-        );
-
-        // A question whose type token is not address-shaped never triggers
-        // the fallback.
-        assert_eq!(
-            address_prior_value(&surreal, person_id, "person__client")
-                .await
-                .unwrap(),
-            None
-        );
-
-        // No address on file at all: no fallback value, not an error.
-        let nobody = seed_person(&surreal, "no-address@example.com").await;
-        assert_eq!(
-            address_prior_value(&surreal, nobody, "address__principal_office")
-                .await
-                .unwrap(),
-            None
-        );
-    }
-
-    /// Start a retainer notation whose questions carry the shipped
-    /// audiences, returning `(notation_id, respondent_id)`.
-    async fn start_audienced_retainer(
-        surreal: &SurrealDb,
-        runtime: &InMemoryRuntime,
-    ) -> (Uuid, Uuid) {
-        seed_retainer_template(surreal).await;
-        seed_retainer_questions_with_audiences(surreal).await;
-        let person_id = seed_person(surreal, "libra@example.com").await;
-        let started = start_notation(
-            surreal,
-            runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap();
-        (started.notation_id, person_id)
-    }
-
-    async fn start_audienced_retainer_for_person(
-        surreal: &SurrealDb,
-        runtime: &InMemoryRuntime,
-        person_id: Uuid,
-    ) -> Uuid {
-        start_notation(
-            surreal,
-            runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap()
-        .notation_id
-    }
-
-    async fn seed_client_question(surreal: &SurrealDb, code: &str, answer_type: &str) -> Uuid {
-        store::questions::create(
-            surreal,
-            &store::questions::NewQuestion::new(code, format!("Prompt for {code}"), answer_type)
-                .with_audience(store::questions::AUDIENCE_BOTH),
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    async fn start_snapshot_notation(
-        surreal: &SurrealDb,
-        yaml: &str,
-        prompts: BTreeMap<String, String>,
-    ) -> (Uuid, Uuid) {
-        let template_row = store::templates::save_version(
-            surreal,
-            None,
-            &format!("state_scope_test_{}", Uuid::now_v7()),
-            store::templates::Version {
-                title: "State scope test".into(),
-                respondent_type: "person".into(),
-                asset_id: None,
-                form_code: None,
-                kind: None,
-                source_commit_sha: None,
-            },
-        )
-        .await
-        .unwrap()
-        .into_model();
-        let person_id = seed_person(surreal, "state-scope@example.com").await;
-        let definition = QuestionnaireDefinition {
-            spec: questionnaire_spec_from_yaml(yaml).unwrap(),
-            prompts,
-            audiences: BTreeMap::new(),
-            choices: BTreeMap::new(),
-        };
-        let notation_id = store::notations::create(
-            surreal,
-            &store::notations::NewNotation::new(
-                template_row.id,
-                person_id,
-                store::test_support::seed_project_surreal(surreal, "test project").await,
-                StateName::BEGIN,
-            )
-            .with_questionnaire_snapshot(serde_json::to_value(&definition).unwrap()),
-        )
-        .await
-        .unwrap()
-        .id;
-        (notation_id, person_id)
-    }
-
-    async fn insert_answer(
-        surreal: &SurrealDb,
-        notation_id: Uuid,
-        person_id: Uuid,
-        question_id: Uuid,
-        state_name: Option<&str>,
-        value: &str,
-        source: &str,
-    ) {
-        let mut new = store::answers::NewAnswer::new(
-            question_id,
-            person_id,
-            store::answers::primitive(value),
-        )
-        .authored_by(source, None);
-        new.notation_id = Some(notation_id);
-        new.state_name = state_name.map(ToString::to_string);
-        store::answers::record(surreal, &new).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn client_intake_walks_only_client_facing_questions() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let (id, person) = start_audienced_retainer(&surreal, &runtime).await;
-
-        // Only the entity and person questions are offered —
-        // address__principal_office and project__engagement are lawyer-only
-        // (the Firm resolves the address and the matter at matter-open).
-        let step = client_intake_step(&surreal, None, id).await.unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            position,
-            total,
-            ..
-        } = step
-        else {
-            panic!("expected NeedsAnswer(entity)");
-        };
-        assert_eq!(question.code, "entity");
-        assert_eq!((position, total), (1, 2));
-
-        record_client_answer(&surreal, None, id, "entity", TEST_ENTITY_NAME, person)
-            .await
-            .unwrap();
-        let step = client_intake_step(&surreal, None, id).await.unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question, position, ..
-        } = step
-        else {
-            panic!("expected NeedsAnswer(person__client)");
-        };
-        assert_eq!(question.code, "person__client");
-        assert_eq!(position, 2);
-
-        record_client_answer(&surreal, None, id, "person__client", "Libra", person)
-            .await
-            .unwrap();
-        // The lawyer-only address / project / custom states are never
-        // offered to the client.
-        assert!(matches!(
-            client_intake_step(&surreal, None, id).await.unwrap(),
-            ClientIntakeStep::Complete { total: 2 }
-        ));
-    }
-
-    #[tokio::test]
-    async fn client_intake_revisits_are_scoped_and_resume_at_the_next_question() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let (id, person) = start_audienced_retainer(&surreal, &runtime).await;
-        record_client_answer(&surreal, None, id, "entity", "First answer", person)
-            .await
-            .unwrap();
-
-        let revisited = client_intake_step_at(&surreal, None, id, Some("entity"))
-            .await
-            .unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            prior_value,
-            position,
-            ..
-        } = revisited
-        else {
-            panic!("expected prior client question");
-        };
-        assert_eq!(question.code, "entity");
-        assert_eq!(prior_value.as_deref(), Some("First answer"));
-        assert_eq!(position, 1);
-        record_client_answer(&surreal, None, id, "entity", "Corrected answer", person)
-            .await
-            .unwrap();
-
-        let next = client_intake_step_at(&surreal, None, id, Some("person__client"))
-            .await
-            .unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            prior_value,
-            position,
-            ..
-        } = next
-        else {
-            panic!("expected next visited question");
-        };
-        assert_eq!(question.code, "person__client");
-        assert_eq!(prior_value, None);
-        assert_eq!(position, 2);
-
-        // Re-answering appends rather than overwriting; latest is what the
-        // active questionnaire pre-fills.
-        assert_eq!(
-            store::answers::for_person_in_notation(&surreal, person, id)
-                .await
-                .unwrap()
-                .iter()
-                .filter(|answer| answer.state_name.as_deref() == Some("entity"))
-                .count(),
-            2
-        );
-        let ClientIntakeStep::NeedsAnswer { prior_value, .. } =
-            client_intake_step_at(&surreal, None, id, Some("entity"))
-                .await
-                .unwrap()
-        else {
-            panic!("expected active correction before intake completion");
-        };
-        assert_eq!(prior_value.as_deref(), Some("Corrected answer"));
-
-        assert!(matches!(
-            client_intake_step_at(&surreal, None, id, Some("project__engagement")).await,
-            Err(NotationSessionError::QuestionNotClientFacing(_))
-        ));
-
-        record_client_answer(&surreal, None, id, "person__client", "Libra", person)
-            .await
-            .unwrap();
-        assert!(matches!(
-            client_intake_step_at(&surreal, None, id, Some("entity"))
-                .await
-                .unwrap(),
-            ClientIntakeStep::Complete { total: 2 }
-        ));
-    }
-
-    #[tokio::test]
-    async fn back_pointer_matches_the_questionnaire_session_and_preserves_corrections() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let (id, _person) = start_audienced_retainer(&surreal, &runtime).await;
-        let step_code = |next: NextStep| match next {
-            NextStep::NeedsAnswer { question } => question.code,
-            NextStep::QuestionnaireComplete => panic!("questionnaire unexpectedly complete"),
-        };
-
-        assert_eq!(
-            step_code(current_step(&surreal, &runtime, None, id).await.unwrap()),
-            "entity"
-        );
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "entity",
-            "First",
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            step_code(current_step(&surreal, &runtime, None, id).await.unwrap()),
-            "address__principal_office"
-        );
-
-        StateMachineRuntime::back(
-            &runtime,
-            MachineKind::Questionnaire,
-            id,
-            SignalContext {
-                acting_person_id: Uuid::nil(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            step_code(current_step(&surreal, &runtime, None, id).await.unwrap()),
-            "entity",
-            "Back from the second displayed question returns the pointer to BEGIN"
-        );
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "entity",
-            "Corrected",
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            step_code(current_step(&surreal, &runtime, None, id).await.unwrap()),
-            "address__principal_office"
-        );
-
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "address__principal_office",
-            "Reno",
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            step_code(current_step(&surreal, &runtime, None, id).await.unwrap()),
-            "person__client"
-        );
-        let answers = store::answers::for_notation(&surreal, id).await.unwrap();
-        let entity_answers: Vec<_> = answers
-            .iter()
-            .filter(|answer| answer.state_name.as_deref() == Some("entity"))
-            .collect();
-        assert_eq!(
-            entity_answers.len(),
-            2,
-            "correction appends a new immutable answer"
-        );
-        assert_eq!(
-            store::answers::display_value(&entity_answers[0].value),
-            "First"
-        );
-        assert_eq!(
-            store::answers::display_value(&entity_answers[1].value),
-            "Corrected"
-        );
-    }
-
-    #[tokio::test]
-    async fn repeated_back_traverses_multiple_questions() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let (id, _person) = start_audienced_retainer(&surreal, &runtime).await;
-        let step_code = |next: NextStep| match next {
-            NextStep::NeedsAnswer { question } => question.code,
-            NextStep::QuestionnaireComplete => panic!("questionnaire unexpectedly complete"),
-        };
-        for (code, value) in [("entity", "Example"), ("address__principal_office", "Reno")] {
-            answer_step(
-                &surreal,
-                &runtime,
-                None,
-                id,
-                code,
-                value,
-                AnswerAuthor::lawyer(None),
-            )
-            .await
-            .unwrap();
-        }
-        assert_eq!(
-            step_code(current_step(&surreal, &runtime, None, id).await.unwrap()),
-            "person__client"
-        );
-        StateMachineRuntime::back(
-            &runtime,
-            MachineKind::Questionnaire,
-            id,
-            SignalContext {
-                acting_person_id: Uuid::nil(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            step_code(current_step(&surreal, &runtime, None, id).await.unwrap()),
-            "address__principal_office"
-        );
-        StateMachineRuntime::back(
-            &runtime,
-            MachineKind::Questionnaire,
-            id,
-            SignalContext {
-                acting_person_id: Uuid::nil(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            step_code(current_step(&surreal, &runtime, None, id).await.unwrap()),
-            "entity"
-        );
-    }
-
-    #[tokio::test]
-    async fn client_intake_progress_is_scoped_to_notation() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions_with_audiences(&surreal).await;
-        let person = seed_person(&surreal, "libra@example.com").await;
-        let first_id = start_audienced_retainer_for_person(&surreal, &runtime, person).await;
-        let second_id = start_audienced_retainer_for_person(&surreal, &runtime, person).await;
-
-        record_client_answer(&surreal, None, first_id, "entity", TEST_ENTITY_NAME, person)
-            .await
-            .unwrap();
-        record_client_answer(&surreal, None, first_id, "person__client", "Libra", person)
-            .await
-            .unwrap();
-        let step = client_intake_step(&surreal, None, second_id).await.unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            prior_value,
-            position,
-            total,
-            ..
-        } = step
-        else {
-            panic!("expected second notation to still need entity");
-        };
-        assert_eq!(question.code, "entity");
-        assert_eq!(prior_value, None);
-        assert_eq!((position, total), (1, 2));
-    }
-
-    #[tokio::test]
-    async fn lawyer_prefilled_answer_shows_and_is_editable() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let (id, person) = start_audienced_retainer(&surreal, &runtime).await;
-
-        // Lawyer walks the two leading questions first, then fills
-        // client_name on the client's behalf.
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "entity",
-            TEST_ENTITY_NAME,
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "address__principal_office",
-            TEST_ENTITY_ADDRESS,
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            id,
-            "person__client",
-            "Lawyer-typed Libra",
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-
-        // The client confirms the entity, then sees the lawyer's client
-        // answer pre-filled and editable — client_name is still *their*
-        // step because they haven't answered it themselves yet.
-        record_client_answer(&surreal, None, id, "entity", TEST_ENTITY_NAME, person)
-            .await
-            .unwrap();
-        let step = client_intake_step(&surreal, None, id).await.unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            prior_value,
-            ..
-        } = step
-        else {
-            panic!("expected NeedsAnswer(person__client) pre-filled");
-        };
-        assert_eq!(question.code, "person__client");
-        assert_eq!(prior_value.as_deref(), Some("Lawyer-typed Libra"));
-
-        // The client corrects it; the latest answer (client-sourced) wins.
-        record_client_answer(&surreal, None, id, "person__client", "Libra Prime", person)
-            .await
-            .unwrap();
-        let latest = store::answers::latest_for_person(&surreal, person)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(store::answers::display_value(&latest.value), "Libra Prime");
-        assert_eq!(latest.notation_id, Some(id));
-        assert_eq!(latest.source, SOURCE_CLIENT);
-    }
-
-    #[tokio::test]
-    async fn client_intake_duplicate_custom_states_prefill_by_state_name() {
-        let surreal = db().await;
-        let custom_q = seed_client_question(&surreal, "custom_text", "string").await;
-        let (id, person) = start_snapshot_notation(
-            &surreal,
-            "questionnaire:\n  BEGIN:\n    _: custom_text__mission_statement\n  \
-             custom_text__mission_statement:\n    _: custom_text__revenue_strategy\n  \
-             custom_text__revenue_strategy:\n    _: END\n  END: {}\n",
-            BTreeMap::from([
-                (
-                    "mission_statement".to_string(),
-                    "Mission statement?".to_string(),
-                ),
-                (
-                    "revenue_strategy".to_string(),
-                    "Revenue strategy?".to_string(),
-                ),
-            ]),
-        )
-        .await;
-        insert_answer(
-            &surreal,
-            id,
-            person,
-            custom_q,
-            Some("custom_text__mission_statement"),
-            "Expand legal access",
-            SOURCE_LAWYER,
-        )
-        .await;
-        insert_answer(
-            &surreal,
-            id,
-            person,
-            custom_q,
-            Some("custom_text__revenue_strategy"),
-            "Flat-fee retainers",
-            SOURCE_LAWYER,
-        )
-        .await;
-
-        let step = client_intake_step(&surreal, None, id).await.unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            prior_value,
-            position,
-            total,
-            ..
-        } = step
-        else {
-            panic!("expected mission statement question");
-        };
-        assert_eq!(question.code, "custom_text__mission_statement");
-        assert_eq!(prior_value.as_deref(), Some("Expand legal access"));
-        assert_eq!((position, total), (1, 2));
-
-        record_client_answer(
-            &surreal,
-            None,
-            id,
-            "custom_text__mission_statement",
-            "Client-approved mission",
-            person,
-        )
-        .await
-        .unwrap();
-        let step = client_intake_step(&surreal, None, id).await.unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            prior_value,
-            position,
-            total,
-            ..
-        } = step
-        else {
-            panic!("expected revenue strategy question");
-        };
-        assert_eq!(question.code, "custom_text__revenue_strategy");
-        assert_eq!(prior_value.as_deref(), Some("Flat-fee retainers"));
-        assert_eq!((position, total), (2, 2));
-    }
-
-    #[tokio::test]
-    async fn client_intake_drops_author_facing_help_and_keeps_respondent_help() {
-        // A client on a `custom_text` step would otherwise read "Use this for
-        // a one-off text answer when no glossary type fits." as the page
-        // lede — an author's note about the question bank, not guidance for
-        // the person answering. Walk one client intake across all four
-        // author-facing primitives, a respondent-facing custom primitive, and
-        // a bank question: only the four lose their help; the rest keep the
-        // seeded string, so the fix is the allowlist, not the `custom_`
-        // prefix and not a blanket blank for clients.
-        let surreal = db().await;
-        let states: [(&str, &str, &str); 6] = [
-            ("custom_text__note", "custom_text", "string"),
-            ("custom_yes_no__consent", "custom_yes_no", "yes_no"),
-            (
-                "custom_single_choice__tier",
-                "custom_single_choice",
-                "radio",
-            ),
-            (
-                "custom_multiple_choice__services",
-                "custom_multiple_choice",
-                "multiple_choice",
-            ),
-            ("custom_phone__daytime", "custom_phone", "custom_phone"),
-            ("person__client", "person", "person"),
-        ];
-        let mut question_ids = BTreeMap::new();
-        for (_, code, answer_type) in states {
-            let id = seed_client_question(&surreal, code, answer_type).await;
-            question_ids.insert(code, id);
-        }
-        let mut chain = String::new();
-        for pair in states.windows(2) {
-            chain.push_str("  ");
-            chain.push_str(pair[0].0);
-            chain.push_str(":\n    _: ");
-            chain.push_str(pair[1].0);
-            chain.push('\n');
-        }
-        let yaml = format!(
-            "questionnaire:\n  BEGIN:\n    _: custom_text__note\n{chain}  \
-             person__client:\n    _: END\n  END: {{}}\n"
-        );
-        let (id, person) = start_snapshot_notation(&surreal, &yaml, BTreeMap::new()).await;
-
-        for (idx, (state, code, _)) in states.iter().enumerate() {
-            let step = client_intake_step(&surreal, None, id).await.unwrap();
-            let ClientIntakeStep::NeedsAnswer {
-                question, position, ..
-            } = step
-            else {
-                panic!("expected NeedsAnswer({state})");
-            };
-            assert_eq!(question.code, *state);
-            assert_eq!(position, idx + 1);
-            let seeded = store::seed::question_help_text(code);
-            assert!(seeded.is_some(), "seed carries help for `{code}`");
-            if AUTHOR_FACING_HELP_CODES.contains(code) {
-                assert_eq!(question.help_text, None, "client step `{state}`");
-            } else {
-                assert_eq!(question.help_text, seeded, "client step `{state}`");
-            }
-            insert_answer(
-                &surreal,
-                id,
-                person,
-                question_ids[code],
-                Some(*state),
-                "answered",
-                SOURCE_CLIENT,
-            )
-            .await;
-        }
-        assert!(matches!(
-            client_intake_step(&surreal, None, id).await.unwrap(),
-            ClientIntakeStep::Complete { total: 6 }
-        ));
-    }
-
-    #[tokio::test]
-    async fn client_intake_duplicate_entity_states_prefill_by_state_name() {
-        let surreal = db().await;
-        let entity_q = seed_client_question(&surreal, "entity", "entity").await;
-        let (id, person) = start_snapshot_notation(
-            &surreal,
-            "questionnaire:\n  BEGIN:\n    _: entity__company\n  \
-             entity__company:\n    _: entity__subsidiary\n  \
-             entity__subsidiary:\n    _: END\n  END: {}\n",
-            BTreeMap::from([
-                ("company".to_string(), "Company?".to_string()),
-                ("subsidiary".to_string(), "Subsidiary?".to_string()),
-            ]),
-        )
-        .await;
-        insert_answer(
-            &surreal,
-            id,
-            person,
-            entity_q,
-            Some("entity__company"),
-            "Neon Law LLC",
-            SOURCE_LAWYER,
-        )
-        .await;
-        insert_answer(
-            &surreal,
-            id,
-            person,
-            entity_q,
-            Some("entity__subsidiary"),
-            "Neon Law Labs LLC",
-            SOURCE_LAWYER,
-        )
-        .await;
-
-        let step = client_intake_step(&surreal, None, id).await.unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            prior_value,
-            ..
-        } = step
-        else {
-            panic!("expected entity__company");
-        };
-        assert_eq!(question.code, "entity__company");
-        assert_eq!(prior_value.as_deref(), Some("Neon Law LLC"));
-
-        record_client_answer(
-            &surreal,
-            None,
-            id,
-            "entity__company",
-            "Neon Law LLC",
-            person,
-        )
-        .await
-        .unwrap();
-        let step = client_intake_step(&surreal, None, id).await.unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            prior_value,
-            position,
-            total,
-            ..
-        } = step
-        else {
-            panic!("expected entity__subsidiary");
-        };
-        assert_eq!(question.code, "entity__subsidiary");
-        assert_eq!(prior_value.as_deref(), Some("Neon Law Labs LLC"));
-        assert_eq!((position, total), (2, 2));
-    }
-
-    #[tokio::test]
-    async fn client_intake_null_state_prefill_is_legacy_bare_code_fallback() {
-        let surreal = db().await;
-        let custom_q = seed_client_question(&surreal, "custom_text", "string").await;
-        let (id, person) = start_snapshot_notation(
-            &surreal,
-            "questionnaire:\n  BEGIN:\n    _: custom_text__mission_statement\n  \
-             custom_text__mission_statement:\n    _: custom_text__revenue_strategy\n  \
-             custom_text__revenue_strategy:\n    _: END\n  END: {}\n",
-            BTreeMap::new(),
-        )
-        .await;
-        insert_answer(
-            &surreal,
-            id,
-            person,
-            custom_q,
-            None,
-            "Legacy bare-code value",
-            SOURCE_LAWYER,
-        )
-        .await;
-
-        let step = client_intake_step(&surreal, None, id).await.unwrap();
-        let ClientIntakeStep::NeedsAnswer {
-            question,
-            prior_value,
-            ..
-        } = step
-        else {
-            panic!("expected first custom_text state");
-        };
-        assert_eq!(question.code, "custom_text__mission_statement");
-        assert_eq!(prior_value.as_deref(), Some("Legacy bare-code value"));
-    }
-
-    #[tokio::test]
-    async fn record_client_answer_rejects_lawyer_only_question() {
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let (id, person) = start_audienced_retainer(&surreal, &runtime).await;
-        let err = record_client_answer(&surreal, None, id, "project__engagement", "sneaky", person)
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            NotationSessionError::QuestionNotClientFacing(c) if c == "project__engagement"
-        ));
-    }
 
     #[test]
     fn answered_client_states_do_not_collapse_duplicate_typed_prefixes() {
@@ -4602,160 +2145,6 @@ It has been our privilege to do this work alongside you. A future engagement req
     /// The declared options, as `UndeclaredChoice` reports them (the
     /// declared map's key order).
     const DECLARED_GOVERNING_LAW: [&str; 3] = ["california", "nevada", "washington"];
-
-    /// Walk a fresh `onboarding__letter` notation up to — but not through —
-    /// the governing-law step, which is its last question.
-    async fn walk_to_governing_law(surreal: &SurrealDb, runtime: &InMemoryRuntime) -> Uuid {
-        seed_retainer_template(surreal).await;
-        seed_retainer_questions(surreal).await;
-        let person_id = seed_person(surreal, "libra@example.com").await;
-        let notation_id = start_notation(
-            surreal,
-            runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap()
-        .notation_id;
-        for (code, value) in [
-            ("entity", TEST_ENTITY_NAME),
-            ("address__principal_office", TEST_ENTITY_ADDRESS),
-            ("person__client", "Libra"),
-            ("project__engagement", "Apollo"),
-            ("custom_datetime__engagement_start_date", "2026-09-01"),
-            (
-                "custom_text__engagement_scope",
-                "Draft and file the Apollo formation documents.",
-            ),
-        ] {
-            answer_step(
-                surreal,
-                runtime,
-                None,
-                notation_id,
-                code,
-                value,
-                AnswerAuthor::lawyer(None),
-            )
-            .await
-            .unwrap_or_else(|e| panic!("step `{code}`: {e}"));
-        }
-        notation_id
-    }
-
-    /// Whether any answer row was stored for `state`.
-    async fn has_answer_for(surreal: &SurrealDb, notation_id: Uuid, state: &str) -> bool {
-        store::answers::for_notation(surreal, notation_id)
-            .await
-            .unwrap()
-            .iter()
-            .any(|a| a.state_name.as_deref() == Some(state))
-    }
-
-    #[tokio::test]
-    async fn answer_step_refuses_an_undeclared_choice() {
-        // The governing-law question declares exactly three options, and the
-        // engagement letter substitutes the answer into its governing-law
-        // and arbitration clause. An off-list value is refused before the
-        // write, so nothing is stored and the walk does not advance. The
-        // browser's radio group cannot produce one, so reaching here is the
-        // CLI, the REST boundary, Navigator MCP, or a hand-crafted POST.
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let notation_id = walk_to_governing_law(&surreal, &runtime).await;
-
-        let err = answer_step(
-            &surreal,
-            &runtime,
-            None,
-            notation_id,
-            "custom_single_choice__governing_law",
-            OFF_LIST_GOVERNING_LAW,
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap_err();
-
-        match &err {
-            NotationSessionError::UndeclaredChoice { state, declared } => {
-                assert_eq!(state, "custom_single_choice__governing_law");
-                assert_eq!(declared.as_slice(), &DECLARED_GOVERNING_LAW);
-            }
-            other => panic!("expected UndeclaredChoice, got {other:?}"),
-        }
-
-        assert!(
-            !has_answer_for(&surreal, notation_id, "custom_single_choice__governing_law").await,
-            "the refused answer must not be on record"
-        );
-
-        // The walk still asks the same question, so a legitimate answer can
-        // still be given — a refusal does not strand a part-finished walk.
-        match current_step(&surreal, &runtime, None, notation_id)
-            .await
-            .unwrap()
-        {
-            NextStep::NeedsAnswer { question } => {
-                assert_eq!(question.code, "custom_single_choice__governing_law");
-            }
-            NextStep::QuestionnaireComplete => {
-                panic!("a refused answer must not complete the questionnaire")
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn answer_step_accepts_every_declared_choice() {
-        // The guard closes the set without narrowing it: each declared
-        // option is still accepted and still completes the walk.
-        for declared in DECLARED_GOVERNING_LAW {
-            let surreal = db().await;
-            let runtime = InMemoryRuntime::new();
-            let notation_id = walk_to_governing_law(&surreal, &runtime).await;
-            let next = answer_step(
-                &surreal,
-                &runtime,
-                None,
-                notation_id,
-                "custom_single_choice__governing_law",
-                declared,
-                AnswerAuthor::lawyer(None),
-            )
-            .await
-            .unwrap_or_else(|e| panic!("`{declared}` must be accepted: {e}"));
-            assert!(
-                matches!(next, NextStep::QuestionnaireComplete),
-                "`{declared}` must complete the walk"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a_state_with_no_declared_choices_is_left_open() {
-        // The same walk's free-text and date questions declare no options,
-        // so the guard must not touch them: "no declared set" means "not a
-        // choice question", not "no valid options".
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let notation_id = walk_to_governing_law(&surreal, &runtime).await;
-        assert!(
-            has_answer_for(&surreal, notation_id, "custom_text__engagement_scope").await,
-            "the free-text scope answer must still be recorded"
-        );
-        assert!(
-            has_answer_for(
-                &surreal,
-                notation_id,
-                "custom_datetime__engagement_start_date"
-            )
-            .await,
-            "the date answer must still be recorded"
-        );
-    }
 
     #[test]
     fn multiple_choice_stores_one_declared_choice_too() {
@@ -4820,165 +2209,5 @@ It has been our privilege to do this work alongside you. A future engagement req
         assert!(!shown.contains(OFF_LIST_GOVERNING_LAW), "{shown}");
         assert!(!debugged.contains(OFF_LIST_GOVERNING_LAW), "{debugged}");
         assert!(shown.contains("nevada"), "{shown}");
-    }
-
-    #[tokio::test]
-    async fn record_reask_answer_refuses_an_undeclared_choice() {
-        // A post-review correction is what the attorney re-reviews and what
-        // ultimately gets signed, so it is closed against the same declared
-        // set the original answer was.
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let notation_id = walk_to_governing_law(&surreal, &runtime).await;
-        answer_step(
-            &surreal,
-            &runtime,
-            None,
-            notation_id,
-            "custom_single_choice__governing_law",
-            "nevada",
-            AnswerAuthor::lawyer(None),
-        )
-        .await
-        .unwrap();
-        let lawyer = store::test_support::dri_person(&surreal).await;
-        store::reask::record_change_request(
-            &surreal,
-            notation_id,
-            lawyer,
-            &["custom_single_choice__governing_law".into()],
-            Some("confirm the governing law"),
-        )
-        .await
-        .unwrap();
-
-        let err = record_reask_answer(
-            &surreal,
-            None,
-            notation_id,
-            "custom_single_choice__governing_law",
-            OFF_LIST_GOVERNING_LAW,
-            None,
-            AnswerAuthor::lawyer(Some(lawyer)),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(
-                &err,
-                NotationSessionError::UndeclaredChoice { state, .. }
-                    if state == "custom_single_choice__governing_law"
-            ),
-            "{err:?}"
-        );
-
-        // A declared correction still lands.
-        record_reask_answer(
-            &surreal,
-            None,
-            notation_id,
-            "custom_single_choice__governing_law",
-            "california",
-            None,
-            AnswerAuthor::lawyer(Some(lawyer)),
-        )
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn record_extracted_answer_skips_an_undeclared_proposal() {
-        // A transcript proposal is read back by the render exactly like a
-        // typed answer, so an off-list extraction is refused. It is skipped
-        // (reported as uncovered) rather than an error, so the lawyer is
-        // asked the question instead of shown an option the questionnaire
-        // never offered.
-        use super::record_extracted_answer;
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        let notation_id = walk_to_governing_law(&surreal, &runtime).await;
-
-        let stored = record_extracted_answer(
-            &surreal,
-            None,
-            notation_id,
-            "custom_single_choice__governing_law",
-            OFF_LIST_GOVERNING_LAW,
-        )
-        .await
-        .unwrap();
-        assert!(!stored, "an off-list proposal must be skipped");
-        assert!(
-            !has_answer_for(&surreal, notation_id, "custom_single_choice__governing_law").await,
-            "the skipped proposal must not be on record"
-        );
-
-        // A declared proposal is still recorded for the lawyer to confirm.
-        let stored = record_extracted_answer(
-            &surreal,
-            None,
-            notation_id,
-            "custom_single_choice__governing_law",
-            "washington",
-        )
-        .await
-        .unwrap();
-        assert!(stored, "a declared proposal must still be recorded");
-    }
-
-    #[tokio::test]
-    async fn record_extracted_answer_carries_the_record_envelope_for_project_states() {
-        // The proposal is read back by the render exactly like a typed
-        // answer, and a typed `project__engagement` answer carries
-        // `{value, name}` — the dotted fields the retainer letter's
-        // `{{project__engagement.name}}` placeholder resolves. A primitive
-        // envelope here would file the answer yet render the placeholder
-        // empty, so the envelope shape is the contract this test pins.
-        use super::record_extracted_answer;
-        let surreal = db().await;
-        let runtime = InMemoryRuntime::new();
-        seed_retainer_template(&surreal).await;
-        seed_retainer_questions(&surreal).await;
-        let person_id = seed_person(&surreal, "libra@example.com").await;
-        let notation_id = start_notation(
-            &surreal,
-            &runtime,
-            None,
-            "onboarding__letter",
-            person_id,
-            store::test_support::seed_project_surreal(&surreal, "test project").await,
-            None,
-        )
-        .await
-        .unwrap()
-        .notation_id;
-
-        let stored = record_extracted_answer(
-            &surreal,
-            None,
-            notation_id,
-            "project__engagement",
-            "Estate plan",
-        )
-        .await
-        .unwrap();
-        assert!(stored, "a proposal for a reached state must be recorded");
-
-        let row = store::answers::for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|a| a.state_name.as_deref() == Some("project__engagement"))
-            .expect("the proposed answer is on record");
-        assert_eq!(
-            store::answers::primitive_str(&row.value),
-            Some("Estate plan"),
-            "the display value is the offer's term"
-        );
-        assert_eq!(
-            row.value.get("name").and_then(serde_json::Value::as_str),
-            Some("Estate plan"),
-            "the dotted `name` field must render `{{project__engagement.name}}`"
-        );
     }
 }

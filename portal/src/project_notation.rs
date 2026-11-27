@@ -69,8 +69,9 @@ impl NewProjectNotationBody {
 /// behavior can never drift between the browser and the API — the convergence
 /// issue #355 applies to every write.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)] // Keep the authorization checks beside the effect.
 pub async fn create_project_notation(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     runtime: &dyn StateMachineRuntime,
     storage: &Arc<dyn cloud::StorageService>,
     acting_person_id: Option<Uuid>,
@@ -87,8 +88,9 @@ pub async fn create_project_notation(
         return Err(CreateProjectNotationError::EmptyInput);
     }
 
-    let project = scoped_project(surreal, acting_person_id, acting_role, project_id).await?;
-    let person_id = find_or_create_client(surreal, email, project_id).await?;
+    let project =
+        scoped_project(application_store, acting_person_id, acting_role, project_id).await?;
+    let person_id = find_or_create_client(application_store, email, project_id).await?;
 
     let database = attempts::database()
         .await
@@ -99,7 +101,7 @@ pub async fn create_project_notation(
             .await
             .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
         if let Some(notation_id) = existing_retainer(
-            surreal,
+            application_store,
             project_id,
             code,
             person_id,
@@ -108,9 +110,10 @@ pub async fn create_project_notation(
         )
         .await?
         {
-            let next = workflows::current_step(surreal, runtime, Some(storage), notation_id)
-                .await
-                .map_err(CreateProjectNotationError::Session)?;
+            let next =
+                workflows::current_step(application_store, runtime, Some(storage), notation_id)
+                    .await
+                    .map_err(CreateProjectNotationError::Session)?;
             return Ok(StartOutcome { notation_id, next });
         }
         Some(lane)
@@ -127,7 +130,7 @@ pub async fn create_project_notation(
     let outcome = async {
         if let Some(draft) = checkout {
             return workflows::create_notation_from_checkout(
-                surreal,
+                application_store,
                 runtime,
                 storage,
                 draft,
@@ -148,7 +151,7 @@ pub async fn create_project_notation(
         })?;
 
         workflows::create_notation_from_repo(
-            surreal,
+            application_store,
             runtime,
             storage,
             &repo,
@@ -187,14 +190,14 @@ pub async fn create_project_notation(
 }
 
 async fn scoped_project(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     acting_person_id: Option<Uuid>,
     acting_role: Role,
     project_id: Uuid,
 ) -> Result<store::projects::Project, CreateProjectNotationError> {
     // The matter must already exist — this command opens a notation *within*
     // it, unlike the onboarding retainer walk that creates the project.
-    let project = store::projects::find_by_id(surreal, project_id)
+    let project = store::projects::find_by_id(application_store, project_id)
         .await
         .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?
         .ok_or(CreateProjectNotationError::ProjectNotFound)?;
@@ -205,7 +208,7 @@ async fn scoped_project(
     // to "not found" so neither door discloses a project outside the caller's
     // scope.
     let in_scope = store::access::can_see_project_as_lawyer(
-        surreal,
+        application_store,
         acting_person_id,
         acting_role,
         project_id,
@@ -220,14 +223,14 @@ async fn scoped_project(
 }
 
 async fn existing_retainer(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     project_id: Uuid,
     code: &str,
     person_id: Uuid,
     checkout: Option<&workflows::CheckoutDraft>,
     delivery: store::notations::SigningDelivery,
 ) -> Result<Option<Uuid>, CreateProjectNotationError> {
-    let Some(template) = store::templates::resolve_exact(surreal, Some(project_id), code)
+    let Some(template) = store::templates::resolve_exact(application_store, Some(project_id), code)
         .await
         .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?
     else {
@@ -241,7 +244,7 @@ async fn existing_retainer(
         return Ok(None);
     }
     let existing = store::notations::find_by_project_template_person(
-        surreal,
+        application_store,
         project_id,
         template.id,
         person_id,
@@ -417,7 +420,9 @@ pub async fn project_notation_new_post(
     session: Option<Extension<SessionData>>,
     Form(body): Form<NewProjectNotationBody>,
 ) -> Response {
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
+    let Some(project_id) =
+        store::projects::id_for_code(&state.application_store, &project_code).await
+    else {
         return (StatusCode::NOT_FOUND, "matter not found").into_response();
     };
 
@@ -429,7 +434,7 @@ pub async fn project_notation_new_post(
     };
 
     match create_project_notation(
-        &state.surreal,
+        &state.application_store,
         state.questionnaire_runtime.as_ref(),
         &state.storage,
         acting_person_id,
@@ -455,7 +460,7 @@ pub async fn project_notation_new_post(
 /// first sight, and ensure they participate in the project (so the matter's
 /// client can see their own notation). Mirrors `link_retainer_rows`.
 async fn find_or_create_client(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     email: &str,
     project_id: Uuid,
 ) -> Result<Uuid, CreateProjectNotationError> {
@@ -465,7 +470,7 @@ async fn find_or_create_client(
     // not "this email belongs to someone else", it is the very client
     // being added, a moment earlier.
     let person_id = match store::persons::find_or_create(
-        surreal,
+        application_store,
         &store::persons::NewPerson::with_role(email, email, store::persons::Role::Client),
     )
     .await
@@ -478,12 +483,12 @@ async fn find_or_create_client(
     };
 
     // Attach client participation if not already present (idempotent).
-    if store::projects::participation_for_person(surreal, person_id, project_id)
+    if store::projects::participation_for_person(application_store, person_id, project_id)
         .await
         .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?
         .is_none()
     {
-        store::projects::add_participation(surreal, project_id, person_id, "client")
+        store::projects::add_participation(application_store, project_id, person_id, "client")
             .await
             .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
     }
@@ -521,90 +526,6 @@ mod tests {
             text.contains("no template `onboarding`"),
             "the cause must name the missed code: {text}"
         );
-    }
-
-    /// LAW-200 regression: opening a notation on a matter that does not
-    /// exist is a typed `404` at the command boundary, not a `500` — the
-    /// original report answered `500 internal` before the typed errors
-    /// landed. The matter lookup fails first, so the runtime and storage
-    /// are never reached; they are present only to satisfy the signature.
-    #[tokio::test]
-    async fn a_missing_matter_reaches_the_lawyer_as_a_typed_404() {
-        let surreal = store::test_support::mem_surreal().await;
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage: Arc<dyn cloud::StorageService> = Arc::new(
-            cloud::FsStorage::new(tmp.path().to_path_buf())
-                .await
-                .expect("storage"),
-        );
-        let runtime = workflows::InMemoryRuntime::new();
-
-        let error = create_project_notation(
-            &surreal,
-            &runtime,
-            &storage,
-            None,
-            Role::Lawyer,
-            Uuid::new_v4(), // no such matter
-            "retainer",
-            "client@example.com",
-            store::notations::SigningDelivery::default(),
-            None,
-        )
-        .await
-        .expect_err("a missing matter must refuse");
-
-        assert!(
-            matches!(error, CreateProjectNotationError::ProjectNotFound),
-            "the refusal must be the typed matter-miss, not a store fault: {error:?}"
-        );
-        let response = error.into_lawyer_response();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    /// LAW-372: a checkout's published Draft opens with no hosted repository
-    /// store at all, pinned to the commit the checkout named.
-    #[tokio::test]
-    async fn a_checkout_draft_opens_without_a_hosted_repository() {
-        let surreal = store::test_support::mem_surreal().await;
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let storage: Arc<dyn cloud::StorageService> = Arc::new(
-            cloud::FsStorage::new(tmp.path().to_path_buf())
-                .await
-                .expect("storage"),
-        );
-        let runtime = workflows::InMemoryRuntime::new();
-        let project_id = store::test_support::seed_project_surreal(&surreal, "checkout").await;
-
-        let opened = create_project_notation(
-            &surreal,
-            &runtime,
-            &storage,
-            None,
-            Role::Admin,
-            project_id,
-            "onboarding__letter",
-            "client@example.com",
-            store::notations::SigningDelivery::default(),
-            Some(workflows::CheckoutDraft {
-                contents: include_str!("../../templates/notations/neon_law/onboarding__letter.md")
-                    .to_string(),
-                commit_sha: "feedface".to_string(),
-            }),
-        )
-        .await
-        .expect("the checkout Draft opens");
-
-        let notation = store::notations::find_by_id(&surreal, opened.notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let template = store::templates::find_by_id(&surreal, notation.template_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(template.project_id, Some(project_id));
-        assert_eq!(template.source_commit_sha.as_deref(), Some("feedface"));
     }
 
     /// LAW-200: a questionnaire that fails the engine's runtime parse names

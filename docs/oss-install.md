@@ -110,9 +110,9 @@ cd navigator
 cargo build --workspace          # pulls dependencies + compiles every crate
 ```
 
-Building needs no cloud account. Follow [test database](test-database.md#how-a-contributor-runs-tests) for focused
-PostgreSQL fixtures and the explicit compatibility-inclusive test commands. Database-backed tests require their
-respective fixtures; an unfiltered workspace run includes compatibility tests.
+Building needs no cloud account. Follow [test database](test-database.md#run-tests) for focused PostgreSQL fixtures and
+the explicit compatibility-inclusive test commands. Database-backed tests require their respective fixtures; an
+unfiltered workspace run includes compatibility tests.
 
 ## 2. Configure your `.env`
 

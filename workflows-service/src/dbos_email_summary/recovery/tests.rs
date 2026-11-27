@@ -26,7 +26,7 @@ struct Case {
     files: tempfile::TempDir,
 }
 
-async fn summary_entity(source: &store::surreal::SurrealDb) -> Uuid {
+async fn summary_entity(source: &store::application_store::ApplicationStore) -> Uuid {
     let id = Uuid::new_v4();
     let jurisdiction = store::jurisdictions::create(
         source,
@@ -58,7 +58,7 @@ async fn summary_entity(source: &store::surreal::SurrealDb) -> Uuid {
     .id
 }
 
-async fn approved_project(source: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
+async fn approved_project(source: &store::application_store::ApplicationStore) -> (Uuid, Uuid) {
     let admin = store::persons::create(
         source,
         &store::persons::NewPerson::with_role(
@@ -129,7 +129,7 @@ async fn approved_project(source: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
     store::persons::set_email_confirmed(source, sender.id, true)
         .await
         .unwrap();
-    store::projects::designate_dri_in_surreal(
+    store::projects::designate_dri(
         source,
         project.id,
         sender.id,
@@ -152,7 +152,7 @@ async fn approved_project(source: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
 }
 
 async fn archived_request(
-    source: &store::surreal::SurrealDb,
+    source: &store::application_store::ApplicationStore,
     firm: Uuid,
     project: Uuid,
 ) -> workflows::EmailSummaryRequest {
@@ -192,7 +192,7 @@ async fn archived_request(
 
 impl Case {
     async fn new(pg: store::postgres::PostgresDb, http_slack: bool) -> Self {
-        let source = store::surreal::SurrealDb::uninitialized();
+        let source = store::application_store::ApplicationStore::uninitialized();
         let (firm, project) = approved_project(&source).await;
         let request = archived_request(&source, firm, project).await;
         let files = tempfile::tempdir().unwrap();
@@ -1004,7 +1004,7 @@ async fn unknown_delivery_requires_native_resend_authorization_and_reuses_provid
         let mut command = case.command();
         command.after_failed_result = None;
         assert_eq!(case.submit(&command, true).await, StatusCode::CONFLICT);
-        let source = store::surreal::SurrealDb::uninitialized();
+        let source = store::application_store::ApplicationStore::uninitialized();
         store::email_deliveries::authorize_resend(
             &source,
             case.request.receipt_id,

@@ -166,7 +166,7 @@ async fn save_selection(
         return redirect_error(&back, "Unsupported social provider");
     };
     match store::social_account_selections::save(
-        &state.surreal,
+        &state.application_store,
         session.role,
         actor,
         &brand_key,
@@ -218,7 +218,7 @@ async fn connect_start_configured(
         return redirect_error(&back, "Unsupported social provider");
     };
     let Ok(selections) =
-        store::social_account_selections::for_brand(&state.surreal, &brand_key).await
+        store::social_account_selections::for_brand(&state.application_store, &brand_key).await
     else {
         return redirect_error(&back, "Could not load the saved destination");
     };
@@ -240,7 +240,7 @@ async fn connect_start_configured(
         })
         .flatten();
     if let Ok(accounts) =
-        store::social_accounts::for_actor(&state.surreal, session.role, actor_id).await
+        store::social_accounts::for_actor(&state.application_store, session.role, actor_id).await
     {
         let usable = |selection| selection_is_usable(&accounts, &brand_key, provider, selection);
         if usable(selection) && linked_instagram.is_none_or(usable) {
@@ -251,7 +251,7 @@ async fn connect_start_configured(
         return redirect_error(&back, "Social account connection is not configured");
     };
     let attempt = match store::social_oauth_attempts::begin(
-        &state.surreal,
+        &state.application_store,
         session.role,
         actor_id,
         &brand_key,
@@ -266,7 +266,7 @@ async fn connect_start_configured(
     if let Some(error) = target_error(provider, target) {
         return redirect_error(&back, error);
     }
-    if store::social_oauth_attempts::bind_account(&state.surreal, &attempt, target)
+    if store::social_oauth_attempts::bind_account(&state.application_store, &attempt, target)
         .await
         .is_err()
     {
@@ -274,7 +274,7 @@ async fn connect_start_configured(
     }
     if let Some(instagram) = linked_instagram {
         if store::social_oauth_attempts::bind_instagram(
-            &state.surreal,
+            &state.application_store,
             &attempt,
             &instagram.provider_account_id,
         )
@@ -617,22 +617,24 @@ async fn authorize_callback(
         return Err(invalid_authorization());
     };
     let Ok(attempt) =
-        store::social_oauth_attempts::consume(&state.surreal, raw_state, Utc::now()).await
+        store::social_oauth_attempts::consume(&state.application_store, raw_state, Utc::now())
+            .await
     else {
         return Err(invalid_authorization());
     };
     let back = format!("/app/admin/brands/{}/edit", attempt.brand_key);
-    let Some(person) = store::persons::find_by_id(&state.surreal, attempt.actor_person_id)
-        .await
-        .ok()
-        .flatten()
+    let Some(person) =
+        store::persons::find_by_id(&state.application_store, attempt.actor_person_id)
+            .await
+            .ok()
+            .flatten()
     else {
         return Err(redirect_error(
             &back,
             "The authorizing person is no longer available",
         ));
     };
-    if !store::persons::is_admitted(&state.surreal, person.id)
+    if !store::persons::is_admitted(&state.application_store, person.id)
         .await
         .unwrap_or(false)
     {
@@ -641,7 +643,7 @@ async fn authorize_callback(
             "The authorizing person is not admitted",
         ));
     }
-    let Some(brand) = store::brands::find_by_key(&state.surreal, &attempt.brand_key)
+    let Some(brand) = store::brands::find_by_key(&state.application_store, &attempt.brand_key)
         .await
         .ok()
         .flatten()
@@ -656,7 +658,7 @@ async fn authorize_callback(
     }
     let decision = store::firm_capability::FirmCapability::ManageBrandContent
         .resolve(
-            &state.surreal,
+            &state.application_store,
             person.role,
             Some(person.id),
             attempt.firm_id,
@@ -805,7 +807,7 @@ async fn persist_identities(input: PersistIdentities<'_>) -> Result<usize, Respo
     for identity in input.identities {
         let identity_provider = store_provider(identity.provider);
         let result = store::social_accounts::connect(
-            &input.state.surreal,
+            &input.state.application_store,
             store::social_accounts::ConnectSocialAccount {
                 actor_role: input.person.role,
                 actor_person_id: input.person.id,
@@ -828,7 +830,7 @@ async fn persist_identities(input: PersistIdentities<'_>) -> Result<usize, Respo
             );
             for (saved_provider, saved_id) in connected_rows {
                 let _ = store::social_accounts::revoke(
-                    &input.state.surreal,
+                    &input.state.application_store,
                     input.person.role,
                     input.person.id,
                     input.brand_key,
@@ -1597,7 +1599,7 @@ async fn disconnect(
         Provider::Tiktok => store::social_accounts::SocialProvider::Tiktok,
     };
     match store::social_accounts::revoke(
-        &state.surreal,
+        &state.application_store,
         session.role,
         actor_id,
         &brand_key,

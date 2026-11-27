@@ -13,11 +13,10 @@
 //! overwrite or remove an authoritative caption.
 
 use crate::postgres::{captions, matter as authority};
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 use word::matter::{Counsel, Matter, Party};
 
-use crate::surreal::{record_id, record_uuid, SurrealDb};
+use crate::application_store::ApplicationStore;
 
 const TABLE: &str = "matter_caption";
 
@@ -33,7 +32,7 @@ pub struct MatterCaption {
 }
 
 /// One stored caption party, as SurrealDB holds it.
-#[derive(Debug, Clone, SurrealValue)]
+#[derive(Debug, Clone)]
 pub(crate) struct PartyRow {
     name: String,
     role: String,
@@ -58,7 +57,7 @@ impl From<&Party> for PartyRow {
 }
 
 /// The stored counsel of record, as SurrealDB holds it.
-#[derive(Debug, Clone, SurrealValue)]
+#[derive(Debug, Clone)]
 pub(crate) struct CounselRow {
     name: String,
     bar_jurisdiction: String,
@@ -103,54 +102,6 @@ impl From<&Counsel> for CounselRow {
     }
 }
 
-#[derive(SurrealValue)]
-struct Row {
-    id: surrealdb::types::RecordId,
-    project_id: surrealdb::types::RecordId,
-    court: Vec<String>,
-    case_number: String,
-    judicial_officer: String,
-    department: String,
-    filed_on: String,
-    trial_on: Option<String>,
-    signed_on: Option<String>,
-    parties: Vec<PartyRow>,
-    counsel: CounselRow,
-    synced_at: String,
-}
-
-impl Row {
-    fn into_caption(self) -> Option<MatterCaption> {
-        Some(MatterCaption {
-            id: record_uuid(&self.id)?,
-            project_id: record_uuid(&self.project_id)?,
-            matter: Matter {
-                court: self.court,
-                case_number: self.case_number,
-                judicial_officer: self.judicial_officer,
-                department: self.department,
-                filed_on: self.filed_on,
-                trial_on: self.trial_on,
-                signed_on: self.signed_on,
-                parties: self.parties.into_iter().map(Party::from).collect(),
-                counsel: self.counsel.into(),
-                // `in_re` and `page_count` only lay out court paper, which
-                // renders from `navigator.yaml`; the matter page never
-                // reads them, so they are not stored.
-                ..Matter::default()
-            },
-            synced_at: self.synced_at,
-        })
-    }
-}
-
-const SELECT: &str = "id, project_id, court, case_number, judicial_officer, department, \
-     filed_on, trial_on, signed_on, parties, counsel, synced_at";
-
-fn project(project_id: Uuid) -> surrealdb::types::RecordId {
-    record_id(crate::projects::PROJECT_TABLE, project_id)
-}
-
 /// Replace a Project's stored `matter:` block with `matter`. `None`, or a
 /// block that declares nothing, removes it.
 ///
@@ -158,64 +109,17 @@ fn project(project_id: Uuid) -> surrealdb::types::RecordId {
 ///
 /// When the write fails.
 pub async fn replace_for_project(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
     matter: Option<&Matter>,
-) -> Result<Option<MatterCaption>, surrealdb::Error> {
-    if let Some(pg) = authority::authority_for(TABLE)
-        .await
-        .map_err(crate::surreal::postgres_error)?
-    {
-        return if let Some(matter) = matter.filter(|matter| !matter.is_empty()) {
-            captions::replace(&pg, project_id, matter)
-                .await
-                .map(Some)
-                .map_err(crate::surreal::postgres_error)
-        } else {
-            captions::delete(&pg, project_id)
-                .await
-                .map_err(crate::surreal::postgres_error)?;
-            Ok(None)
-        };
+) -> Result<Option<MatterCaption>, crate::postgres::matter::MatterAuthorityError> {
+    let pg = authority::authority_for(TABLE).await?;
+    if let Some(matter) = matter.filter(|matter| !matter.is_empty()) {
+        captions::replace(&pg, project_id, matter).await.map(Some)
+    } else {
+        captions::delete(&pg, project_id).await?;
+        Ok(None)
     }
-
-    let Some(matter) = matter.filter(|matter| !matter.is_empty()) else {
-        delete_for_project(surreal, project_id).await?;
-        return Ok(None);
-    };
-    surreal
-        .query(format!(
-            "BEGIN TRANSACTION; DELETE {TABLE} WHERE project_id = $project; \
-             CREATE $id SET project_id = $project, court = $court, \
-             case_number = $case_number, judicial_officer = $judicial_officer, \
-             department = $department, filed_on = $filed_on, trial_on = $trial_on, \
-             signed_on = $signed_on, parties = $parties, counsel = $counsel, \
-             synced_at = $now; \
-             COMMIT TRANSACTION;"
-        ))
-        .bind(("id", record_id(TABLE, Uuid::now_v7())))
-        .bind(("project", project(project_id)))
-        .bind(("court", matter.court.clone()))
-        .bind(("case_number", matter.case_number.clone()))
-        .bind(("judicial_officer", matter.judicial_officer.clone()))
-        .bind(("department", matter.department.clone()))
-        .bind(("filed_on", matter.filed_on.clone()))
-        .bind(("trial_on", matter.trial_on.clone()))
-        .bind((
-            "parties",
-            matter
-                .parties
-                .iter()
-                .map(PartyRow::from)
-                .collect::<Vec<_>>(),
-        ))
-        .bind(("counsel", CounselRow::from(&matter.counsel)))
-        .bind(("signed_on", matter.signed_on.clone()))
-        .bind(("now", chrono::Utc::now().to_rfc3339()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    mirror(surreal, project_id).await;
-    for_project(surreal, project_id).await
 }
 
 /// A Project's stored `matter:` block, if any.
@@ -224,27 +128,11 @@ pub async fn replace_for_project(
 ///
 /// When the read fails.
 pub async fn for_project(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
-) -> Result<Option<MatterCaption>, surrealdb::Error> {
-    if let Some(pg) = authority::authority_for(TABLE)
-        .await
-        .map_err(crate::surreal::postgres_error)?
-    {
-        return captions::find(&pg, project_id)
-            .await
-            .map_err(crate::surreal::postgres_error);
-    }
-
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project LIMIT 1"
-        ))
-        .bind(("project", project(project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<Row> = response.take(0)?;
-    Ok(rows.into_iter().find_map(Row::into_caption))
+) -> Result<Option<MatterCaption>, crate::postgres::matter::MatterAuthorityError> {
+    let pg = authority::authority_for(TABLE).await?;
+    captions::find(&pg, project_id).await
 }
 
 /// Remove a Project's stored `matter:` block, for an explicit empty block and
@@ -254,34 +142,11 @@ pub async fn for_project(
 ///
 /// When the delete fails.
 pub async fn delete_for_project(
-    surreal: &SurrealDb,
+    _application_store: &ApplicationStore,
     project_id: Uuid,
-) -> Result<(), surrealdb::Error> {
-    if let Some(pg) = authority::authority_for(TABLE)
-        .await
-        .map_err(crate::surreal::postgres_error)?
-    {
-        return captions::delete(&pg, project_id)
-            .await
-            .map_err(crate::surreal::postgres_error);
-    }
-
-    surreal
-        .query(format!("DELETE {TABLE} WHERE project_id = $project"))
-        .bind(("project", project(project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    mirror(surreal, project_id).await;
-    Ok(())
-}
-
-/// Mirror the Project's caption, or its removal, to PostgreSQL when opted in.
-async fn mirror(surreal: &SurrealDb, project_id: Uuid) {
-    crate::postgres_mirror::after_write(
-        surreal,
-        crate::postgres_mirror::MirrorKey::MatterCaption(project_id),
-    )
-    .await;
+) -> Result<(), crate::postgres::matter::MatterAuthorityError> {
+    let pg = authority::authority_for(TABLE).await?;
+    captions::delete(&pg, project_id).await
 }
 
 #[cfg(test)]
@@ -326,11 +191,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_sync_replaces_the_block_and_an_empty_block_removes_it() {
+        use crate::application_store::ApplicationStore;
         use crate::postgres::fixtures::{activate_family, firm_for_notation, workflow_fixture};
+        use crate::postgres::fixtures::{connect, fresh_schema};
+        use crate::postgres::history::Family;
         use crate::postgres::{matter::with_test_db, PostgresDb};
-        use crate::postgres_backfill::family::Family;
-        use crate::postgres_mirror::tests::{connect, fresh_schema};
-        use crate::surreal::SurrealDb;
 
         let Some((options, database)) = fresh_schema().await else {
             panic!("PostgreSQL-backed caption tests require the disposable test server");
@@ -339,7 +204,7 @@ mod tests {
         activate_family(&pg, Family::Satellites).await;
         let (_, notation, _) = workflow_fixture(&pg).await;
         let (_, project_id) = firm_for_notation(&pg, notation).await;
-        let unavailable = SurrealDb::uninitialized();
+        let unavailable = ApplicationStore::uninitialized();
 
         Box::pin(with_test_db(pg.clone(), async {
             assert!(for_project(&unavailable, project_id)

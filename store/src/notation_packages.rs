@@ -13,14 +13,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::application_store::ApplicationStore;
 use crate::postgres::catalog;
-use crate::surreal::{record_id, record_uuid, SurrealDb};
-
-const PACKAGE_TABLE: &str = "notation_package";
-const MEMBER_TABLE: &str = "notation_package_template";
 
 /// One client-facing bundle of one or more notation templates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -40,37 +36,6 @@ pub struct NotationPackage {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct PackageRow {
-    id: surrealdb::types::RecordId,
-    code: String,
-    title: String,
-    description: Option<String>,
-    complexity: String,
-    starting_price_cents: i64,
-    currency: String,
-    active: bool,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl PackageRow {
-    fn into_model(self) -> Option<NotationPackage> {
-        Some(NotationPackage {
-            id: record_uuid(&self.id)?,
-            code: self.code,
-            title: self.title,
-            description: self.description,
-            complexity: self.complexity,
-            starting_price_cents: self.starting_price_cents,
-            currency: self.currency,
-            active: self.active,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
 /// One template in a package, in assembly order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageTemplate {
@@ -79,29 +44,6 @@ pub struct PackageTemplate {
     pub position: i32,
     pub required: bool,
 }
-
-#[derive(SurrealValue)]
-struct PackageTemplateRow {
-    package_id: surrealdb::types::RecordId,
-    template_id: surrealdb::types::RecordId,
-    position: i32,
-    required: bool,
-}
-
-impl PackageTemplateRow {
-    fn into_model(self) -> Option<PackageTemplate> {
-        Some(PackageTemplate {
-            package_id: record_uuid(&self.package_id)?,
-            template_id: record_uuid(&self.template_id)?,
-            position: self.position,
-            required: self.required,
-        })
-    }
-}
-
-const PACKAGE_SELECT: &str = "id, code, title, description, complexity, starting_price_cents, \
-                              currency, active, inserted_at, updated_at";
-const TEMPLATE_SELECT: &str = "package_id, template_id, position, required";
 
 /// Input to create one package in the catalog.
 #[derive(Debug, Clone)]
@@ -136,8 +78,6 @@ impl NewNotationPackage {
 /// Errors from the package catalog.
 #[derive(Debug, thiserror::Error)]
 pub enum NotationPackageError {
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
     #[error("notation package writes require PostgreSQL authority")]
     AuthorityUnavailable,
     /// The PostgreSQL catalog authority could not serve the call.
@@ -189,22 +129,13 @@ fn template_from_pg(row: &sqlx::postgres::PgRow) -> Result<PackageTemplate, sqlx
     })
 }
 
-fn one(
-    mut response: surrealdb::IndexedResults,
-) -> Result<Option<NotationPackage>, NotationPackageError> {
-    let row: Option<PackageRow> = response.take(0)?;
-    Ok(row.and_then(PackageRow::into_model))
-}
-
 /// Insert a package catalog entry. Package templates are attached separately
 /// with [`add_template`] so their order is explicit.
 pub async fn create(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     new: &NewNotationPackage,
 ) -> Result<NotationPackage, NotationPackageError> {
-    let pg = catalog::authority()
-        .await?
-        .ok_or(NotationPackageError::AuthorityUnavailable)?;
+    let pg = catalog::authority().await?;
     let row = catalog::row(
         sqlx::query(PG_INSERT)
             .bind(Uuid::now_v7())
@@ -225,15 +156,13 @@ pub async fn create(
 /// The schema rejects duplicate template membership and duplicate positions
 /// within a package.
 pub async fn add_template(
-    _db: &SurrealDb,
+    _db: &ApplicationStore,
     package_id: Uuid,
     template_id: Uuid,
     position: i32,
     required: bool,
 ) -> Result<(), NotationPackageError> {
-    let pg = catalog::authority()
-        .await?
-        .ok_or(NotationPackageError::AuthorityUnavailable)?;
+    let pg = catalog::authority().await?;
     catalog::execute(
         sqlx::query(PG_ADD_TEMPLATE)
             .bind(Uuid::now_v7())
@@ -249,56 +178,33 @@ pub async fn add_template(
 
 /// Find a package by its stable catalog code.
 pub async fn find_by_code(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     code: &str,
 ) -> Result<Option<NotationPackage>, NotationPackageError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::one(&pg, PG_BY_CODE, code.to_string(), package_from_pg).await?);
-    }
-    let response = db
-        .query(format!(
-            "SELECT {PACKAGE_SELECT} FROM {PACKAGE_TABLE} WHERE code = $code LIMIT 1"
-        ))
-        .bind(("code", code.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let pg = catalog::authority().await?;
+    Ok(catalog::one(&pg, PG_BY_CODE, code.to_string(), package_from_pg).await?)
 }
 
 /// The templates a package assembles, in its declared order.
 pub async fn templates(
-    db: &SurrealDb,
+    _db: &ApplicationStore,
     package_id: Uuid,
 ) -> Result<Vec<PackageTemplate>, NotationPackageError> {
-    if let Some(pg) = catalog::authority().await? {
-        return Ok(catalog::all(&pg, PG_TEMPLATES, Some(package_id), template_from_pg).await?);
-    }
-    let mut response = db
-        .query(format!(
-            "SELECT {TEMPLATE_SELECT} FROM {MEMBER_TABLE} WHERE package_id = $package_id \
-             ORDER BY position ASC"
-        ))
-        .bind(("package_id", record_id(PACKAGE_TABLE, package_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<PackageTemplateRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(PackageTemplateRow::into_model)
-        .collect())
+    let pg = catalog::authority().await?;
+    Ok(catalog::all(&pg, PG_TEMPLATES, Some(package_id), template_from_pg).await?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{add_template, create, find_by_code, templates, NewNotationPackage};
-    use crate::surreal::SurrealDb;
+    use crate::application_store::ApplicationStore;
     use crate::test_support;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn a_package_keeps_its_starting_price_and_template_assembly_order() {
         test_support::with_required_postgres(async {
-        let db = SurrealDb::uninitialized();
+        let db = ApplicationStore::uninitialized();
         let package = create(
             &db,
             &NewNotationPackage::new("estate-package", "Estate package", "complex", 10_000),
@@ -307,7 +213,7 @@ mod tests {
         .unwrap();
         let first = Uuid::now_v7();
         let second = Uuid::now_v7();
-        let pg = crate::postgres::PostgresDb::configured().await.unwrap().unwrap();
+        let pg = crate::postgres::PostgresDb::application().await.unwrap();
         for (id, code) in [(first, "synthetic-first"), (second, "synthetic-second")] {
             sqlx::query("INSERT INTO template (id, code, title, respondent_type, is_current, inserted_at, updated_at) VALUES ($1, $2, 'Synthetic', 'person', false, now(), now())")
                 .bind(id).bind(code).execute(pg.pool()).await.unwrap();

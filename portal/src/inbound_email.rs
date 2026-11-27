@@ -790,7 +790,7 @@ pub fn storage_key_for(email: &InboundEmail) -> String {
 /// the object-storage key of the archived `.eml` so the threading layer
 /// can reference it from the conversation transcript.
 pub async fn persist(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     email: &InboundEmail,
 ) -> Result<String, InboundError> {
@@ -802,7 +802,7 @@ pub async fn persist(
 
     // Route via the first registered mailroom. We'll grow a
     // per-recipient routing layer when the second mailroom appears.
-    let mailrooms = store::mailrooms::list_all(surreal)
+    let mailrooms = store::mailrooms::list_all(application_store)
         .await
         .map_err(|e| InboundError::Database(e.to_string()))?;
     let mailroom_id = mailrooms
@@ -811,7 +811,7 @@ pub async fn persist(
         .ok_or(InboundError::NoMailroom)?;
 
     store::letters::record(
-        surreal,
+        application_store,
         &store::letters::NewLetter {
             mailroom_id,
             // Inbound mail lands unclassified — no matter is known at this
@@ -832,7 +832,7 @@ pub async fn persist(
 /// is stable for the scoped raw-message digest, so retries can complete a
 /// partial attempt without allocating another object or letter.
 pub async fn persist_summary(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     config: &SummaryIntakeConfig,
     email: &InboundEmail,
@@ -840,7 +840,7 @@ pub async fn persist_summary(
     let receiving_mailbox =
         summary_receiving_mailbox(config, email).ok_or(InboundError::InvalidEnvelope)?;
     persist_summary_receipt(
-        surreal,
+        application_store,
         storage,
         &config.deployment,
         receiving_mailbox,
@@ -857,7 +857,7 @@ pub async fn persist_summary(
 /// or the firm's SMS number ([`crate::twilio_sms`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn persist_summary_receipt(
-    surreal: &store::surreal::SurrealDb,
+    application_store: &store::application_store::ApplicationStore,
     storage: &Arc<dyn StorageService>,
     deployment: &str,
     receiving_mailbox: String,
@@ -866,7 +866,7 @@ pub(crate) async fn persist_summary_receipt(
     provider_account: Option<&str>,
     sender_authenticated: bool,
 ) -> Result<store::email_receipts::EmailReceipt, InboundError> {
-    let mailrooms = store::mailrooms::list_all(surreal)
+    let mailrooms = store::mailrooms::list_all(application_store)
         .await
         .map_err(|e| InboundError::Database(e.to_string()))?;
     let mailroom_id = mailrooms
@@ -877,7 +877,7 @@ pub(crate) async fn persist_summary_receipt(
     let archive_key = summary_archive_key(&digest);
     let letter_id = stable_uuid_from_digest(&digest);
     let ensured = store::email_receipts::ensure(
-        surreal,
+        application_store,
         &store::email_receipts::NewEmailReceipt {
             receiving_mailbox: &receiving_mailbox,
             deployment,
@@ -907,7 +907,7 @@ pub(crate) async fn persist_summary_receipt(
             .await
             .map_err(|e| InboundError::Storage(e.to_string()))?;
 
-        if store::letters::find_by_id(surreal, letter_id)
+        if store::letters::find_by_id(application_store, letter_id)
             .await
             .map_err(|e| InboundError::Database(e.to_string()))?
             .is_none()
@@ -920,10 +920,10 @@ pub(crate) async fn persist_summary_receipt(
                 recipient: receiving_mailbox,
                 summary: email.subject.clone(),
             };
-            match store::letters::record_with_id(surreal, letter_id, &new_letter).await {
+            match store::letters::record_with_id(application_store, letter_id, &new_letter).await {
                 Ok(_) => {}
                 Err(error) => {
-                    let recovered = store::letters::find_by_id(surreal, letter_id)
+                    let recovered = store::letters::find_by_id(application_store, letter_id)
                         .await
                         .map_err(|e| InboundError::Database(e.to_string()))?;
                     if recovered.is_none() {
@@ -932,11 +932,11 @@ pub(crate) async fn persist_summary_receipt(
                 }
             }
         }
-        store::email_receipts::mark_archived(surreal, ensured.receipt.id)
+        store::email_receipts::mark_archived(application_store, ensured.receipt.id)
             .await
             .map_err(|e| InboundError::Database(e.to_string()))?;
         let receipt = store::email_receipts::find(
-            surreal,
+            application_store,
             &ensured.receipt.receiving_mailbox,
             &ensured.receipt.deployment,
             &ensured.receipt.raw_digest,
@@ -1091,9 +1091,10 @@ pub async fn webhook(
     );
     if summary_eligible {
         if let Some(config) = summary_config {
-            let receipt = persist_summary(&state.surreal, &state.storage, config, &email).await?;
+            let receipt =
+                persist_summary(&state.application_store, &state.storage, config, &email).await?;
             crate::email_acknowledgment::receive(
-                &state.surreal,
+                &state.application_store,
                 &state.storage,
                 state.email.as_ref(),
                 &email,
@@ -1104,12 +1105,13 @@ pub async fn webhook(
         }
         return Ok(StatusCode::ACCEPTED);
     }
-    let raw_key = persist(&state.surreal, &state.storage, &email).await?;
+    let raw_key = persist(&state.application_store, &state.storage, &email).await?;
 
     // Mail addressed to the lawyer's own mailbox joins the Firm inbox as its
     // own channel (LAW-238). Best-effort like threading: the raw `.eml` is
     // already archived, and a non-2xx would make SendGrid redeliver.
-    if let Err(error) = crate::lawyer_mailbox::ingest(&state.surreal, &state.storage, &email).await
+    if let Err(error) =
+        crate::lawyer_mailbox::ingest(&state.application_store, &state.storage, &email).await
     {
         tracing::error!(
             error = %error,
@@ -1124,7 +1126,7 @@ pub async fn webhook(
     // SendGrid retry and duplicate the conversation.
     if let Some(cfg) = crate::email_threads::ThreadConfig::from_env() {
         if let Err(e) = crate::email_threads::thread_inbound(
-            &state.surreal,
+            &state.application_store,
             &state.storage,
             state.email.as_ref(),
             state.workflow_runtime.as_ref(),
@@ -1138,7 +1140,7 @@ pub async fn webhook(
         }
     }
     crate::email_acknowledgment::receive(
-        &state.surreal,
+        &state.application_store,
         &state.storage,
         state.email.as_ref(),
         &email,
