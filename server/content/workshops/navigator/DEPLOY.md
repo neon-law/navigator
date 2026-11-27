@@ -394,9 +394,9 @@ For a prefix `<name>`, set `NAVIGATOR_GKE_CLUSTER_NAME=<name>`, `NAVIGATOR_GKE_C
 `NAVIGATOR_WEB_SECRET_NAME=<name>-web-secrets`. Bucket names are global; choose an available name under your
 organization's naming convention.
 
-Also set `NAVIGATOR_GCP_PROJECT_ID`, `NAVIGATOR_GCP_LOCATION`, `NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_HOST`,
-`NAV_BASE_URL=https://$NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_URL=https://$NAVIGATOR_WORKFLOWS_HOST/`,
-`NAVIGATOR_WEB_IMAGE`, and `NAVIGATOR_ASSET_BASE_URL=$NAV_BASE_URL/assets` in that row's
+Also set `NAVIGATOR_GCP_PROJECT_ID`, `NAVIGATOR_GCP_LOCATION`, `NAVIGATOR_PUBLIC_HOST`,
+`NAV_BASE_URL=https://$NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WEB_IMAGE`, and
+`NAVIGATOR_ASSET_BASE_URL=$NAV_BASE_URL/assets` in that row's
 `$NAVIGATOR_DEPLOYMENTS_DIR/deployments/<row>/config.toml`. Set that row's own `NAVIGATOR_POSTGRES_*` and
 `NAVIGATOR_DBOS_*` coordinates and credentials in its encrypted `secrets.enc.yaml`.
 
@@ -1156,6 +1156,7 @@ development with no `.env`; add only the sandbox values you actually intend to o
 | Identity port | `NAVIGATOR_KIND_RAUTHY_PORT` | `30080` |
 | Storage port | `NAVIGATOR_KIND_SEAWEEDFS_S3_PORT` | `30900` |
 | Web port | `NAVIGATOR_KIND_WEB_PORT` | `3001` |
+| PostgreSQL host port | `NAVIGATOR_KIND_POSTGRES_PORT` | `15432` |
 | `delete-your-data` web port | `NAVIGATOR_LOCAL_DELETE_YOUR_DATA_PORT` | `3011`; bound alongside `PORT` |
 | Observability | `NAVIGATOR_KIND_OPENOBSERVE_PORT`, `NAVIGATOR_KIND_OPENOBSERVE_OTLP_PORT` | `5080`, `5081` |
 | Documents key | `NAVIGATOR_SEAWEEDFS_ACCESS_KEY` | runtime-generated lane key |
@@ -1200,7 +1201,6 @@ overrides. Keep generated credentials out of source control.
 | Storage buckets | `NAVIGATOR_STORAGE_BUCKET`, `NAVIGATOR_ASSETS_BUCKET`, `NAVIGATOR_LFS_BUCKET` |
 | Applications bucket | `NAVIGATOR_APPLICATIONS_BUCKET` |
 | Iceberg-archive bucket | `NAVIGATOR_ARCHIVES_BUCKET` |
-| Archive source (`postgres` by default) | `NAVIGATOR_ARCHIVE_SOURCE` |
 | Cloud-only archive buckets (`ops gcp setup`, not locally generated) | `NAVIGATOR_TELEMETRY_BUCKET` |
 | Storage region | `NAVIGATOR_STORAGE_REGION` |
 | Documents credentials | `NAVIGATOR_STORAGE_ACCESS_KEY`, `NAVIGATOR_STORAGE_SECRET_KEY` |
@@ -1289,7 +1289,6 @@ checks through their authorized accessor without widening the caller's ordinary 
 | Iceberg-archive bucket | `NAVIGATOR_ARCHIVES_BUCKET` |
 | Iceberg-archive S3 key | `NAVIGATOR_ARCHIVES_ACCESS_KEY`, `NAVIGATOR_ARCHIVES_SECRET_KEY` |
 | Sessions | `SESSION_SECRET` |
-| Worker listener | `WORKFLOWS_SERVICE_LISTEN` |
 | Telemetry and log filtering | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `RUST_LOG` |
 | Image-baked release identity | `NAVIGATOR_RELEASE_TAG`, `NAVIGATOR_GIT_SHA`, `NAVIGATOR_BUILD_TIME` |
 
@@ -1515,9 +1514,8 @@ concurrency and token budgets bounded, and keep credentials and matter content o
 | Manifest source | `NAVIGATOR_GKE_OVERLAY` |
 | Public OAuth clients | `NAVIGATOR_OAUTH_CLIENT_ID_BROWSER` (required) |
 | Brand and base URL | `NAVIGATOR_CUSTOM_BRANDING`, `NAVIGATOR_PRIMARY_DOMAIN`, `NAV_BASE_URL` |
-| Public hosts | `NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_HOST`, `GOOGLE_OAUTH_REQUIRED_HD` |
+| Public hosts | `NAVIGATOR_PUBLIC_HOST`, `GOOGLE_OAUTH_REQUIRED_HD` |
 | Runtime Secret | `NAVIGATOR_WEB_SECRET_NAME` |
-| Worker registration | `NAVIGATOR_WORKFLOWS_URL` |
 
 ---
 
