@@ -4,8 +4,8 @@ resources:
   - ../../overlays/kind/postgres
 patches:
   - target:
-      kind: (Deployment|RestateDeployment)
-      name: (navigator-web|workflows-service)
+      kind: Deployment
+      name: navigator-web
     patch: |-
       - op: "add"
         path: "/spec/template/metadata/labels/navigator.neonlaw.org~1postgres-client"

@@ -1083,6 +1083,11 @@ The web application hosts DBOS and its authenticated ingress. These switches ena
 Project Calendar membership runs for Firms with a Google Workspace calendar owner in Firm Settings. See the [DBOS
 runbook](../../../../docs/dbos-durability.md) for schedule ownership and recovery.
 
+---
+
+Verify each enabled capability's credentials and schedule before rollout. For example, Sent Email Export needs a
+writable export bucket, and Project Calendar membership needs a configured calendar owner.
+
 ### Capability and storage switches
 
 | Switch | What the operator controls |
@@ -1785,6 +1790,8 @@ before generating a bill, and verify the provider's actual result rather than in
 
 The application container serves the portal and the authenticated DBOS listener. PostgreSQL with AGE and private object
 storage remain independent services.
+
+---
 
 Use a unique DBOS executor identity per concurrent pod. Verify application-version compatibility and finish or recover
 pending runs before changing executor identities. See the [DBOS runbook](../../../../docs/dbos-durability.md).

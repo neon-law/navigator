@@ -63,13 +63,13 @@ pub struct Context {
     pub counts: Arc<dyn CountSource>,
 }
 
-struct SurrealCounts(
+struct DeploymentCounts(
     store::application_store::ApplicationStore,
     DeploymentSlackFirm,
 );
 
 #[async_trait::async_trait]
-impl CountSource for SurrealCounts {
+impl CountSource for DeploymentCounts {
     async fn read(&self) -> Result<Vec<BrandOpenPitch>, GeneralNagError> {
         slack_firm_open_pitch_counts(&self.0, self.1)
             .await
@@ -137,7 +137,7 @@ impl Context {
             slack,
             channel_id,
             simulated,
-            counts: Arc::new(SurrealCounts(application_store, firm)),
+            counts: Arc::new(DeploymentCounts(application_store, firm)),
         })
     }
 }

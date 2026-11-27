@@ -1,7 +1,7 @@
 //! Machine-bound devx orchestration.
 //!
 //! Every function here drives KIND, Kubernetes, Docker, or a host process:
-//! it shells out to `kind`/`kubectl`/`helm`/`docker`, spawns and reaps
+//! it shells out to `kind`/`kubectl`/`docker`, spawns and reaps
 //! port-forward children, probes host TCP ports, or reads and writes the
 //! `.devx/` state directory. None of it is unit-testable — it is exercised
 //! by the live `deploy.yml` / `dev up` gates against the persistent KIND
@@ -480,7 +480,7 @@ pub(super) fn rauthy_deployment_exists(cfg: &KindConfig) -> bool {
 
 /// Create the cluster and install its ingress controller.
 pub(super) fn kind_up_only(cfg: &KindConfig) -> Result<()> {
-    require_tools(&["kind", "kubectl", "helm"])?;
+    require_tools(&["kind", "kubectl"])?;
     let root = workspace_root()?;
     kind_platform_steps(&root, cfg).map(|_| ())
 }

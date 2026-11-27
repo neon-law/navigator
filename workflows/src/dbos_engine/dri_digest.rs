@@ -49,13 +49,13 @@ pub trait DriDigestSource: Send + Sync {
     async fn open_pitch_counts(&self) -> Result<Vec<BrandOpenPitch>, DriDigestError>;
 }
 
-struct SurrealDriDigestSource(
+struct DeploymentDriDigestSource(
     store::application_store::ApplicationStore,
     DeploymentSlackFirm,
 );
 
 #[async_trait::async_trait]
-impl DriDigestSource for SurrealDriDigestSource {
+impl DriDigestSource for DeploymentDriDigestSource {
     async fn projects(&self) -> Result<Vec<ProjectDriSummary>, DriDigestError> {
         store::projects::dri_digest(&self.0)
             .await
@@ -123,8 +123,7 @@ impl Context {
         )
     }
 
-    /// Construct a host context from the same Project accessors used by the
-    /// Restate service. The digest posts with the deployment's bot to
+    /// The digest posts with the deployment's bot to
     /// `SLACK_GENERAL_CHANNEL_ID`, beside `GeneralNag`'s open-matters notice;
     /// an enabled schedule requires the channel.
     pub fn from_lookup<F>(
@@ -140,7 +139,7 @@ impl Context {
             .map_err(|_| super::SettingsError::Invalid(SLACK_FIRM_ENV))?;
         let channel = super::required_channel(lookup, "SLACK_GENERAL_CHANNEL_ID")?;
         Ok(Self {
-            source: Arc::new(SurrealDriDigestSource(application_store, firm)),
+            source: Arc::new(DeploymentDriDigestSource(application_store, firm)),
             notifier: Arc::new(crate::notify::ChannelNotifier::new(bot, channel)),
             simulated,
         })
@@ -433,7 +432,7 @@ mod tests {
                 lines[0].open
             };
             assert_eq!(open(source.open_pitch_counts().await.unwrap()), 3);
-            let strict_source = super::SurrealDriDigestSource(application_store, slack_firm);
+            let strict_source = super::DeploymentDriDigestSource(application_store, slack_firm);
             assert_eq!(strict_source.projects().await.unwrap().len(), 2);
             assert_eq!(open(strict_source.open_pitch_counts().await.unwrap()), 3);
             pg.pool().close().await;

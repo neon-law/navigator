@@ -62,8 +62,9 @@ compile without it.
 
 **To run the local KIND cluster** (`hudson dev up`, and the per-worktree `dev worktree-env up`):
 
-The local tier uses PostgreSQL and DBOS. It requires Docker, `kubectl`, `kind`, and `openssl`. Quickstart also uses
-`git`, `ssh-keygen`, Rust, and `cmake`. CI provisions through the same CLI and tests the exact built application image.
+The local tier uses PostgreSQL and DBOS. It requires Docker, `kubectl`, `kind`, and `openssl`
+(`deploy/src/devx/orchestrate.rs:483`, `deploy/src/devx/worktree_env.rs:394`). Quickstart also uses `git`, `ssh-keygen`,
+Rust, and `cmake`. CI provisions through the same CLI and tests the exact built application image.
 
 Quickstart builds and stages the current checkout's Dioxus client before creating the KIND tier or starting the server
 watcher. It uses the debug profile locally and rebuilds incrementally on each launch; an existing bundle is not treated
