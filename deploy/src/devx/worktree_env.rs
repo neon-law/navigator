@@ -394,6 +394,7 @@ fn up_locked(
         runtime == Runtime::Kind,
         "development runs on PostgreSQL and DBOS in KIND"
     );
+    super::orchestrate::require_tools(&["kind", "kubectl", "docker", "openssl"])?;
     let slug = slug_for(root)?;
     let (cfg, db_name, _) =
         reserve_worktree_tier(root, &slug, Runtime::Kind, base_cfg, demo_image.is_some())?;

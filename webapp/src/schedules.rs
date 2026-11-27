@@ -150,7 +150,7 @@ pub fn cron_jobs() -> Vec<CronJobEntry> {
 /// The flash a manual run redirects back with, already resolved to a message.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ScheduleNotice {
-    /// The rendered sentence, e.g. `Archives twice-daily export queued.`
+    /// A status message for a recognized schedule.
     pub message: String,
     /// Whether the job was queued — selects the toast tone.
     pub queued: bool,
@@ -520,37 +520,12 @@ mod tests {
     }
 
     #[test]
-    fn floats_a_queued_notice() {
-        let html = dioxus_ssr::render_element(schedules_body(&SchedulesView {
-            notice: resolve_notice(Some("queued:archives")),
-            ..view()
-        }));
-        assert!(
-            html.contains("Archives twice-daily export queued."),
-            "{html}"
-        );
-        assert!(html.contains("nav-toast--success"), "{html}");
-    }
-
-    #[test]
-    fn floats_a_failure_notice() {
-        let html = dioxus_ssr::render_element(schedules_body(&SchedulesView {
-            notice: resolve_notice(Some("not_queued:archives")),
-            ..view()
-        }));
-        assert!(
-            html.contains("Archives twice-daily export could not be queued."),
-            "{html}"
-        );
-        assert!(html.contains("nav-toast--danger"), "{html}");
-    }
-
-    #[test]
     fn an_unknown_notice_resolves_to_nothing() {
         // The query is attacker-controlled, so only a known outcome+slug pair
         // renders — never the raw value.
         assert!(resolve_notice(None).is_none());
         assert!(resolve_notice(Some("queued:not-a-job")).is_none());
+        assert!(resolve_notice(Some("queued:archives")).is_none());
         assert!(resolve_notice(Some("exploded:archives")).is_none());
         assert!(resolve_notice(Some("no-colon")).is_none());
         assert!(resolve_notice(Some("<script>:archives")).is_none());

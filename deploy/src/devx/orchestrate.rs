@@ -80,7 +80,6 @@ pub(super) fn verified_native_database(root: &Path, cfg: &KindConfig) -> Result<
 pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Result<()> {
     use super::native_profile::{self, Intent};
     use store::postgres::native_origin;
-    require_tools(&["kind", "kubectl", "docker", "openssl"])?;
     super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
     let mut intent = Intent::read(root)?.context("native tier creation intent is missing")?;
     intent.verify_target(root, cfg)?;

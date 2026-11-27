@@ -6,16 +6,11 @@ offline upgrade plan run without a Neon Law account, cloud project, SOPS key, re
 cloud deployment and the supplied Google Cloud Storage backup manifests require the operator's own services and
 credentials.
 
-Navigator is mid-migration from SurrealDB and Restate to PostgreSQL and DBOS. Sections marked **Interim** describe a
-component that ships today and is scheduled to retire. The table distinguishes delivered behavior from the target.
-
-| Concern | Today | Target |
-| --- | --- | --- |
-| System of record | SurrealDB (**Interim**) | PostgreSQL |
-| PostgreSQL | Migrations, Firm journal, and mirror tables; opt-in | Every read and write |
-| Durable workflows | Restate (**Interim**) | DBOS inside `web` |
-| DBOS | Inside `web`, opt-in; `Heartbeat` and five flagged paths | Every durable job |
-| Apache AGE | In the PostgreSQL image; no application reads | Graph queries over the same database |
+| Concern | Deployment |
+| --- | --- |
+| Application data | PostgreSQL |
+| Durable workflows | DBOS inside `web`, with a PostgreSQL system schema |
+| Graph | Apache AGE in the PostgreSQL image |
 
 ## Prerequisites
 
@@ -91,7 +86,6 @@ Each release builds these images from `images/`, tagged with the release version
 | Image | Containerfile | Runs |
 | --- | --- | --- |
 | `neon-server` | `images/Containerfile.neon` | `web`, and `/app/navigator-migrate` |
-| `navigator-workflows-service` | `images/Containerfile.workflows-service` | the Restate worker (**Interim**) |
 | `navigator-*-trigger`, `navigator-general-nag` | `images/Containerfile.trigger` | scheduled workflow triggers |
 
 The release workflow mirrors every digest to `ghcr.io/<owner>/navigator/<image>:<tag>` and signs the mirror with cosign.
@@ -173,25 +167,14 @@ data when changing its storage engine. Production continues to use its configure
   Cloud Storage bucket the operator names in the `navigator-postgres-backup-target` ConfigMap.
   `k8s/postgres/restore-drill/` restores into scratch storage and reports row counts and AGE graph counts. See
   [`postgres-kubernetes.md`](postgres-kubernetes.md#backups-and-point-in-time-recovery).
-- **SurrealDB (Interim).** `hudson ops surreal-archive export` writes a best-effort recovery archive by
-  default, and `hudson ops surreal-archive restore-drill --key <key>` checks it against its export receipt when
-  available. This verifies recovery only; strict consistency requires an explicitly quiesced-writer export. See
-  [`surreal-archives.md`](surreal-archives.md).
 - **Projects.** Each Project has verified recovery archives under `/app/api/projects/{id}/recovery-archives`. See
   [`project-recovery-archives.md`](project-recovery-archives.md).
 
 ## DBOS
 
-DBOS runs inside `web` when `NAVIGATOR_DBOS_ENABLED=true`, keeping its system schema in PostgreSQL. `Heartbeat` runs on
-DBOS. `GeneralNag`, `DriDigest`, `ProjectRecovery`, `RetentionPurge`, and `SourceImport` each have a DBOS path behind
-its own flag. Do not rewrite DBOS's system tables by hand. [`dbos-durability.md`](dbos-durability.md) has the flags and
-the effect-key rule.
-
-## Restate (Interim)
-
-Restate runs every other durable workflow. `dev up` installs the pinned Restate Operator with Helm, and
-`k8s/staging/restate.yaml` declares the cluster. `workflows-service` is the registered worker.
-[`durable-workflows.md`](durable-workflows.md) lists what it owns.
+DBOS runs inside `web` and stores its journal in PostgreSQL. Use the dedicated database login for the DBOS system schema
+and a deployment token for the private ingress. See [durable workflows](durable-workflows.md) for the active jobs and
+[DBOS durability](dbos-durability.md) for recovery and effect keys.
 
 ## Apache AGE
 
@@ -222,9 +205,9 @@ live on Forgejo's retained `/var/lib/gitea` claim and need their own backup, res
 | --- | --- |
 | `k8s/base/` | The `navigator` namespace, shared by every overlay |
 | `k8s/base/web/` | The `navigator-web` Deployment, its Secret, and its repository volume |
-| `k8s/staging/` | A complete provider-neutral runtime: base, web, Rauthy, Restate, OpenObserve, worker, ClamAV |
-| `k8s/postgres/` | PostgreSQL, roles, migrations, mirror reconcile, backups, and the restore drill |
-| `k8s/overlays/kind/` | The full local stack: staging plus SeaweedFS, SurrealDB, and the trigger CronJobs |
+| `k8s/staging/` | A complete provider-neutral runtime: base, web, Rauthy, OpenObserve, ClamAV |
+| `k8s/postgres/` | PostgreSQL, roles, migrations, backups, and the restore drill |
+| `k8s/overlays/kind/` | The full local stack: staging plus SeaweedFS and PostgreSQL |
 | `k8s/overlays/kind-deps/` | The `dev up` stack: the same, minus `web`, which runs on the host |
 
 A cluster of your own starts from `k8s/staging/` plus `k8s/postgres/`, with a private overlay for object storage,
@@ -246,8 +229,8 @@ cargo run -p hudson -- ops ship --deployment example-deployment --deployments-di
 
 This validates local configuration and renders manifests without cloud tools or credentials. The synthetic encrypted
 markers are planning fixtures, so this example supports only `--dry-run`. A successful plan verifies neither live access
-nor images, decrypted secrets, IAM, assets, Restate registration, or health endpoints. For an authenticated rollout,
-supply a private deployment root and follow [`manual-roll.md`](manual-roll.md).
+nor images, decrypted secrets, IAM, assets, or health endpoints. For an authenticated rollout, supply a private
+deployment root and follow [`manual-roll.md`](manual-roll.md).
 
 ## Upgrades
 
@@ -268,8 +251,5 @@ them. Upgrade a staging cluster before production.
 
 These are open and land in later changes:
 
-- PostgreSQL becomes the system of record for every read, and SurrealDB retires.
-- DBOS takes the remaining durable workflows, and Restate and `workflows-service` retire.
-- `dev up` includes PostgreSQL without the separate `dev forgejo up` step.
 - PostgreSQL backups write to any S3-compatible bucket, not only Google Cloud Storage.
 - The sample matters' Project repositories become public, so a fresh clone stages their applications too.

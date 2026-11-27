@@ -24,6 +24,8 @@ fn synthetic_deployment_tree() -> tempfile::TempDir {
             "NAVIGATOR_POSTGRES_APP_PASSWORD",
             "NAVIGATOR_POSTGRES_MIGRATOR_PASSWORD",
             "NAVIGATOR_POSTGRES_BACKUP_PASSWORD",
+            "NAVIGATOR_POSTGRES_DBOS_PASSWORD",
+            "NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD",
         ],
     );
     write_encrypted_keys(
