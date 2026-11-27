@@ -898,7 +898,7 @@ jobs:
           native_fi+='native_call_and_fi_triage_preserve_roles_billing_and_attribution'
           native_fi+=')$/)'
           # These cases share source files with compatibility tests but run with PostgreSQL or in memory only.
-          calendar='(package(workflows-service) & test(/::(calendar_failure_still_posts_the_open_project_notice|the_daily_trigger_runs_at_0333_utc_in_every_manifest)$/))'
+          calendar='(package(workflows-service) & test(/::(calendar_failure_still_posts_the_open_project_notice|the_daily_trigger_runs_at_0333_utc)$/))'
           cargo nextest run --workspace --no-fail-fast --profile ci \
               -E "($(cat /tmp/surreal-free/nextest-filter)) | ($native_fi) | ($calendar)" \
               2>&1 | tee /tmp/navigator-workspace-tests.log
