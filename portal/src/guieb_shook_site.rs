@@ -6,6 +6,9 @@
 //! "Sign in" link reads "Projects", the same switch [`crate::dioxus_app::public_utility_links`] makes on every
 //! Navigator-rendered page.
 //!
+//! A page's address has no `.html`: `/attorneys/waleed-amer` answers with `attorneys/waleed-amer.html`, and a
+//! request that names the file redirects to that address.
+//!
 //! A path with no file in the folder falls through to Navigator, so `/auth`, `/app` and every other route of its
 //! own keep working. Two exceptions sit between: the site's videos stay out of Git and the image and live in the
 //! public assets bucket under [`VIDEO_BUCKET_PREFIX`], answered at their site address; and the addresses the
@@ -78,18 +81,38 @@ impl GuiebShookSite {
         }
     }
 
-    /// The file a request path names, if the folder holds it: `/` is `index.html`, and a path with an empty,
-    /// hidden, `.` or `..` segment names nothing.
+    /// The file a request path names, if the folder holds it: `/` is `index.html`, `/our-story` is
+    /// `our-story.html`, any other file answers at its own name except a page, and a path with an empty, hidden,
+    /// `.` or `..` segment names nothing.
     fn file_for(&self, path: &str) -> Option<PathBuf> {
-        let relative = match path.strip_prefix('/')? {
-            "" => "index.html",
-            rest => rest,
-        };
+        let relative = path.strip_prefix('/')?;
+        if relative.is_empty() {
+            let index = self.root.join("index.html");
+            return index.is_file().then_some(index);
+        }
         let safe = relative.split('/').all(|segment| {
             !segment.is_empty() && !segment.starts_with('.') && !segment.contains('\\')
         });
+        if !safe {
+            return None;
+        }
+        let page = self.root.join(format!("{relative}.html"));
+        if page.is_file() {
+            return Some(page);
+        }
         let file = self.root.join(relative);
-        (safe && file.is_file()).then_some(file)
+        (file.is_file() && !is_page(&file)).then_some(file)
+    }
+
+    /// The address of a page requested by its file name: `/our-story.html` is `/our-story`, `/index.html` is `/`.
+    fn page_address<'a>(&self, path: &'a str) -> Option<&'a str> {
+        let address = match path.strip_suffix(".html")? {
+            "/index" => "/",
+            stem => stem,
+        };
+        self.file_for(address)
+            .is_some_and(|file| is_page(&file))
+            .then_some(address)
     }
 
     fn signed_in(&self, req: &Request) -> bool {
@@ -103,27 +126,19 @@ impl GuiebShookSite {
     }
 
     /// Where a former address of the brand's Navigator pages now lives in the static site.
-    fn former_address(&self, path: &str) -> Option<String> {
+    fn former_address(path: &str) -> Option<&'static str> {
         let under = |prefix: &str| path == prefix || path.starts_with(&format!("{prefix}/"));
-        let target = match path {
-            "/contact" | "/contact/sent" | "/leads" => "/contact.html",
-            "/our-story" => "/our-story.html",
-            "/team/waleed" => "/attorneys/waleed-amer.html",
-            "/team/nick" => "/attorneys/nicholas-shook.html",
-            "/privacy" => "/legal/privacy-policy.html",
-            "/terms" => "/legal/disclaimer.html",
+        Some(match path {
+            "/contact/sent" | "/leads" => "/contact",
+            "/team/waleed" => "/attorneys/waleed-amer",
+            "/team/nick" => "/attorneys/nicholas-shook",
+            "/privacy" => "/legal/privacy-policy",
+            "/terms" => "/legal/disclaimer",
             "/services" | "/testimonials" | "/llms.txt" => "/",
             _ if under("/team") => "/#attorneys",
             _ if under("/blog") || under("/design") || under("/templates") => "/",
-            _ => {
-                let page = format!("{path}.html");
-                let published = ["/practice/", "/attorneys/", "/legal/"]
-                    .iter()
-                    .any(|prefix| path.starts_with(prefix));
-                return (published && self.file_for(&page).is_some()).then_some(page);
-            }
-        };
-        Some(target.to_string())
+            _ => return None,
+        })
     }
 
     async fn page(&self, file: &Path, signed_in: bool) -> Response {
@@ -170,11 +185,15 @@ pub async fn serve(
         return next.run(req).await;
     };
     let path = req.uri().path().to_owned();
+    if let Some(address) = site.page_address(&path) {
+        let target = match req.uri().query() {
+            Some(query) => format!("{address}?{query}"),
+            None => address.to_string(),
+        };
+        return (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, target)]).into_response();
+    }
     if let Some(file) = site.file_for(&path) {
-        if file
-            .extension()
-            .is_some_and(|extension| extension == "html")
-        {
+        if is_page(&file) {
             // Decided before the read: a borrowed request is not `Send` across the await.
             let signed_in = site.signed_in(&req);
             return site.page(&file, signed_in).await;
@@ -204,10 +223,15 @@ pub async fn serve(
             Err(never) => match never {},
         };
     }
-    if let Some(target) = site.former_address(&path) {
+    if let Some(target) = GuiebShookSite::former_address(&path) {
         return (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, target)]).into_response();
     }
     next.run(req).await
+}
+
+fn is_page(file: &Path) -> bool {
+    file.extension()
+        .is_some_and(|extension| extension == "html")
 }
 
 /// The page's Content-Security-Policy: same-origin everything, the page's own inline scripts and event handlers by
@@ -350,6 +374,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pages_answer_without_html_and_their_file_names_redirect_there() {
+        let dir = site_dir();
+        let app = app(dir.path(), BrandKey::GuiebShook);
+        let (status, headers, body) = get_text(&app, "/practice/real-estate", None).await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, HOME));
+        assert!(headers.contains_key(header::CONTENT_SECURITY_POLICY));
+        for (from, to) in [
+            ("/practice/real-estate.html", "/practice/real-estate"),
+            ("/index.html", "/"),
+            ("/index.html?type=first", "/?type=first"),
+        ] {
+            let (status, headers, _) = get_text(&app, from, None).await;
+            assert_eq!(
+                (status, headers[header::LOCATION].to_str().unwrap()),
+                (StatusCode::MOVED_PERMANENTLY, to),
+                "{from}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn a_signed_in_visitor_sees_projects_in_place_of_sign_in() {
         let dir = site_dir();
         let app = app(dir.path(), BrandKey::GuiebShook);
@@ -377,11 +422,10 @@ mod tests {
             format!("{VIDEO_BUCKET_PREFIX}hero-1.mp4")
         );
         for (from, to) in [
-            ("/contact", "/contact.html"),
+            ("/contact/sent", "/contact"),
             ("/team", "/#attorneys"),
-            ("/team/nick", "/attorneys/nicholas-shook.html"),
-            ("/privacy", "/legal/privacy-policy.html"),
-            ("/practice/real-estate", "/practice/real-estate.html"),
+            ("/team/nick", "/attorneys/nicholas-shook"),
+            ("/privacy", "/legal/privacy-policy"),
             ("/blog/a-post", "/"),
         ] {
             let (status, headers, _) = get_text(&app, from, None).await;
@@ -390,7 +434,13 @@ mod tests {
                 (StatusCode::MOVED_PERMANENTLY, to)
             );
         }
-        for unsafe_path in ["/.hidden", "/practice/../index.html", "/practice/missing"] {
+        for unsafe_path in [
+            "/.hidden",
+            "/practice/../index.html",
+            "/practice/missing",
+            "/practice/missing.html",
+            "/practice/real-estate/",
+        ] {
             assert_eq!(
                 get_text(&app, unsafe_path, None).await.0,
                 StatusCode::NOT_FOUND,
