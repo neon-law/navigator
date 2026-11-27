@@ -10,6 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
+use model::project_deadlines::{Appearance, Hearing, SchedulingPolicy};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -54,6 +55,12 @@ struct Deadline {
     calendar_role: String,
     #[serde(default)]
     category: Option<String>,
+    hearing: Option<Hearing>,
+    replay_key: Option<String>,
+    #[serde(default)]
+    effort_minutes: i32,
+    #[serde(default)]
+    scheduling_policy: SchedulingPolicy,
 }
 
 #[derive(Clone, Debug)]
@@ -62,10 +69,14 @@ struct ReadFailure {
     message: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct DeadlineBatch {
     projects: Vec<Project>,
     deadlines: Vec<Deadline>,
+    #[serde(default)]
+    scheduling_policy: SchedulingPolicy,
+    #[serde(default)]
+    work_schedule: Value,
 }
 
 fn validate_deadlines(rows: Vec<Deadline>) -> Result<Vec<Deadline>> {
@@ -82,7 +93,8 @@ fn partition_batch(batch: DeadlineBatch) -> Result<Vec<(Project, Vec<Deadline>)>
         .into_iter()
         .map(|project| (project.id, (project, Vec::new())))
         .collect::<std::collections::HashMap<_, _>>();
-    for row in validate_deadlines(batch.deadlines)? {
+    for mut row in validate_deadlines(batch.deadlines)? {
+        row.scheduling_policy = batch.scheduling_policy;
         let project_id = row.project_id;
         by_project
             .get_mut(&project_id)
@@ -102,6 +114,7 @@ struct Filters {
     overdue: bool,
     status: String,
     project: Option<String>,
+    horizon: Option<i64>,
 }
 
 pub(super) fn local_zone(explicit: Option<&str>) -> Result<Tz> {
@@ -148,6 +161,14 @@ fn selected(deadline: &Deadline, filters: &Filters, now: DateTime<Utc>, zone: Tz
     if filters.due_by.is_some_and(|date| local_due > date) {
         return false;
     }
+    if filters.horizon.is_some_and(|days| {
+        matches!(
+            deadline.category.as_deref(),
+            Some("trial_day" | "deposition")
+        ) && local_due.signed_duration_since(today).num_days() > days
+    }) {
+        return false;
+    }
     !filters.overdue || due.with_timezone(&Utc) < now
 }
 
@@ -190,7 +211,44 @@ fn source_href(base: &str, project: &Project, deadline: &Deadline) -> String {
     )
 }
 
+fn scheduling_times(row: &Deadline) -> (Option<String>, Option<(String, String)>) {
+    if row.status != "open" {
+        return (None, None);
+    }
+    let Ok(due) = DateTime::parse_from_rfc3339(&row.due_at) else {
+        return (None, None);
+    };
+    let category = row
+        .category
+        .as_deref()
+        .and_then(|category| category.parse().ok());
+    if model::project_deadlines::is_appearance(&row.calendar_role, category) {
+        (
+            None,
+            row.scheduling_policy
+                .appearance(due, row.hearing.as_ref().map_or(60, Hearing::minutes))
+                .map(|(start, end)| (start.to_rfc3339(), end.to_rfc3339())),
+        )
+    } else {
+        (
+            row.scheduling_policy
+                .submit_by(due, row.due_on.as_ref())
+                .map(|at| at.to_rfc3339()),
+            None,
+        )
+    }
+}
+
 fn deadline_value(base: &str, project: &Project, row: &Deadline, zone: Tz) -> Value {
+    let (submit_by, busy_window) = scheduling_times(row);
+    let trial_day = match row
+        .hearing
+        .as_ref()
+        .and_then(|hearing| hearing.appearance.as_ref())
+    {
+        Some(Appearance::TrialDay { day, .. }) => *day,
+        _ => None,
+    };
     json!({
         "id": row.id,
         "project_code": project.code,
@@ -213,6 +271,12 @@ fn deadline_value(base: &str, project: &Project, row: &Deadline, zone: Tz) -> Va
         )),
         "owner_person_id": row.owner_person_id,
         "description": row.description,
+        "effort_minutes": row.effort_minutes,
+        "submit_by": submit_by,
+        "busy_window": busy_window,
+        "trial_day": trial_day,
+        "appearance": row.hearing,
+        "replay_key": row.replay_key,
     })
 }
 
@@ -408,6 +472,7 @@ fn make_report(
             "inventory_projects": inventory_projects
         },
         "filters": {
+            "appearance_horizon_days": filters.horizon,
             "project": filters.project,
             "due_by": filters.due_by.map(|date| date.to_string()),
             "today": filters.today,
@@ -420,6 +485,7 @@ fn make_report(
     })
 }
 
+#[cfg(test)]
 fn render(
     base: &str,
     successful: &[(Project, Vec<Deadline>)],
@@ -571,6 +637,12 @@ fn render_table(base: &str, rows: &[(Project, Deadline)], zone: Tz) -> String {
             ),
             source_href(base, project, row)
         );
+        let (submit_by, busy_window) = scheduling_times(row);
+        let context = match (submit_by, busy_window) {
+            (Some(at), _) => format!("{context} · Submit by {at}"),
+            (_, Some((start, end))) => format!("{context} · Busy {start} – {end}"),
+            _ => context,
+        };
         table.add_row([
             Cell::new(&project.code),
             Cell::new(format_due(row, zone)),
@@ -596,6 +668,7 @@ pub struct BriefOptions {
     pub status: String,
     pub timezone: Option<String>,
     pub as_json: bool,
+    pub horizon: i64,
 }
 
 fn host_report(reports: Vec<(String, Result<Value>)>) -> Value {
@@ -631,6 +704,7 @@ async fn run(options: BriefOptions) -> Result<bool> {
         status,
         timezone,
         as_json,
+        horizon,
     } = options;
     let due_by = due_by
         .map(|value| {
@@ -646,6 +720,7 @@ async fn run(options: BriefOptions) -> Result<bool> {
         overdue,
         status,
         project: project.clone(),
+        horizon: Some(horizon),
     };
     let BriefHosts::Selected(host) = hosts else {
         let credentials =
@@ -698,26 +773,48 @@ async fn render_host(
     zone: Tz,
     as_json: bool,
 ) -> Result<(String, bool)> {
-    let (successful, failures) = read_host(base, token, filters.project.as_deref()).await?;
-    Ok((
-        render(base, &successful, &failures, filters, now, zone, as_json),
-        failures.is_empty(),
-    ))
+    let (successful, failures, schedule) =
+        read_host(base, token, filters.project.as_deref(), zone).await?;
+    let rows = collect_rows(&successful, &failures, filters, now, zone);
+    let mut report = make_report(
+        base,
+        &rows,
+        &failures,
+        filters,
+        now,
+        zone,
+        successful.len() + failures.len(),
+    );
+    add_schedule(&mut report, schedule, zone);
+    let rendered = if as_json {
+        report.to_string()
+    } else {
+        let text = render_console(base, &rows, &failures, filters, now, zone, &report);
+        let extra = scheduling_console(&report);
+        if extra.is_empty() {
+            text
+        } else {
+            format!("{extra}\n{text}")
+        }
+    };
+    Ok((rendered, failures.is_empty()))
 }
 
 async fn read_host(
     base: &str,
     token: &str,
     project: Option<&str>,
-) -> Result<(Vec<(Project, Vec<Deadline>)>, Vec<ReadFailure>)> {
+    zone: Tz,
+) -> Result<(Vec<(Project, Vec<Deadline>)>, Vec<ReadFailure>, Value)> {
     let client = reqwest::Client::new();
-    let batch: DeadlineBatch = list(
+    let mut batch: DeadlineBatch = list(
         &client,
-        format!("{base}{INVENTORY_PATH}?include_deadlines=true"),
+        format!("{base}{INVENTORY_PATH}?include_deadlines=true&deadline_schedule_timezone={zone}"),
         token,
     )
     .await
     .context("read the dashboard-scoped open Project deadline batch")?;
+    let schedule = std::mem::take(&mut batch.work_schedule);
     let mut projects = partition_batch(batch)?;
     if let Some(code) = project {
         projects.retain(|(row, _)| row.code == code);
@@ -726,7 +823,7 @@ async fn read_host(
             "no visible open Project has code `{code}`"
         );
     }
-    Ok((projects, Vec::new()))
+    Ok((projects, Vec::new(), schedule))
 }
 
 pub(super) async fn agenda_rows(
@@ -735,15 +832,22 @@ pub(super) async fn agenda_rows(
     day: NaiveDate,
     now: DateTime<Utc>,
     zone: Tz,
+    horizon: i64,
 ) -> Result<Value> {
     let filters = Filters {
         status: "open".to_owned(),
         due_by: Some(day),
         ..Filters::default()
     };
-    let (successful, failures) = read_host(base, token, None).await?;
+    let (successful, failures, schedule) = read_host(base, token, None, zone).await?;
     let rows = collect_rows(&successful, &failures, &filters, now, zone);
-    Ok(make_report(
+    let upcoming = Filters {
+        status: "open".to_owned(),
+        horizon: Some(horizon),
+        ..Filters::default()
+    };
+    let upcoming = collect_rows(&successful, &failures, &upcoming, now, zone);
+    let mut report = make_report(
         base,
         &rows,
         &failures,
@@ -751,7 +855,175 @@ pub(super) async fn agenda_rows(
         now,
         zone,
         successful.len() + failures.len(),
-    ))
+    );
+    report["appearances"] = upcoming_appearances(
+        &upcoming
+            .rows
+            .iter()
+            .map(|(project, row)| deadline_value(base, project, row, zone))
+            .collect::<Vec<_>>(),
+        now,
+    );
+    add_schedule(&mut report, schedule, zone);
+    Ok(report)
+}
+
+fn upcoming_appearances(rows: &[Value], now: DateTime<Utc>) -> Value {
+    use std::collections::BTreeMap;
+    let mut groups = BTreeMap::<String, (Vec<&Value>, Vec<&Value>)>::new();
+    for row in rows {
+        if row["status"] != "open"
+            || !matches!(row["category"].as_str(), Some("trial_day" | "deposition"))
+            || row["due_at"]
+                .as_str()
+                .and_then(|at| at.parse::<DateTime<chrono::FixedOffset>>().ok())
+                .is_none_or(|at| at < now)
+        {
+            continue;
+        }
+        if let Some(id) = row["trial_day"]["series_id"]
+            .as_str()
+            .or_else(|| row["id"].as_str())
+        {
+            groups.entry(id.to_owned()).or_default().0.push(row);
+        }
+    }
+    for row in rows {
+        if let Some(id) = row["replay_key"]
+            .as_str()
+            .and_then(|key| key.strip_prefix("preparation:"))
+            .and_then(|key| key.split_once(':'))
+            .map(|(id, _)| id)
+        {
+            if let Some((_, prep)) = groups.get_mut(id) {
+                if row["status"] == "open" {
+                    prep.push(row);
+                }
+            }
+        }
+    }
+    let mut groups: Vec<_> = groups.into_values().collect();
+    groups.sort_by_key(|(days, _)| days.first().and_then(|row| row["due_at"].as_str()));
+    json!(groups
+        .into_iter()
+        .map(|(days, preparation)| json!({
+            "days": days, "preparation": preparation,
+        }))
+        .collect::<Vec<_>>())
+}
+
+fn add_schedule(report: &mut Value, mut plan: Value, zone: Tz) {
+    use model::deadline_schedule::{capacity, Window};
+    let parse =
+        |value: &Value| serde_json::from_value::<Vec<Window>>(value.clone()).unwrap_or_default();
+    let mut busy = parse(&plan["busy"]);
+    if let Some(blocks) = plan["schedule"]["blocks"].as_object() {
+        busy.extend(blocks.values().flat_map(parse));
+    }
+    let days = parse(&plan["working_hours"])
+        .into_iter()
+        .map(|window| {
+            let (booked, available) = capacity(&[window], &busy);
+            (
+                window.start.with_timezone(&zone).date_naive().to_string(),
+                json!({
+                    "booked_minutes": booked, "available_minutes": available,
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    if plan.is_object() {
+        plan["capacity"] = days.into();
+    }
+    let risk = &plan["schedule"]["at_risk"];
+    let include_appearances = report.get("appearances").is_none();
+    let now = report["as_of"]
+        .as_str()
+        .and_then(|now| now.parse().ok())
+        .unwrap_or_else(Utc::now);
+    if let Some(rows) = report["deadlines"].as_array_mut() {
+        for row in &mut *rows {
+            let conflicts = row["id"].as_str().and_then(|id| risk.get(id)).cloned();
+            if let Some(conflicts) = conflicts {
+                row["at_risk"] = json!(true);
+                row["competing_deadlines"] = conflicts;
+            }
+        }
+        rows.sort_by_key(|row| row["at_risk"] != true);
+        if include_appearances {
+            report["appearances"] = upcoming_appearances(rows, now);
+        }
+    }
+    report["work_schedule"] = plan;
+}
+
+pub(super) fn scheduling_console(report: &Value) -> String {
+    let rows = report["deadlines"].as_array().into_iter().flatten();
+    let titles: std::collections::BTreeMap<_, _> = rows
+        .clone()
+        .filter_map(|row| Some((row["id"].as_str()?, row["title"].as_str()?)))
+        .collect();
+    let mut lines = Vec::new();
+    for row in rows.filter(|row| row["at_risk"] == true) {
+        let competing = row["competing_deadlines"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|id| titles.get(id).copied().unwrap_or("another Deadline"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "At risk · {} · Competing: {}",
+            row["title"].as_str().unwrap_or("Deadline"),
+            if competing.is_empty() {
+                "calendar commitments"
+            } else {
+                &competing
+            }
+        ));
+    }
+    if let Some(days) = report["work_schedule"]["capacity"].as_object() {
+        for (day, capacity) in days {
+            let hours = |key: &str| {
+                f64::from(
+                    i32::try_from(capacity[key].as_i64().unwrap_or_default()).unwrap_or_default(),
+                ) / 60.0
+            };
+            lines.push(format!(
+                "{day} · {:.2} hours booked / {:.2} hours available",
+                hours("booked_minutes"),
+                hours("available_minutes")
+            ));
+        }
+    } else if report["work_schedule"]["availability"] == "unverified" {
+        lines.push("Calendar availability could not be verified.".into());
+    }
+    for group in report["appearances"].as_array().into_iter().flatten() {
+        for row in group["days"].as_array().into_iter().flatten() {
+            lines.push(format!(
+                "{} · {}",
+                row["due_local"].as_str().unwrap_or_default(),
+                row["title"].as_str().unwrap_or("Appearance")
+            ));
+        }
+        for row in group["preparation"].as_array().into_iter().flatten() {
+            lines.push(format!(
+                "  Prepare by {} · {}",
+                row["due_local"].as_str().unwrap_or_default(),
+                row["title"].as_str().unwrap_or("Preparation")
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+pub(crate) fn horizon_days(value: &str) -> std::result::Result<i64, String> {
+    value
+        .strip_suffix('d')
+        .and_then(|days| days.parse::<i64>().ok())
+        .filter(|days| (1..=366).contains(days))
+        .ok_or_else(|| "horizon must be between 1d and 366d".into())
 }
 
 #[cfg(test)]
@@ -801,6 +1073,10 @@ mod tests {
             owner_person_id: Some(Uuid::new_v4()),
             calendar_role: "firm".into(),
             category: Some("court".into()),
+            hearing: None,
+            replay_key: None,
+            effort_minutes: 360,
+            scheduling_policy: SchedulingPolicy::default(),
         }
     }
 
@@ -851,6 +1127,41 @@ mod tests {
         let after_cutoff = "2028-07-13T07:00:00Z".parse().unwrap();
         assert!(!selected(&row, &filters, after_cutoff, zone));
         assert_eq!(band(&row, after_cutoff, zone), Some("Overdue"));
+    }
+
+    #[test]
+    fn a_deposition_at_day_100_shows_its_open_preparation() {
+        let now = "2030-03-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let project = project("synthetic");
+        let zone = chrono_tz::UTC;
+        let mut appearance = deadline("2030-06-09T10:00:00Z", "open");
+        appearance.category = Some("deposition".into());
+        let mut prep = deadline("2030-06-06T10:00:00Z", "open");
+        prep.replay_key = Some(format!("preparation:{}:0", appearance.id));
+        let filters = Filters {
+            horizon: Some(120),
+            status: "open".into(),
+            ..Filters::default()
+        };
+        assert!(selected(&appearance, &filters, now, zone));
+        assert!(!selected(
+            &appearance,
+            &Filters {
+                horizon: Some(99),
+                ..filters
+            },
+            now,
+            zone
+        ));
+        let result = upcoming_appearances(
+            &[
+                deadline_value("", &project, &prep, zone),
+                deadline_value("", &project, &appearance, zone),
+            ],
+            now,
+        );
+        assert_eq!(result[0]["days"][0]["id"], json!(appearance.id));
+        assert_eq!(result[0]["preparation"][0]["id"], json!(prep.id));
     }
 
     #[test]
@@ -950,6 +1261,7 @@ mod tests {
         let rows = partition_batch(DeadlineBatch {
             projects: vec![good.clone(), bad],
             deadlines: vec![row.clone()],
+            ..DeadlineBatch::default()
         })
         .unwrap();
         assert_eq!(rows.len(), 2);
@@ -959,6 +1271,7 @@ mod tests {
         assert!(partition_batch(DeadlineBatch {
             projects: vec![good],
             deadlines: vec![row],
+            ..DeadlineBatch::default()
         })
         .is_err());
     }
@@ -979,6 +1292,7 @@ mod tests {
             status: "open".into(),
             timezone: Some("America/Los_Angeles".into()),
             as_json: false,
+            horizon: 120,
         }
     }
 
@@ -1250,6 +1564,7 @@ mod tests {
         let error = partition_batch(DeadlineBatch {
             projects: vec![malformed],
             deadlines: vec![deadline("not-an-instant", "open")],
+            ..DeadlineBatch::default()
         })
         .unwrap_err();
         assert!(format!("{error:#}").contains("unreadable due_at"));

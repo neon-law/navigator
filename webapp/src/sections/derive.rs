@@ -674,6 +674,7 @@ mod tests {
             title: None,
             description: None,
             hearing: None,
+            effort_minutes: 0,
             due_on: None,
             due_at: due_at.to_string(),
             authority_kind: "court_order".to_string(),

@@ -780,6 +780,9 @@ erDiagram
         datetime updated_at
     }
     firm_calendar_settings {
+        int deadline_buffer_minutes
+        json deadline_effort_defaults
+        string deadline_end_of_business
         string firm_id
         string google_workspace_owner
     }
@@ -1813,6 +1816,7 @@ erDiagram
         string description
         datetime due_at
         json due_on
+        int effort_minutes
         json hearing
         uuid id
         datetime inserted_at

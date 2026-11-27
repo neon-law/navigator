@@ -12,6 +12,7 @@ pub(super) async fn run(
     host: Option<&str>,
     date: &str,
     zone: Option<&str>,
+    horizon: i64,
     json: bool,
 ) -> ExitCode {
     let result: Result<Value> = async {
@@ -19,7 +20,7 @@ pub(super) async fn run(
         let (day, start, end, now) = dates(date, zone, Utc::now())?;
         let (base, token) = remote::resolve(host)?;
         let (deadlines, calendar) = tokio::join!(
-            deadline_brief::agenda_rows(&base, &token, day, now, zone),
+            deadline_brief::agenda_rows(&base, &token, day, now, zone, horizon),
             super::post(
                 &base,
                 &token,
@@ -82,8 +83,17 @@ fn assemble(
 ) -> Value {
     let mut entries = Vec::new();
     let mut overdue = Vec::new();
+    let mut schedule = Value::Null;
+    let mut appearances = Value::Null;
+    let mut deadline_rows = Value::Null;
     let deadline_coverage = match deadlines {
-        Ok(report) => {
+        Ok(mut report) => {
+            schedule = std::mem::take(&mut report["work_schedule"]);
+            appearances = std::mem::take(&mut report["appearances"]);
+            deadline_rows = report["deadlines"].clone();
+            if let Some(capacity) = schedule["capacity"].as_object_mut() {
+                capacity.retain(|date, _| date == &day.to_string());
+            }
             for row in report["deadlines"].as_array().into_iter().flatten() {
                 let Some(due) = row["due_at"]
                     .as_str()
@@ -91,7 +101,11 @@ fn assemble(
                 else {
                     continue;
                 };
-                let priority = row["category"] == "hearing"
+                let priority = row["at_risk"] == true
+                    || matches!(
+                        row["category"].as_str(),
+                        Some("hearing" | "trial_day" | "deposition")
+                    )
                     || row["calendar_role"] == "hearing"
                     || row["authority_kind"] == "court_order";
                 let mut entry = row.clone();
@@ -139,13 +153,16 @@ fn assemble(
         Ok(gap) => json!({"complete": false, "detail": gap}),
         Err(error) => json!({"complete": false, "error": error.to_string()}),
     };
-    entries.sort_by_key(|(ordinary, at, _)| (*ordinary, *at));
+    entries.sort_by_key(|(ordinary, at, entry)| (entry["at_risk"] != true, *ordinary, *at));
     json!({
         "date": day, "as_of": now,
         "complete": deadline_coverage["complete"] == true && calendar_coverage["complete"] == true,
         "coverage": {"deadlines": deadline_coverage, "calendar": calendar_coverage},
         "entries": entries.into_iter().map(|(_, _, entry)| entry).collect::<Vec<_>>(),
         "overdue": overdue,
+        "work_schedule": schedule,
+        "appearances": appearances,
+        "deadlines": deadline_rows,
     })
 }
 
@@ -155,6 +172,10 @@ fn print(report: &Value) {
         report["date"].as_str().unwrap_or_default(),
         report["timezone"].as_str().unwrap_or_default()
     );
+    let schedule = deadline_brief::scheduling_console(report);
+    if !schedule.is_empty() {
+        println!("{schedule}");
+    }
     for (field, label) in [
         ("entries", "Scheduled and due"),
         ("overdue", "Overdue deadlines"),
@@ -180,6 +201,15 @@ fn print(report: &Value) {
                 "  {when} • {marker}{}{project}",
                 row["title"].as_str().unwrap_or_default()
             );
+            if let Some(at) = row["submit_by"].as_str() {
+                println!("    Submit by {at}");
+            }
+            if let (Some(start), Some(end)) = (
+                row["busy_window"][0].as_str(),
+                row["busy_window"][1].as_str(),
+            ) {
+                println!("    Busy {start} – {end}");
+            }
         }
     }
     if report["complete"] != true {

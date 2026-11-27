@@ -1236,6 +1236,7 @@ async fn create_plan_deadlines(
                 acceptance_due, plan.name
             )),
             hearing: None,
+            effort_minutes: None,
             due_on: None,
             due_at: acceptance_due.to_rfc3339(),
             authority_kind: "internal".to_string(),
@@ -1269,6 +1270,7 @@ async fn create_plan_deadlines(
                     plan.name, days
                 )),
                 hearing: None,
+                effort_minutes: None,
                 due_on: None,
                 due_at: turnaround_due(accepted_at, days).to_rfc3339(),
                 authority_kind: "internal".to_string(),
@@ -1299,6 +1301,7 @@ async fn create_plan_deadlines(
                     plan.portal.as_deref().unwrap_or("the provider's portal")
                 )),
                 hearing: None,
+                effort_minutes: None,
                 due_on: None,
                 due_at: acceptance_due.to_rfc3339(),
                 authority_kind: "internal".to_string(),

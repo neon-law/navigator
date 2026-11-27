@@ -20,6 +20,7 @@ use std::fmt::Write as _;
 
 use chrono::DateTime;
 use cloud::calendar::{CalendarError, CalendarEvent, CalendarService, StoredEvent};
+use model::project_deadlines::{is_appearance, SchedulingPolicy};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -210,6 +211,9 @@ async fn reconcile_rows(
     let stored = calendar
         .mirrored_events(calendar_id, MARKER_KEY, MARKER_VALUE)
         .await?;
+    let policy = project_deadlines::scheduling_policy(project.firm_id)
+        .await
+        .map_err(|error| MirrorError::Db(error.to_string()))?;
     let by_deadline: BTreeMap<&String, &StoredEvent> = stored
         .iter()
         .filter_map(|event| {
@@ -229,8 +233,8 @@ async fn reconcile_rows(
         if deadline.calendar_review_pending {
             continue;
         }
-        let sha = body_sha(deadline, &project.code, base_url);
-        let event = match deadline_event(deadline, &project.code, base_url) {
+        let sha = body_sha_with_policy(deadline, &project.code, base_url, policy);
+        let event = match event_with_policy(deadline, &project.code, base_url, policy) {
             Ok(event) => event,
             Err(error) => {
                 report.failures.push(error.to_string());
@@ -308,10 +312,13 @@ async fn plan_rows(
     let rows = project_deadlines::list(application_store, project.id)
         .await
         .map_err(|error| MirrorError::Db(error.to_string()))?;
+    let policy = project_deadlines::scheduling_policy(project.firm_id)
+        .await
+        .map_err(|error| MirrorError::Db(error.to_string()))?;
     for deadline in rows.iter().filter(|row| {
         !row.calendar_review_pending && row.status != project_deadlines::STATUS_CANCELLED
     }) {
-        match deadline_event(deadline, &project.code, base_url) {
+        match event_with_policy(deadline, &project.code, base_url, policy) {
             Ok(_) => report.upserted.push(deadline.id),
             Err(error) => report.failures.push(error.to_string()),
         }
@@ -402,10 +409,10 @@ pub fn report_line(report: &MirrorReport) -> String {
 #[must_use]
 pub fn category_color(category: Option<&str>) -> Option<&'static str> {
     match category {
-        Some("court") => Some("11"),               // Tomato.
-        Some("hearing") => Some("3"),              // Grape.
-        Some("discovery") => Some("5"),            // Banana.
-        Some("internal" | "tickler") => Some("8"), // Graphite.
+        Some("court") => Some("11"),                   // Tomato.
+        Some("hearing" | "trial_day") => Some("3"),    // Grape.
+        Some("discovery" | "deposition") => Some("5"), // Banana.
+        Some("internal" | "tickler") => Some("8"),     // Graphite.
         _ => None,
     }
 }
@@ -419,29 +426,83 @@ pub fn deadline_event(
     project_code: &str,
     base_url: Option<&str>,
 ) -> Result<CalendarEvent, MirrorError> {
+    event_with_policy(
+        deadline,
+        project_code,
+        base_url,
+        SchedulingPolicy::default(),
+    )
+}
+
+fn event_with_policy(
+    deadline: &Deadline,
+    project_code: &str,
+    base_url: Option<&str>,
+    policy: SchedulingPolicy,
+) -> Result<CalendarEvent, MirrorError> {
     let start = DateTime::parse_from_rfc3339(deadline.due_at.trim()).map_err(|error| {
         MirrorError::InvalidDeadline(deadline.id, format!("unreadable due_at: {error}"))
     })?;
-    Ok(CalendarEvent {
-        summary: event_summary(deadline, project_code),
-        description: Some(event_description(deadline, project_code, base_url)),
-        location: deadline
-            .hearing
-            .as_ref()
-            .and_then(|hearing| hearing.location.clone()),
-        color_id: category_color(deadline.category.as_deref()).map(str::to_string),
-        start,
-        timing: if let Some(day) = &deadline.due_on {
-            cloud::calendar::EventTiming::AllDay(day.date)
-        } else if deadline.calendar_role == "hearing"
-            || deadline.category.as_deref() == Some("hearing")
-        {
-            cloud::calendar::EventTiming::Hearing(
+    let appearance = is_appearance(
+        &deadline.calendar_role,
+        deadline
+            .category
+            .as_deref()
+            .and_then(|category| category.parse().ok()),
+    );
+    let window = (appearance && deadline.status == project_deadlines::STATUS_OPEN)
+        .then(|| {
+            policy.appearance(
+                start,
                 deadline
                     .hearing
                     .as_ref()
                     .map_or(60, model::project_deadlines::Hearing::minutes),
             )
+        })
+        .flatten();
+    let submit_by = (!appearance && deadline.status == project_deadlines::STATUS_OPEN)
+        .then(|| policy.submit_by(start, deadline.due_on.as_ref()))
+        .flatten();
+    let mut description = event_description(deadline, project_code, base_url);
+    if let Some((from, until)) = window {
+        push_line(
+            &mut description,
+            &format!(
+                "Starts {}. Busy from {} until {}.",
+                start.to_rfc3339(),
+                from.to_rfc3339(),
+                until.to_rfc3339()
+            ),
+        );
+    }
+    let mut reminders = reminder_minutes(deadline)?;
+    if let Some(target) = submit_by {
+        push_line(
+            &mut description,
+            &format!("Submit by {}", target.to_rfc3339()),
+        );
+        if deadline.due_on.is_none() {
+            reminders.push(policy.buffer_minutes());
+        }
+    }
+    Ok(CalendarEvent {
+        summary: event_summary(deadline, project_code),
+        description: Some(description),
+        location: deadline
+            .hearing
+            .as_ref()
+            .and_then(|hearing| hearing.location.clone()),
+        color_id: category_color(deadline.category.as_deref()).map(str::to_string),
+        start: window.map_or(start, |(from, _)| from),
+        timing: if let Some((from, until)) = window {
+            cloud::calendar::EventTiming::Hearing(
+                u32::try_from((until - from).num_minutes()).map_err(|error| {
+                    MirrorError::InvalidDeadline(deadline.id, error.to_string())
+                })?,
+            )
+        } else if let Some(day) = &deadline.due_on {
+            cloud::calendar::EventTiming::AllDay(day.date)
         } else if deadline.status == project_deadlines::STATUS_OPEN {
             cloud::calendar::EventTiming::Due
         } else {
@@ -449,13 +510,13 @@ pub fn deadline_event(
         },
         sequence: event_sequence(deadline)?,
         cancelled: deadline.status == project_deadlines::STATUS_CANCELLED,
-        reminder_minutes: reminder_minutes(deadline)?,
+        reminder_minutes: reminders,
         private_properties: BTreeMap::from([
             (MARKER_KEY.to_string(), MARKER_VALUE.to_string()),
             (DEADLINE_ID_KEY.to_string(), deadline.id.to_string()),
             (
                 BODY_SHA_KEY.to_string(),
-                body_sha(deadline, project_code, base_url),
+                body_sha_with_policy(deadline, project_code, base_url, policy),
             ),
         ]),
     })
@@ -572,6 +633,20 @@ fn reminder_minutes(deadline: &Deadline) -> Result<Vec<i64>, MirrorError> {
 /// stale cache.
 #[must_use]
 pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>) -> String {
+    body_sha_with_policy(
+        deadline,
+        project_code,
+        base_url,
+        SchedulingPolicy::default(),
+    )
+}
+
+fn body_sha_with_policy(
+    deadline: &Deadline,
+    project_code: &str,
+    base_url: Option<&str>,
+    policy: SchedulingPolicy,
+) -> String {
     let mut payload = serde_json::json!({
         "title": deadline.title,
         "description": deadline.description,
@@ -597,6 +672,9 @@ pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>)
     if deadline.due_on.is_none() && deadline.status == project_deadlines::STATUS_OPEN {
         payload["busy"] = serde_json::json!(true);
     }
+    if deadline.status == project_deadlines::STATUS_OPEN {
+        payload["deadline_buffer_minutes"] = serde_json::json!(policy);
+    }
     let digest = Sha256::digest(payload.to_string().as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in &digest {
@@ -613,7 +691,7 @@ mod tests {
     };
     use crate::application_store::ApplicationStore;
     use crate::project_deadlines::{self, NewDeadline};
-    use chrono::TimeZone;
+    use chrono::{DateTime, TimeZone};
     use cloud::calendar::{CalendarService, FakeCalendar};
     use uuid::Uuid;
 
@@ -623,6 +701,7 @@ mod tests {
             title: Some("Answering brief due".into()),
             description: None,
             hearing: None,
+            effort_minutes: None,
             due_on: None,
             due_at: "2026-11-02T17:00:00-08:00".into(),
             authority_kind: "court_order".into(),
@@ -1270,14 +1349,19 @@ mod tests {
             );
             assert_eq!(event.sequence, 0);
             assert!(!event.cancelled);
-            assert_eq!(event.reminder_minutes, vec![10080, 4320, 1440]);
+            assert_eq!(event.reminder_minutes, vec![10080, 4320, 1440, 15]);
+            let description = event.description.as_deref().unwrap();
+            let (details, target) = description.rsplit_once("\nSubmit by ").unwrap();
             assert_eq!(
-                event.description.as_deref(),
-                Some(format!(
+                details,
+                format!(
                     "Authority: Order setting briefing\nDeadline: {}\nMatter page: https://law.test/app/projects/mirror-code",
                     created.id
-                ))
-                .as_deref()
+                )
+            );
+            assert_eq!(
+                DateTime::parse_from_rfc3339(target).unwrap(),
+                DateTime::parse_from_rfc3339("2026-11-02T16:45:00-08:00").unwrap()
             );
             assert_eq!(
                 event.private_properties.get(MARKER_KEY),
@@ -1364,6 +1448,7 @@ mod tests {
             due_at: deadline.due_at.clone(),
             due_on: deadline.due_on.clone(),
             hearing: deadline.hearing.clone(),
+            effort_minutes: deadline.effort_minutes.unwrap_or_default(),
             authority_kind: deadline.authority_kind.clone(),
             authority: deadline.authority.clone(),
             source: deadline.source.clone(),
@@ -1523,7 +1608,7 @@ mod tests {
         let mut row = stored(sample(Uuid::now_v7()));
         row.internal_lead_days = Some(3);
         let event = super::deadline_event(&row, "ACME", None).unwrap();
-        assert_eq!(event.reminder_minutes, vec![10080, 4320, 1440]);
+        assert_eq!(event.reminder_minutes, vec![10080, 4320, 1440, 15]);
 
         row.status = project_deadlines::STATUS_COMPLETE.into();
         assert_eq!(

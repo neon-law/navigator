@@ -10,6 +10,7 @@ pub(crate) struct Normalized {
     pub(crate) due_at: String,
     pub(crate) due_on: Option<crate::project_deadlines::DueOn>,
     pub(crate) hearing: Option<crate::project_deadlines::Hearing>,
+    pub(crate) effort_minutes: Option<i32>,
     pub(crate) authority_kind: String,
     pub(crate) authority: String,
     pub(crate) source: String,
@@ -43,9 +44,42 @@ fn same_schedule(row: &Deadline, stored: &StoredDeadline<'_>, same_due: bool) ->
         && row.calendar_role == n.calendar_role
 }
 
-fn same_payload(row: &Deadline, stored: &StoredDeadline<'_>, status: &str, same_due: bool) -> bool {
+async fn default_effort(
+    conn: &mut sqlx::PgConnection,
+    project: Uuid,
+    category: Option<&str>,
+) -> Result<i32, DeadlineError> {
+    use crate::postgres::matter::MatterAuthorityError as PgError;
+    let Some(text) = category else {
+        return Ok(0);
+    };
+    let configured = sqlx::query_scalar::<_, Option<i32>>(
+        "SELECT (f.deadline_effort_defaults ->> $2)::integer FROM project p
+         LEFT JOIN firm_calendar_settings f ON f.firm_id=p.firm_id WHERE p.id=$1",
+    )
+    .bind(project)
+    .bind(text)
+    .fetch_one(conn)
+    .await
+    .map_err(PgError::from)?;
+    Ok(configured.unwrap_or_else(|| {
+        text.parse::<model::project_deadlines::Category>().map_or(
+            0,
+            model::project_deadlines::Category::default_effort_minutes,
+        )
+    }))
+}
+
+fn same_payload(
+    row: &Deadline,
+    stored: &StoredDeadline<'_>,
+    status: &str,
+    same_due: bool,
+    effort: i32,
+) -> bool {
     let n = stored.normalized;
     same_schedule(row, stored, same_due)
+        && row.effort_minutes == effort
         && row.title == n.title
         && row.description == n.description
         && row.source == n.source
@@ -87,6 +121,75 @@ pub(crate) fn review_pending(
     Ok(old.calendar_review_pending)
 }
 
+async fn check_appearance_conflicts(
+    conn: &mut sqlx::PgConnection,
+    project: Uuid,
+    id: Uuid,
+    stored: &StoredDeadline<'_>,
+) -> Result<(), DeadlineError> {
+    use crate::postgres::matter::MatterAuthorityError as PgError;
+    use model::project_deadlines::{is_appearance, Hearing, SchedulingPolicy};
+    let n = stored.normalized;
+    if !is_appearance(
+        &n.calendar_role,
+        n.category.as_deref().and_then(|value| value.parse().ok()),
+    ) {
+        return Ok(());
+    }
+    if let Some(owner) = stored.owner_person_id {
+        sqlx::query("SELECT pg_advisory_xact_lock(1312902740, hashtext($1::text))")
+            .bind(owner)
+            .execute(&mut *conn)
+            .await
+            .map_err(PgError::from)?;
+    }
+    let buffer = sqlx::query_scalar::<_, i32>(
+        "SELECT COALESCE(f.deadline_buffer_minutes, 15) FROM project p
+         LEFT JOIN firm_calendar_settings f ON f.firm_id = p.firm_id WHERE p.id = $1",
+    )
+    .bind(project)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(PgError::from)?;
+    let policy = SchedulingPolicy::new(
+        i64::from(buffer),
+        SchedulingPolicy::default().end_of_business(),
+    )
+    .map_err(|error| DeadlineError::Invalid(error.into()))?;
+    let start = n
+        .due_at
+        .parse()
+        .map_err(|_| DeadlineError::Invalid("invalid appearance start".into()))?;
+    let (start, end) = policy
+        .appearance(start, n.hearing.as_ref().map_or(60, Hearing::minutes))
+        .ok_or_else(|| {
+            DeadlineError::Invalid("appearance is outside the supported calendar range".into())
+        })?;
+    let conflicts = sqlx::query_scalar::<_, String>(
+        "SELECT CASE WHEN d.project_id = $1 THEN COALESCE(d.title, d.id::text)
+                     ELSE 'another Project appointment' END
+         FROM project_deadlines d JOIN project p ON p.id=d.project_id
+         LEFT JOIN firm_calendar_settings f ON f.firm_id=p.firm_id
+         WHERE (d.project_id = $1 OR d.owner_person_id = $3) AND d.id <> $2
+           AND d.status = 'open' AND NOT d.calendar_review_pending
+           AND (d.calendar_role = 'hearing' OR d.category IN
+              ('hearing','trial_day','deposition','conference','consult','call'))
+           AND d.due_at - make_interval(mins => COALESCE(f.deadline_buffer_minutes,15)) < $5
+           AND d.due_at + make_interval(mins => COALESCE((d.hearing->>'duration_minutes')::integer,60)
+              + COALESCE(f.deadline_buffer_minutes,15)) > $4
+         ORDER BY d.due_at, d.id",
+    ).bind(project).bind(id).bind(stored.owner_person_id)
+     .bind(start).bind(end).fetch_all(conn).await.map_err(PgError::from)?;
+    if conflicts.is_empty() {
+        Ok(())
+    } else {
+        Err(DeadlineError::Invalid(format!(
+            "appearance overlaps {}",
+            conflicts.join(", ")
+        )))
+    }
+}
+
 impl StoredDeadline<'_> {
     pub(crate) fn check_revision(&self, old: Option<&Deadline>) -> Result<(), DeadlineError> {
         if self
@@ -112,9 +215,77 @@ pub(crate) async fn persist(
     use crate::postgres::matter::MatterAuthorityError as PgError;
     let mut tx = pg.pool().begin().await.map_err(PgError::from)?;
     let result = persist_on(&mut tx, requested_id, project, stored, false).await?;
+    if result.category.as_deref() == Some("deposition") {
+        if let Some(prep) = stored
+            .normalized
+            .hearing
+            .as_ref()
+            .and_then(|hearing| hearing.prep.as_deref())
+        {
+            persist_preparation(&mut tx, &result, prep, stored.inserted_at).await?;
+        }
+    }
     tx.commit().await.map_err(PgError::from)?;
     Ok(result)
 }
+/// Preparation is published atomically with its appearance. Retries retain the original child identity.
+pub(crate) async fn persist_preparation(
+    conn: &mut sqlx::PgConnection,
+    parent: &Deadline,
+    prep: &[model::project_deadlines::PreparationDeadline],
+    now: &str,
+) -> Result<(), DeadlineError> {
+    use crate::postgres::matter::MatterAuthorityError as PgError;
+    for (index, task) in prep.iter().enumerate() {
+        let key = format!("preparation:{}:{index}", parent.id);
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM project_deadlines WHERE project_id=$1 AND replay_key=$2)",
+        )
+        .bind(parent.project_id)
+        .bind(&key)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(PgError::from)?;
+        if exists {
+            continue;
+        }
+        let normalized = Normalized {
+            title: Some(task.title.trim().into()),
+            description: None,
+            due_at: task.due_at.to_rfc3339(),
+            due_on: None,
+            hearing: None,
+            effort_minutes: Some(task.effort_minutes),
+            authority_kind: "internal".into(),
+            authority: "Appearance preparation".into(),
+            source: "appearance_preparation".into(),
+            calendar_role: "firm".into(),
+            category: Some("internal".into()),
+            internal_lead_days: None,
+            client_lead_days: None,
+            replay_key: Some(key),
+        };
+        persist_on(
+            conn,
+            Uuid::now_v7(),
+            parent.project_id,
+            &StoredDeadline {
+                normalized: &normalized,
+                source_document_id: None,
+                owner_person_id: parent.owner_person_id,
+                status: "open",
+                expected_status: None,
+                expected_updated_at: None,
+                inserted_at: now,
+            },
+            false,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn persist_on(
     conn: &mut sqlx::PgConnection,
     requested_id: Uuid,
@@ -154,11 +325,39 @@ pub(crate) async fn persist_on(
     } else {
         stored.status
     };
+    let effort = match n
+        .effort_minutes
+        .or_else(|| old.as_ref().map(|row| row.effort_minutes))
+    {
+        Some(minutes) => minutes,
+        None => default_effort(conn, project, n.category.as_deref()).await?,
+    };
+    if effort < 0 {
+        return Err(DeadlineError::Invalid(
+            "effort minutes must be nonnegative".into(),
+        ));
+    }
     // Identical retries do not create another calendar notification revision.
     if let Some(existing) = old.as_ref().filter(|row| {
-        row.calendar_review_pending == pending && same_payload(row, stored, status, same_due)
+        row.calendar_review_pending == pending
+            && same_payload(row, stored, status, same_due, effort)
     }) {
         return Ok(existing.clone());
+    }
+    if !pending
+        && status == "open"
+        && old.as_ref().is_none_or(|row| {
+            row.calendar_review_pending
+                || row.status != "open"
+                || !same_due
+                || row.hearing != n.hearing
+                || row.category != n.category
+                || row.calendar_role != n.calendar_role
+                || row.owner_person_id != stored.owner_person_id
+        })
+    {
+        let id = old.as_ref().map_or(requested_id, |row| row.id);
+        check_appearance_conflicts(conn, project, id, stored).await?;
     }
     let sequence = old
         .as_ref()
@@ -183,7 +382,7 @@ pub(crate) async fn persist_on(
         "due_at": n.due_at,  "authority_kind": n.authority_kind, "authority": n.authority,
         "source": n.source, "source_document_id": stored.source_document_id,
         "owner_person_id": stored.owner_person_id, "status": status, "calendar_role": n.calendar_role,
-        "category": n.category, "internal_lead_days": n.internal_lead_days,
+        "category": n.category, "effort_minutes": effort, "internal_lead_days": n.internal_lead_days,
         "client_lead_days": n.client_lead_days, "replay_key": n.replay_key,
         "calendar_sequence": sequence, "inserted_at": inserted, "updated_at": chrono::Utc::now(),
     });

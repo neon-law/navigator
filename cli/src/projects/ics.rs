@@ -73,6 +73,7 @@ struct Event {
     due: DateTime<FixedOffset>,
     due_on: Option<model::project_deadlines::DueOn>,
     hearing: Option<model::project_deadlines::Hearing>,
+    scheduling_policy: model::project_deadlines::SchedulingPolicy,
     category: Option<model::project_deadlines::Category>,
     stamp: DateTime<Utc>,
     sequence: i64,
@@ -122,6 +123,13 @@ impl Event {
                 .map_err(|error| format!("invalid hearing: {error}"))?,
             due_on: serde_json::from_value(row["due_on"].clone())
                 .map_err(|error| format!("invalid civil date: {error}"))?,
+            scheduling_policy: row.get("scheduling_policy").map_or_else(
+                || Ok(model::project_deadlines::SchedulingPolicy::default()),
+                |policy| {
+                    serde_json::from_value(policy.clone())
+                        .map_err(|error| format!("invalid scheduling policy: {error}"))
+                },
+            )?,
             category: row["category"]
                 .as_str()
                 .and_then(|value| value.parse().ok()),
@@ -213,6 +221,7 @@ impl Out {
         self.line("END:VTIMEZONE");
     }
 
+    #[allow(clippy::too_many_lines)]
     fn event(&mut self, calendar: &Calendar<'_>, event: &Event) {
         let summary = event.summary(calendar.project_code);
         self.line("BEGIN:VEVENT");
@@ -234,14 +243,15 @@ impl Out {
                 event.due.format("%Y%m%dT%H%M%S")
             ));
         }
-        let hearing = event.calendar_role == "hearing"
-            || event.category == Some(model::project_deadlines::Category::Hearing);
+        let hearing = model::project_deadlines::is_appearance(&event.calendar_role, event.category);
+        let policy = event.scheduling_policy;
+        let duration = event
+            .hearing
+            .as_ref()
+            .map_or(60, model::project_deadlines::Hearing::minutes);
+        let open = event.status == "open";
         if hearing {
-            let minutes = event
-                .hearing
-                .as_ref()
-                .map_or(60, model::project_deadlines::Hearing::minutes);
-            self.line(&format!("DURATION:PT{minutes}M"));
+            self.line(&format!("DURATION:PT{duration}M"));
         }
         self.line(&format!("SUMMARY:{}", escape(&summary)));
         if let Some(location) = event.location.as_ref().or_else(|| {
@@ -262,6 +272,12 @@ impl Out {
             .and_then(model::project_deadlines::DueOn::cutoff_description)
         {
             let _ = writeln!(description, "{cutoff}");
+        }
+        let submit_by = (open && !hearing)
+            .then(|| policy.submit_by(event.due, event.due_on.as_ref()))
+            .flatten();
+        if let Some(at) = submit_by {
+            let _ = writeln!(description, "Submit by {}", at.to_rfc3339());
         }
         if !event.authority.is_empty() {
             let _ = writeln!(description, "Authority: {}", event.authority);
@@ -287,6 +303,16 @@ impl Out {
         } else {
             "TRANSP:TRANSPARENT"
         });
+        if let Some(at) = submit_by {
+            self.line("BEGIN:VALARM");
+            self.line("ACTION:DISPLAY");
+            self.line(&format!("DESCRIPTION:Submit by — {}", escape(&summary)));
+            self.line(&format!(
+                "TRIGGER;VALUE=DATE-TIME:{}",
+                at.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
+            ));
+            self.line("END:VALARM");
+        }
         for days in model::project_deadlines::reminder_days(
             &event.status,
             event.category,
@@ -299,6 +325,46 @@ impl Out {
             self.line("END:VALARM");
         }
         self.line("END:VEVENT");
+        if hearing {
+            self.buffer_event(calendar, event, &summary, duration);
+        }
+    }
+
+    fn buffer_event(
+        &mut self,
+        calendar: &Calendar<'_>,
+        event: &Event,
+        summary: &str,
+        duration: u32,
+    ) {
+        // Keep the scheduled appearance intact and publish its busy window separately.
+        let policy = event.scheduling_policy;
+        let open = event.status == "open";
+        if let Some((from, until)) = policy.appearance(event.due, duration) {
+            self.line("BEGIN:VEVENT");
+            self.line(&format!("UID:{}-buffer@{}", event.id, calendar.host));
+            self.line(&format!("DTSTAMP:{}", event.stamp.format("%Y%m%dT%H%M%SZ")));
+            self.line(&format!("SEQUENCE:{}", event.sequence));
+            self.line(&format!(
+                "DTSTART:{}",
+                from.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
+            ));
+            self.line(&format!(
+                "DTEND:{}",
+                until.with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
+            ));
+            self.line(&format!(
+                "SUMMARY:{}",
+                escape(&format!("{summary} (reserved time)"))
+            ));
+            self.line(if open {
+                "STATUS:CONFIRMED"
+            } else {
+                "STATUS:CANCELLED"
+            });
+            self.line("TRANSP:OPAQUE");
+            self.line("END:VEVENT");
+        }
     }
 }
 
@@ -351,9 +417,22 @@ mod tests {
         assert!(result.contains("DTSTART;VALUE=DATE:20280712\r\n"));
         assert!(result.contains("Cutoff: 23:59:00 America/Los_Angeles"));
         assert!(result.contains("SUMMARY:sample: DEADLINE – File response"));
+        assert!(result.contains("TRIGGER;VALUE=DATE-TIME:20280713T064400Z"));
         for lead in [7, 3, 1] {
             assert!(result.contains(&format!("TRIGGER:-P{lead}D")));
         }
+    }
+
+    #[test]
+    fn a_deposition_exports_the_actual_start_and_its_buffered_busy_window() {
+        let mut deposition = row();
+        deposition["due_at"] = json!("2028-07-12T10:00:00-07:00");
+        deposition["category"] = json!("deposition");
+        deposition["hearing"] = json!({"duration_minutes":120,"location":"Remote"});
+        let text = render(&calendar(), &[deposition]).unwrap();
+        assert!(text.contains("20280712T100000"));
+        assert!(text.contains("DTSTART:20280712T164500Z"));
+        assert!(text.contains("DTEND:20280712T191500Z"));
     }
 
     #[test]
@@ -393,7 +472,7 @@ mod tests {
         }
         assert!(text.contains("PRODID:"));
         assert!(text.replace("\r\n ", "").contains(
-            "DESCRIPTION:Authority: Order setting briefing\\, entered 2026-10-05\\nSource document: 0190a000-0000-7000-8000-0000000000aa\\nDeadline: 0190a000-0000-7000-8000-000000000001\\nMatter page: https://navigator.example.test/app/projects/acme"
+            "DESCRIPTION:Submit by 2026-11-02T16:45:00-08:00\\nAuthority: Order setting briefing\\, entered 2026-10-05\\nSource document: 0190a000-0000-7000-8000-0000000000aa\\nDeadline: 0190a000-0000-7000-8000-000000000001\\nMatter page: https://navigator.example.test/app/projects/acme"
         ));
     }
 
@@ -479,7 +558,7 @@ mod tests {
         let text = render(&calendar(), &[utc]).unwrap();
         assert!(text.contains("DTSTART:20261103T010000Z\r\n"));
         assert!(!text.contains("VTIMEZONE"));
-        assert!(!text.contains("VALARM"));
+        assert!(text.contains("TRIGGER;VALUE=DATE-TIME:20261103T004500Z"));
     }
 
     #[test]

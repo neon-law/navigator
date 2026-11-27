@@ -2421,8 +2421,8 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/lawyer/deadline-projects": {
           "get": {
             "summary": "List the signed-in lawyer dashboard's open Projects for deadline reporting",
-            "description": "Returns Projects visible to the signed-in lawyer in the deployment Firm's dashboard scope. The default is an array of open Projects. The readiness inventory includes pitches and Project Skill practice area where known. With include_deadlines, returns the same Projects and all their recorded Deadlines in one authorized read. Every read works without a checkout.",
-            "parameters": [{ "name": "include_pitch", "in": "query", "schema": { "type": "boolean", "default": false } }, { "name": "include_deadlines", "in": "query", "schema": { "type": "boolean", "default": false } }],
+            "description": "Returns Projects visible to the signed-in lawyer in the deployment Firm's dashboard scope. The default is an array of open Projects. The readiness inventory includes pitches and Project Skill practice area where known. With include_deadlines, returns the same Projects and all their recorded Deadlines in one authorized read. Supply deadline_schedule_timezone for the signed-in attorney’s availability and work plan. Every read works without a checkout.",
+            "parameters": [{ "name": "include_pitch", "in": "query", "schema": { "type": "boolean", "default": false } }, { "name": "include_deadlines", "in": "query", "schema": { "type": "boolean", "default": false } }, { "name": "deadline_schedule_timezone", "in": "query", "schema": { "type": "string" }, "description": "IANA time zone for the attorney’s working hours." }],
             "responses": {
               "200": { "description": "Dashboard-scoped Projects. With include_pitch, returns the Projects with practice area. With include_deadlines, returns Projects and their recorded Deadlines.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "array", "items": { "type": "object", "required": ["id", "code", "name", "status"], "properties": { "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "status": { "type": "string", "const": "open" } } } }, { "type": "object", "required": ["projects"], "not": { "required": ["deadlines"] }, "properties": { "projects": { "type": "array", "items": { "type": "object", "required": ["id", "code", "name", "status", "practice_area"], "properties": { "id": { "type": "string", "format": "uuid" }, "code": { "type": "string" }, "name": { "type": "string" }, "status": { "type": "string", "enum": ["open", "pitch"] }, "practice_area": { "type": ["string", "null"] } } } } } }, { "type": "object", "required": ["projects", "deadlines"], "properties": { "projects": { "type": "array", "items": { "type": "object" } }, "deadlines": { "type": "array", "items": { "type": "object", "required": ["id", "project_id", "due_at", "status"] } } } }] } } } },
               "401": { "description": "Authentication required" },
@@ -3695,7 +3695,7 @@ fn canonical_document(base: &str) -> Value {
           },
           "post": {
             "summary": "Create a deadline",
-            "description": "Store a deadline and return the written row. An optional title (at most 200 characters) names what is due. Supply an RFC 3339 timestamp with an offset in due_at, or a civil due_on date with an optional IANA timezone and local cutoff. An omitted zone inherits the Project default. Submit court dates and hearings to the Project’s court-date-proposals endpoint for evidence-backed lawyer confirmation. The internal lead time is never shorter than the client lead time. Dates are stored as given; court days are not computed. Replaying a cancelled row is refused without changing it; POST to the row's /reopen endpoint first. Replaying a complete row updates its fields and preserves complete status.",
+            "description": "Store a deadline and return the written row. Supply nonnegative effort_minutes or use the Firm’s category default. A deposition includes its role, taking party, and explicitly selected preparation in the hearing object. An optional title (at most 200 characters) names what is due. Supply an RFC 3339 timestamp with an offset in due_at, or a civil due_on date with an optional IANA timezone and local cutoff. An omitted zone inherits the Project default. Submit court dates and hearings to the Project’s court-date-proposals endpoint for evidence-backed lawyer confirmation. The internal lead time is never shorter than the client lead time. Dates are stored as given; court days are not computed. Replaying a cancelled row is refused without changing it; POST to the row's /reopen endpoint first. Replaying a complete row updates its fields and preserves complete status.",
             "x-mcp-tool": "create_deadline",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
@@ -3711,7 +3711,7 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/deadlines/{deadline_id}": {
           "patch": {
             "summary": "Update a deadline",
-            "description": "Change the stored fields and return the written row. An empty title clears it. Status changes only through complete, cancel, and reopen.",
+            "description": "Change the stored fields and return the written row. Use effort_minutes to change the estimate. An empty title clears it. Status changes only through complete, cancel, and reopen.",
             "x-mcp-tool": "update_deadline",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
@@ -7510,7 +7510,19 @@ fn add_court_date_schemas(document: &mut Value) {
         "properties":{"kind":{"enum":["signed_order","calculated"]},"title":{"type":"string","maxLength":200},"timezone":{"type":"string"},
             "due_at":{"type":"string","format":"date-time"},"due_on":{"type":"string","format":"date"},"cutoff":{"type":"string"},
             "category":{"enum":model::project_deadlines::CATEGORIES},"calendar_role":{"enum":model::project_deadlines::CALENDAR_ROLES},
-            "hearing":{"type":"object","properties":{"duration_minutes":{"type":"integer","minimum":1},"location":{"type":"string"}}},
+            "hearing":{"type":"object","properties":{
+                "duration_minutes":{"type":"integer","minimum":1,"maximum":1440},"location":{"type":"string"},
+                "appearance":{"type":"object","properties":{
+                    "kind":{"enum":["trial_day","deposition"]},
+                    "additional_starts":{"type":"array","items":{"type":"string","format":"date-time"}},
+                    "cancel":{"type":"boolean"},
+                    "deponent_role":{"enum":["party","non_party","expert"]},"taken_by":{"enum":["firm","opponent"]}
+                }},
+                "prep":{"type":"array","items":{"type":"object","required":["title","due_at","effort_minutes"],"properties":{
+                    "title":{"type":"string","maxLength":200},"due_at":{"type":"string","format":"date-time"},
+                    "effort_minutes":{"type":"integer","minimum":0}
+                }}}
+            }},
             "calculation":{"$ref":"#/components/schemas/CourtDateCalculation"},
             "evidence":{"type":"array","maxItems":32,"items":{"$ref":"#/components/schemas/CourtDateEvidence"}}}});
     let revision = json!({"type":"integer","minimum":1});

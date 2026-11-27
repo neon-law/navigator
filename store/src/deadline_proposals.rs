@@ -543,29 +543,62 @@ pub async fn publish(pg: &PostgresDb, job: Job) -> Result<(), Error> {
     if row.revision != job.revision || row.status != Status::Approved {
         return Ok(());
     }
+    let reviewer: Option<Uuid> = sqlx::query_scalar(
+        "SELECT reviewer_id FROM deadline_proposal WHERE project_id=$1 AND id=$2 AND revision=$3",
+    )
+    .bind(job.project_id)
+    .bind(job.id)
+    .bind(job.revision)
+    .fetch_one(&mut *tx)
+    .await?;
+    // A rejected member of a series must leave every day and preparation row untouched.
     let result = match reviewed_sources(&mut tx, &row).await {
-        Ok(citations) => crate::project_deadlines::publish_reviewed(&mut tx, &row, &citations)
+        Ok(citations) => {
+            use sqlx::Acquire as _;
+            let mut publication = (&mut *tx).begin().await?;
+            match crate::project_deadlines::publish_reviewed(
+                &mut publication,
+                &row,
+                &citations,
+                reviewer,
+            )
             .await
-            .map_err(Error::from),
+            {
+                Ok(deadline) => {
+                    publication.commit().await?;
+                    Ok(deadline)
+                }
+                Err(error) => {
+                    publication.rollback().await?;
+                    Err(Error::from(error))
+                }
+            }
+        }
         Err(error) => Err(error),
     };
     let deadline = match result {
         Ok(deadline) => deadline,
         Err(
-            Error::Invalid(_)
-            | Error::Deadline(DeadlineError::Invalid(_) | DeadlineError::NotFound),
+            error @ (Error::Invalid(_)
+            | Error::Deadline(DeadlineError::Invalid(_) | DeadlineError::NotFound)),
         ) => {
+            let reason = match error {
+                Error::Deadline(DeadlineError::Invalid(message)) => message,
+                _ => {
+                    "The approved evidence or target Deadline changed. Review the latest revision."
+                        .into()
+                }
+            };
             sqlx::query(
-        "UPDATE deadline_proposal
-         SET status='returned',reason='The approved evidence or target Deadline changed. Review the latest revision.'
-         WHERE project_id=$1
-         AND id=$2
-         AND revision=$3",
-    )
-        .bind(job.project_id)
-        .bind(job.id)
-        .bind(job.revision)
-        .execute(&mut *tx).await?;
+                "UPDATE deadline_proposal SET status='returned',reason=$4
+                WHERE project_id=$1 AND id=$2 AND revision=$3",
+            )
+            .bind(job.project_id)
+            .bind(job.id)
+            .bind(job.revision)
+            .bind(reason)
+            .execute(&mut *tx)
+            .await?;
             tx.commit().await?;
             return Ok(());
         }

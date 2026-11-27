@@ -26,6 +26,7 @@ axum = { workspace = true, features = ["form", "multipart"] }
 base64.workspace = true
 billing.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 cloud.workspace = true
 dioxus-core.workspace = true
 ed25519-dalek.workspace = true

@@ -75,9 +75,11 @@ the gap in the private matter handoff.
 * "Pull changes" means rebase onto refreshed `origin/main` from a clean tree. Commit work in progress; never stash,
   merge `origin/main`, or force-push `main`. Follow `.agents/skills/pull-changes/SKILL.md` for conflict handling,
   validation, and `--force-with-lease`. A host-side sync tool is allowed only when the sandbox blocks rebase; report it.
-* "Push changes", "push this", "ship it", and "land it" mean review the signed Jujutsu change, run the Project gate,
-  and run `navigator jj push`. Follow the ready pull request through merge and verify deployment of its exact merge
-  commit. Follow `.agents/skills/push-changes/SKILL.md`.
+* "Push changes", "push this", "ship it", and "land it" mean review the signed Jujutsu change and run the Project gate.
+  Ask the author for actual hours in tenths and the work date for each outgoing change that lacks a Billing Annotation.
+  Add a terminal `Billing-Time: <hours> <YYYY-MM-DD> <uuid>` trailer after confirmation. Keep its UUID on retry. Run
+  `navigator jj push` to stage the annotation for lawyer review. Follow the pull request through merge and verify
+  deployment of its exact merge commit. Follow `.agents/skills/push-changes/SKILL.md`.
 * "Save work" means a signed Jujutsu change rebased onto the latest `origin/main`, the Navigator gate green, and a
   ready pull request against `main`; "save this" and "save it" mean the same. Verify squash auto-merge is armed
   (`autoMergeRequest` non-null or the pull request is already merged), follow the required checks through confirmed

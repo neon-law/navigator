@@ -50,6 +50,20 @@ digest, page and highlights. The `calculation` object carries `trigger`, `trigge
 and `authority_kind`. Select `case_law`, `court_rule` or `statute` according to the filed source. Calendar-day offsets
 must agree with the proposed date. A lawyer supplies a date that depends on court days or holidays.
 
+### Trial series and depositions
+
+For a trial, use `category: "trial_day"` and the first start in `due_at`. In the hearing details, supply
+`duration_minutes`, `location`, and an `appearance` object with `kind: "trial_day"` and an `additional_starts` array of
+explicit RFC 3339 start times in order. Run the queue command with `--preview` to see suggested preparation. Edit or
+drop entries in `hearing.prep` before queuing the draft. Confirm all trial dates and their preparation together in Court
+date review. To continue or cancel one day, target its Deadline ID and cite the filed order or stipulation in the
+revised draft. Set `hearing.appearance.cancel` to `true` to cancel that day.
+
+Create a deposition with `--category deposition --calendar-role firm --authority-kind internal`. Supply `--due-at`,
+`--hearing-minutes`, `--hearing-location`, `--deponent-role`, and `--taken-by`. Review the proposed preparation and
+rerun with `--confirm` to save. Supply an edited JSON array with `--prep-file`. An empty array drops all suggestions.
+These suggestions are internal preparation dates. Use a cited court date proposal for a date fixed by a rule or order.
+
 ### Cite a file in Forgejo
 
 The optional `forgejo` field identifies the file at a full commit SHA. Choose `project` for the matter repository or

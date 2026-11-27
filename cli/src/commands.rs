@@ -2244,6 +2244,9 @@ pub enum DeadlineCmd {
         /// IANA time zone. Defaults to TZ, the system time zone, or UTC.
         #[arg(long)]
         timezone: Option<String>,
+        /// Upcoming trial and deposition horizon, in days.
+        #[arg(long, default_value = "120d", value_parser = projects::deadline_brief::horizon_days)]
+        horizon: i64,
         /// Print the complete report as JSON.
         #[arg(long)]
         json: bool,
@@ -2285,6 +2288,21 @@ pub enum DeadlineCmd {
         /// Court-supplied location saved on the hearing.
         #[arg(long)]
         hearing_location: Option<String>,
+        /// Role of the person being deposed: `party`, `non_party`, or `expert`.
+        #[arg(long, requires = "taken_by")]
+        deponent_role: Option<model::project_deadlines::DeponentRole>,
+        /// Who is taking the deposition: firm or opponent.
+        #[arg(long, requires = "deponent_role")]
+        taken_by: Option<model::project_deadlines::TakenBy>,
+        /// Save the deposition and the displayed or edited preparation Deadlines.
+        #[arg(long)]
+        confirm: bool,
+        /// JSON array of preparation Deadlines. Use an empty array to drop every suggestion.
+        #[arg(long, requires = "deponent_role")]
+        prep_file: Option<PathBuf>,
+        /// Estimated work, such as 30m, 4h, 3d, or 0. A day is eight hours.
+        #[arg(long, value_parser = projects::deadline::effort_minutes)]
+        effort: Option<i32>,
         /// `statute`, `court_rule`, `court_order`, `contract`, or `internal`.
         #[arg(long)]
         authority_kind: model::project_deadlines::AuthorityKind,
@@ -2303,8 +2321,8 @@ pub enum DeadlineCmd {
         /// `firm`, `opponent`, or `hearing`.
         #[arg(long)]
         calendar_role: model::project_deadlines::CalendarRole,
-        /// `court`, `hearing`, `discovery`, `tickler`, or `internal`. Defaults from the
-        /// calendar role and authority kind when either settles it.
+        /// Deadline category, including `deposition`, `conference`, `consult`, and `call`.
+        /// Court dates and `trial_day` use the court-date review queue.
         #[arg(long)]
         category: Option<String>,
         /// Whole days. Never shorter than the client lead.
@@ -2358,6 +2376,9 @@ pub enum DeadlineCmd {
         /// Court-supplied location saved on the hearing.
         #[arg(long)]
         hearing_location: Option<String>,
+        /// Estimated work, such as 30m, 4h, 3d, or 0. A day is eight hours.
+        #[arg(long, value_parser = projects::deadline::effort_minutes)]
+        effort: Option<i32>,
         #[arg(long)]
         authority_kind: Option<String>,
         #[arg(long)]
@@ -3076,6 +3097,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 overdue,
                 status,
                 timezone,
+                horizon,
                 json,
             } => {
                 projects::deadline_brief::brief(projects::deadline_brief::BriefOptions {
@@ -3091,6 +3113,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     status,
                     timezone,
                     as_json: json,
+                    horizon,
                 })
                 .await
             }
@@ -3108,6 +3131,11 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 cutoff,
                 hearing_minutes,
                 hearing_location,
+                deponent_role,
+                taken_by,
+                confirm,
+                prep_file,
+                effort,
                 authority_kind,
                 authority,
                 source,
@@ -3132,6 +3160,13 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                         cutoff,
                     }),
                     projects::deadline::hearing_details(hearing_minutes, hearing_location),
+                    projects::deadline::DepositionOptions {
+                        role: deponent_role,
+                        taken_by,
+                        confirm,
+                        prep_file,
+                    },
+                    effort,
                     authority_kind.to_string(),
                     authority,
                     source,
@@ -3162,6 +3197,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 cutoff,
                 hearing_minutes,
                 hearing_location,
+                effort,
                 authority_kind,
                 authority,
                 source,
@@ -3186,6 +3222,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                         cutoff,
                     }),
                     projects::deadline::hearing_details(hearing_minutes, hearing_location),
+                    effort,
                     authority_kind,
                     authority,
                     source,

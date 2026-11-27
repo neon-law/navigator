@@ -63,6 +63,9 @@ pub struct FirmEditView {
     /// The Firm's Portal Theme Brand key; `None` keeps each host's own look.
     #[serde(default)]
     pub google_workspace_calendar_owner: Option<String>,
+    pub deadline_buffer_minutes: String,
+    pub deadline_end_of_business: String,
+    pub deadline_effort: [String; 4],
     /// Whether the Firm's Projects use Google Drive folders. Read for the Owner only.
     #[serde(default)]
     pub google_drive: bool,
@@ -203,6 +206,26 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
     } else {
         None
     };
+    let policy = if role == ViewerRole::Owner {
+        store::project_deadlines::scheduling_policy(Some(id))
+            .await
+            .map_err(|error| ServerFnError::new(error.to_string()))?
+    } else {
+        store::project_deadlines::SchedulingPolicy::default()
+    };
+    let effort = if role == ViewerRole::Owner {
+        store::firms::deadline_effort_defaults(id)
+            .await
+            .map_err(|error| ServerFnError::new(error.to_string()))?
+    } else {
+        serde_json::Value::Null
+    };
+    let minutes = |category: store::project_deadlines::Category| {
+        effort[category.to_string()]
+            .as_i64()
+            .unwrap_or_else(|| i64::from(category.default_effort_minutes()))
+            .to_string()
+    };
     let google_drive = role == ViewerRole::Owner
         && store::firms::google_drive(id)
             .await
@@ -212,6 +235,15 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         found: true,
         esign_provider,
         google_workspace_calendar_owner,
+        deadline_buffer_minutes: policy.buffer_minutes().to_string(),
+        deadline_end_of_business: policy.end_of_business().format("%H:%M").to_string(),
+        deadline_effort: [
+            store::project_deadlines::Category::Court,
+            store::project_deadlines::Category::Discovery,
+            store::project_deadlines::Category::Internal,
+            store::project_deadlines::Category::Tickler,
+        ]
+        .map(minutes),
         google_drive,
         name: firm.name,
         status: firm.status,
@@ -426,6 +458,23 @@ fn integration_cards(view: &FirmEditView) -> Element {
             ],
         }
         FormCard {
+            title: "Deadline scheduling".to_string(),
+            action: format!("/app/admin/firms/{}/edit", view.id),
+            submit_label: "Save deadline scheduling".to_string(),
+            heading: Heading::H2,
+            csrf_token: Some(view.csrf_token.clone()),
+            fields: vec![
+                Field::text("Buffer minutes", "deadline_buffer_minutes", view.deadline_buffer_minutes.clone())
+                    .required().help("At least 10 minutes."),
+                Field::text("End of business (HH:MM)", "deadline_end_of_business", view.deadline_end_of_business.clone())
+                    .required().help("Local time in the matter’s time zone."),
+                Field::text("Court work (minutes)", "deadline_effort_court", view.deadline_effort[0].clone()).required(),
+                Field::text("Discovery work (minutes)", "deadline_effort_discovery", view.deadline_effort[1].clone()).required(),
+                Field::text("Internal work (minutes)", "deadline_effort_internal", view.deadline_effort[2].clone()).required(),
+                Field::text("Tickler work (minutes)", "deadline_effort_tickler", view.deadline_effort[3].clone()).required(),
+            ],
+        }
+        FormCard {
             title: "Google Drive".to_string(),
             action: format!("/app/admin/firms/{}/edit", view.id),
             submit_label: "Save Google Drive".to_string(),
@@ -517,6 +566,9 @@ mod tests {
                 name: "Guieb & Shook PC".to_string(),
             }],
             google_workspace_calendar_owner: Some("calendar@example.test".to_string()),
+            deadline_buffer_minutes: "15".into(),
+            deadline_end_of_business: "17:00".into(),
+            deadline_effort: ["360", "240", "30", "15"].map(str::to_owned),
             google_drive: false,
             esign_provider: "docusign".to_string(),
             portal_theme_brand_key: Some("guieb-shook".to_string()),

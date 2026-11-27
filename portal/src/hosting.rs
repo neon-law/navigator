@@ -982,6 +982,7 @@ async fn dbos_schedules(
             Arc::new(crate::calendar_mirror::MembershipSource {
                 application_store: rt.state.application_store.clone(),
                 providers: Arc::clone(&rt.state.integration_providers),
+                base_url: rt.state.canonical_host.host().map(str::to_owned),
             }) as Arc<dyn dbos_engine::project_calendar::Source>
         }),
         purchase_activation,

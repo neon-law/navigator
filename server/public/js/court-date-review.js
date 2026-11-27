@@ -190,6 +190,24 @@
         el("p", row.title),
         el("p", when.detail, "nav-muted"),
       );
+      const hearing = row.hearing;
+      if (hearing?.appearance?.kind === "trial_day") {
+        const starts = [row.due_at, ...(hearing.appearance.additional_starts || [])];
+        const list = el("ol");
+        for (const start of starts) list.append(el("li", formatted({ ...row, due_at: start }).label));
+        this.detail.append(
+          el("h4", hearing.appearance.cancel ? "Cancel this trial day" : "Trial dates"),
+          list,
+          el("p", hearing.duration_minutes + " minutes · " + hearing.location),
+        );
+      }
+      if (hearing?.prep?.length) {
+        const list = el("ul");
+        for (const entry of hearing.prep) {
+          list.append(el("li", entry.title + " · " + entry.due_at + " · " + entry.effort_minutes + " minutes"));
+        }
+        this.detail.append(el("h4", "Preparation deadlines"), list);
+      }
       let loaded = 0;
       const supported =
         !row.review_error &&
@@ -237,7 +255,11 @@
       }
       const actions = el("div", undefined, "court-review__actions");
       const confirmation =
-        row.kind === "signed_order" ? "Confirm signed order and date" : "Confirm date";
+        hearing?.appearance?.cancel
+          ? "Confirm trial day cancellation"
+          : hearing?.appearance?.kind === "trial_day"
+            ? "Confirm trial dates and preparation"
+            : row.kind === "signed_order" ? "Confirm signed order and date" : "Confirm date";
       this.confirm = button(confirmation, () => this.submitDecision("confirm"), true);
       this.confirm.disabled = true;
       const correct = button("Request correction", () => this.correction());
