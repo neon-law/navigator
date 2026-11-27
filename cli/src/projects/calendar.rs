@@ -25,6 +25,9 @@ pub struct PersonalCalendarArgs {
     /// IANA time zone for the dated agenda.
     #[arg(long, requires = "date")]
     timezone: Option<String>,
+    /// Upcoming trial and deposition horizon. Defaults to 120d.
+    #[arg(long, requires = "date", value_parser = super::deadline_brief::horizon_days)]
+    horizon: Option<i64>,
     /// Print the dated agenda as JSON.
     #[arg(long, requires = "date")]
     json: bool,
@@ -147,7 +150,14 @@ impl PersonalCalendarArgs {
                 eprintln!("navigator calendar: use --date without a subcommand");
                 return ExitCode::FAILURE;
             }
-            return dated::run(host, date, self.timezone.as_deref(), self.json).await;
+            return dated::run(
+                host,
+                date,
+                self.timezone.as_deref(),
+                self.horizon.unwrap_or(120),
+                self.json,
+            )
+            .await;
         }
         match self.action {
             None => events(host, None, self.agenda, false).await,

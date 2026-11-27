@@ -197,6 +197,9 @@ impl Draft {
         if self.due_on.is_none() && self.cutoff.is_some() {
             return Err("only a date-only deadline accepts a cutoff");
         }
+        if self.category == Some(Category::TrialDay) && self.kind != Kind::SignedOrder {
+            return Err("a trial day requires the filed order or stipulation");
+        }
         let appearance = crate::project_deadlines::is_appearance(
             if self.calendar_role == Some(CalendarRole::Hearing) {
                 "hearing"

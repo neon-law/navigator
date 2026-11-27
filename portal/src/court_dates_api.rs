@@ -163,7 +163,7 @@ pub(crate) async fn stage(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     project_reviewer(&state, &session, project).await?;
     let pg = database().await?;
-    let draft = proposals::resolve_draft(
+    let mut draft = proposals::resolve_draft(
         &pg,
         &state.application_store,
         project,
@@ -173,6 +173,15 @@ pub(crate) async fn stage(
     )
     .await
     .map_err(map_error)?;
+    if input.target_deadline_id.is_none()
+        && draft.category == Some(model::project_deadlines::Category::TrialDay)
+    {
+        if let (Some(start), Some(hearing)) = (draft.due_at, draft.hearing.as_mut()) {
+            if hearing.prep.is_none() {
+                hearing.prep = Some(hearing.preparation(start));
+            }
+        }
+    }
     let verified =
         crate::deadline_evidence::verify(&state, project, &draft, session.role.is_lawyer_tier())
             .await?;

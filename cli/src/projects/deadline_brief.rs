@@ -832,6 +832,7 @@ pub(super) async fn agenda_rows(
     day: NaiveDate,
     now: DateTime<Utc>,
     zone: Tz,
+    horizon: i64,
 ) -> Result<Value> {
     let filters = Filters {
         status: "open".to_owned(),
@@ -842,7 +843,7 @@ pub(super) async fn agenda_rows(
     let rows = collect_rows(&successful, &failures, &filters, now, zone);
     let upcoming = Filters {
         status: "open".to_owned(),
-        horizon: Some(120),
+        horizon: Some(horizon),
         ..Filters::default()
     };
     let upcoming = collect_rows(&successful, &failures, &upcoming, now, zone);
@@ -1126,6 +1127,41 @@ mod tests {
         let after_cutoff = "2028-07-13T07:00:00Z".parse().unwrap();
         assert!(!selected(&row, &filters, after_cutoff, zone));
         assert_eq!(band(&row, after_cutoff, zone), Some("Overdue"));
+    }
+
+    #[test]
+    fn a_deposition_at_day_100_shows_its_open_preparation() {
+        let now = "2030-03-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let project = project("synthetic");
+        let zone = chrono_tz::UTC;
+        let mut appearance = deadline("2030-06-09T10:00:00Z", "open");
+        appearance.category = Some("deposition".into());
+        let mut prep = deadline("2030-06-06T10:00:00Z", "open");
+        prep.replay_key = Some(format!("preparation:{}:0", appearance.id));
+        let filters = Filters {
+            horizon: Some(120),
+            status: "open".into(),
+            ..Filters::default()
+        };
+        assert!(selected(&appearance, &filters, now, zone));
+        assert!(!selected(
+            &appearance,
+            &Filters {
+                horizon: Some(99),
+                ..filters
+            },
+            now,
+            zone
+        ));
+        let result = upcoming_appearances(
+            &[
+                deadline_value("", &project, &prep, zone),
+                deadline_value("", &project, &appearance, zone),
+            ],
+            now,
+        );
+        assert_eq!(result[0]["days"][0]["id"], json!(appearance.id));
+        assert_eq!(result[0]["preparation"][0]["id"], json!(prep.id));
     }
 
     #[test]

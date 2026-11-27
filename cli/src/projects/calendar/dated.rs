@@ -12,6 +12,7 @@ pub(super) async fn run(
     host: Option<&str>,
     date: &str,
     zone: Option<&str>,
+    horizon: i64,
     json: bool,
 ) -> ExitCode {
     let result: Result<Value> = async {
@@ -19,7 +20,7 @@ pub(super) async fn run(
         let (day, start, end, now) = dates(date, zone, Utc::now())?;
         let (base, token) = remote::resolve(host)?;
         let (deadlines, calendar) = tokio::join!(
-            deadline_brief::agenda_rows(&base, &token, day, now, zone),
+            deadline_brief::agenda_rows(&base, &token, day, now, zone, horizon),
             super::post(
                 &base,
                 &token,

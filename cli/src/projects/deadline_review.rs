@@ -41,6 +41,9 @@ fn read(file: PathBuf) -> Result<Value> {
 
 fn suggest_trial_prep(submission: &mut Value) -> Result<()> {
     use model::project_deadlines::{Category, Hearing};
+    if !submission["target_deadline_id"].is_null() {
+        return Ok(());
+    }
     let draft = &mut submission["draft"];
     if draft["category"] == "trial_day" && draft["hearing"]["prep"].is_null() {
         let hearing: Hearing = serde_json::from_value(draft["hearing"].clone())?;
