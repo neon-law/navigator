@@ -2052,7 +2052,7 @@ pub(crate) async fn list_intake_on(
 // Date ordering uses the latest inbound or authored outbound email. Ignore historical
 // date strings that are outside the provider timestamp format or invalid to PostgreSQL.
 // Keep the fractional seconds as a decimal so cursor comparisons retain nanosecond precision.
-const INTAKE_PAGE_SQL: &str = r#"
+const INTAKE_PAGE_SQL: &str = r"
 WITH ranked AS (
     SELECT c.id, COALESCE(
         CASE WHEN c.channel = 'email' THEN (
@@ -2092,7 +2092,7 @@ SELECT c.*, floor(page.activity_at)::bigint AS activity_seconds,
        ((page.activity_at - floor(page.activity_at)) * 1000000000)::integer AS activity_nanos
 FROM page JOIN inbox_conversation c ON c.id = page.id
 ORDER BY page.activity_at DESC, page.id DESC
-"#;
+";
 
 pub(crate) async fn intake_page_on(
     pg: &PostgresDb,
