@@ -33,8 +33,10 @@ attorney's existing Notion Calendar scheduling link, enable **Avoid conflicts** 
 
 The DBOS reconciliation reads the timed Busy intervals on the attorney's eligible open Project Calendars for the next 90
 days. It writes private `Busy` holds without guests, reminders, or matter details and removes obsolete holds it can
-verify it owns. Incomplete source reads leave existing holds in place. The booking calendar stays out of Navigator's own
-availability reads.
+verify it owns. An open Project joins the sync when its Calendar ID is recorded. A Lawyer assignment still contributes
+private Busy holds after promotion to Admin or Owner when the Person qualifies through the Firm's current membership.
+Unreadable or unverified recorded calendars leave existing holds in place. The booking calendar stays out of Navigator's
+own availability reads.
 
 The table is `person_calendar`.
 

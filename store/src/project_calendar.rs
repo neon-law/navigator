@@ -322,7 +322,11 @@ pub async fn sync_membership(
     verify_private_calendar(calendar, &project.code, &calendar_id).await?;
     let (desired, mut report) = if project.status == "open" {
         let mut rosters = load_rosters(&db, &[project.id]).await?;
-        eligible_roster(rosters.remove(&project.id).unwrap_or_default(), &owner)?
+        eligible_roster(
+            rosters.remove(&project.id).unwrap_or_default(),
+            &owner,
+            CalendarPurpose::Access,
+        )?
     } else {
         Default::default()
     };
@@ -498,6 +502,30 @@ pub async fn shared_freebusy_calendars(
     firms: &[Uuid],
     people: &[Uuid],
 ) -> Result<BTreeMap<Uuid, Vec<SharedCalendar>>, ProjectCalendarError> {
+    calendar_candidates(db, firms, people, CalendarPurpose::Access).await
+}
+
+/// Existing assigned Project Calendars for projecting private busy holds.
+pub async fn booking_calendars(
+    db: &crate::postgres::PostgresDb,
+    firms: &[Uuid],
+    person: Uuid,
+) -> Result<BTreeMap<Uuid, Vec<SharedCalendar>>, ProjectCalendarError> {
+    calendar_candidates(db, firms, &[person], CalendarPurpose::Booking).await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CalendarPurpose {
+    Access,
+    Booking,
+}
+
+async fn calendar_candidates(
+    db: &crate::postgres::PostgresDb,
+    firms: &[Uuid],
+    people: &[Uuid],
+    purpose: CalendarPurpose,
+) -> Result<BTreeMap<Uuid, Vec<SharedCalendar>>, ProjectCalendarError> {
     let projects: Vec<(Uuid, Uuid, String, Option<String>, String)> = crate::firms::calendar_owners_query()
         .push("SELECT p.id, p.firm_id, p.code, p.calendar_id, c.owner FROM project p JOIN calendar_owners c ON c.firm_id = p.firm_id
                WHERE c.owner IS NOT NULL AND p.status = 'open' AND p.firm_id = ANY(")
@@ -513,7 +541,13 @@ pub async fn shared_freebusy_calendars(
     let mut rosters = load_rosters(db, &ids).await?;
     let mut calendars = BTreeMap::<_, Vec<_>>::new();
     for (id, firm, code, calendar_id, owner) in projects {
-        let (eligible, _) = eligible_roster(rosters.remove(&id).unwrap_or_default(), &owner)?;
+        if purpose == CalendarPurpose::Booking
+            && calendar_id.as_deref().is_none_or(|id| id.trim().is_empty())
+        {
+            continue;
+        }
+        let (eligible, _) =
+            eligible_roster(rosters.remove(&id).unwrap_or_default(), &owner, purpose)?;
         let people: Vec<_> = eligible
             .into_keys()
             .filter(|person| people.contains(person))
@@ -530,7 +564,11 @@ pub async fn shared_freebusy_calendars(
     Ok(calendars)
 }
 
-fn eligible_roster(rows: Vec<RosterRow>, owner: &str) -> Result<Roster, ProjectCalendarError> {
+fn eligible_roster(
+    rows: Vec<RosterRow>,
+    owner: &str,
+    purpose: CalendarPurpose,
+) -> Result<Roster, ProjectCalendarError> {
     let owner_domain = owner.rsplit_once('@').map(|(_, domain)| domain);
     let mut desired = BTreeMap::new();
     let mut report = Vec::new();
@@ -545,7 +583,12 @@ fn eligible_roster(rows: Vec<RosterRow>, owner: &str) -> Result<Roster, ProjectC
             Role::Client => continue,
         };
         let address = email.trim().to_ascii_lowercase();
-        let gap = if participation != projects::participation_for_role(role) {
+        // A promotion can leave an existing lawyer assignment on the same side
+        // of the Project. Use it only for generating private Busy holds.
+        let booking_promotion = purpose == CalendarPurpose::Booking
+            && participation == "lawyer"
+            && matches!(role, Role::Admin | Role::Owner);
+        let gap = if participation != projects::participation_for_role(role) && !booking_promotion {
             Some("project_role_mismatch")
         } else if membership.as_deref() != Some(expected.as_str()) {
             Some("not_a_firm_member")
@@ -872,6 +915,45 @@ mod tests {
             .is_empty());
     }
 
+    async fn assert_booking_for_promoted_lawyer(
+        db: &crate::application_store::ApplicationStore,
+        pg: &crate::postgres::PostgresDb,
+        firm_id: uuid::Uuid,
+        assignment: &projects::PersonProjectRole,
+        calendar_id: &str,
+    ) {
+        sqlx::query("UPDATE person_project_role SET participation = 'lawyer' WHERE id = $1")
+            .bind(assignment.id)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        let person_id = assignment.person_id;
+        assert_no_shared_calendars(pg, &[firm_id], person_id).await;
+        let booking = super::booking_calendars(pg, &[firm_id], person_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            booking[&firm_id][0].calendar_id.as_deref(),
+            Some(calendar_id)
+        );
+        assert!(super::booking_calendars(pg, &[], person_id)
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("UPDATE project SET calendar_id = NULL WHERE id = $1")
+            .bind(assignment.project_id)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        assert!(super::booking_calendars(pg, &[firm_id], person_id)
+            .await
+            .unwrap()
+            .is_empty());
+        projects::set_calendar_id(db, assignment.project_id, calendar_id)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn assignments_share_calendar_access_and_freebusy_for_the_same_roster() {
         use crate::firms::{self, FirmMembership, NewPersonFirmRole};
@@ -945,6 +1027,9 @@ mod tests {
                     .any(|shared| shared.calendar_id.as_ref() == Some(&calendar_id)
                         && shared.people.contains(&person.id)));
                 assert_no_shared_calendars(&pg, &[], person.id).await;
+                if role == Role::Owner {
+                    assert_booking_for_promoted_lawyer(&db, &pg, firm_id, &row, &calendar_id).await;
+                }
                 if row.is_lawyer_dri {
                     continue;
                 }
