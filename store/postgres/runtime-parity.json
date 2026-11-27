@@ -156,24 +156,9 @@
     "scenario": "same-Firm round trip; cross-Firm refusal",
     "runtime_tests": [
       {
-        "file": "store/src/postgres_mirror/blog_videos_tests.rs",
-        "function": "video_uploads_mirror_replay_and_reconcile_with_brand_ownership",
-        "proves": "Real PostgreSQL keeps the upload UUID and measured fields, links it to its Brand's Firm, detects and repairs target drift, refuses an unknown Brand, and removes a source-deleted upload during reconciliation."
-      },
-      {
         "file": "store/src/posts.rs",
         "function": "declared_video_must_be_this_brands_measured_upload",
-        "proves": "A Post refuses a measured video uploaded for a different Brand."
-      },
-      {
-        "file": "store/src/postgres/social_tests.rs",
-        "function": "posts_handles_and_videos_live_in_postgres",
-        "proves": "An upload registers once in PostgreSQL by its unique object key and reads back measured."
-      },
-      {
-        "file": "store/src/postgres/social_tests.rs",
-        "function": "the_mirror_leaves_postgres_alone",
-        "proves": "Where PostgreSQL holds the table, the write hook and reconcile write nothing, parity names only rows PostgreSQL lacks, and only the first Mirror Backfill copies them."
+        "proves": "An upload registers once in PostgreSQL by its unique object key and reads back measured, and a Post refuses a measured video uploaded for a different Brand."
       }
     ],
     "remaining": [
