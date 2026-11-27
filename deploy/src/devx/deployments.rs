@@ -1014,11 +1014,7 @@ fn plan(
     let mut plan = BTreeMap::new();
     let mut skipped = BTreeMap::new();
     let mut missing = Vec::new();
-    let mut objects = projected_objects();
-    if store::workflow_engine::dbos_only(&|key| deployment.coordinates.get(key).cloned())? {
-        objects.insert(workflows::trigger::DBOS_INGRESS_TOKEN_ENV.to_owned());
-    }
-    for object in objects {
+    for object in projected_objects() {
         if deployment.encrypted_keys.contains(&object) {
             plan.insert(object, Source::Encrypted);
         } else if deployment.coordinates.contains_key(&object) {
@@ -2364,6 +2360,7 @@ mod tests {
                 .insert(workflow.flag.into(), "true".into());
         }
         let token = workflows::trigger::DBOS_INGRESS_TOKEN_ENV;
+        deployment.encrypted_keys.remove(token);
         let error = plan(&deployment).expect_err("native web needs its ingress token");
         assert!(error.to_string().contains(token));
         deployment.encrypted_keys.insert(token.into());

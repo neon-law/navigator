@@ -359,10 +359,9 @@ pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
 ) -> anyhow::Result<Vec<Requirement>> {
     let harness = harness_relaxations_apply(environment, get);
     let capabilities = DeploymentCapabilities::from_lookup(get)?;
-    let dbos_only = crate::workflow_engine::dbos_only(get)?;
     Ok(WEB_REQUIREMENTS
         .iter()
-        .filter(|requirement| !dbos_only || !is_restate_requirement(requirement))
+        .filter(|requirement| !is_restate_requirement(requirement))
         .filter(|requirement| !harness || !requirement.integration)
         .filter(|requirement| requirement.scope.applies(capabilities))
         .filter(|requirement| {

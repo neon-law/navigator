@@ -4,7 +4,7 @@ metadata:
   name: youtube-comments-poll-trigger
   namespace: navigator
 spec:
-  suspend: true
+  suspend: false
   schedule: "*/15 * * * *"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 120
@@ -20,33 +20,10 @@ spec:
               image: YOUR_IMAGE_REGISTRY/navigator-youtube-comments-poll-trigger:YY.M.D
               imagePullPolicy: IfNotPresent
               env:
-                - name: RESTATE_INGRESS_URL
-                  valueFrom:
-                    secretKeyRef:
-                      name: navigator-web-secrets
-                      key: RESTATE_INGRESS_URL
-                      optional: true
-                - name: RESTATE_AUTH_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: navigator-web-secrets
-                      key: RESTATE_AUTH_TOKEN
-                      optional: true
-                - name: NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED
-                  valueFrom:
-                    secretKeyRef:
-                      name: navigator-web-secrets
-                      key: NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED
-                      optional: true
                 - name: NAVIGATOR_DBOS_INGRESS_URL
-                  valueFrom:
-                    secretKeyRef:
-                      name: navigator-web-secrets
-                      key: NAVIGATOR_DBOS_INGRESS_URL
-                      optional: true
+                  value: http://navigator-web-dbos:9083
                 - name: NAVIGATOR_DBOS_INGRESS_TOKEN
                   valueFrom:
                     secretKeyRef:
                       name: navigator-web-secrets
                       key: NAVIGATOR_DBOS_INGRESS_TOKEN
-                      optional: true

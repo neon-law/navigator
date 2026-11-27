@@ -237,24 +237,6 @@ async fn tag_digest_from_urls(
         .with_context(|| format!("registry returned no canonical digest for {repository}:{tag}"))
 }
 
-/// Bail unless `tag` is published for `<registry>/<image>`. Used to fail
-/// fast — before any `kubectl set image` / `docker pull` — when an image
-/// is missing the requested tag (which would otherwise wedge a deployment
-/// in `ImagePullBackOff`). Distinguishes a lookup error (network / auth)
-/// from an honestly-absent tag.
-pub fn ensure_tag_published(registry: &str, image: &str, tag: &str) -> Result<()> {
-    let tags = fetch_tags(registry, image)
-        .with_context(|| format!("check {registry}/{image}:{tag} is published"))?;
-    if tags.iter().any(|t| t == tag) {
-        Ok(())
-    } else {
-        bail!(
-            "{registry}/{image}:{tag} is not published — images are deleted 7 days after push, so \
-             a tag older than a week is gone. Pick a newer tag, or republish from source."
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

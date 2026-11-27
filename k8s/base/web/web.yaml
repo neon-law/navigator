@@ -56,11 +56,6 @@ spec:
                 configMapKeyRef:
                   name: navigator-seaweedfs
                   key: documents_bucket
-            - name: NAVIGATOR_SURREAL_ARCHIVES_BUCKET
-              valueFrom:
-                configMapKeyRef:
-                  name: navigator-seaweedfs
-                  key: surreal_archives_bucket
             - name: NAVIGATOR_STORAGE_REGION
               value: us-east-1
             - name: NAVIGATOR_STORAGE_ACCESS_KEY
@@ -185,19 +180,6 @@ spec:
                   key: SESSION_SECRET
             - name: NAVIGATOR_CLAMD_ADDR
               value: clamav.navigator.svc.cluster.local:3310
-            # Restate workflow broker. `RESTATE_BROKER_URL` is what
-            # `workflows::RestateRuntime::from_env` reads; its presence
-            # is also what `web::main` checks to pick RestateRuntime
-            # over the in-process InMemoryRuntime. The
-            # `workflows-service` RestateDeployment registers itself
-            # with this cluster via the operator (no Job needed).
-            #
-            # The Restate Operator places the StatefulSet + Service in
-            # a namespace named after the RestateCluster (`restate`),
-            # not the namespace of the CR itself. So consumers in
-            # `navigator` reach the broker via the cross-namespace FQDN.
-            - name: RESTATE_BROKER_URL
-              value: http://restate.restate.svc.cluster.local:8080
             - name: OTEL_SERVICE_NAME
               value: navigator-web
             # SendGrid + DocuSign stubs belong only to the explicit KIND

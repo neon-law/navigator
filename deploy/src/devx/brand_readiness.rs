@@ -481,7 +481,7 @@ mod tests {
             name: "test-deployment".into(),
             environment: store::DeploymentEnvironment::Dev,
             capabilities: store::deployment::DeploymentCapabilities::default(),
-            dbos_only: false,
+
             project_id: "test-project".into(),
             location: "example-region".into(),
             cluster: "navigator".into(),
@@ -493,8 +493,6 @@ mod tests {
             google_service_account_id: "navigator-web".into(),
             primary_domain: "neonlaw.com".into(),
             secret_name: "navigator-web-secrets".into(),
-            workflows_url: None,
-            restate_admin_url: None,
             context: "gke_test-project_example-region_navigator".into(),
         }
     }

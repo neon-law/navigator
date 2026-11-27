@@ -495,7 +495,7 @@ pub(in crate::devx) fn prepare_postgres(
     let ca = apply_postgres_secrets(&kube, &seed)?;
     Ok(crate::devx::postgres_fixture::Credentials {
         app_password: seed.app_password,
-        owner_password: seed.migrator_password,
+
         ca,
     })
 }
