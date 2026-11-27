@@ -217,8 +217,16 @@ pub async fn serve(
         let Ok(uri) = Uri::try_from(format!("{VIDEO_BUCKET_PREFIX}{video}")) else {
             return StatusCode::NOT_FOUND.into_response();
         };
-        *req.uri_mut() = uri;
-        return match site.bucket.oneshot(req).await {
+        // A fresh request, not this one: Navigator's own `/assets/{*key}` route has already matched it, and the
+        // path parameters that match left in its extensions would reach the bucket route's `Path` extractor beside
+        // its own, which then refuses the request (500).
+        let (parts, body) = req.into_parts();
+        let mut bucket_req = Request::new(body);
+        *bucket_req.method_mut() = parts.method;
+        *bucket_req.uri_mut() = uri;
+        *bucket_req.version_mut() = parts.version;
+        *bucket_req.headers_mut() = parts.headers;
+        return match site.bucket.oneshot(bucket_req).await {
             Ok(response) => response,
             Err(never) => match never {},
         };
@@ -321,6 +329,8 @@ mod tests {
         let site = Some(GuiebShookSite::new(root.to_path_buf(), sessions(), bucket));
         Router::new()
             .route("/auth/login", get(|| async { "navigator sign-in" }))
+            // As in production, Navigator's own asset route matches a video's site address before this layer runs.
+            .route("/assets/{*key}", get(|| async { "navigator asset" }))
             .layer(axum::middleware::from_fn_with_state(site, serve))
             .layer(tower_cookies::CookieManagerLayer::new())
             .layer(axum::middleware::from_fn(
@@ -416,7 +426,8 @@ mod tests {
             get_text(&app, "/auth/login", None).await.2,
             "navigator sign-in"
         );
-        let (_, _, key) = get_text(&app, "/assets/video/hero-1.mp4", None).await;
+        let (status, _, key) = get_text(&app, "/assets/video/hero-1.mp4", None).await;
+        assert_eq!(status, StatusCode::OK, "{key}");
         assert_eq!(
             format!("/assets/{key}"),
             format!("{VIDEO_BUCKET_PREFIX}hero-1.mp4")
