@@ -48,19 +48,11 @@ pub fn notation_reset(now: DateTime<Utc>) -> CronTrigger {
     )
 }
 
-/// The Nightly Project Update, keyed on its UTC date on either ingress.
+/// Nightly Project Update reuses its workflow ID throughout each UTC day.
 #[must_use]
-pub fn nightly_project_update(now: DateTime<Utc>) -> CronTrigger {
+pub fn nightly_project_update(now: DateTime<Utc>) -> serde_json::Value {
     let run_id = crate::nightly_project_update::run_key(now);
-    CronTrigger {
-        flag: "NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED",
-        service: "NightlyProjectUpdate",
-        dbos: Some((
-            "/internal/dbos/nightly-project-update",
-            json!({ "workflow_id": crate::dbos_nightly_project_update::workflow_id(&run_id) }),
-        )),
-        restate: restate_run(run_id, json!({})),
-    }
+    json!({ "workflow_id": crate::dbos_nightly_project_update::workflow_id(&run_id) })
 }
 
 /// The social publication reconciler. The DBOS identity is slot-floored: the
@@ -88,18 +80,9 @@ pub fn social_publish_reconciler(now: DateTime<Utc>) -> CronTrigger {
 /// restart in its retry window must join the same DBOS run even if the UTC
 /// minute has advanced, so the DBOS tick is floored to the quarter hour.
 #[must_use]
-pub fn youtube_comments_poll(now: DateTime<Utc>) -> CronTrigger {
-    let minute = |at: DateTime<Utc>| at.format("%Y-%m-%d-%H-%M").to_string();
+pub fn youtube_comments_poll(now: DateTime<Utc>) -> serde_json::Value {
     let slot = now - TimeDelta::minutes(i64::from(now.minute() % 15));
-    CronTrigger {
-        flag: workflows::trigger::YOUTUBE_COMMENTS_DBOS_ENABLED_ENV,
-        service: "YoutubeCommentsPoller",
-        dbos: Some((
-            "/internal/dbos/youtube-comments-poll",
-            json!({ "tick": minute(slot) }),
-        )),
-        restate: restate_run(minute(now), json!({ "tick": minute(now) })),
-    }
+    json!({ "tick": slot.format("%Y-%m-%d-%H-%M").to_string() })
 }
 
 #[cfg(test)]
@@ -126,20 +109,15 @@ mod tests {
     }
 
     #[test]
-    fn the_nightly_project_update_names_one_run_per_utc_date_on_both_ingresses() {
+    fn the_nightly_project_update_names_one_run_per_utc_date() {
         let first = Utc.with_ymd_and_hms(2026, 11, 8, 3, 33, 0).unwrap();
         let retry = first + TimeDelta::minutes(7);
-        let (route, body) = nightly_project_update(first).dbos.unwrap();
-        assert_eq!(route, "/internal/dbos/nightly-project-update");
-        assert_eq!(body, nightly_project_update(retry).dbos.unwrap().1);
+        let body = nightly_project_update(first);
+        assert_eq!(body, nightly_project_update(retry));
         assert!(body["workflow_id"]
             .as_str()
             .unwrap()
             .ends_with("2026-11-08"));
-        assert_eq!(
-            restate(nightly_project_update(retry)),
-            ("2026-11-08".to_owned(), json!({}))
-        );
     }
 
     #[test]
@@ -167,20 +145,14 @@ mod tests {
         let first = Utc.with_ymd_and_hms(2026, 11, 8, 23, 45, 20).unwrap();
         let retry = Utc.with_ymd_and_hms(2026, 11, 8, 23, 48, 20).unwrap();
         let next = Utc.with_ymd_and_hms(2026, 11, 9, 0, 0, 20).unwrap();
-        let dbos = |at| youtube_comments_poll(at).dbos.unwrap();
         assert_eq!(
-            dbos(first),
-            (
-                "/internal/dbos/youtube-comments-poll",
-                json!({"tick": "2026-11-08-23-45"})
-            )
+            youtube_comments_poll(first),
+            json!({"tick": "2026-11-08-23-45"})
         );
-        assert_eq!(dbos(retry), dbos(first));
-        assert_eq!(dbos(next).1, json!({"tick": "2026-11-09-00-00"}));
-        let (key, request) = restate(youtube_comments_poll(retry));
-        assert_eq!(key, "2026-11-08-23-48");
-        let request: crate::youtube_comments::PollRequest =
-            serde_json::from_value(request).unwrap();
-        assert_eq!(request.tick, key);
+        assert_eq!(youtube_comments_poll(retry), youtube_comments_poll(first));
+        assert_eq!(
+            youtube_comments_poll(next),
+            json!({"tick": "2026-11-09-00-00"})
+        );
     }
 }

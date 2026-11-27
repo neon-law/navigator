@@ -87,7 +87,6 @@ async fn retired_manual_billing_cannot_execute_a_retained_native_handle() {
             manual_schedules: Some(ManualIngress {
                 token: "synthetic-manual-token".into(),
                 builtin: executor.manual_schedules(),
-                archives: None,
             }),
             ..Default::default()
         },

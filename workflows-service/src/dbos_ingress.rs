@@ -55,7 +55,6 @@ pub struct WorkerIngress {
 pub struct ManualIngress {
     pub token: Arc<str>,
     pub builtin: workflows::dbos_engine::ManualSchedules,
-    pub archives: Option<archives::workflow::ArchivesDbosWorkflow>,
 }
 
 #[derive(Deserialize)]
@@ -94,30 +93,14 @@ async fn start_manual_schedule(
     if request.run_key != format!("manual-{id}")
         || !matches!(
             request.service.as_str(),
-            "Archives" | "BillingCanary" | "BillingDigest" | "NotationReset"
+            "BillingCanary" | "BillingDigest" | "NotationReset"
         )
     {
         return Err(StatusCode::BAD_REQUEST);
     }
     require_active_service(&request.service)?;
     let workflow_id = format!("{}:{}", request.service, request.run_key);
-    if request.service == "Archives" {
-        let workflow = ingress
-            .archives
-            .as_ref()
-            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-        workflow
-            .start_with(
-                archives::workflow::RunRequest::configured(None)
-                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
-                dbos::StartOptions {
-                    workflow_id: Some(&workflow_id),
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    } else if !ingress
+    if !ingress
         .builtin
         .start(&request.service, &workflow_id)
         .await
@@ -2618,7 +2601,6 @@ mod manual_schedule_tests {
                 manual_schedules: Some(ManualIngress {
                     token: "synthetic-manual-token".into(),
                     builtin: workflows::dbos_engine::ManualSchedules::default(),
-                    archives: None,
                 }),
                 ..Default::default()
             },
@@ -2634,7 +2616,7 @@ mod manual_schedule_tests {
             (Some("synthetic-manual-token"), serde_json::json!({"service":"Unknown", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::BAD_REQUEST),
             (Some("synthetic-manual-token"), serde_json::json!({"service":"BillingCanary", "run_key":"daily"}).to_string(), StatusCode::BAD_REQUEST),
             (Some("synthetic-manual-token"), serde_json::json!({"service":"BillingCanary", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::GONE),
-            (Some("synthetic-manual-token"), serde_json::json!({"service":"Archives", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::SERVICE_UNAVAILABLE),
+            (Some("synthetic-manual-token"), serde_json::json!({"service":"NotationReset", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::SERVICE_UNAVAILABLE),
             (Some("synthetic-manual-token"), "x".repeat(MAX_BODY_BYTES + 1), StatusCode::PAYLOAD_TOO_LARGE),
         ] {
             let mut request = Request::post("/internal/dbos/schedules");

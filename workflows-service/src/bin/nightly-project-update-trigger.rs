@@ -2,9 +2,10 @@
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    workflows::trigger::run_cron_trigger(
+    workflows::trigger::run_dbos_cron(
         "navigator-nightly-project-update-trigger",
-        workflows_service::cron_triggers::nightly_project_update(chrono::Utc::now()),
+        "/internal/dbos/nightly-project-update",
+        &workflows_service::cron_triggers::nightly_project_update(chrono::Utc::now()),
     )
     .await
 }

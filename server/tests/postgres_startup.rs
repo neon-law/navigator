@@ -14,7 +14,7 @@ const BODY: &str = include_str!("../../templates/notations/neon_law/onboarding__
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn full_native_profile_replays_staged_data_and_manual_workflows_without_source() {
     if std::env::var(CHILD).as_deref() == Ok("1") {
-        portal::hosting::run_with_dbos(neon::brand()).await.unwrap();
+        portal::hosting::run(neon::brand()).await.unwrap();
         return;
     }
     let port = store::test_support::postgres_test_port();

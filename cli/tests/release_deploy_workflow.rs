@@ -726,7 +726,7 @@ fn every_health_check_posts_its_result() {
             .collect();
         assert_eq!(
             checks,
-            ["brand-readiness", "restate-registration"],
+            ["brand-readiness"],
             "`{job_name}` runs these health checks"
         );
         for check in checks {
@@ -752,94 +752,6 @@ fn every_health_check_posts_its_result() {
             assert_eq!(post["with"]["tag"].as_str(), Some("${{ env.TAG }}"));
         }
     }
-}
-
-/// Run one ship job's `restate-registration` script against a row, with a stub
-/// `navigator` on `PATH` that echoes its arguments, and return what it printed.
-fn run_registration_check(
-    job_name: &str,
-    row: &str,
-    supports_project_id: bool,
-) -> std::process::Output {
-    let script = step(job_name, "restate-registration")["run"]
-        .as_str()
-        .expect("the registration check runs a script")
-        .to_string();
-    let stub_dir = tempfile::tempdir().expect("stub dir");
-    let stub = stub_dir.path().join("hudson");
-    let help = if supports_project_id {
-        "--project-id <PROJECT_ID>"
-    } else {
-        "--url <URL>"
-    };
-    std::fs::write(
-        &stub,
-        format!(
-            "#!/usr/bin/env bash\ncase \"$*\" in *--help*) echo '{help}' ;; *) echo \"hudson $*\" ;; esac\n"
-        ),
-    )
-    .expect("write stub");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod stub");
-    }
-    let path = format!(
-        "{}:{}",
-        stub_dir.path().display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    Command::new("bash")
-        .args(["-e", "-c", &script])
-        .current_dir(stub_dir.path())
-        .env("PATH", path)
-        .env("DEPLOYMENT", row)
-        .env("GCP_PROJECT_ID", "example-project")
-        .env("TAG", "26.10.22")
-        .env_remove("NAVIGATOR_WORKFLOWS_URL")
-        .output()
-        .expect("run the registration check under bash")
-}
-
-/// The standalone registration check runs outside `ops ship`. Without the
-/// row's own worker URL it would fall back to the brand's
-/// `workflows.<primary_domain>` — production — and staging's Restate env then
-/// fails to sign against the production worker (`META0003`, `401`). It must
-/// name the row and its project, so the CLI reads that row's worker URL.
-#[test]
-fn the_registration_check_targets_the_rows_own_worker() {
-    for (job_name, row) in [
-        ("ship-staging", "example-staging"),
-        ("ship-production", "example-production"),
-    ] {
-        let output = run_registration_check(job_name, row, true);
-        assert!(
-            output.status.success(),
-            "`{job_name}` registration check failed for `{row}`: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            format!("hudson ops restate register --deployment {row} --project-id example-project"),
-            "`{job_name}` must register `{row}`'s own worker"
-        );
-    }
-}
-
-/// The CLI is the tag being rolled. A tag older than `restate register
-/// --project-id` must not fall back to the brand default; it skips the
-/// re-check and leaves the registration `ops ship` already did.
-#[test]
-fn an_older_cli_skips_the_registration_check_rather_than_register_the_brand_default() {
-    let output = run_registration_check("ship-staging", "example-staging", false);
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !stdout.contains("hudson ops restate register"),
-        "nothing may be registered by a CLI that cannot read the row's worker URL: {stdout}"
-    );
-    assert!(stdout.contains("::warning::"));
 }
 
 #[test]
