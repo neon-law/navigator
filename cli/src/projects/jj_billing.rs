@@ -23,7 +23,7 @@ fn trailer(description: &str) -> Result<(i32, NaiveDate, Uuid)> {
     let mut lines = trailer_lines(description);
     let fields: Vec<_> = lines
         .next()
-        .context("missing Billing-Time trailer")?
+        .context("missing Billing-Time trailer; ask the author for actual hours and the work date, then add a signed change trailer: Billing-Time: <hours in tenths> <YYYY-MM-DD> <entry UUID>")?
         .strip_prefix(' ')
         .context("leave a space after Billing-Time:")?
         .split_whitespace()

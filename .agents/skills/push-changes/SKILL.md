@@ -13,6 +13,10 @@ jj setup` when needed. Fetch current main and rebase the intended change if main
 final signature, and run `navigator project gate`. Review every client-visible Matter Page and document Pointer before
 delivery. Keep document bytes, private notes, and credentials outside the change.
 
+For each outgoing change by the signed-in author, check for a Billing Annotation. If it is missing, ask the author for
+the actual hours in tenths and the work date before pushing. After confirmation, add `Billing-Time: <hours> <YYYY-MM-DD>
+<uuid>` as the final trailer on the signed change. Use a fresh UUID for each entry and keep the same UUID on retry.
+
 Run `navigator jj push` from the checkout root. To select a particular change, use `--revision <change-id>`. The command
 stages the signed-in author's explicit Billing Annotations for lawyer review and opens or resumes the review request on
 the configured forge. Navigator follows the required checks, the merge, and the deployment run for the exact merge
