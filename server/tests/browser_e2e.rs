@@ -1052,27 +1052,68 @@ async fn unverified_drive_shortcut_opens_the_working_folder_settings() {
     let Some(browser) = new_client_or_skip().await else {
         return;
     };
-    login_as_lawyer(&browser).await;
-    let project = "/app/projects/sample-litigation";
-    browser
-        .goto(&format!("{}{project}", base_url()))
-        .await
-        .unwrap();
-    click_and_reach(
-        &browser,
-        "nav[aria-label='Project actions'] a[aria-label='Configure private Google Drive folder']",
-        &format!("{project}/edit#private-drive-folder"),
-        Duration::from_secs(20),
-    )
-    .await;
-    assert!(browser
-        .find(Locator::Css(":target input[name='drive_folder_id']"))
+    use futures::FutureExt as _;
+    use std::panic::{resume_unwind, AssertUnwindSafe};
+
+    let db = postgres_browser_store().await.unwrap();
+    let pg = store::postgres::PostgresDb::application().await.unwrap();
+    let firm_id = store::projects::find_by_code(&db, "sample-litigation")
         .await
         .unwrap()
-        .is_displayed()
+        .expect("sample litigation Project")
+        .firm_id
+        .expect("sample litigation Firm");
+    let previous: Option<bool> =
+        sqlx::query_scalar("SELECT google_drive FROM firm_drive_settings WHERE firm_id = $1")
+            .bind(firm_id)
+            .fetch_optional(pg.pool())
+            .await
+            .unwrap();
+    store::firms::set_google_drive(&db, store::persons::Role::Owner, None, firm_id, true)
         .await
-        .unwrap());
-    browser.close().await.unwrap();
+        .unwrap();
+
+    let result = AssertUnwindSafe(async {
+        login_as_lawyer(&browser).await;
+        let project = "/app/projects/sample-litigation";
+        browser
+            .goto(&format!("{}{project}", base_url()))
+            .await
+            .unwrap();
+        click_and_reach(
+            &browser,
+            "nav[aria-label='Project actions'] a[aria-label='Configure private Google Drive folder']",
+            &format!("{project}/edit#private-drive-folder"),
+            Duration::from_secs(20),
+        )
+        .await;
+        assert!(browser
+            .find(Locator::Css(":target input[name='drive_folder_id']"))
+            .await
+            .unwrap()
+            .is_displayed()
+            .await
+            .unwrap());
+        browser.close().await.unwrap();
+    })
+    .catch_unwind()
+    .await;
+
+    // Other browser checks share the seeded Firm. Restore its exact setting even on failure.
+    if let Some(enabled) = previous {
+        store::firms::set_google_drive(&db, store::persons::Role::Owner, None, firm_id, enabled)
+            .await
+            .unwrap();
+    } else {
+        sqlx::query("DELETE FROM firm_drive_settings WHERE firm_id = $1")
+            .bind(firm_id)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+    }
+    if let Err(panic) = result {
+        resume_unwind(panic);
+    }
 }
 
 #[tokio::test]
