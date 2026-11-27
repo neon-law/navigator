@@ -1101,6 +1101,10 @@ fn dispatch_with_dns_provider(
             max_runners,
             once,
         }),
+        crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::QueueObserver {
+            url,
+            repository,
+        })) => forgejo::queue_observer::run(&url, &repository),
         crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::Logs {
             repository,
             run,

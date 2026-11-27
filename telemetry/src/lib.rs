@@ -51,6 +51,8 @@ use tracing_core::span::Current;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Layer;
 
+pub mod forgejo_queue;
+
 /// The instrumentation scope name for durable-execution metrics.
 const TRIGGER_METER: &str = "navigator.workflow.trigger";
 

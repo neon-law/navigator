@@ -433,6 +433,21 @@ Omit the flag for installation-wide operation.
 Forgejo 15.0.9 has no API to re-run a run (the endpoint returns 404). To re-run a failed job, push a new commit; the
 controller picks it up within one tick.
 
+### Queue alerts on staging
+
+Deploy the [queue observer](../examples/deploy/k8s/gke/forgejo/queue-observer) beside the runner controller. It polls
+one private synthetic repository using the dedicated read credential from the Forgejo service inventory every 20
+seconds. The Pod has no Kubernetes API token. It emits run numbers and queue ages for waiting runs and run numbers for
+recent failed gates and CD runs on `main`. Each poll replaces the sample. The observer keeps collecting if the
+controller stops.
+
+Set the `repository` key of the `navigator-forgejo-queue-observer` ConfigMap in the application namespace to the exact
+synthetic `owner/repository` before deploying the observer.
+
+Set the same staging Forgejo origin without a trailing slash in the observer and the [Dash0
+rules](../examples/deploy/k8s/observability/dash0-forgejo-check-rules.yaml). The waiting and failure alerts link to the
+exact run. Use the staging dataset and the existing Slack route for the `forgejo_actions` workflow label.
+
 ### Reading a run's log
 
 `hudson ops forgejo logs <owner>/<repository> --run <n> --url <forgejo> --context <context>` prints every job log of run

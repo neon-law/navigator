@@ -151,6 +151,8 @@ const FORGEJO_OIDC_CLIENT_ID: &str = "NAVIGATOR_FORGEJO_OIDC_CLIENT_ID";
 
 const FORGEJO_RUNNER_KEYS: &[&str] = &["NAVIGATOR_FORGEJO_RUNNER_CONTROLLER_TOKEN"];
 const FORGEJO_RUNNER_SECRET: &str = "navigator-forgejo-runner-controller";
+const FORGEJO_OBSERVER_KEYS: &[&str] = &["NAVIGATOR_FORGEJO_QUEUE_OBSERVER_TOKEN"];
+const FORGEJO_OBSERVER_SECRET: &str = "navigator-forgejo-queue-observer";
 
 const FORGEJO_ACTIONS_ENABLED: &str = "NAVIGATOR_FORGEJO_ACTIONS_ENABLED";
 const FORGEJO_SIGNING_KEYS: &[&str] = &[
@@ -255,7 +257,12 @@ impl ServiceSecrets {
                 POSTGRES_DBOS_KEYS,
                 POSTGRES_ARCHIVE_KEYS,
             ],
-            Self::Forgejo => &[FORGEJO_OIDC_KEYS, FORGEJO_SIGNING_KEYS, FORGEJO_RUNNER_KEYS],
+            Self::Forgejo => &[
+                FORGEJO_OIDC_KEYS,
+                FORGEJO_SIGNING_KEYS,
+                FORGEJO_RUNNER_KEYS,
+                FORGEJO_OBSERVER_KEYS,
+            ],
         }
     }
 
@@ -296,6 +303,9 @@ impl ServiceSecrets {
                 }
                 if keys.contains(FORGEJO_RUNNER_KEYS[0]) {
                     targets.push(FORGEJO_RUNNER_SECRET);
+                }
+                if keys.contains(FORGEJO_OBSERVER_KEYS[0]) {
+                    targets.push(FORGEJO_OBSERVER_SECRET);
                 }
                 targets.push(FORGEJO_METRICS_SECRET);
                 targets
@@ -1432,15 +1442,20 @@ fn build_forgejo_secrets(
     if forgejo_signing_identity(deployment)?.is_some() {
         secrets.push(forgejo_signing_secret(payloads)?);
     }
-    if payloads.contains_key(FORGEJO_RUNNER_KEYS[0]) {
-        secrets.push(KubernetesSecretPayload {
-            name: FORGEJO_RUNNER_SECRET,
-            secret_type: "Opaque",
-            data: BTreeMap::from([(
-                "FORGEJO_TOKEN".to_owned(),
-                required_payload(payloads, FORGEJO_RUNNER_KEYS[0])?,
-            )]),
-        });
+    for (key, name) in [
+        (FORGEJO_RUNNER_KEYS[0], FORGEJO_RUNNER_SECRET),
+        (FORGEJO_OBSERVER_KEYS[0], FORGEJO_OBSERVER_SECRET),
+    ] {
+        if payloads.contains_key(key) {
+            secrets.push(KubernetesSecretPayload {
+                name,
+                secret_type: "Opaque",
+                data: BTreeMap::from([(
+                    "FORGEJO_TOKEN".to_owned(),
+                    required_payload(payloads, key)?,
+                )]),
+            });
+        }
     }
     secrets.push(KubernetesSecretPayload {
         name: FORGEJO_METRICS_SECRET,
@@ -2987,39 +3002,48 @@ sops:
     }
 
     #[test]
-    fn forgejo_runner_credential_is_opt_in_and_only_reaches_its_controller_secret() {
+    fn forgejo_actions_credentials_only_reach_their_dedicated_secrets() {
         let service = ServiceSecrets::Forgejo;
-        let mut deployment = service_deployment(service);
-        let mut payloads = synthetic_service_payloads(service);
-        let key = "NAVIGATOR_FORGEJO_RUNNER_CONTROLLER_TOKEN";
-        let target = "navigator-forgejo-runner-controller";
-        let fixture_token = "synthetic-controller-credential";
-
-        for enabled in [false, true] {
-            if enabled {
-                deployment.forgejo_encrypted_keys.insert(key.to_owned());
-                payloads.insert(key.to_owned(), fixture_token.to_owned());
-            }
-            let keys = service_plan(&deployment, service).unwrap();
-            assert_eq!(service.targets(&keys).contains(&target), enabled);
-            let values = service_payloads(service, &keys, &payloads).unwrap();
-            let secrets =
-                build_service_secrets(service, &deployment, "navigator", &values).unwrap();
-            let controller = secrets.iter().find(|secret| secret.name == target);
-            if enabled {
-                let controller = controller.expect("controller Secret");
+        for (key, target, fixture_token) in [
+            (
+                FORGEJO_RUNNER_KEYS[0],
+                FORGEJO_RUNNER_SECRET,
+                "synthetic-controller-credential",
+            ),
+            (
+                FORGEJO_OBSERVER_KEYS[0],
+                FORGEJO_OBSERVER_SECRET,
+                "synthetic-observer-credential",
+            ),
+        ] {
+            let mut deployment = service_deployment(service);
+            let mut payloads = synthetic_service_payloads(service);
+            for enabled in [false, true] {
+                if enabled {
+                    deployment.forgejo_encrypted_keys.insert(key.to_owned());
+                    payloads.insert(key.to_owned(), fixture_token.to_owned());
+                }
+                let keys = service_plan(&deployment, service).unwrap();
+                assert_eq!(service.targets(&keys).contains(&target), enabled);
+                let values = service_payloads(service, &keys, &payloads).unwrap();
+                let secrets =
+                    build_service_secrets(service, &deployment, "navigator", &values).unwrap();
+                let dedicated = secrets.iter().find(|secret| secret.name == target);
                 assert_eq!(
-                    controller.data,
-                    BTreeMap::from([("FORGEJO_TOKEN".to_owned(), fixture_token.to_owned())])
+                    dedicated.map(|secret| &secret.data),
+                    enabled
+                        .then(|| BTreeMap::from([(
+                            "FORGEJO_TOKEN".to_owned(),
+                            fixture_token.to_owned()
+                        )]))
+                        .as_ref()
                 );
-            } else {
-                assert!(controller.is_none());
+                assert!(secrets
+                    .iter()
+                    .filter(|secret| secret.name != target)
+                    .flat_map(|secret| secret.data.values())
+                    .all(|value| !value.contains(fixture_token)));
             }
-            assert!(secrets
-                .iter()
-                .filter(|secret| secret.name != target)
-                .flat_map(|secret| secret.data.values())
-                .all(|value| !value.contains(fixture_token)));
         }
     }
 

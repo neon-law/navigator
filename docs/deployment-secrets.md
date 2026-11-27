@@ -296,6 +296,10 @@ service apply projects it as `FORGEJO_TOKEN` in the controller's own `navigator-
 the target with `--dry-run` before applying. The controller reads the Secret at startup, so restart its Deployment after
 rotating the credential. See [Runner controller](forgejo-deployment.md#runner-controller) for the access it needs.
 
+For the staging queue observer, add `NAVIGATOR_FORGEJO_QUEUE_OBSERVER_TOKEN` to the Forgejo service inventory. Give the
+credential read access to the synthetic repository and its Actions data. The service projection stores it as
+`FORGEJO_TOKEN` only in `navigator-forgejo-queue-observer`. The observer reads the credential at startup.
+
 The PostgreSQL certificate must include `navigator-postgres.<namespace>.svc.cluster.local` in its SAN, as Forgejo
 validates the full service DNS name.
 
