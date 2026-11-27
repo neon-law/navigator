@@ -895,7 +895,15 @@ fn webfont_css(face: &Typeface) -> Option<String> {
 /// Render the catalogued webfont with absolute URLs for email or relative URLs for a page.
 #[must_use]
 pub fn webfont_css_at(face: &Typeface, origin: &str) -> Option<String> {
-    let asset = |key: &str| crate::assets::absolute_url_at(origin, &crate::assets::asset_url(key));
+    let asset = |key: &str| {
+        let path = crate::assets::asset_url(key);
+        if !origin.is_empty() && path.starts_with("https://") {
+            // The same bucket route is mounted on each serving Brand.
+            crate::assets::absolute_url_at(origin, &format!("/assets/{key}"))
+        } else {
+            crate::assets::absolute_url_at(origin, &path)
+        }
+    };
     let bucket_face = |family: &str, dir: &str, stem: &str| {
         font_face_css(
             family,

@@ -56,6 +56,17 @@ pub fn render_branded_email_html(
     base_url: &str,
     brand: Option<&store::brands::Brand>,
 ) -> String {
+    render_email_html_with_contact(content_markdown, base_url, brand, support_email())
+}
+
+/// Render a Brand's layout with its resolved contact address.
+#[must_use]
+pub fn render_email_html_with_contact(
+    content_markdown: &str,
+    base_url: &str,
+    brand: Option<&store::brands::Brand>,
+    contact: &str,
+) -> String {
     let key = views::brand::brand_key();
     let (face, palette) = views::brand::resolve_presentation(
         brand.and_then(|b| b.typeface.as_deref()),
@@ -77,11 +88,11 @@ pub fn render_branded_email_html(
     let content_html = views::markdown::render_document(content_markdown)
         .replace("<a href=", &format!(r#"<a style="color:{link};" href="#));
     let alt = escape_attribute(brand_name());
-    let support = escape_attribute(support_email());
+    let support = escape_attribute(contact);
     let uploaded = brand
         .filter(|b| b.logo_content_type.as_deref() == Some("image/png"))
         .and_then(|b| b.logo_object_key.as_deref())
-        .map(views::assets::bucket_asset_url);
+        .map(|key| format!("/assets/{key}"));
     let logo = uploaded
         .as_deref()
         .unwrap_or(views::brand::FIRM_BRAND.social_image);
