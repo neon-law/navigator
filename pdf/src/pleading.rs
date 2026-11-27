@@ -661,63 +661,74 @@ fn caption_typst(variant: Variant, caption: &word::paper::Caption) -> String {
         );
     }
     if !caption.parties.is_empty() || !caption.case.is_empty() {
-        let left = if caption.california {
-            format!("{page_center}pt")
-        } else {
-            "1fr".into()
-        };
-        let compact = format!(
-            "[#set par(leading: {CAPTION_LEADING_POINTS}pt, spacing: {CAPTION_LEADING_POINTS}pt)\n\
-             #grid(columns: ({left}, 1fr),\n\
-             grid.cell(stroke: (right: 0.5pt, bottom: 0.5pt), inset: (right: 8pt, bottom: 8pt))[{}],\n\
-             grid.cell(inset: (left: 8pt))[{}],\n\
-             )]",
-            caption_lines(&caption.parties),
-            caption_lines(&caption.case),
-        );
-        if caption.california && variant.has_rail() {
-            let bottom = US_LETTER_HEIGHT_POINTS - variant.bottom_margin_points();
-            let _ = write!(out,
-                "#let caption-row(last: false, body) = layout(size => {{\n\
-                 \x20 let h = measure(block(width: size.width, body)).height\n\
-                 \x20 let lines = calc.max(1, calc.ceil(h / {grid}pt - 0.001))\n\
-                 \x20 block(width: 100%, height: lines * {grid}pt - if last {{ {gap}pt }} else {{ 0pt }}, body)\n\
-                 }})\n\
-                 #let flow-caption(compact, continued) = context {{\n\
-                 \x20 let y = here().position().y\n\
-                 \x20 if measure(block(width: {width}pt, compact)).height <= {bottom}pt - y {{ snap(min: 1, compact) }}\n\
-                 \x20 else {{ continued }}\n\
-                 }}\n",
-                width = (8.5 - variant.left_margin_inches() - variant.right_margin_inches())
-                    * POINTS_PER_INCH
-            );
-            let mut cells = String::from("grid.vline(x: 1, stroke: 0.5pt),\n");
-            let rows = caption.parties.len().max(caption.case.len());
-            for index in 0..rows {
-                let party = caption.parties.get(index).map_or("", String::as_str);
-                let case = caption.case.get(index).map_or("", String::as_str);
-                let last = index + 1 == rows;
-                let _ = writeln!(
-                    cells,
-                    "grid.cell(inset: (right: 8pt))[#caption-row(last: {last})[{}]],\n\
-                     grid.cell(inset: (left: 8pt))[#caption-row(last: {last})[{}]],",
-                    escape(party),
-                    escape(case),
-                );
-            }
-            cells.push_str("grid.hline(start: 0, end: 1, stroke: 0.5pt),\n");
-            let _ = writeln!(
-                out,
-                "#flow-caption({compact})[\n\
-                 #set par(leading: {CAPTION_LEADING_POINTS}pt, spacing: {CAPTION_LEADING_POINTS}pt)\n\
-                 #grid(columns: ({left}, 1fr), {cells})\n\
-                 ]"
-            );
-        } else {
-            let _ = writeln!(out, "#snap(min: 1){compact}");
-        }
+        write_caption_columns(&mut out, variant, caption, page_center, gap);
     }
     out
+}
+
+fn write_caption_columns(
+    out: &mut String,
+    variant: Variant,
+    caption: &word::paper::Caption,
+    page_center: f64,
+    gap: f64,
+) {
+    let grid = variant.calibration().grid_unit;
+    let left = if caption.california {
+        format!("{page_center}pt")
+    } else {
+        "1fr".into()
+    };
+    let compact = format!(
+        "[#set par(leading: {CAPTION_LEADING_POINTS}pt, spacing: {CAPTION_LEADING_POINTS}pt)\n\
+         #grid(columns: ({left}, 1fr),\n\
+         grid.cell(stroke: (right: 0.5pt, bottom: 0.5pt), inset: (right: 8pt, bottom: 8pt))[{}],\n\
+         grid.cell(inset: (left: 8pt))[{}],\n\
+         )]",
+        caption_lines(&caption.parties),
+        caption_lines(&caption.case),
+    );
+    if caption.california && variant.has_rail() {
+        let bottom = US_LETTER_HEIGHT_POINTS - variant.bottom_margin_points();
+        let _ = write!(out,
+            "#let caption-row(last: false, body) = layout(size => {{\n\
+             \x20 let h = measure(block(width: size.width, body)).height\n\
+             \x20 let lines = calc.max(1, calc.ceil(h / {grid}pt - 0.001))\n\
+             \x20 block(width: 100%, height: lines * {grid}pt - if last {{ {gap}pt }} else {{ 0pt }}, body)\n\
+             }})\n\
+             #let flow-caption(compact, continued) = context {{\n\
+             \x20 let y = here().position().y\n\
+             \x20 if measure(block(width: {width}pt, compact)).height <= {bottom}pt - y {{ snap(min: 1, compact) }}\n\
+             \x20 else {{ continued }}\n\
+             }}\n",
+            width = (8.5 - variant.left_margin_inches() - variant.right_margin_inches())
+                * POINTS_PER_INCH
+        );
+        let mut cells = String::from("grid.vline(x: 1, stroke: 0.5pt),\n");
+        let rows = caption.parties.len().max(caption.case.len());
+        for index in 0..rows {
+            let party = caption.parties.get(index).map_or("", String::as_str);
+            let case = caption.case.get(index).map_or("", String::as_str);
+            let last = index + 1 == rows;
+            let _ = writeln!(
+                cells,
+                "grid.cell(inset: (right: 8pt))[#caption-row(last: {last})[{}]],\n\
+                 grid.cell(inset: (left: 8pt))[#caption-row(last: {last})[{}]],",
+                escape(party),
+                escape(case),
+            );
+        }
+        cells.push_str("grid.hline(start: 0, end: 1, stroke: 0.5pt),\n");
+        let _ = writeln!(
+            out,
+            "#flow-caption({compact})[\n\
+             #set par(leading: {CAPTION_LEADING_POINTS}pt, spacing: {CAPTION_LEADING_POINTS}pt)\n\
+             #grid(columns: ({left}, 1fr), {cells})\n\
+             ]"
+        );
+    } else {
+        let _ = writeln!(out, "#snap(min: 1){compact}");
+    }
 }
 
 /// Headings in the calibration's one type size, set apart by weight, with
