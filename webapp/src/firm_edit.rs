@@ -211,7 +211,7 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
     } else {
-        Default::default()
+        store::project_deadlines::SchedulingPolicy::default()
     };
     let effort = if role == ViewerRole::Owner {
         store::firms::deadline_effort_defaults(id)

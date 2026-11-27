@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, NaiveTime, TimeDelta, TimeZone, Utc};
 use chrono_tz::Tz;
 use cloud::calendar::{CalendarEvent, CalendarService, EventTiming};
 use model::deadline_schedule::{allocate, working_hours, Window, WorkSchedule};
@@ -48,10 +48,15 @@ pub(crate) async fn plan(
         .await
         .map_err(|e| e.to_string())?;
     let finish = now + TimeDelta::days(30);
-    let horizon = Window {
-        start: now,
-        end: finish,
-    };
+    let start = zone
+        .from_local_datetime(
+            &now.with_timezone(&zone)
+                .date_naive()
+                .and_time(NaiveTime::MIN),
+        )
+        .earliest()
+        .map_or(now, |time| time.to_utc());
+    let horizon = Window { start, end: finish };
     let mut calendars_to_read = store::attorney_calendars::listed(&pg, &[person])
         .await
         .map_err(|e| e.to_string())?
@@ -139,17 +144,28 @@ pub(crate) async fn plan(
         .attorney_calendars()
         .await
         .map_err(|e| e.to_string())?;
-    let windows = provider
-        .free_busy(
-            &person.email,
-            &ids,
-            now.fixed_offset(),
-            finish.fixed_offset(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    if windows.len() != ids.len() || windows.iter().any(|calendar| calendar.gap.is_some()) {
-        return Err("an attorney or Project Calendar could not report availability".into());
+    let mut windows = Vec::new();
+    for chunk in ids.chunks(50) {
+        let report = provider
+            .free_busy(
+                &person.email,
+                chunk,
+                start.fixed_offset(),
+                finish.fixed_offset(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let returned = report
+            .iter()
+            .map(|calendar| calendar.calendar_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if report.len() != chunk.len()
+            || chunk.iter().any(|id| !returned.contains(id.as_str()))
+            || report.iter().any(|calendar| calendar.gap.is_some())
+        {
+            return Err("an attorney or Project Calendar could not report availability".into());
+        }
+        windows.extend(report);
     }
     let mut busy: Vec<_> = windows
         .into_iter()

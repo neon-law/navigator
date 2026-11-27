@@ -472,7 +472,7 @@ mod tests {
         }
         assert!(text.contains("PRODID:"));
         assert!(text.replace("\r\n ", "").contains(
-            "DESCRIPTION:Authority: Order setting briefing\\, entered 2026-10-05\\nSource document: 0190a000-0000-7000-8000-0000000000aa\\nDeadline: 0190a000-0000-7000-8000-000000000001\\nMatter page: https://navigator.example.test/app/projects/acme"
+            "DESCRIPTION:Submit by 2026-11-02T16:45:00-08:00\\nAuthority: Order setting briefing\\, entered 2026-10-05\\nSource document: 0190a000-0000-7000-8000-0000000000aa\\nDeadline: 0190a000-0000-7000-8000-000000000001\\nMatter page: https://navigator.example.test/app/projects/acme"
         ));
     }
 

@@ -61,6 +61,7 @@ pub(crate) fn columns(name: &str) -> Option<&'static [&'static str]> {
             "due_at",
             "due_on",
             "hearing",
+            "effort_minutes",
             "authority_kind",
             "authority",
             "source",

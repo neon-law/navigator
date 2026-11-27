@@ -1353,7 +1353,7 @@ mod tests {
             assert_eq!(
                 event.description.as_deref(),
                 Some(format!(
-                    "Authority: Order setting briefing\nDeadline: {}\nMatter page: https://law.test/app/projects/mirror-code",
+                    "Authority: Order setting briefing\nDeadline: {}\nMatter page: https://law.test/app/projects/mirror-code\nSubmit by 2026-11-02T16:45:00-08:00",
                     created.id
                 ))
                 .as_deref()

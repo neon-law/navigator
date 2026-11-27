@@ -2321,8 +2321,8 @@ pub enum DeadlineCmd {
         /// `firm`, `opponent`, or `hearing`.
         #[arg(long)]
         calendar_role: model::project_deadlines::CalendarRole,
-        /// `court`, `hearing`, `discovery`, `tickler`, or `internal`. Defaults from the
-        /// calendar role and authority kind when either settles it.
+        /// Deadline category, including `deposition`, `conference`, `consult`, and `call`.
+        /// Court dates and `trial_day` use the court-date review queue.
         #[arg(long)]
         category: Option<String>,
         /// Whole days. Never shorter than the client lead.

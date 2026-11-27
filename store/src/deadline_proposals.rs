@@ -579,20 +579,26 @@ pub async fn publish(pg: &PostgresDb, job: Job) -> Result<(), Error> {
     let deadline = match result {
         Ok(deadline) => deadline,
         Err(
-            Error::Invalid(_)
-            | Error::Deadline(DeadlineError::Invalid(_) | DeadlineError::NotFound),
+            error @ (Error::Invalid(_)
+            | Error::Deadline(DeadlineError::Invalid(_) | DeadlineError::NotFound)),
         ) => {
+            let reason = match error {
+                Error::Deadline(DeadlineError::Invalid(message)) => message,
+                _ => {
+                    "The approved evidence or target Deadline changed. Review the latest revision."
+                        .into()
+                }
+            };
             sqlx::query(
-        "UPDATE deadline_proposal
-         SET status='returned',reason='The approved evidence or target Deadline changed. Review the latest revision.'
-         WHERE project_id=$1
-         AND id=$2
-         AND revision=$3",
-    )
-        .bind(job.project_id)
-        .bind(job.id)
-        .bind(job.revision)
-        .execute(&mut *tx).await?;
+                "UPDATE deadline_proposal SET status='returned',reason=$4
+                WHERE project_id=$1 AND id=$2 AND revision=$3",
+            )
+            .bind(job.project_id)
+            .bind(job.id)
+            .bind(job.revision)
+            .bind(reason)
+            .execute(&mut *tx)
+            .await?;
             tx.commit().await?;
             return Ok(());
         }

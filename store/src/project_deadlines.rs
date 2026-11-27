@@ -11,7 +11,7 @@ use crate::application_store::ApplicationStore;
 use crate::postgres::project_deadlines::{Normalized, StoredDeadline};
 pub use model::project_deadlines::{
     optional_category, AuthorityKind, CalendarRole, Category, Due, DueOn, DueOnInput, Hearing,
-    AUTHORITY_KINDS, CALENDAR_ROLES, CATEGORIES,
+    SchedulingPolicy, AUTHORITY_KINDS, CALENDAR_ROLES, CATEGORIES,
 };
 
 pub const STATUS_OPEN: &str = "open";
@@ -1236,6 +1236,44 @@ mod tests {
 
     async fn pg_list(db: &ApplicationStore, project: Uuid) -> Result<Vec<Deadline>, DeadlineError> {
         super::list(db, project).await
+    }
+
+    #[tokio::test]
+    async fn effort_round_trips_and_overlapping_appearance_buffers_are_refused() {
+        test_support::with_required_postgres(async {
+            let db = ApplicationStore::uninitialized();
+            let project = pg_project(&db).await;
+            let mut filing = sample(project);
+            filing.category = Some("court".into());
+            let filing = pg_create(&db, &filing).await.unwrap();
+            assert_eq!(filing.effort_minutes, 360);
+            let no_work = pg_update(
+                &db,
+                project,
+                filing.id,
+                &DeadlinePatch {
+                    effort_minutes: Some(0),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(no_work.effort_minutes, 0);
+
+            let mut call = sample(project);
+            call.authority_kind = "internal".into();
+            call.category = Some("call".into());
+            call.title = Some("Synthetic first call".into());
+            call.due_at = "2028-07-12T10:00:00-07:00".into();
+            pg_create(&db, &call).await.unwrap();
+            call.title = Some("Synthetic second call".into());
+            call.due_at = "2028-07-12T11:15:00-07:00".into();
+            let error = pg_create(&db, &call).await.unwrap_err();
+            assert!(error.to_string().contains("Synthetic first call"));
+            call.due_at = "2028-07-12T11:30:00-07:00".into();
+            pg_create(&db, &call).await.unwrap();
+        })
+        .await;
     }
 
     #[tokio::test]
