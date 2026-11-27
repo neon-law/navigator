@@ -1,0 +1,62 @@
+# Staging canary for one synthetic, private repository.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-forgejo-queue-observer
+  namespace: navigator
+  labels:
+    app: navigator-forgejo-queue-observer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: navigator-forgejo-queue-observer
+  template:
+    metadata:
+      labels:
+        app: navigator-forgejo-queue-observer
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: observer
+          image: YOUR_IMAGE_REGISTRY/navigator-ops:YY.M.D
+          args:
+            - ops
+            - forgejo
+            - queue-observer
+            - --url=YOUR_FORGEJO_ROOT_URL
+            - --repository=$(FORGEJO_QUEUE_REPOSITORY)
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: navigator-forgejo-queue-observer
+            - name: FORGEJO_QUEUE_REPOSITORY
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-forgejo-queue-observer
+                  key: repository
+            - name: FORGEJO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-forgejo-queue-observer
+                  key: FORGEJO_TOKEN
+          envFrom:
+            - configMapRef:
+                name: navigator-otel-env
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 128Mi

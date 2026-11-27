@@ -2,20 +2,17 @@
 #
 # Slack hears about Forgejo Actions only when something is wrong, including
 # when something did not happen. Every signal comes from the runner
-# controller (`navigator ops forgejo runner-controller`, telemetry/src/lib.rs)
-# or the collector's Forgejo scrape:
+# controller, independent queue observer, or collector's Forgejo scrape:
 #   navigator.forgejo.controller.tick                  outcome = ok | error
-#   navigator.forgejo.run.oldest_waiting_seconds       forgejo.repository
-#   navigator.forgejo.run.finished                     forgejo.repository, forgejo.workflow,
-#                                                      forgejo.event, outcome
+#   navigator.forgejo.queue.waiting_seconds            forgejo.repository, forgejo.run_number
+#   navigator.forgejo.queue.recent_failure             forgejo.repository, forgejo.run_number, forgejo.workflow
 #   navigator.forgejo.runner.orphan_cleaned            (no attributes)
 #   navigator.forgejo.cd.missed                        forgejo.repository
 #   up{job="forgejo"}                                  the collector's Forgejo scrape
 # The repository is `<firm>/<project code>`. No rule, label or annotation
 # carries a PR title, branch name or commit message: each can hold
-# client-identifying text. The run number is on the controller's
-# `forgejo.job.*` log records; `navigator ops forgejo logs <repository> --run
-# <n>` prints the run.
+# client-identifying text. Substitute the staging Forgejo origin without a
+# trailing slash for YOUR_FORGEJO_ROOT_URL before applying the rules.
 #
 # One rule per group, so each group also loads as a Terraform
 # `dash0_check_rule`. Apply to the staging dataset with either:
@@ -41,13 +38,13 @@ spec:
         # that waits five minutes has no runner coming.
         - alert: ForgejoJobWaitingNoRunner
           expr: |
-            max by ("forgejo.repository") (
-              {otel_metric_name="navigator.forgejo.run.oldest_waiting_seconds"}
+            max by ("forgejo.repository", "forgejo.run_number") (
+              {otel_metric_name="navigator.forgejo.queue.waiting_seconds"}
             ) > 300
           for: 0m
           annotations:
-            summary: "Forgejo: a {{ $labels.forgejo_repository }} run has waited {{ $value | humanizeDuration }} for a runner"
-            description: "Check ForgejoRunnerControllerMissed first. Open the repository's Actions page to find the waiting run; `kubectl -n navigator logs deploy/navigator-forgejo-runner-controller` shows why no runner started."
+            summary: "Forgejo: {{ $labels.forgejo_repository }} run {{ $labels.forgejo_run_number }} has waited {{ $value | humanizeDuration }} for a runner"
+            description: "Open YOUR_FORGEJO_ROOT_URL/{{ $labels.forgejo_repository }}/actions/runs/{{ $labels.forgejo_run_number }} and check ForgejoRunnerControllerMissed."
             dash0-enabled: "true"
           labels:
             workflow: forgejo_actions
@@ -77,13 +74,13 @@ spec:
         # failure stays in the pull request.
         - alert: ForgejoGateFailedOnMain
           expr: |
-            sum by ("forgejo.repository", "forgejo.workflow") (
-              increase({otel_metric_name="navigator.forgejo.run.finished", outcome="failure", "forgejo.event"="push", "forgejo.workflow"="gate.yml"}[15m])
+            max by ("forgejo.repository", "forgejo.run_number") (
+              {otel_metric_name="navigator.forgejo.queue.recent_failure", "forgejo.workflow"="gate.yml"}
             ) > 0
           for: 0m
           annotations:
-            summary: "Forgejo: {{ $labels.forgejo_workflow }} failed on main in {{ $labels.forgejo_repository }}"
-            description: "`navigator ops forgejo logs {{ $labels.forgejo_repository }} --run <n>` prints the run; the controller's forgejo.job.finished record names <n>."
+            summary: "Forgejo: gate run {{ $labels.forgejo_run_number }} failed on main in {{ $labels.forgejo_repository }}"
+            description: "Open YOUR_FORGEJO_ROOT_URL/{{ $labels.forgejo_repository }}/actions/runs/{{ $labels.forgejo_run_number }}."
             dash0-enabled: "true"
           labels:
             workflow: forgejo_actions
@@ -94,13 +91,13 @@ spec:
         # in practice this is the document check or the seed import.
         - alert: ForgejoCdFailed
           expr: |
-            sum by ("forgejo.repository") (
-              increase({otel_metric_name="navigator.forgejo.run.finished", outcome="failure", "forgejo.workflow"="cd.yml"}[15m])
+            max by ("forgejo.repository", "forgejo.run_number") (
+              {otel_metric_name="navigator.forgejo.queue.recent_failure", "forgejo.workflow"="cd.yml"}
             ) > 0
           for: 0m
           annotations:
-            summary: "Forgejo CD failed on main in {{ $labels.forgejo_repository }}"
-            description: "`navigator ops forgejo logs {{ $labels.forgejo_repository }} --run <n>` prints the run. A failed `seeds` job left the live Project unreconciled."
+            summary: "Forgejo: CD run {{ $labels.forgejo_run_number }} failed on main in {{ $labels.forgejo_repository }}"
+            description: "Open YOUR_FORGEJO_ROOT_URL/{{ $labels.forgejo_repository }}/actions/runs/{{ $labels.forgejo_run_number }}."
             dash0-enabled: "true"
           labels:
             workflow: forgejo_actions

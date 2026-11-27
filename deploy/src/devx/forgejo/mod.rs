@@ -15,11 +15,13 @@
 pub(in crate::devx) mod bundle;
 pub(in crate::devx) mod cluster;
 pub(in crate::devx) mod controller;
+mod job_receipts;
 mod kubeapi;
 pub(in crate::devx) mod logs;
 pub(in crate::devx) mod namespace_move;
 mod oidc;
 pub(in crate::devx) mod policy;
+pub(in crate::devx) mod queue_observer;
 pub(in crate::devx) mod release;
 pub(in crate::devx) mod runner;
 mod smoke;
