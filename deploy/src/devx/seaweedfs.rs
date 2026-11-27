@@ -313,12 +313,6 @@ pub(super) fn credential_env(credentials: &Credentials) -> [(&'static str, &str)
     ]
 }
 
-pub(super) fn export(credentials: &Credentials) {
-    for (key, value) in credential_env(credentials) {
-        std::env::set_var(key, value);
-    }
-}
-
 pub(super) fn random_hex() -> String {
     rand::random::<[u8; 32]>()
         .iter()

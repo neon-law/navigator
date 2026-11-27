@@ -211,22 +211,19 @@ fn trigger_build_matrix_matches_rendered_trigger_manifests() {
     let matrix = workflow["jobs"]["publish-triggers"]["strategy"]["matrix"]["include"]
         .as_sequence()
         .expect("publish-triggers must declare an include matrix");
+    assert!(matrix.iter().any(|leg| leg["image"] == "navigator-ops"));
     let built: BTreeSet<String> = matrix
         .iter()
-        .filter(|leg| leg["dockerfile"].as_str() == Some("images/Containerfile.trigger"))
-        .flat_map(|leg| {
-            ["image", "alias"].into_iter().filter_map(move |key| {
-                leg[key]
-                    .as_str()
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-            })
-        })
+        .filter_map(|leg| leg["image"].as_str())
+        .filter(|image| *image != "navigator-ops")
+        .map(str::to_owned)
         .collect();
 
+    let mut rendered = rendered_trigger_images();
+    rendered.remove("navigator-ops");
     assert_eq!(
         built,
-        rendered_trigger_images(),
+        rendered,
         "every trigger image built by publish-triggers must be named by a rendered CronJob, and every rendered trigger must be built"
     );
 }
@@ -978,28 +975,16 @@ fn every_kubectl_apply_reads_a_vendored_manifest() {
          Found: {remote:#?}"
     );
 
-    // The CLI owns these paths; the native runner delegates provisioning to it.
-    for named in [
-        "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml",
-        "k8s/vendor/restate-operator-v2.8.1",
-    ] {
-        assert!(
-            orchestration.contains(named),
-            "the CLI must resolve its vendored manifest {named} locally"
-        );
-    }
-
-    for vendored in [
-        "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml",
-        "k8s/vendor/restate-operator-v2.8.1/restateclusters.yaml",
-        "k8s/vendor/restate-operator-v2.8.1/restatedeployments.yaml",
-        "k8s/vendor/restate-operator-v2.8.1/restatecloudenvironments.yaml",
-    ] {
-        assert!(
-            root.join(vendored).exists(),
-            "the CLI's vendored manifest `{vendored}` is missing from the tree"
-        );
-    }
+    // The CLI owns this path. The native runner delegates provisioning to it.
+    let manifest = "k8s/vendor/ingress-nginx-controller-v1.11.2.yaml";
+    assert!(
+        orchestration.contains(manifest),
+        "the CLI must resolve its vendored manifest {manifest} locally"
+    );
+    assert!(
+        root.join(manifest).exists(),
+        "the CLI's vendored manifest `{manifest}` is missing from the tree"
+    );
 }
 
 #[test]
@@ -1046,11 +1031,6 @@ fn build_exports_an_actions_cache_scope_only_where_publish_service_reads_it() {
     let exported = scopes("build");
     let read_back = scopes("publish-service");
 
-    assert!(
-        !exported.is_empty(),
-        "at least one build leg must still export a scope publish-service reads, or a release \
-         compiles the same crates twice"
-    );
     for scope in &exported {
         assert!(
             read_back.contains(scope),
@@ -1931,130 +1911,6 @@ fn only_the_bump_commit_publishes_an_unreleased_version() {
         behind.contains("tag=1.0.1\n"),
         "the version is still reported: {behind}"
     );
-}
-
-fn run_retained_operator_alias(
-    format: &str,
-    stale_public: bool,
-) -> (bool, Vec<String>, Vec<String>) {
-    use sha2::Digest;
-    use std::fmt::Write as _;
-    use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().unwrap();
-    let bin = dir.path().join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    std::fs::create_dir(dir.path().join("scripts")).unwrap();
-    let docker = r#"#!/usr/bin/env bash
-set -euo pipefail
-case "$*" in
-  'buildx imagetools create '*)
-    printf '%s\n' "$*" >> "$CALLS"
-    if [[ "$FORMAT" == plain && " $* " != *' --prefer-index=false '* ]]; then
-      printf 'wrapped index' > "$COPIED"
-    else
-      printf '%s manifest' "$FORMAT" > "$COPIED"
-    fi ;;
-  'buildx imagetools inspect --raw '*)
-    if [[ "$STALE_PUBLIC" == 1 && "${@: -1}" == ghcr.io/* ]]; then
-      printf 'stale manifest'
-    else
-      cat "$COPIED"
-    fi ;;
-  *) exit 17 ;;
-esac
-"#;
-    for (name, body) in [
-        ("docker", docker),
-        (
-            "cosign",
-            r#"#!/usr/bin/env bash
-printf '%s\n' "$3" >> "$SIGNED"
-"#,
-        ),
-        ("sleep", "#!/usr/bin/env bash\nexit 0\n"),
-    ] {
-        let path = bin.join(name);
-        std::fs::write(&path, body).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let signer = dir.path().join("scripts/cosign-sign.sh");
-    std::fs::write(&signer, repo_file("scripts/cosign-sign.sh")).unwrap();
-    std::fs::set_permissions(&signer, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let parsed: serde_yaml::Value = serde_yaml::from_str(&deploy_workflow()).unwrap();
-    let step = parsed["jobs"]["publish-triggers"]["steps"]
-        .as_sequence()
-        .unwrap()
-        .iter()
-        .find(|step| step["name"] == "publish retained Source operator alias")
-        .unwrap();
-    let mut digest = String::from("sha256:");
-    for byte in sha2::Sha256::digest(format!("{format} manifest").as_bytes()) {
-        write!(digest, "{byte:02x}").unwrap();
-    }
-    let output = std::process::Command::new("bash")
-        .args(["-c", step["run"].as_str().unwrap()])
-        .current_dir(dir.path())
-        .env_clear()
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                bin.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .env("ALIAS", "navigator-surreal-archive")
-        .env("IMAGE_REF", "registry.example/native/navigator-ops")
-        .env("IMAGE_DIGEST", &digest)
-        .env("GHCR_REGISTRY", "ghcr.io/example/navigator")
-        .env("RELEASE_TAG", "synthetic")
-        .env("FORMAT", format)
-        .env("COPIED", dir.path().join("copied"))
-        .env("CALLS", dir.path().join("calls"))
-        .env("SIGNED", dir.path().join("signed"))
-        .env("STALE_PUBLIC", if stale_public { "1" } else { "0" })
-        .env("COSIGN_SIGN_ATTEMPTS", "1")
-        .output()
-        .unwrap();
-    let lines = |name: &str| {
-        std::fs::read_to_string(dir.path().join(name))
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_string)
-            .collect::<Vec<_>>()
-    };
-    (output.status.success(), lines("calls"), lines("signed"))
-}
-
-#[test]
-fn retained_operator_alias_preserves_plain_and_index_bytes_in_both_registries() {
-    for format in ["plain", "index"] {
-        let (success, copies, signed) = run_retained_operator_alias(format, false);
-        assert!(success);
-        assert_eq!(copies.len(), 2);
-        assert_eq!(signed.len(), 2);
-        for (copy, signature) in copies.iter().zip(&signed) {
-            assert!(copy.contains(":synthetic") && copy.contains(":latest"));
-            assert!(copy.contains("registry.example/native/navigator-ops@sha256:"));
-            assert!(signature.contains("/navigator-surreal-archive@sha256:"));
-        }
-        assert!(signed[0].starts_with("registry.example/"));
-        assert!(signed[1].starts_with("ghcr.io/"));
-        assert_eq!(
-            signed[0].rsplit_once('@').unwrap().1,
-            signed[1].rsplit_once('@').unwrap().1
-        );
-    }
-}
-
-#[test]
-fn retained_operator_alias_refuses_changed_public_bytes_before_signing_them() {
-    for format in ["plain", "index"] {
-        let (success, _, signed) = run_retained_operator_alias(format, true);
-        assert!(!success);
-        assert_eq!(signed.len(), 1);
-        assert!(signed[0].starts_with("registry.example/"));
-    }
 }
 
 #[test]

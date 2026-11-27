@@ -19,7 +19,6 @@ resources:
   - ../../staging
   - ../kind/seaweedfs
   - ../kind/rauthy
-  - ../kind/surreal
   - staging-coordinates.yaml
 
 patches:

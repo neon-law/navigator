@@ -658,10 +658,6 @@ jobs:
           # `neon-server` is the expensive one — measured at 3.78 GB of
           # `mode=max` blobs in run 32487939326, 38% of the whole 10 GB
           # repository quota on its own.
-          - image: navigator-workflows-service
-            dockerfile: images/Containerfile.workflows-service
-            runner: blacksmith-4vcpu-ubuntu-2404
-            ci_cache_scope: navigator-workflows-service-amd64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
@@ -1232,10 +1228,6 @@ jobs:
           # and `COPY server server` sits above `RUN cargo build`, so their
           # builder inputs genuinely differ and a lookup could only miss.
           # Sharing those needs `server/public` moved below the compile.
-          - image: navigator-workflows-service
-            dockerfile: images/Containerfile.workflows-service
-            runner: blacksmith-4vcpu-ubuntu-2404
-            ci_cache_scope: navigator-workflows-service-amd64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
@@ -1682,56 +1674,19 @@ jobs:
         include:
           # Scheduled and operator images share Containerfile.trigger; CRATE
           # and BIN select the executable. Compatibility aliases reuse its digest.
-          - image: navigator-archives-trigger
-            dockerfile: images/Containerfile.trigger
-            runner: blacksmith-4vcpu-ubuntu-2404
-            build-args: |
-              CRATE=archives
-              BIN=trigger
           - image: navigator-ops
-            alias: navigator-surreal-archive
             dockerfile: images/Containerfile.trigger
             # Hudson links the portal graph and requires the operator build capacity.
             runner: blacksmith-8vcpu-ubuntu-2404
             build-args: |
               CRATE=hudson
               BIN=hudson
-          - image: navigator-billing-digest-trigger
-            dockerfile: images/Containerfile.trigger
-            runner: blacksmith-4vcpu-ubuntu-2404
-            build-args: |
-              CRATE=billing-workflows
-              BIN=billing-digest-trigger
-          - image: navigator-dri-digest-trigger
-            dockerfile: images/Containerfile.trigger
-            runner: blacksmith-4vcpu-ubuntu-2404
-            build-args: |
-              CRATE=workflows-service
-              BIN=dri-digest-trigger
           - image: navigator-nightly-project-update-trigger
             dockerfile: images/Containerfile.trigger
             runner: blacksmith-4vcpu-ubuntu-2404
             build-args: |
               CRATE=workflows-service
               BIN=nightly-project-update-trigger
-          - image: navigator-notation-reset-trigger
-            dockerfile: images/Containerfile.trigger
-            runner: blacksmith-4vcpu-ubuntu-2404
-            build-args: |
-              CRATE=workflows-service
-              BIN=notation-reset-trigger
-          - image: navigator-general-nag
-            dockerfile: images/Containerfile.trigger
-            runner: blacksmith-4vcpu-ubuntu-2404
-            build-args: |
-              CRATE=workflows-service
-              BIN=general-nag
-          - image: navigator-social-publish-reconciler-trigger
-            dockerfile: images/Containerfile.trigger
-            runner: blacksmith-4vcpu-ubuntu-2404
-            build-args: |
-              CRATE=workflows-service
-              BIN=social-publish-reconciler-trigger
           - image: navigator-youtube-comments-poll-trigger
             dockerfile: images/Containerfile.trigger
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -1930,9 +1885,7 @@ jobs:
           image="${IMAGE_REF}@${IMAGE_DIGEST}"
           docker run --rm "$image" --version
           docker run --rm "$image" ops postgres ready --help
-          docker run --rm "$image" ops postgres mirror reconcile --help
           docker run --rm "$image" ops forgejo runner-controller --help
-          docker run --rm "$image" ops surreal-archive export --help
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -1965,43 +1918,6 @@ jobs:
           done
           echo "::error::GHCR mirror of ${target}:${RELEASE_TAG} failed after retries"
           exit 1
-      # The retained Source exporter uses an explicit compatibility repository.
-      # Copy this build's digest, verify the copied bytes, and sign each registry
-      # identity instead of compiling Hudson twice or falling back to an old tag.
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        if: matrix.alias != ''
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "publish-triggers ${{ matrix.image }}"
-          step: "publish retained Source operator alias"
-      - name: publish retained Source operator alias
-        timeout-minutes: 5
-        if: matrix.alias != ''
-        env:
-          ALIAS: ${{ matrix.alias }}
-          IMAGE_REF: ${{ steps.img.outputs.name }}
-          IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
-          GHCR_REGISTRY: ghcr.io/${{ github.repository_owner }}/navigator
-          RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          test -n "${ALIAS}"
-          for target in "${IMAGE_REF%/*}/${ALIAS}" "${GHCR_REGISTRY}/${ALIAS}"; do
-              copied=false
-              for attempt in 1 2 3 4 5; do
-                  if docker buildx imagetools create --prefer-index=false --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
-                      && target_digest="$(docker buildx imagetools inspect --raw "${target}:${RELEASE_TAG}" | sha256sum | cut -d' ' -f1)" \
-                      && [ "sha256:${target_digest}" = "${IMAGE_DIGEST}" ]; then
-                      copied=true
-                      break
-                  fi
-                  sleep "$((attempt * 2))"
-              done
-              test "${copied}" = true
-              scripts/cosign-sign.sh "${target}@${IMAGE_DIGEST}"
-          done
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -2013,10 +1929,8 @@ jobs:
         env:
           IMAGE_NAME: ${{ matrix.image }}
           IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
-          ALIAS: ${{ matrix.alias }}
         run: |
-          jq -n --arg image "${IMAGE_NAME}" --arg digest "${IMAGE_DIGEST}" --arg alias "${ALIAS}" \
-            'if $alias == "" then {($image): $digest} else {($image): $digest, ($alias): $digest} end' > image-digest.json
+          jq -n --arg image "${IMAGE_NAME}" --arg digest "${IMAGE_DIGEST}" '{($image): $digest}' > image-digest.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-digest-${{ matrix.image }}
@@ -3598,13 +3512,10 @@ jobs:
           • \`neon-server\` — www.neonlaw.com, the firm serving the whole site
 
           *Service images*
-          • \`navigator-workflows-service\` — the durable-execution worker
           • \`navigator-web\` — alias tag, byte-identical to \`neon-server\`; retires with #796
 
           *Scheduled-job images*
-          • \`navigator-archives-trigger\`, \`navigator-ops\` (with the retained \`navigator-surreal-archive\` alias),
-          \`navigator-billing-digest-trigger\`, \`navigator-dri-digest-trigger\`,
-          \`navigator-general-nag\`, \`navigator-nightly-project-update-trigger\`
+          • \`navigator-ops\`, \`navigator-nightly-project-update-trigger\`
 
           All 12 images were published with the release tag and \`latest\`.
 

@@ -16,7 +16,6 @@
 use std::env;
 use std::fmt::Write as _;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
@@ -35,7 +34,6 @@ mod dns;
 mod doctor;
 mod e2e;
 mod email_summary_delivery;
-mod email_summary_e2e;
 mod email_summary_redrive;
 mod firm_certificate_roll;
 mod flake_hunt;
@@ -45,7 +43,6 @@ mod github_auto_merge;
 pub(crate) mod github_setup;
 mod host_setup;
 mod lifecycle;
-mod native;
 mod native_profile;
 // `navigator jj setup` installs jj with the same Homebrew seam.
 // `hudson same-day preview` serves the bundle this module stages, so
@@ -57,8 +54,6 @@ mod postgres_volume;
 pub(crate) mod project_slack_reconcile;
 mod quickstart;
 pub(crate) mod registry;
-mod restate_handover;
-mod restate_object_handover;
 mod runtime;
 pub(crate) mod same_day;
 mod sample_project;
@@ -69,7 +64,6 @@ mod ship_log;
 pub(crate) mod signed_commits;
 mod social_key_changes;
 mod staging;
-mod surreal;
 mod webapp;
 mod worktree_env;
 
@@ -84,9 +78,8 @@ pub use worktree_env::WorktreeEnvCmd;
 // as `super::<name>`, exactly as when they lived here.
 use orchestrate::{
     down, down_in, kind_down_only, kind_up_only, kustomize_render, logs, print_env,
-    rauthy_deployment_exists, reload_worker as reload_worker_in_kind, require_auth, require_tools,
-    run, status, undeploy, up, use_kind_context, wait_for_condition, wait_for_tcp, wait_rollout,
-    workspace_root,
+    rauthy_deployment_exists, require_auth, require_tools, run, status, undeploy, up,
+    use_kind_context, wait_for_tcp, wait_rollout, workspace_root,
 };
 
 // KIND/local defaults. Each pairs with a `KindConfig` field and a
@@ -112,7 +105,6 @@ const INGRESS_MANIFEST_SHA256: &str =
 // own `deny-all` NetworkPolicy being enforced by recent kindnet, which
 // blocked the operator→node `:5122` provisioning dial. The fix lives in
 // `restate.yaml` (`security.disableNetworkPolicies: true`), not here.
-const RESTATE_OPERATOR_VERSION: &str = "2.8.1";
 
 // The Operator's CRDs, applied explicitly by `install_restate_operator`.
 //
@@ -124,29 +116,8 @@ const RESTATE_OPERATOR_VERSION: &str = "2.8.1";
 // cluster got the current one. That silent split is exactly the drift the
 // pinned constants exist to prevent, so apply the release's CRD artifacts
 // on every `up` and let both converge.
-const RESTATE_CRDS: [&str; 3] = [
-    "restateclusters",
-    "restatedeployments",
-    "restatecloudenvironments",
-];
 // Exact v2.8.1 release artifact SHA-256 digests.
 #[cfg(test)]
-const RESTATE_CRD_SHA256: [(&str, &str); 3] = [
-    (
-        "restateclusters",
-        "f8fa6a9f6cb0233b90e7a8860f62fd6c6cd6b0633776b9a269496ffe9d1fb5a5",
-    ),
-    (
-        "restatedeployments",
-        "a8de718e448c99856303553403dce047ed884b26dd0312cd36d9c5a1dda45dfa",
-    ),
-    (
-        "restatecloudenvironments",
-        "c63f92508ec4a3862ee399f629fab58f63813d02de08d190e63c2c772f15c01b",
-    ),
-];
-const RESTATE_CRD_DIR: &str = "k8s/vendor/restate-operator-v2.8.1";
-
 #[cfg(test)]
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::Digest;
@@ -197,7 +168,6 @@ mod ingress_manifest_tests {
 // the server image in `restate.yaml`) — keep all three on 1.7.x.
 // Only `check_restate_cli_version` reads this: it warns when the CLI
 // on PATH drifts. There is no CI env to keep in step.
-const RESTATE_CLI_VERSION: &str = "1.7.2";
 
 // Last-resort public HTTPS endpoint Restate Cloud uses to reach the
 // `workflows-service` worker. Backed by the ingress + managed cert
@@ -209,7 +179,6 @@ const RESTATE_CLI_VERSION: &str = "1.7.2";
 // bundle's), and only falls back to this constant when none of those are set.
 // Hitting this constant in prod means the
 // re-register silently no-ops (the 2026-06-10 ship symptom).
-pub(crate) const WORKFLOWS_PUBLIC_URL: &str = "https://workflows.example.com/";
 
 // Local `:dev` image tags KIND loads. CI publishes the real images to
 // the private Artifact Registry (`YY.M.D`); `pull_retag_load` pulls one
@@ -217,8 +186,6 @@ pub(crate) const WORKFLOWS_PUBLIC_URL: &str = "https://workflows.example.com/";
 // overlays stay unchanged. Trigger images are pulled straight from the
 // registry by their CronJobs in prod and are never loaded into the local
 // cluster, so they need no local tag constant here.
-const WEB_IMAGE: &str = "navigator-web:dev";
-const WORKFLOWS_SERVICE_IMAGE: &str = "navigator-workflows-service:dev";
 
 // Kustomize overlay roots. `Up` applies the deps-only overlay (no
 // in-cluster `web`). `Deploy` applies the full overlay including
@@ -254,14 +221,6 @@ const DEFAULT_SEAWEEDFS_S3_HOST_PORT: u16 = 30900;
 // so the host mapping is 18000 — clear of every other port this module
 // binds.
 const DEFAULT_SURREAL_HOST_PORT: u16 = 18000;
-/// The namespace every local environment selects. One namespace per
-/// deployment is the production shape (#1093); locally there is one.
-const SURREAL_NAMESPACE: &str = "navigator";
-/// Root credentials for the disposable in-cluster engine. They match
-/// `k8s/overlays/kind/surreal/surreal.yaml`'s Secret — a KIND-only
-/// convenience, never a deployment's credentials.
-const SURREAL_LOCAL_USER: &str = "root";
-const SURREAL_LOCAL_PASSWORD: &str = "root";
 
 // Local `web` defaults — matches `cargo run -p neon` defaults.
 const DEFAULT_LOCAL_WEB_PORT: u16 = 3001;
@@ -921,51 +880,6 @@ pub enum IapCmd {
     },
 }
 
-#[derive(Subcommand)]
-pub enum RestateCmd {
-    /// Capture, check, import and activate retained Notation/Project Slack objects.
-    ObjectHandover {
-        #[command(subcommand)]
-        operation: restate_object_handover::Operation,
-    },
-    /// Report aggregate Restate preservation obligations without reading payloads.
-    HandoverAudit {
-        /// Explicit Restate CLI environment to inspect; ambient defaults are refused.
-        #[arg(long)]
-        environment: String,
-    },
-    /// Register the `workflows-service` worker with the configured
-    /// Restate Cloud environment. Equivalent to
-    /// `restate -y deployment register <url>` against
-    /// `NAVIGATOR_WORKFLOWS_URL` (or the prod default).
-    Register {
-        /// Override the public worker URL. When unset, falls back to
-        /// `NAVIGATOR_WORKFLOWS_URL`, then derives
-        /// `https://workflows.<brand.primary_domain>/`, and only
-        /// then the workspace placeholder
-        /// (`https://workflows.example.com/`).
-        #[arg(long, conflicts_with = "project_id")]
-        url: Option<String>,
-        /// Deployment whose published configuration names the worker URL.
-        #[arg(long, requires = "project_id")]
-        deployment: Option<String>,
-        /// Read the worker URL (`NAVIGATOR_WORKFLOWS_URL`) from the
-        /// deployment's configuration in this explicit GCP project, so a
-        /// runner without a deployment tree registers the row's own worker.
-        #[arg(long, requires = "deployment")]
-        project_id: Option<String>,
-    },
-}
-
-fn reload_worker(cfg: &KindConfig) -> Result<()> {
-    let root = workspace_root()?;
-    if worktree_env::is_native(&root) {
-        let (slot, admin_port) = worktree_env::native_worker_coordinates(&root, cfg)?;
-        return native::reload_workflows(&root, slot, admin_port);
-    }
-    reload_worker_in_kind(cfg)
-}
-
 /// Dispatch the local `dev` and operator `ops` subsets of the `navigator` CLI.
 /// `main` loads `.env` + `.devx/env` before parsing ordinary local commands,
 /// so this only resolves the KIND config and routes. Deployment-scoped
@@ -998,7 +912,6 @@ fn dispatch_with_dns_provider(
     }
     let cfg = KindConfig::from_env();
     match command {
-        crate::Command::Dev(crate::DevCmd::Install) => native::install(),
         crate::Command::Dev(crate::DevCmd::Up { path }) => up(path.as_deref(), &cfg),
         crate::Command::Dev(crate::DevCmd::Down { path }) => down(path.as_deref(), &cfg),
         crate::Command::Dev(crate::DevCmd::Env) => print_env(&cfg),
@@ -1006,7 +919,6 @@ fn dispatch_with_dns_provider(
             status(&cfg);
             Ok(())
         }
-        crate::Command::Dev(crate::DevCmd::WorkerReload) => reload_worker(&cfg),
         crate::Command::Dev(crate::DevCmd::Serve) => serve::run(),
         crate::Command::Quickstart => quickstart::run(&cfg),
         crate::Command::Dev(crate::DevCmd::BuildWebapp { release }) => webapp::build(release),
@@ -1027,9 +939,6 @@ fn dispatch_with_dns_provider(
         }
         crate::Command::Dev(crate::DevCmd::E2e) => e2e::run_e2e(&cfg),
         crate::Command::Dev(crate::DevCmd::SeaweedfsBootstrap) => seaweedfs::bootstrap(&cfg),
-        crate::Command::Dev(crate::DevCmd::PostgresBootstrap { path }) => {
-            orchestrate::postgres_bootstrap(path.as_deref(), &cfg)
-        }
         crate::Command::Dev(crate::DevCmd::GrantLawyer) => e2e::grant_lawyer(&cfg),
         crate::Command::Dev(crate::DevCmd::SampleProject {
             project,
@@ -1042,7 +951,6 @@ fn dispatch_with_dns_provider(
             git_ref.as_deref(),
             keep,
         ),
-        crate::Command::Dev(crate::DevCmd::EmailSummaryE2e) => email_summary_e2e::run_e2e(&cfg),
         crate::Command::Dev(crate::DevCmd::BrowserE2e { base_url }) => {
             browser_e2e::run_browser_e2e(base_url.as_deref())
         }
@@ -1061,12 +969,6 @@ fn dispatch_with_dns_provider(
         crate::Command::Ops(crate::OpsCmd::Doctor { namespace }) => {
             doctor::run(namespace.as_deref().unwrap_or(&cfg.namespace))
         }
-        crate::Command::Ops(crate::OpsCmd::SurrealArchive(crate::SurrealArchiveCmd::Export)) => {
-            crate::surreal_archive::export()
-        }
-        crate::Command::Ops(crate::OpsCmd::SurrealArchive(
-            crate::SurrealArchiveCmd::RestoreDrill { key },
-        )) => crate::surreal_archive::restore_drill(&key),
         crate::Command::Ops(crate::OpsCmd::Forgejo(
             crate::ForgejoPolicyCmd::RenameOrganization(args),
         )) => forgejo::namespace_move::run(&args),
@@ -1321,25 +1223,6 @@ fn dispatch_with_dns_provider(
             member,
             service,
         }))) => gcp_iap_grant(&project_id, &service, &member),
-        crate::Command::Ops(crate::OpsCmd::Restate(RestateCmd::ObjectHandover { operation })) => {
-            restate_object_handover::run(operation)
-        }
-        crate::Command::Ops(crate::OpsCmd::Restate(RestateCmd::HandoverAudit { environment })) => {
-            restate_handover::run(&environment)
-        }
-        crate::Command::Ops(crate::OpsCmd::Restate(RestateCmd::Register {
-            url,
-            deployment,
-            project_id,
-        })) => match (project_id, deployment) {
-            (Some(project), Some(deployment)) => {
-                let loaded = deployment_config::load(&project, &deployment)?;
-                register_published_deployment(&loaded, |url, target| {
-                    restate_register(Some(url), Some(target))
-                })
-            }
-            _ => restate_register(url.as_deref(), None),
-        },
         crate::Command::Ops(crate::OpsCmd::Ship {
             deployment,
             deployments_dir,
@@ -2027,447 +1910,6 @@ fn gcp_iap_grant(project_id: &str, service: &str, member: &str) -> Result<()> {
     })
 }
 
-/// Resolve the public worker URL Restate Cloud dials, in precedence
-/// order:
-///   1. an explicit `--url` override,
-///   2. `NAVIGATOR_WORKFLOWS_URL`,
-///   3. derived from mounted `brand.primary_domain` as
-///      `https://workflows.<domain>/`,
-///   4. the [`WORKFLOWS_PUBLIC_URL`] placeholder — only when none of the
-///      above are set.
-///
-/// Step 3 is the hardening from the 2026-06-10 ship: an operator who has
-/// a bundle domain but never set the explicit workflows URL
-/// now targets their real ingress instead of `workflows.example.com`,
-/// which silently no-op'd the re-register. Pure (takes its inputs as
-/// args) so it is unit-testable without mutating the process env.
-pub(crate) fn resolve_workflows_url(
-    url_override: Option<&str>,
-    workflows_url_env: Option<&str>,
-    primary_domain: Option<&str>,
-) -> String {
-    fn nonblank(v: &str) -> Option<String> {
-        let t = v.trim();
-        (!t.is_empty()).then(|| t.to_string())
-    }
-    url_override
-        .and_then(nonblank)
-        .or_else(|| workflows_url_env.and_then(nonblank))
-        .or_else(|| {
-            primary_domain
-                .and_then(nonblank)
-                .map(|d| format!("https://workflows.{d}/"))
-        })
-        .unwrap_or_else(|| WORKFLOWS_PUBLIC_URL.to_string())
-}
-
-/// Registration follows the same loaded deployment profile as ship, never ambient flags.
-fn register_published_deployment(
-    deployment: &deployments::Deployment,
-    register: impl FnOnce(&str, &RegisterTarget<'_>) -> Result<()>,
-) -> Result<()> {
-    if !ship::requires_restate_registration(deployment)? {
-        eprintln!("DBOS-only deployment: no Restate worker registration target");
-        return Ok(());
-    }
-    let url = workflows_url_coordinate(deployment)?;
-    let target = RegisterTarget {
-        deployment: &deployment.name,
-        admin_url: deployment
-            .coordinates
-            .get(RESTATE_ADMIN_URL_KEY)
-            .map(String::as_str),
-    };
-    register(&url, &target)
-}
-
-/// The row's own worker URL from its published configuration. Refuses rather
-/// than fall back to the brand default, which another row's Restate
-/// environment cannot sign for.
-fn workflows_url_coordinate(deployment: &deployments::Deployment) -> Result<String> {
-    deployment
-        .coordinates
-        .get("NAVIGATOR_WORKFLOWS_URL")
-        .map(|url| url.trim())
-        .filter(|url| !url.is_empty())
-        .map(str::to_owned)
-        .with_context(|| {
-            format!(
-                "deployment {} sets no NAVIGATOR_WORKFLOWS_URL; refusing to register the brand default",
-                deployment.name
-            )
-        })
-}
-
-/// The deployment coordinate naming the row's Restate Cloud admin endpoint.
-pub(super) const RESTATE_ADMIN_URL_KEY: &str = "RESTATE_ADMIN_URL";
-
-/// The deployment row a registration belongs to: its name, for refusals, and
-/// its `RESTATE_ADMIN_URL` coordinate, which picks the `restate` CLI
-/// environment to register against.
-pub(super) struct RegisterTarget<'a> {
-    pub deployment: &'a str,
-    pub admin_url: Option<&'a str>,
-}
-
-/// `devx restate register [--url <URL>]`: register the `workflows-service`
-/// worker with the caller's Restate Cloud environment. The URL is resolved
-/// by [`resolve_workflows_url`] (override → `NAVIGATOR_WORKFLOWS_URL` →
-/// `https://workflows.<brand.primary_domain>/` → placeholder).
-///
-/// Two transports, chosen by environment:
-/// - When `RESTATE_ADMIN_URL` **and** `RESTATE_ADMIN_TOKEN` are both set
-///   (operator-session credentials exported for a headless run — never
-///   repository coordinates), register via the
-///   admin REST API. This is headless: it needs no `restate cloud env
-///   configure` (which requires a TTY) and works with a non-expiring
-///   admin-scoped API key, so an unattended `ship` from a fresh
-///   machine re-registers without the SSO token or a configured CLI env.
-/// - Otherwise shell out to the pinned `restate` CLI (the KIND dev loop and
-///   operators who keep the `restate cloud login` SSO token fresh). With a
-///   `target` row, every command names the CLI environment whose
-///   `admin_base_url` is the row's `RESTATE_ADMIN_URL`, never the CLI's
-///   current one, which can be the other row.
-///
-/// See [`docs/durable-workflows.md`] "step 7d".
-pub(super) fn restate_register(
-    url_override: Option<&str>,
-    target: Option<&RegisterTarget<'_>>,
-) -> Result<()> {
-    let workflows_url_env = env::var("NAVIGATOR_WORKFLOWS_URL").ok();
-    let primary_domain = brand::primary_domain()?;
-    let url = resolve_workflows_url(
-        url_override,
-        workflows_url_env.as_deref(),
-        Some(&primary_domain),
-    );
-
-    let admin_url = env::var("RESTATE_ADMIN_URL").ok();
-    let admin_token = env::var("RESTATE_ADMIN_TOKEN").ok();
-    if let (Some(admin_url), Some(admin_token)) = (
-        admin_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty()),
-        admin_token
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty()),
-    ) {
-        return register_via_admin_api(admin_url, admin_token, &url);
-    }
-
-    require_tools(&["restate"])?;
-    check_restate_cli_version();
-    let environment = match target {
-        Some(target) => {
-            let path = restate_cli_config_path()?;
-            let config = std::fs::read_to_string(&path).with_context(|| {
-                format!(
-                    "read the restate CLI config {} to find deployment {}'s environment",
-                    path.display(),
-                    target.deployment
-                )
-            })?;
-            Some(restate_cli_environment(target, &config)?)
-        }
-        None => None,
-    };
-    for verb in [
-        &["deployments", "register", url.as_str()][..],
-        &["deployments", "list"],
-    ] {
-        let mut command = restate_cli_command(environment.as_deref(), verb);
-        eprintln!("==> restate {}", command_args(&command).join(" "));
-        run(&mut command)?;
-    }
-    Ok(())
-}
-
-/// `restate -y [-e <environment>] <verb…>`. A named environment also drops the
-/// two variables that outrank `-e` (`RESTATE_ENVIRONMENT`, `RESTATE_ADMIN_URL`).
-fn restate_cli_command(environment: Option<&str>, verb: &[&str]) -> Command {
-    let mut command = Command::new("restate");
-    command.arg("-y");
-    if let Some(environment) = environment {
-        command
-            .args(["-e", environment])
-            .env_remove("RESTATE_ENVIRONMENT")
-            .env_remove("RESTATE_ADMIN_URL");
-    }
-    command.args(verb);
-    command
-}
-
-fn command_args(command: &Command) -> Vec<String> {
-    command
-        .get_args()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect()
-}
-
-/// The `restate` CLI's config file: `$RESTATE_CLI_CONFIG_HOME/config.toml`,
-/// else `~/.config/restate/config.toml`.
-fn restate_cli_config_path() -> Result<std::path::PathBuf> {
-    let home = match env::var_os("RESTATE_CLI_CONFIG_HOME").filter(|v| !v.is_empty()) {
-        Some(dir) => std::path::PathBuf::from(dir),
-        None => std::path::PathBuf::from(env::var_os("HOME").context("HOME is not set")?)
-            .join(".config/restate"),
-    };
-    Ok(home.join("config.toml"))
-}
-
-/// The `restate` CLI environment (a top-level section of its `config.toml`)
-/// whose `admin_base_url` is the row's `RESTATE_ADMIN_URL`. Refuses, naming
-/// the deployment, when the row records no admin URL or no section holds it.
-fn restate_cli_environment(target: &RegisterTarget<'_>, config: &str) -> Result<String> {
-    let normalize = |url: &str| url.trim().trim_end_matches('/').to_owned();
-    let admin_url = target
-        .admin_url
-        .map(normalize)
-        .filter(|url| !url.is_empty())
-        .with_context(|| {
-            format!(
-                "deployment {} sets no {RESTATE_ADMIN_URL_KEY}; refusing to register against \
-                 the restate CLI's current environment",
-                target.deployment
-            )
-        })?;
-    let config: toml::Table = toml::from_str(config).context("parse the restate CLI config")?;
-    config
-        .iter()
-        .find(|(_, section)| {
-            section
-                .get("admin_base_url")
-                .and_then(toml::Value::as_str)
-                .is_some_and(|url| normalize(url) == admin_url)
-        })
-        .map(|(name, _)| name.clone())
-        .with_context(|| {
-            format!(
-                "no restate CLI environment has admin_base_url {admin_url} (deployment {}'s \
-                 {RESTATE_ADMIN_URL_KEY}); add one with `restate cloud env configure`",
-                target.deployment
-            )
-        })
-}
-
-/// Register a native worker against its private Restate server. This keeps the
-/// discovery and retry machinery shared with cloud registration while leaving
-/// cloud credentials and `restate` CLI state out of the native lane.
-pub(super) fn restate_register_local(admin_port: u16, worker_port: u16) -> Result<()> {
-    let admin = format!("http://127.0.0.1:{admin_port}");
-    let worker = format!("http://127.0.0.1:{worker_port}");
-    register_via_admin_api(&admin, "", &worker)
-}
-
-/// Force-register the worker deployment via the Restate Cloud admin REST
-/// API (`POST {admin}/deployments` with `force: true`), bearer-authenticated.
-/// `force` re-runs discovery against the live worker, so every service it
-/// exposes is (re)registered; the call is idempotent and safe on every ship.
-fn register_via_admin_api(admin_base_url: &str, token: &str, worker_url: &str) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new().context("create tokio runtime")?;
-    runtime.block_on(register_via_admin_api_async(
-        admin_base_url,
-        token,
-        worker_url,
-    ))
-}
-
-/// Force-register attempts before ship gives up. The Restate Cloud admin
-/// server proxies discovery to the public worker URL through the GKE load
-/// balancer; for a window after a rollout the NEG readiness gate lags and the
-/// GFE returns a transient `502` (surfaced as a direct `502`/`503`/`504`, or
-/// as an admin `500`/`META0003` wrapping one). The worker pod is healthy, so
-/// retry rather than abort the ship on the LB window.
-const REGISTER_MAX_ATTEMPTS: u32 = 5;
-
-/// Initial backoff between force-register attempts; doubles each retry
-/// (3s → 6s → 12s → 24s), so five attempts span ~45s — past the ~30s the GFE
-/// error page itself asks the caller to wait.
-const REGISTER_BACKOFF_BASE: std::time::Duration = std::time::Duration::from_secs(3);
-
-/// Per-attempt HTTP timeout for a force-register POST, covering connect, send,
-/// and reading the response body. Without it a connection that stalls in the LB
-/// window (rather than returning a `502`) would hang the whole ship, defeating
-/// the bounded-retry design; a timed-out attempt is retryable like any other
-/// transport error, so the loop still makes progress.
-const REGISTER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// One re-register attempt failed. `retryable` distinguishes a transient
-/// gateway/LB window (worth another attempt) from a real registration error
-/// (a bad request shape, auth failure, or a genuine worker-side error) that
-/// more attempts cannot fix.
-struct RegisterAttemptError {
-    retryable: bool,
-    message: String,
-}
-
-/// Whether a failed admin-register HTTP outcome is a transient gateway/LB
-/// window worth retrying rather than a real registration error. The Restate
-/// Cloud admin API surfaces the worker-side discovery failure back to us: a
-/// direct `502`/`503`/`504`, or a `500` whose body carries the proxied gateway
-/// error (Restate `META0003` wrapping a `5xx`, or a raw GFE "502 Server Error"
-/// / "Bad Gateway" page). A `4xx` (bad request/auth/conflict) or a `500` with a
-/// real registration body is a genuine error — never mask it with retries.
-fn is_transient_register_failure(status: reqwest::StatusCode, body: &str) -> bool {
-    match status.as_u16() {
-        // A direct gateway status from the GFE/LB is the rollout window itself.
-        502..=504 => true,
-        // A Restate admin `500` is only the LB window when its body actually
-        // carries the proxied gateway failure. A genuine registration error
-        // answers `500` with a JSON body carrying a `restate_code`, so:
-        //   - an empty/whitespace body is the proxy or LB dropping/truncating
-        //     the response mid-rollout → transient; and
-        //   - a non-empty body is transient only when it names a gateway
-        //     failure ("bad gateway"/"service unavailable"/"gateway timeout",
-        //     or a GFE "<5xx> Server Error" page).
-        // We deliberately do NOT retry on a bare "502"/"503"/"504" digit run
-        // that merely appears inside a real error body (a port, id, offset, or
-        // line number), which would delay and misreport the true failure by
-        // ~45s.
-        500 => {
-            let b = body.trim().to_ascii_lowercase();
-            b.is_empty()
-                || b.contains("bad gateway")
-                || b.contains("service unavailable")
-                || b.contains("gateway timeout")
-                || b.contains("502 server error")
-                || b.contains("503 server error")
-                || b.contains("504 server error")
-        }
-        _ => false,
-    }
-}
-
-async fn register_via_admin_api_async(
-    admin_base_url: &str,
-    token: &str,
-    worker_url: &str,
-) -> Result<()> {
-    let endpoint = format!("{}/deployments", admin_base_url.trim_end_matches('/'));
-    eprintln!("==> POST {endpoint} (force re-register {worker_url})");
-    let client = reqwest::Client::builder()
-        .timeout(REGISTER_REQUEST_TIMEOUT)
-        .build()
-        .context("build Restate admin HTTP client")?;
-    let mut backoff = REGISTER_BACKOFF_BASE;
-    for attempt in 1..=REGISTER_MAX_ATTEMPTS {
-        match register_attempt(&client, &endpoint, token, worker_url).await {
-            Ok(names) => {
-                eprintln!(
-                    "==> re-registered {worker_url} ({} services{}{})",
-                    names.len(),
-                    if names.is_empty() { "" } else { ": " },
-                    names.join(", ")
-                );
-                return Ok(());
-            }
-            Err(err) if err.retryable && attempt < REGISTER_MAX_ATTEMPTS => {
-                eprintln!(
-                    "==> transient re-register failure (attempt {attempt}/{REGISTER_MAX_ATTEMPTS}): \
-                     {}; retrying in {}s",
-                    err.message,
-                    backoff.as_secs()
-                );
-                tokio::time::sleep(backoff).await;
-                backoff *= 2;
-            }
-            Err(err) if err.retryable => {
-                bail!(
-                    "Restate admin register still failing after {REGISTER_MAX_ATTEMPTS} attempts \
-                     (last: {}); the worker endpoint {worker_url} is not reachable through the \
-                     load balancer — check the rollout and NEG health before retrying the ship",
-                    err.message
-                );
-            }
-            Err(err) => bail!("Restate admin register failed: {}", err.message),
-        }
-    }
-    unreachable!("the loop returns or bails on the final attempt")
-}
-
-/// A single force-register POST. Returns the discovered service names on
-/// success, or a classified error the caller's loop uses to decide whether to
-/// retry. A transport error (connection reset/timeout mid-rollout) is treated
-/// as retryable — the bounded attempt count still surfaces a genuinely
-/// unreachable admin URL as a hard failure.
-async fn register_attempt(
-    client: &reqwest::Client,
-    endpoint: &str,
-    token: &str,
-    worker_url: &str,
-) -> std::result::Result<Vec<String>, RegisterAttemptError> {
-    let body = serde_json::json!({ "uri": worker_url, "force": true });
-    let request = client.post(endpoint).json(&body);
-    let request = if token.is_empty() {
-        request
-    } else {
-        request.bearer_auth(token)
-    };
-    let resp = match request.send().await {
-        Ok(resp) => resp,
-        Err(err) => {
-            return Err(RegisterAttemptError {
-                retryable: true,
-                message: format!("POST to Restate Cloud admin /deployments failed: {err}"),
-            });
-        }
-    };
-    let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
-    if status.is_success() {
-        return Ok(parse_registered_service_names(&text));
-    }
-    Err(RegisterAttemptError {
-        retryable: is_transient_register_failure(status, &text),
-        message: format!("HTTP {status}: {text}"),
-    })
-}
-
-/// Pull the registered service names out of the admin API's success body, for
-/// the operator-facing confirmation line. A body that does not match the
-/// expected shape yields an empty list rather than an error — the registration
-/// already succeeded.
-fn parse_registered_service_names(text: &str) -> Vec<String> {
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .and_then(|v| {
-            v.get("services").and_then(|s| s.as_array()).map(|arr| {
-                arr.iter()
-                    .filter_map(|s| s.get("name").and_then(|n| n.as_str()).map(str::to_string))
-                    .collect()
-            })
-        })
-        .unwrap_or_default()
-}
-
-/// Warn (don't fail) if the on-PATH Restate CLI doesn't match the
-/// pinned version. Drift between operator-laptop and CI is the
-/// primary failure mode the pin guards against; surface it loudly
-/// without blocking the operator who may be deliberately ahead.
-fn check_restate_cli_version() {
-    let Ok(out) = Command::new("restate").arg("--version").output() else {
-        return;
-    };
-    let banner = String::from_utf8_lossy(&out.stdout);
-    if !banner.contains(RESTATE_CLI_VERSION) {
-        eprintln!(
-            "warning: restate CLI on PATH is `{}`; devx pins {RESTATE_CLI_VERSION}",
-            banner.trim()
-        );
-    }
-}
-
-/// `devx gcp setup --project-id <ID> [--dry-run]`: provision the GCP
-/// resources `web` depends on. Builds a private Tokio runtime so the
-/// rest of `devx` can stay sync — the entire `gcp` module is async
-/// (it talks to GCP REST APIs).
-///
-/// The pipeline generates no credential of its own, so a run prints no secret
-/// to record. A deployment's own store, vendor, and OIDC credentials are
-/// written into `deployments/<name>/secrets.enc.yaml` with `sops set` and
-/// rotated at the provider first — see `docs/deployment-secrets.md`.
 fn gcp_setup(project_id: String, dry_run: bool, config: gcp::SetupConfig) -> Result<()> {
     use std::sync::Arc;
 
@@ -2557,79 +1999,6 @@ fn gcp_hub_setup(
         }
         Ok::<(), anyhow::Error>(())
     })
-}
-
-/// Vendored path for one of the Operator's CRD artifacts. Tied to
-/// [`RESTATE_OPERATOR_VERSION`] so the CRD schema can never drift from the
-/// chart that reconciles it.
-fn restate_crd_path(name: &str) -> String {
-    format!("{RESTATE_CRD_DIR}/{name}.yaml")
-}
-
-/// An object the API server is trying to delete but cannot, because a
-/// finalizer is still held.
-#[derive(Debug, PartialEq, Eq)]
-struct Terminating {
-    deleted_at: String,
-    finalizers: String,
-}
-
-/// Read a `{.metadata.deletionTimestamp}|{.metadata.finalizers}` jsonpath
-/// probe. `None` means "not mid-deletion" — the timestamp is empty on a
-/// healthy object, whereas finalizers are present either way (a Restate CR
-/// carries `deployments.restate.dev` for its whole life), so the timestamp
-/// is the only discriminator.
-fn parse_terminating(raw: &str) -> Option<Terminating> {
-    let (deleted_at, finalizers) = raw.split_once('|')?;
-    let deleted_at = deleted_at.trim();
-    if deleted_at.is_empty() {
-        return None;
-    }
-    Some(Terminating {
-        deleted_at: deleted_at.to_string(),
-        finalizers: finalizers.trim().to_string(),
-    })
-}
-
-/// Explain a `Terminating` wedge in terms of the operator action that clears
-/// it.
-///
-/// Worth the words because the failure it replaces is actively misleading:
-/// `kubectl wait` discards a condition whose `status.observedGeneration`
-/// trails `metadata.generation`, treating it as stale. A CR stuck
-/// `Terminating` never reconciles a re-applied spec, so its generation
-/// climbs while `observedGeneration` sticks — and the wait blocks for the
-/// full `--timeout` before dying with a bare `timed out waiting for the
-/// condition`. That names neither the deletion nor the finalizer, and it
-/// reports a `Ready: True` object as un-Ready.
-fn terminating_wedge_message(namespace: &str, resource: &str, state: &Terminating) -> String {
-    format!(
-        "{resource} in namespace {namespace} is stuck Terminating (deletionTimestamp \
-         {deleted_at}, finalizers {finalizers}).\n\
-         Its controller is holding the finalizer, so a re-applied spec never reconciles and \
-         `kubectl wait --for=condition=…` would block for the full timeout and then fail — \
-         even while the object still reports Ready.\n\
-         See why the finalizer is held:\n    \
-         kubectl --namespace {namespace} describe {resource}\n\
-         If the finalizer cannot be satisfied (e.g. the Restate Operator reports \
-         `CleanupFailed(DeploymentInUse)` because this CR still backs the active service \
-         versions), drop it and let `dev up` recreate the CR:\n    \
-         kubectl --namespace {namespace} patch {resource} --type=merge -p \
-         '{{\"metadata\":{{\"finalizers\":[]}}}}'",
-        deleted_at = state.deleted_at,
-        finalizers = state.finalizers,
-    )
-}
-
-/// Map a Rust `std::env::consts::ARCH` value to the Docker/OCI arch suffix.
-/// Only the two arches the workspace builds for are remapped; anything else
-/// passes through unchanged.
-fn normalize_docker_arch(arch: &str) -> String {
-    match arch {
-        "x86_64" => "amd64".to_string(),
-        "aarch64" => "arm64".to_string(),
-        other => other.to_string(),
-    }
 }
 
 /// Nested Docker (Cursor Cloud `DinD`) cannot load `xt_multiport` or
@@ -2765,18 +2134,6 @@ fn rauthy_loopback_config_patch(rauthy_port: u16) -> String {
     .to_string()
 }
 
-fn navigator_web_rauthy_patch(rauthy_port: u16) -> String {
-    format!(
-        concat!(
-            r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"#,
-            r#""name":"web","env":[{{"#,
-            r#""name":"OAUTH_ISSUER_URL","value":"{issuer}","valueFrom":null"#,
-            r#"}}]}}]}}}}}}}}"#,
-        ),
-        issuer = rauthy_issuer(rauthy_port),
-    )
-}
-
 // ---------- helpers ----------
 
 /// Single-quote a `.devx/env` value so both a POSIX shell `source` and a
@@ -2807,13 +2164,6 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
     // The canonical seed is embedded from `store/seeds/*.yaml` and is
     // applied unconditionally and idempotently by `web` at startup.
     //
-    // `RESTATE_BROKER_URL` is what `workflows::RestateRuntime::from_env`
-    // reads. When set, the host-side `web` binary signals the
-    // in-cluster `workflows-service` worker through the port-forwarded
-    // Restate ingress; the worker journals each transition to the same
-    // store. The renderer gives host `web` that same database name and the
-    // tier's matching host port, so Restate-backed flows remain observable
-    // from every worktree.
     // Host-side `web` runs `enforce_deployment_invariants` for the dev
     // profile. SENDGRID_API_KEY /
     // NAVIGATOR_CI_HARNESS explicitly authorizes the fake integration
@@ -2854,14 +2204,6 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
         (
             "NAVIGATOR_KIND_INGRESS_HTTPS_PORT",
             cfg.ingress_https_port.to_string(),
-        ),
-        (
-            "NAVIGATOR_KIND_RESTATE_INGRESS_PORT",
-            cfg.restate_ingress_port.to_string(),
-        ),
-        (
-            "NAVIGATOR_KIND_RESTATE_ADMIN_PORT",
-            cfg.restate_admin_port.to_string(),
         ),
         ("NAVIGATOR_KIND_CLAMAV_PORT", cfg.clamav_port.to_string()),
         ("NAVIGATOR_KIND_RAUTHY_PORT", cfg.rauthy_port.to_string()),
@@ -2917,30 +2259,12 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
                     .to_string(),
             ),
         ),
-        // The store. The in-cluster `workflows-service` worker reaches
-        // the same engine at `surreal.navigator.svc.cluster.local:8000`,
-        // so host `web` and the worker share one database.
-        (
-            "NAVIGATOR_SURREAL_ENDPOINT",
-            format!("ws://localhost:{}", cfg.surreal_port),
-        ),
-        ("NAVIGATOR_SURREAL_NAMESPACE", SURREAL_NAMESPACE.into()),
-        ("NAVIGATOR_SURREAL_DATABASE", db_name.to_string()),
-        ("NAVIGATOR_SURREAL_USER", SURREAL_LOCAL_USER.into()),
-        ("NAVIGATOR_SURREAL_PASSWORD", SURREAL_LOCAL_PASSWORD.into()),
         ("NAVIGATOR_STORAGE_BACKEND", "s3".into()),
         (
             "NAVIGATOR_STORAGE_ENDPOINT",
             format!("http://localhost:{}", cfg.seaweedfs_s3_port),
         ),
         ("NAVIGATOR_STORAGE_BUCKET", "navigator-documents".into()),
-        // The local KIND topology shares the already-provisioned exports
-        // bucket for this lane, but names it explicitly so the archive
-        // resolver has no confidentiality-boundary fallback.
-        (
-            "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
-            "navigator-exports".into(),
-        ),
         ("NAVIGATOR_ASSETS_BUCKET", "navigator-assets".into()),
         (
             "NAVIGATOR_APPLICATIONS_BUCKET",
@@ -2957,14 +2281,6 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
         (
             "NAVIGATOR_ARCHIVED_PROJECTS_BUCKET",
             "navigator-archived-projects".into(),
-        ),
-        (
-            "NAVIGATOR_SURREAL_ARCHIVES_ACCESS_KEY",
-            env_string("NAVIGATOR_SEAWEEDFS_EXPORTS_ACCESS_KEY", ""),
-        ),
-        (
-            "NAVIGATOR_SURREAL_ARCHIVES_SECRET_KEY",
-            env_string("NAVIGATOR_SEAWEEDFS_EXPORTS_SECRET_KEY", ""),
         ),
         (
             "NAVIGATOR_EXPORTS_ACCESS_KEY",
@@ -3060,10 +2376,6 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
             "NAVIGATOR_CLAMD_ADDR",
             format!("127.0.0.1:{}", cfg.clamav_port),
         ),
-        (
-            "RESTATE_BROKER_URL",
-            format!("http://localhost:{}", cfg.restate_ingress_port),
-        ),
         ("SENDGRID_API_KEY", "SG.kind-stub".into()),
         ("SENDGRID_INBOUND_SECRET", "kind-stub".into()),
         // OpenObserve's direct OTLP sink is port-forwarded to the host. To
@@ -3109,107 +2421,6 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
     out
 }
 
-#[cfg(test)]
-mod restate_pin_tests {
-    use super::*;
-
-    #[test]
-    fn crd_artifacts_are_vendored_and_track_the_pinned_operator_chart() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("repo root is cli/'s parent");
-
-        assert_eq!(RESTATE_CRDS.len(), RESTATE_CRD_SHA256.len());
-
-        for (name, expected_sha256) in RESTATE_CRD_SHA256 {
-            assert!(RESTATE_CRDS.contains(&name));
-            let artifact = restate_crd_path(name);
-            assert!(
-                !artifact.contains("://"),
-                "worktree bootstrap must not ask kubectl to download Restate CRDs"
-            );
-            assert!(
-                artifact.contains(&format!("v{RESTATE_OPERATOR_VERSION}/")),
-                "CRD artifact must pin the operator version: {artifact}"
-            );
-            assert!(
-                artifact.ends_with(&format!("/{name}.yaml")),
-                "bad artifact path: {artifact}"
-            );
-            let manifest =
-                std::fs::read(root.join(&artifact)).expect("read the vendored Restate CRD");
-            assert_eq!(
-                sha256_hex(&manifest),
-                expected_sha256,
-                "vendored CRD digest must match the recorded upstream artifact: {artifact}"
-            );
-            assert!(
-                std::str::from_utf8(&manifest)
-                    .expect("vendored Restate CRD is UTF-8")
-                    .contains("restate.dev"),
-                "vendored CRD must define a Restate API"
-            );
-        }
-    }
-
-    #[test]
-    fn restate_cli_and_server_share_a_release_line() {
-        // server image (k8s/staging/restate.yaml) ⇄ CLI ⇄ operator chart are
-        // pinned together; the CLI tracks the server's minor line.
-        assert!(
-            RESTATE_CLI_VERSION.starts_with("1.7."),
-            "CLI pin drifted off the 1.7 server line: {RESTATE_CLI_VERSION}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod terminating_guard_tests {
-    use super::*;
-
-    #[test]
-    fn a_healthy_object_is_not_terminating() {
-        // Real `kubectl -o jsonpath` output for a live RestateDeployment:
-        // no deletionTimestamp, but the finalizer is present as always.
-        assert_eq!(parse_terminating(r#"|["deployments.restate.dev"]"#), None);
-        assert_eq!(parse_terminating("|"), None);
-        assert_eq!(parse_terminating("  |[]"), None);
-    }
-
-    #[test]
-    fn a_deleted_object_is_terminating() {
-        // Real output from the wedged CR: `dev up` blocked 300s on this.
-        let state =
-            parse_terminating(r#"2026-07-15T06:32:52Z|["deployments.restate.dev"]"#).unwrap();
-        assert_eq!(state.deleted_at, "2026-07-15T06:32:52Z");
-        assert_eq!(state.finalizers, r#"["deployments.restate.dev"]"#);
-    }
-
-    #[test]
-    fn unparseable_probe_output_is_not_treated_as_terminating() {
-        // No separator at all — never claim a wedge we can't prove.
-        assert_eq!(parse_terminating(""), None);
-        assert_eq!(parse_terminating("garbage"), None);
-    }
-
-    #[test]
-    fn the_wedge_message_names_the_cause_and_the_escape() {
-        let state =
-            parse_terminating(r#"2026-07-15T06:32:52Z|["deployments.restate.dev"]"#).unwrap();
-        let msg =
-            terminating_wedge_message("navigator", "restatedeployment/workflows-service", &state);
-        assert!(msg.contains("stuck Terminating"), "{msg}");
-        assert!(msg.contains("2026-07-15T06:32:52Z"), "{msg}");
-        assert!(msg.contains("deployments.restate.dev"), "{msg}");
-        // The operator's own reason, so the message is greppable against the
-        // controller log that explains the refusal.
-        assert!(msg.contains("DeploymentInUse"), "{msg}");
-        // And the command that actually clears it.
-        assert!(msg.contains("--type=merge"), "{msg}");
-        assert!(msg.contains(r#"{"metadata":{"finalizers":[]}}"#), "{msg}");
-    }
-}
-
 /// Coordinates of the existing private native resource, verified without lifecycle mutation.
 pub(crate) struct NativeAdmissionTarget {
     pub port: u16,
@@ -3235,320 +2446,6 @@ pub(crate) fn verified_native_admission_target() -> Result<Option<NativeAdmissio
 mod tests {
     use super::*;
     use std::sync::Mutex;
-
-    #[test]
-    fn published_registration_uses_only_the_rows_own_worker_url() {
-        let root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/deployment-tree");
-        let mut deployment = deployments::Deployment::load(&root, "example-deployment").unwrap();
-        assert_eq!(
-            workflows_url_coordinate(&deployment).unwrap(),
-            "https://workflows.example.invalid/"
-        );
-        deployment
-            .coordinates
-            .insert("NAVIGATOR_WORKFLOWS_URL".into(), "  ".into());
-        let error = workflows_url_coordinate(&deployment)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("refusing to register the brand default"));
-    }
-
-    fn native_registration_fixture() -> deployments::Deployment {
-        use store::workflow_engine as engine;
-
-        let root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/deployment-tree");
-        let mut deployment = deployments::Deployment::load(&root, "example-deployment").unwrap();
-        for workflow in engine::WORKFLOWS {
-            deployment
-                .coordinates
-                .insert(workflow.flag.into(), "true".into());
-        }
-        for (key, value) in [
-            (engine::COHOST_ENV, "true"),
-            (engine::DBOS_ENABLED_ENV, "true"),
-            (engine::ENGINE_ENV, "dbos"),
-        ] {
-            deployment.coordinates.insert(key.into(), value.into());
-        }
-        deployment.coordinates.remove("NAVIGATOR_WORKFLOWS_URL");
-        deployment.coordinates.remove(RESTATE_ADMIN_URL_KEY);
-        deployment
-    }
-
-    #[test]
-    fn published_native_registration_never_resolves_or_calls_a_restate_target() {
-        let deployment = native_registration_fixture();
-        assert!(workflows_url_coordinate(&deployment).is_err());
-        register_published_deployment(&deployment, |_, _| {
-            panic!("native registration must not call Restate")
-        })
-        .unwrap();
-    }
-
-    #[test]
-    fn published_registration_refuses_incomplete_or_unknown_native_modes_before_any_call() {
-        use store::workflow_engine as engine;
-        for workflow in engine::WORKFLOWS {
-            for value in [None, Some("false"), Some("unknown")] {
-                let mut deployment = native_registration_fixture();
-                match value {
-                    Some(value) => {
-                        deployment
-                            .coordinates
-                            .insert(workflow.flag.into(), value.into());
-                    }
-                    None => {
-                        deployment.coordinates.remove(workflow.flag);
-                    }
-                }
-                assert!(register_published_deployment(&deployment, |_, _| panic!(
-                    "incomplete mode must not register"
-                ))
-                .is_err());
-            }
-        }
-        for key in [
-            engine::COHOST_ENV,
-            engine::DBOS_ENABLED_ENV,
-            engine::ENGINE_ENV,
-        ] {
-            let mut deployment = native_registration_fixture();
-            deployment.coordinates.insert(key.into(), "unknown".into());
-            assert!(register_published_deployment(&deployment, |_, _| panic!(
-                "unknown mode must not register"
-            ))
-            .is_err());
-        }
-    }
-
-    #[test]
-    fn published_mixed_registration_keeps_the_retained_worker_target() {
-        let mut deployment = native_registration_fixture();
-        deployment
-            .coordinates
-            .insert(store::workflow_engine::COHOST_ENV.into(), "false".into());
-        deployment.coordinates.insert(
-            "NAVIGATOR_WORKFLOWS_URL".into(),
-            "https://retained-worker.example.invalid/".into(),
-        );
-        let called = std::cell::Cell::new(false);
-        register_published_deployment(&deployment, |url, _| {
-            called.set(true);
-            assert_eq!(url, "https://retained-worker.example.invalid/");
-            Ok(())
-        })
-        .unwrap();
-        assert!(
-            called.get(),
-            "native caller switches alone cannot retire the retained registration target"
-        );
-    }
-
-    #[test]
-    fn published_legacy_registration_still_requires_the_rows_endpoint_and_propagates_failure() {
-        let root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/deployment-tree");
-        let mut deployment = deployments::Deployment::load(&root, "example-deployment").unwrap();
-        deployment.coordinates.insert(
-            RESTATE_ADMIN_URL_KEY.into(),
-            "https://restate-admin.example.invalid/".into(),
-        );
-        let called = std::cell::Cell::new(false);
-        let result = register_published_deployment(&deployment, |url, target| {
-            called.set(true);
-            assert_eq!(url, "https://workflows.example.invalid/");
-            assert_eq!(target.deployment, "example-deployment");
-            assert_eq!(
-                target.admin_url,
-                Some("https://restate-admin.example.invalid/")
-            );
-            anyhow::bail!("synthetic retained-worker registration refusal")
-        });
-        assert!(called.get());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("synthetic retained-worker registration refusal"));
-        deployment.coordinates.remove("NAVIGATOR_WORKFLOWS_URL");
-        assert!(register_published_deployment(&deployment, |_, _| panic!(
-            "missing row endpoint cannot fall back"
-        ))
-        .is_err());
-    }
-
-    /// An operator's `restate` CLI config with production selected as current
-    /// (the selection lives in a separate file) and staging beside it.
-    const RESTATE_CLI_CONFIG: &str = r#"
-[global]
-
-[staging]
-environment_type = "cloud"
-ingress_base_url = "https://staging-env.example.invalid:8080"
-admin_base_url = "https://staging-env.example.invalid:9070"
-
-[staging.cloud]
-environment_id = "env_staging"
-
-[production]
-environment_type = "cloud"
-admin_base_url = "https://production-env.example.invalid:9070"
-"#;
-
-    #[test]
-    fn row_registration_names_its_restate_environment_on_every_command() {
-        for verb in [
-            &[
-                "deployments",
-                "register",
-                "https://workflows.example.invalid/",
-            ][..],
-            &["deployments", "list"][..],
-        ] {
-            let command = restate_cli_command(Some("staging"), verb);
-            assert_eq!(command.get_program(), "restate");
-            let mut expected = vec!["-y", "-e", "staging"];
-            expected.extend_from_slice(verb);
-            assert_eq!(command_args(&command), expected);
-            // Both variables outrank the config section `-e` names, so a stale
-            // export in the operator's shell cannot redirect the register.
-            let removed: Vec<_> = command
-                .get_envs()
-                .filter(|(_, value)| value.is_none())
-                .map(|(key, _)| key.to_string_lossy().into_owned())
-                .collect();
-            assert!(removed.contains(&"RESTATE_ENVIRONMENT".to_owned()));
-            assert!(removed.contains(&"RESTATE_ADMIN_URL".to_owned()));
-        }
-    }
-
-    #[test]
-    fn unscoped_registration_keeps_the_cli_default_environment() {
-        let command = restate_cli_command(None, &["deployments", "list"]);
-        assert_eq!(command_args(&command), ["-y", "deployments", "list"]);
-        assert_eq!(command.get_envs().count(), 0);
-    }
-
-    #[test]
-    fn the_rows_admin_url_selects_its_cli_environment_not_the_current_one() {
-        let target = RegisterTarget {
-            deployment: "example-staging",
-            admin_url: Some(" https://staging-env.example.invalid:9070/ "),
-        };
-        assert_eq!(
-            restate_cli_environment(&target, RESTATE_CLI_CONFIG).unwrap(),
-            "staging"
-        );
-    }
-
-    #[test]
-    fn a_row_without_restate_admin_url_is_refused_by_name() {
-        for admin_url in [None, Some("  ")] {
-            let target = RegisterTarget {
-                deployment: "example-staging",
-                admin_url,
-            };
-            let error = restate_cli_environment(&target, RESTATE_CLI_CONFIG)
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("example-staging"), "{error}");
-            assert!(error.contains("RESTATE_ADMIN_URL"), "{error}");
-        }
-    }
-
-    #[test]
-    fn an_admin_url_no_cli_environment_holds_is_refused() {
-        let target = RegisterTarget {
-            deployment: "example-staging",
-            admin_url: Some("https://other-env.example.invalid:9070"),
-        };
-        let error = restate_cli_environment(&target, RESTATE_CLI_CONFIG)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("example-staging"), "{error}");
-        assert!(
-            error.contains("https://other-env.example.invalid:9070"),
-            "{error}"
-        );
-    }
-
-    fn status(code: u16) -> reqwest::StatusCode {
-        reqwest::StatusCode::from_u16(code).expect("valid status code")
-    }
-
-    /// A force re-register draws a `500`/`META0003` wrapping a GFE `502` from
-    /// the admin API while the NEG readiness gate lags after a rollout. It must
-    /// classify as transient so ship retries instead of aborting on a healthy
-    /// worker.
-    #[test]
-    fn meta0003_wrapping_a_502_is_transient() {
-        let body = r#"{"message":"[META0003] [META0003] got status code '502 Bad Gateway'. Response headers: {...}. Body: \n<html><head><title>502 Server Error</title></head><body><h1>Error: Server Error</h1></body></html>\n","restate_code":"META0003"}"#;
-        assert!(is_transient_register_failure(status(500), body));
-    }
-
-    /// A direct gateway status from the load balancer is transient regardless of
-    /// body — the GFE 502/503/504 pages are the LB window, not a real error.
-    #[test]
-    fn direct_gateway_statuses_are_transient() {
-        assert!(is_transient_register_failure(status(502), ""));
-        assert!(is_transient_register_failure(status(503), ""));
-        assert!(is_transient_register_failure(status(504), ""));
-        assert!(is_transient_register_failure(
-            status(503),
-            "<html><title>503 Service Unavailable</title></html>"
-        ));
-    }
-
-    /// Real errors must NOT be masked by retries: a `4xx` (bad request shape,
-    /// auth, conflict) and a `500` with no gateway marker are genuine failures
-    /// the operator must see immediately, not five attempts later.
-    #[test]
-    fn real_errors_are_not_transient() {
-        assert!(!is_transient_register_failure(status(400), "bad uri"));
-        assert!(!is_transient_register_failure(status(401), "unauthorized"));
-        assert!(!is_transient_register_failure(status(409), "conflict"));
-        assert!(!is_transient_register_failure(
-            status(500),
-            r#"{"message":"internal error registering deployment","restate_code":"META0000"}"#
-        ));
-    }
-
-    /// A genuine registration `500` whose body merely *mentions* a 5xx digit run
-    /// (a port, an id, a line number) must classify as a real error, not the LB
-    /// window — otherwise a broad numeric match would burn ~45s of retries and
-    /// then misreport the true failure as an unreachable load balancer.
-    #[test]
-    fn incidental_5xx_digits_in_a_real_error_are_not_transient() {
-        assert!(!is_transient_register_failure(
-            status(500),
-            r#"{"message":"failed to register deployment at https://workflows.example.com:8502/ (META0011, line 504)","restate_code":"META0011"}"#
-        ));
-    }
-
-    /// A `500` with an empty or dropped body cannot be a genuine Restate
-    /// registration error (those always answer with a JSON `restate_code`
-    /// body); it is the proxy/LB truncating the response mid-rollout, so it must
-    /// classify as transient rather than aborting the ship on a healthy worker.
-    #[test]
-    fn empty_500_body_is_transient() {
-        assert!(is_transient_register_failure(status(500), ""));
-        assert!(is_transient_register_failure(status(500), "   \n"));
-    }
-
-    /// The success-body parser feeds only the operator confirmation line, so a
-    /// well-formed body yields the service names and a malformed one yields an
-    /// empty list rather than failing an already-successful registration.
-    #[test]
-    fn parse_registered_service_names_reads_names_and_tolerates_junk() {
-        let body = r#"{"services":[{"name":"workflows-service"},{"name":"Heartbeat"},{"name":"notation"}]}"#;
-        assert_eq!(
-            parse_registered_service_names(body),
-            vec!["workflows-service", "Heartbeat", "notation"]
-        );
-        assert!(parse_registered_service_names("not json").is_empty());
-        assert!(parse_registered_service_names("{}").is_empty());
-    }
 
     #[test]
     fn parse_label_target_requires_both_sides() {
@@ -3767,36 +2664,6 @@ admin_base_url = "https://production-env.example.invalid:9070"
         );
     }
 
-    /// The web boot invariants (#1172) refuse to start without the `SurrealDB`
-    /// coordinates, so the KIND web patch must inject every one of them or
-    /// the in-cluster pod crash-loops before its readiness probe can pass —
-    /// deploy run 142136966 failed exactly this way while the local loops
-    /// (which get the values from `.devx/env`) stayed green.
-    #[test]
-    fn kind_web_patch_carries_the_surreal_boot_invariants() {
-        use std::path::Path;
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("repo root is cli/'s parent")
-            .to_path_buf();
-
-        let web_repos = std::fs::read_to_string(root.join("k8s/overlays/kind/web-surreal.yaml"))
-            .expect("read web-surreal.yaml");
-        for var in [
-            "NAVIGATOR_SURREAL_ENDPOINT",
-            "NAVIGATOR_SURREAL_NAMESPACE",
-            "NAVIGATOR_SURREAL_DATABASE",
-            "NAVIGATOR_SURREAL_USER",
-            "NAVIGATOR_SURREAL_PASSWORD",
-        ] {
-            assert!(
-                web_repos.contains(var),
-                "KIND web patch must set {var}: the web boot invariants \
-                 refuse to start without it"
-            );
-        }
-    }
-
     /// The guard's fail path must actually fire on the regression it exists to
     /// catch (a stub step gated to a family the KIND web pod does not run) and
     /// stay quiet once the served image is covered.
@@ -3864,15 +2731,6 @@ admin_base_url = "https://production-env.example.invalid:9070"
     // `kind_load_image_into_cluster`) must use the OCI arch suffix, not the
     // Rust arch triple — `linux/aarch64` would never match an image's
     // `linux/arm64` manifest, defeating the multi-arch flatten.
-    #[test]
-    fn normalize_docker_arch_maps_rust_arches_to_oci_suffixes() {
-        assert_eq!(normalize_docker_arch("x86_64"), "amd64");
-        assert_eq!(normalize_docker_arch("aarch64"), "arm64");
-        // Already-normalized or unknown values pass through unchanged.
-        assert_eq!(normalize_docker_arch("amd64"), "amd64");
-        assert_eq!(normalize_docker_arch("arm64"), "arm64");
-        assert_eq!(normalize_docker_arch("riscv64"), "riscv64");
-    }
 
     // Every env var `KindConfig::from_env` reads. Tests clear all of
     // them before asserting so a stray value from the developer's shell
@@ -3978,116 +2836,6 @@ admin_base_url = "https://production-env.example.invalid:9070"
         );
     }
 
-    #[test]
-    fn resolve_workflows_url_prefers_explicit_override() {
-        assert_eq!(
-            resolve_workflows_url(
-                Some("https://flag.example/"),
-                Some("https://env.example/"),
-                Some("neonlaw.com"),
-            ),
-            "https://flag.example/"
-        );
-    }
-
-    #[test]
-    fn resolve_workflows_url_falls_back_to_env() {
-        assert_eq!(
-            resolve_workflows_url(None, Some("https://env.example/"), Some("neonlaw.com")),
-            "https://env.example/"
-        );
-    }
-
-    #[test]
-    fn resolve_workflows_url_derives_from_primary_domain() {
-        // The 2026-06-10 hardening: domain set, explicit URL unset →
-        // target the real ingress, never the placeholder.
-        assert_eq!(
-            resolve_workflows_url(None, None, Some("neonlaw.com")),
-            "https://workflows.neonlaw.com/"
-        );
-    }
-
-    #[test]
-    fn resolve_workflows_url_treats_blank_as_unset() {
-        // Empty/whitespace override and env must not win, and a blank
-        // domain falls through to the placeholder rather than producing
-        // `https://workflows.//`.
-        assert_eq!(
-            resolve_workflows_url(Some("  "), Some(""), Some(" neonlaw.com ")),
-            "https://workflows.neonlaw.com/"
-        );
-        assert_eq!(
-            resolve_workflows_url(None, None, Some("   ")),
-            WORKFLOWS_PUBLIC_URL
-        );
-    }
-
-    #[test]
-    fn resolve_workflows_url_placeholder_only_when_nothing_set() {
-        assert_eq!(
-            resolve_workflows_url(None, None, None),
-            WORKFLOWS_PUBLIC_URL
-        );
-    }
-
-    #[tokio::test]
-    async fn admin_api_register_posts_force_to_deployments_and_reports_services() {
-        use wiremock::matchers::{body_json, header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        let worker_url = "https://workflows.example.com/";
-        Mock::given(method("POST"))
-            .and(path("/deployments"))
-            .and(header("authorization", "Bearer test-admin-key"))
-            // The force re-register must send exactly {uri, force:true} — a
-            // plain register (no force) would refuse to overwrite the
-            // existing endpoint and a service added since last register would
-            // stay invisible at the ingress.
-            .and(body_json(
-                serde_json::json!({ "uri": worker_url, "force": true }),
-            ))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "dp_test",
-                "services": [{ "name": "notation" }, { "name": "Archives" }],
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        // A trailing slash on the admin base must not double up the path.
-        register_via_admin_api_async(&format!("{}/", server.uri()), "test-admin-key", worker_url)
-            .await
-            .expect("admin-api register should succeed against the mock");
-        // `.expect(1)` on the mock asserts exactly one matching POST on drop.
-    }
-
-    #[tokio::test]
-    async fn admin_api_register_errors_on_non_2xx() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/deployments"))
-            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
-            .mount(&server)
-            .await;
-
-        let err = register_via_admin_api_async(
-            &server.uri(),
-            "bad-token",
-            "https://workflows.example.com/",
-        )
-        .await
-        .expect_err("a 401 must surface as an error, not a silent success");
-        assert!(
-            err.to_string().contains("401"),
-            "error should name the HTTP status, got: {err}"
-        );
-    }
-
     /// Load-bearing safety net: an empty environment must reproduce the
     /// exact pre-refactor constants. If this fails, `devx up` against a
     /// clean `.env` would behave differently than it always has.
@@ -4159,10 +2907,6 @@ admin_base_url = "https://production-env.example.invalid:9070"
                 .any(|entry| entry["name"].as_str() == Some("ZO_GRPC_PORT")
                     && entry["value"].as_str() == Some("5081")),
             "OpenObserve must expose direct OTLP gRPC on 5081"
-        );
-        assert!(
-            manifests.contains("NAVIGATOR_OPENOBSERVE_PASSWORD"),
-            "both Navigator binaries must receive the OpenObserve credential contract"
         );
         assert!(
             manifests.contains("openobserve_endpoint: http://openobserve:5081"),
@@ -4263,12 +3007,12 @@ admin_base_url = "https://production-env.example.invalid:9070"
         let cfg = KindConfig::from_env();
         let credentials = postgres_fixture::Credentials {
             app_password: "synthetic-app".into(),
-            owner_password: "synthetic-owner".into(),
+
             ca: "synthetic-ca".into(),
         };
         let mut environment = render_env(&cfg, root);
         environment.push_str(&postgres_fixture::render_environment(
-            &credentials.environment(&cfg, root),
+            &credentials.environment_for(&cfg, root, "navigator"),
         ));
         let rendered = parse_rendered_env(&environment);
         let get = |key: &str| rendered.get(key).cloned();
@@ -4371,7 +3115,6 @@ admin_base_url = "https://production-env.example.invalid:9070"
         cfg.clamav_port = 23310;
         cfg.rauthy_port = 31080;
         cfg.seaweedfs_s3_port = 31900;
-        cfg.restate_ingress_port = 19080;
         cfg.openobserve_port = 15_080;
         cfg.openobserve_otlp_port = 15_081;
         cfg.forgejo_port = 21_437;
@@ -4386,7 +3129,6 @@ admin_base_url = "https://production-env.example.invalid:9070"
             root.join(".devx").join("kubeconfig").display()
         )));
         assert!(env.contains("NAVIGATOR_KIND_CLUSTER=navigator-task"));
-        assert!(env.contains("NAVIGATOR_KIND_RESTATE_INGRESS_PORT=19080"));
         assert!(env.contains("NAVIGATOR_KIND_WEB_PORT=4001"));
         assert!(env.contains(&format!("{}=4011", delete_your_data_port_env_var())));
         assert!(env.contains(&format!(
@@ -4407,34 +3149,7 @@ admin_base_url = "https://production-env.example.invalid:9070"
         assert!(env.contains("NAVIGATOR_APPLICATIONS_ACCESS_KEY=navigator-applications"));
         assert!(env.contains("NAVIGATOR_LFS_BUCKET=navigator-lfs"));
         assert!(env.contains("NAVIGATOR_LFS_ACCESS_KEY=navigator-lfs"));
-        assert!(env.contains("RESTATE_BROKER_URL=http://localhost:19080"));
         assert!(env.contains("OAUTH_REDIRECT_URI=http://localhost:4001/auth/callback"));
-    }
-
-    /// `.devx/env` carries the store's whole connection contract, so a
-    /// sourced environment reaches the same engine `web` was started
-    /// against.
-    #[test]
-    fn render_env_carries_the_surreal_contract() {
-        let mut cfg = default_cfg();
-        cfg.surreal_port = 21_224;
-
-        let env = render_env(&cfg, Path::new("/ws"));
-
-        assert!(
-            env.contains("NAVIGATOR_SURREAL_ENDPOINT=ws://localhost:21224"),
-            "{env}"
-        );
-        assert!(
-            env.contains("NAVIGATOR_SURREAL_NAMESPACE=navigator"),
-            "{env}"
-        );
-        assert!(
-            env.contains("NAVIGATOR_SURREAL_DATABASE=navigator"),
-            "{env}"
-        );
-        assert!(env.contains("NAVIGATOR_SURREAL_USER=root"), "{env}");
-        assert!(env.contains("NAVIGATOR_SURREAL_PASSWORD=root"), "{env}");
     }
 
     /// `web` refuses to boot without an explicit signature provider, so
@@ -4554,10 +3269,6 @@ admin_base_url = "https://production-env.example.invalid:9070"
         assert!(
             rauthy_public_url_patch(cfg.rauthy_port).contains(&origin),
             "the Rauthy deployment patch must carry the same origin"
-        );
-        assert!(
-            navigator_web_rauthy_patch(cfg.rauthy_port).contains(&issuer),
-            "the in-cluster web patch must carry the same issuer"
         );
         let proxy = rauthy_loopback_config(cfg.rauthy_port);
         assert!(proxy.contains("listen 127.0.0.1:20445"), "{proxy}");
@@ -5156,19 +3867,6 @@ mod devx_render_tests {
             "{conf}"
         );
         assert!(conf.contains("proxy_pass http://rauthy:8080;"), "{conf}");
-    }
-
-    /// The web patch pins `OAUTH_ISSUER_URL` to this tier's browser-reachable
-    /// issuer so redirects land on the port the host actually forwarded.
-    #[test]
-    fn navigator_web_patch_pins_the_issuer_to_the_tiers_port() {
-        let patch = navigator_web_rauthy_patch(31080);
-        let parsed: serde_json::Value = serde_json::from_str(&patch).expect("valid JSON patch");
-        let env = parsed["spec"]["template"]["spec"]["containers"][0]["env"]
-            .as_array()
-            .expect("env array");
-        assert_eq!(env[0]["name"], "OAUTH_ISSUER_URL");
-        assert_eq!(env[0]["value"], "http://localhost:31080/auth/v1/");
     }
 
     /// The kind-config rewrite swaps only the three ingress host ports for

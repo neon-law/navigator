@@ -164,49 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn the_daily_trigger_runs_at_0420_utc_in_every_manifest() {
-        for source in [
-            include_str!("../../examples/deploy/k8s/exports/cron-notation-reset-trigger.yaml"),
-            include_str!(
-                "../../k8s/overlays/kind/notation-reset-trigger/notation-reset-trigger.yaml"
-            ),
-        ] {
-            let manifest: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
-            assert_eq!(manifest["spec"]["schedule"].as_str(), Some("20 4 * * *"));
-            assert_eq!(manifest["spec"]["timeZone"].as_str(), Some("Etc/UTC"));
-            assert_eq!(
-                manifest["metadata"]["name"].as_str(),
-                Some("notation-reset-trigger")
-            );
-        }
-    }
-
-    #[test]
-    fn the_trigger_manifest_is_listed_in_every_kustomization() {
-        let listed = |value: &serde_yaml::Value, entry: &str| {
-            value["resources"]
-                .as_sequence()
-                .unwrap()
-                .iter()
-                .any(|resource| resource.as_str() == Some(entry))
-        };
-        let exports: serde_yaml::Value = serde_yaml::from_str(include_str!(
-            "../../examples/deploy/k8s/exports/kustomization.yaml"
-        ))
-        .unwrap();
-        assert!(listed(&exports, "cron-notation-reset-trigger.yaml"));
-        let kind: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../k8s/overlays/kind/kustomization.yaml"))
-                .unwrap();
-        assert!(listed(&kind, "notation-reset-trigger"));
-        let overlay: serde_yaml::Value = serde_yaml::from_str(include_str!(
-            "../../k8s/overlays/kind/notation-reset-trigger/kustomization.yaml"
-        ))
-        .unwrap();
-        assert!(listed(&overlay, "notation-reset-trigger.yaml"));
-    }
-
-    #[test]
     fn the_journaled_clock_must_be_rfc_3339() {
         let at = parse_clock("2026-10-21T04:20:00+02:00").expect("an RFC 3339 instant");
         assert_eq!(at.to_rfc3339(), "2026-10-21T02:20:00+00:00");

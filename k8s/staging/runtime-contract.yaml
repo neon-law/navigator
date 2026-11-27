@@ -9,12 +9,6 @@ spec:
       containers:
         - name: web
           env:
-            - name: RESTATE_BROKER_URL
-              value: null
-              valueFrom:
-                configMapKeyRef:
-                  name: navigator-staging-coordinates
-                  key: restate_broker_url
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: null
               valueFrom:

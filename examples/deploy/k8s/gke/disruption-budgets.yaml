@@ -16,14 +16,3 @@ spec:
   selector:
     matchLabels:
       app: navigator-web
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: workflows-service
-  namespace: navigator
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: workflows-service

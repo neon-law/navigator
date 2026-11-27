@@ -9,12 +9,6 @@ fn guide_documents_the_delivered_deployment_boundary() {
     assert!(GUIDE.contains("## Deployment configuration"));
     assert!(GUIDE.contains("NAVIGATOR_DEPLOYMENTS_DIR"));
     assert!(!GUIDE.contains("Per-deployment configuration moves out of the source tree"));
-    for limitation in ["SurrealDB (**Interim**)", "Restate (**Interim**)"] {
-        assert!(
-            GUIDE.contains(limitation),
-            "missing limitation: {limitation}"
-        );
-    }
 }
 
 #[test]

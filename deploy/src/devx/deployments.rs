@@ -1014,11 +1014,7 @@ fn plan(
     let mut plan = BTreeMap::new();
     let mut skipped = BTreeMap::new();
     let mut missing = Vec::new();
-    let mut objects = projected_objects();
-    if store::workflow_engine::dbos_only(&|key| deployment.coordinates.get(key).cloned())? {
-        objects.insert(workflows::trigger::DBOS_INGRESS_TOKEN_ENV.to_owned());
-    }
-    for object in objects {
+    for object in projected_objects() {
         if deployment.encrypted_keys.contains(&object) {
             plan.insert(object, Source::Encrypted);
         } else if deployment.coordinates.contains_key(&object) {
@@ -2364,6 +2360,7 @@ mod tests {
                 .insert(workflow.flag.into(), "true".into());
         }
         let token = workflows::trigger::DBOS_INGRESS_TOKEN_ENV;
+        deployment.encrypted_keys.remove(token);
         let error = plan(&deployment).expect_err("native web needs its ingress token");
         assert!(error.to_string().contains(token));
         deployment.encrypted_keys.insert(token.into());
@@ -3376,33 +3373,6 @@ sops:
     }
 
     #[test]
-    fn the_restate_ingress_pair_is_required_of_the_automation_home_alone() {
-        // The subtlety a "every deployment has every key" test gets wrong.
-        // `store::deployment` scopes the trigger-submitted Restate ingress
-        // pair to one project, so its absence is a gap there and correct
-        // everywhere else.
-        let without_ingress: Vec<&str> = complete_keys()
-            .into_iter()
-            .filter(|key| *key != "RESTATE_INGRESS_URL" && *key != "RESTATE_AUTH_TOKEN")
-            .collect();
-
-        let home = deployment(
-            &[(store::deployment::GITHUB_AUTOMATION_HOME_FLAG, "true")],
-            &without_ingress,
-        );
-        assert!(
-            !valid_unsatisfied_requirements(&home).is_empty(),
-            "the automation home must still need its Restate ingress credentials"
-        );
-
-        let elsewhere = deployment(&[], &without_ingress);
-        assert!(
-            valid_unsatisfied_requirements(&elsewhere).is_empty(),
-            "no other deployment is preflighted for that singleton's ingress credentials"
-        );
-    }
-
-    #[test]
     fn inline_env_keys_count_as_supplied_without_entering_the_encrypted_file() {
         // `NAVIGATOR_STORAGE_BACKEND` and friends are boot-required but ship
         // as inline Deployment env. Requiring them in the tree would push
@@ -3429,33 +3399,6 @@ sops:
         let rendered = error.to_string();
         assert!(rendered.contains("SESSION_SECRET"));
         assert!(rendered.contains("Secret Manager was not changed"));
-    }
-
-    #[test]
-    fn a_production_row_is_not_asked_for_the_automation_home_s_ingress_credentials() {
-        // The `SecretProviderClass` is one manifest rendered for every
-        // deployment, so it references the trigger-submitted Restate ingress
-        // pair everywhere. Demanding them would push a singleton's bearer
-        // token into a row holding real client matters — the opposite of what
-        // `store::deployment` scopes it to.
-        let objects: Vec<String> = projected_objects().into_iter().collect();
-        let home_only = ["RESTATE_INGRESS_URL", "RESTATE_AUTH_TOKEN"];
-        let supplied: Vec<&str> = objects
-            .iter()
-            .map(String::as_str)
-            .filter(|object| !home_only.contains(object))
-            .collect();
-
-        let (plan, skipped) = plan(&deployment(&[(PROJECT_ID, "neon-law")], &supplied))
-            .expect("a production row without the receiver's credentials is complete");
-        for key in home_only {
-            assert!(!plan.contains_key(key));
-            assert_eq!(
-                skipped.get(key),
-                Some(&Exemption::ScopedElsewhere),
-                "{key} must be reported as skipped, never silently dropped"
-            );
-        }
     }
 
     /// The JWT triple every deployment signs into `DOCUSIGN_BASE_URL` with
@@ -3788,25 +3731,6 @@ sops:
         ] {
             assert!(error.to_string().contains(key), "{key} must still be named");
         }
-    }
-
-    #[test]
-    fn the_automation_home_is_still_asked_for_its_own_ingress_credentials() {
-        // The other half: the exemption is scoped to the project that does not
-        // own the Restate ingress pair, never a blanket allowance.
-        let objects: Vec<String> = projected_objects().into_iter().collect();
-        let supplied: Vec<&str> = objects
-            .iter()
-            .map(String::as_str)
-            .filter(|object| *object != "RESTATE_INGRESS_URL")
-            .collect();
-
-        let error = plan(&deployment(
-            &[(store::deployment::GITHUB_AUTOMATION_HOME_FLAG, "true")],
-            &supplied,
-        ))
-        .expect_err("the automation home owns the ingress pair");
-        assert!(error.to_string().contains("RESTATE_INGRESS_URL"));
     }
 
     #[test]

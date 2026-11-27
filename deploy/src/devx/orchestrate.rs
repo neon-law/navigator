@@ -21,11 +21,11 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+use sqlx::postgres::{PgConnectOptions, PgSslMode};
 
 use super::{
-    normalize_docker_arch, parse_terminating, render_env, render_kind_config, restate_crd_path,
-    seaweedfs, terminating_wedge_message, KindConfig, Terminating, DEFAULT_RAUTHY_HOST_PORT,
-    INGRESS_MANIFEST, RESTATE_CRDS, RESTATE_OPERATOR_VERSION, WEB_IMAGE, WORKFLOWS_SERVICE_IMAGE,
+    render_env, render_kind_config, seaweedfs, KindConfig, DEFAULT_RAUTHY_HOST_PORT,
+    INGRESS_MANIFEST,
 };
 
 /// `dev up [--path <checkout>]`: bring up the tier for `path`, or for the
@@ -38,7 +38,6 @@ pub(super) fn up(path: Option<&Path>, cfg: &KindConfig) -> Result<()> {
 /// database-targeted roles Job. This performs no provisioning or restamping.
 pub(super) fn verified_native_database(root: &Path, cfg: &KindConfig) -> Result<String> {
     use super::forgejo::cluster::Kube;
-    use sqlx::postgres::{PgConnectOptions, PgSslMode};
     super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
     let intent = super::native_profile::Intent::read(root)?.context("native intent is missing")?;
     intent.verify_target(root, cfg)?;
@@ -81,7 +80,6 @@ pub(super) fn verified_native_database(root: &Path, cfg: &KindConfig) -> Result<
 pub(super) fn up_native_in(root: &Path, cfg: &KindConfig, no_deps: bool) -> Result<()> {
     use super::native_profile::{self, Intent};
     use store::postgres::native_origin;
-    require_tools(&["kind", "kubectl", "docker", "openssl"])?;
     super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
     let mut intent = Intent::read(root)?.context("native tier creation intent is missing")?;
     intent.verify_target(root, cfg)?;
@@ -173,7 +171,6 @@ fn prepare_native_dependencies(
 ) -> Result<NativeDependencies> {
     use super::forgejo::cluster::{prepare_postgres, Kube};
     use super::native_profile;
-    use sqlx::postgres::{PgConnectOptions, PgSslMode};
     let created = if reconcile {
         kind_platform_steps(root, cfg)?
     } else {
@@ -216,7 +213,7 @@ fn prepare_native_dependencies(
             .context("native PostgreSQL TLS is missing")?;
         super::postgres_fixture::Credentials {
             app_password: password("navigator-postgres-app")?,
-            owner_password: password("navigator-postgres-migrator")?,
+
             ca: super::postgres_fixture::trust_anchor(&tls)?.to_owned(),
         }
     };
@@ -430,85 +427,11 @@ fn seed_native_application(
     Ok(())
 }
 
-/// Rebuild the current checkout's worker image and replace the running KIND
-/// worker. This is the focused edit loop for `workflows-service` and shared
-/// workflow code; host-side `web` edits do not need an image rebuild.
-pub(super) fn reload_worker(cfg: &KindConfig) -> Result<()> {
-    require_tools(&["kind", "kubectl", "docker"])?;
-    let root = workspace_root()?;
-    // Pin every kubectl call below to this checkout's cluster before touching
-    // it. `build_and_load_worker` loads the image into `cfg.cluster` by name,
-    // but the pod delete and readiness wait use whatever kubeconfig context is
-    // ambient, so a stale or unrelated context would restart the wrong worker
-    // and leave the rebuilt image unused. The development tier also pins its own
-    // kubectl operations via `kind_up_steps`.
-    configure_worktree_kubeconfig(&root, cfg)?;
-    build_and_load_worker(&root, cfg)?;
-    eprintln!("==> restarting workflows-service in {}", cfg.cluster);
-    // Deleting the pod forces the RestateDeployment's ReplicaSet to recreate it
-    // against the freshly `kind load`ed `:dev` image (the tag is unchanged, so
-    // only a new pod picks it up under `IfNotPresent`). `--wait` is kubectl's
-    // default, so this blocks until the outgoing pod is gone.
-    run(Command::new("kubectl")
-        .arg("--namespace")
-        .arg(&cfg.namespace)
-        .arg("delete")
-        .arg("pod")
-        .arg("--selector")
-        .arg("app=workflows-service")
-        .arg("--ignore-not-found"))?;
-    // Gate on the *replacement* pod's readiness before trusting the
-    // RestateDeployment CR: its `Ready` condition lags pod deletion, so waiting
-    // on it alone can return against the pre-deletion state while the new pod is
-    // still starting. Once the new pod is Ready, confirm the operator has
-    // finished reconciling the deployment too.
-    wait_for_selected_pod_ready(&cfg.namespace, "app=workflows-service")?;
-    wait_for_condition(
-        &cfg.namespace,
-        "restatedeployment/workflows-service",
-        "Ready",
-    )
-}
-
-/// Build the worker from `root` and make its local `:dev` tag available to
-/// every node of this KIND cluster. The manifest's `IfNotPresent` policy then
-/// starts this exact source image without contacting a registry.
-fn build_and_load_worker(root: &Path, cfg: &KindConfig) -> Result<()> {
-    build_and_load_local_image(
-        root,
-        cfg,
-        "images/Containerfile.workflows-service",
-        WORKFLOWS_SERVICE_IMAGE,
-    )
-}
-
-pub(super) fn build_and_load_local_image(
-    root: &Path,
-    cfg: &KindConfig,
-    containerfile_path: &str,
-    image: &str,
-) -> Result<()> {
-    let containerfile = root.join(containerfile_path);
-    eprintln!(
-        "==> docker build -f {} -t {image} {}",
-        containerfile.display(),
-        root.display()
-    );
-    run(Command::new("docker")
-        .arg("build")
-        .arg("--file")
-        .arg(containerfile)
-        .arg("--tag")
-        .arg(image)
-        .arg(root))?;
-    kind_load_image_into_cluster(image, cfg, &format!("linux/{}", docker_daemon_arch()))
-}
-
 /// Point Rauthy's canonical public URL at this tier's browser-reachable origin.
 ///
 /// Rauthy uses one `PUB_URL` for discovery, token validation, and browser
 /// redirects. Host-run web reaches the mapped `NodePort` directly; full KIND web
-/// reaches the same issuer through [`align_rauthy_in_cluster_client`].
+/// reaches the same issuer through its application configuration.
 ///
 /// The Deployment keeps `valueFrom` references to this Secret. Patching the
 /// Secret instead of replacing those entries with literal values preserves a
@@ -555,85 +478,11 @@ pub(super) fn rauthy_deployment_exists(cfg: &KindConfig) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// Release the local `NodePort` and remove the retired dependency-tier objects
-/// before applying Rauthy. This is idempotent and touches only the disposable
-/// identity-provider fixture in the selected KIND cluster.
-fn retire_legacy_identity_provider(cfg: &KindConfig) -> Result<()> {
-    run(Command::new("kubectl")
-        .args(["--context", &cfg.kind_context(), "-n", &cfg.namespace])
-        .args([
-            "delete",
-            "deployment/keycloak",
-            "service/keycloak",
-            "configmap/keycloak-realm",
-            "secret/keycloak-realm-admin",
-            "ingress/keycloak",
-            "--ignore-not-found",
-        ]))
-}
-
-/// Remove the Garage object store that `SeaweedFS` replaced. `kubectl apply`
-/// never prunes, so a KIND cluster created before the switch keeps running
-/// Garage beside `SeaweedFS`. Its claims go too: the bytes were disposable
-/// fixtures. Idempotent.
-fn retire_legacy_object_store(cfg: &KindConfig) -> Result<()> {
-    run(Command::new("kubectl")
-        .args(["--context", &cfg.kind_context(), "-n", &cfg.namespace])
-        .args([
-            "delete",
-            "statefulset/garage",
-            "service/navigator-garage",
-            "service/navigator-garage-internal",
-            "configmap/navigator-garage",
-            "secret/navigator-garage-control",
-            "secret/navigator-garage-s3",
-            "persistentvolumeclaim/data-garage-0",
-            "persistentvolumeclaim/meta-garage-0",
-            "--ignore-not-found",
-        ]))
-}
-
-/// Align a full-stack `navigator-web` pod with Rauthy's single public issuer.
-///
-/// The `ConfigMap` changes the sidecar's loopback listen port; the Deployment
-/// patch changes web's issuer and triggers the rollout that remounts that
-/// `ConfigMap`. Deps-only host-web environments never call this path.
-fn align_rauthy_in_cluster_client(cfg: &KindConfig) -> Result<()> {
-    let issuer = super::rauthy_issuer(cfg.rauthy_port);
-    eprintln!("==> aligning in-cluster Rauthy client → {issuer}");
-    run(Command::new("kubectl")
-        .args(["--context", &cfg.kind_context(), "-n", &cfg.namespace])
-        .args([
-            "patch",
-            "configmap",
-            "rauthy-loopback-proxy",
-            "--type=merge",
-            "-p",
-        ])
-        .arg(super::rauthy_loopback_config_patch(cfg.rauthy_port)))?;
-    run(Command::new("kubectl")
-        .args(["--context", &cfg.kind_context(), "-n", &cfg.namespace])
-        .args([
-            "patch",
-            "deployment",
-            "navigator-web",
-            "--type=strategic",
-            "-p",
-        ])
-        .arg(super::navigator_web_rauthy_patch(cfg.rauthy_port)))
-}
-
-pub(super) fn hydrate_seaweedfs_environment(cfg: &KindConfig) -> Result<()> {
-    seaweedfs::export(&seaweedfs::provision(&cfg.namespace)?);
-    Ok(())
-}
-
-/// `dev kind up`: just create the cluster + install ingress +
-/// install the Restate Operator. Don't apply application manifests.
+/// Create the cluster and install its ingress controller.
 pub(super) fn kind_up_only(cfg: &KindConfig) -> Result<()> {
     require_tools(&["kind", "kubectl", "helm"])?;
     let root = workspace_root()?;
-    kind_up_steps(&root, cfg)
+    kind_platform_steps(&root, cfg).map(|_| ())
 }
 
 /// `dev kind down`: delete the KIND cluster.
@@ -726,60 +575,6 @@ pub(super) fn deploy_native_image(root: &Path, cfg: &KindConfig, image: &str) ->
     kube.apply(&manifest)?;
     kube.wait_rollout("deployment/navigator-web", "600s")?;
     Ok(())
-}
-
-/// `devx deploy`: full in-cluster stack from published Artifact Registry
-/// images. Pulls both images at a resolved immutable release tag, retags + loads them
-/// into KIND, applies every manifest under `k8s/`, waits for the
-/// navigator-web rollout to settle. CI builds and publishes the images;
-/// this pulls them. `tag_override` (e.g. `worktree-env --demo --tag`)
-/// pins the release; else `NAVIGATOR_IMAGE_TAG`, else the latest
-/// published tag is pulled.
-pub(super) fn deploy_captured(
-    root: &Path,
-    cfg: &KindConfig,
-    tag_override: Option<&str>,
-) -> Result<()> {
-    require_tools(&["kind", "kubectl", "docker", "helm"])?;
-    // `kind_up_steps` is idempotent — safe to call when the cluster
-    // is already up. Establishes the Operator + nginx-ingress
-    // invariants `deploy` relies on.
-    kind_up_steps(root, cfg)?;
-    let image_registry = super::registry::registry_from_env()?;
-    let tag = match local_image_tag(tag_override)? {
-        Some(tag) => tag,
-        None => super::registry::resolve_latest_tag(&image_registry, "navigator-web")?,
-    };
-    // Fail fast before any apply if either service image is missing the
-    // resolved tag — a missing image would wedge the rollout in
-    // ImagePullBackOff.
-    super::registry::ensure_tag_published(&image_registry, "navigator-web", &tag)?;
-    super::registry::ensure_tag_published(&image_registry, "navigator-workflows-service", &tag)?;
-    pull_retag_load(&image_registry, "navigator-web", &tag, WEB_IMAGE, cfg)?;
-    pull_retag_load(
-        &image_registry,
-        "navigator-workflows-service",
-        &tag,
-        WORKFLOWS_SERVICE_IMAGE,
-        cfg,
-    )?;
-    seaweedfs::prepare(&cfg.namespace)?;
-    retire_legacy_identity_provider(cfg)?;
-    retire_legacy_object_store(cfg)?;
-    apply_kustomize(root, &cfg.full_overlay)?;
-    align_rauthy_public_url(cfg)?;
-    align_rauthy_in_cluster_client(cfg)?;
-    wait_rollout("statefulset", "seaweedfs", cfg)?;
-    seaweedfs::provision(&cfg.namespace)?;
-    bootstrap_postgres_in(root, cfg, "navigator")?;
-    eprintln!("==> waiting for navigator-web rollout");
-    run(Command::new("kubectl")
-        .arg("--namespace")
-        .arg(&cfg.namespace)
-        .arg("rollout")
-        .arg("status")
-        .arg("deployment/navigator-web")
-        .arg("--timeout=300s"))
 }
 
 /// `devx undeploy`: kubectl delete namespace navigator. Does NOT
@@ -1064,45 +859,6 @@ pub(super) fn kind_platform_steps(
     Ok(created)
 }
 
-fn kind_up_steps(root: &Path, cfg: &KindConfig) -> Result<()> {
-    kind_platform_steps(root, cfg)?;
-    eprintln!("==> installing Restate Operator (chart v{RESTATE_OPERATOR_VERSION})");
-    run(Command::new("helm")
-        .arg("upgrade")
-        .arg("--install")
-        .arg("restate-operator")
-        .arg("oci://ghcr.io/restatedev/restate-operator-helm")
-        .arg("--version")
-        .arg(RESTATE_OPERATOR_VERSION)
-        .arg("--namespace")
-        .arg("restate-operator")
-        .arg("--create-namespace"))?;
-    // Helm installs a native `crds/` entry once and never upgrades it, so the
-    // chart bump alone leaves an existing cluster on its original CRD schema.
-    // Server-side apply because the chart already owns these fields under the
-    // `helm` field manager (`--force-conflicts` takes ownership) and because
-    // `restateclusters` serializes to ~236 KB — close enough to the 262 KB
-    // annotation ceiling that a client-side apply's `last-applied-configuration`
-    // is one upstream field away from breaking.
-    eprintln!("==> applying Restate CRDs (v{RESTATE_OPERATOR_VERSION})");
-    for crd in RESTATE_CRDS {
-        run(Command::new("kubectl")
-            .arg("apply")
-            .arg("--server-side")
-            .arg("--force-conflicts")
-            .arg("-f")
-            .arg(root.join(restate_crd_path(crd))))?;
-    }
-    run(Command::new("kubectl")
-        .arg("--namespace")
-        .arg("restate-operator")
-        .arg("wait")
-        .arg("--for=condition=available")
-        .arg("--timeout=1200s")
-        .arg("deployment")
-        .arg("--all"))
-}
-
 /// Keep every Kubernetes subprocess for one local setup on a kubeconfig that
 /// belongs to the target worktree. Unlike `kubectl config use-context`, this
 /// never mutates the host-wide current context, so concurrent clones cannot
@@ -1237,22 +993,6 @@ fn kind_load_image_into_cluster(tag: &str, cfg: &KindConfig, platform: &str) -> 
     Ok(())
 }
 
-/// Architecture the Docker daemon runs as (`arm64` / `amd64`), used to build
-/// the `linux/<arch>` platform passed to `docker save`. Queries the daemon
-/// directly (`docker version`) so it is correct even when the CLI binary runs
-/// under a different arch (Rosetta); falls back to the host arch if the daemon
-/// can't be reached.
-fn docker_daemon_arch() -> String {
-    Command::new("docker")
-        .args(["version", "--format", "{{.Server.Arch}}"])
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .filter(|arch| !arch.is_empty())
-        .unwrap_or_else(|| normalize_docker_arch(std::env::consts::ARCH))
-}
-
 /// Resolve the immutable release tag the local cluster should
 /// pull, in precedence order: an explicit `override_tag` (e.g.
 /// `worktree-env --demo --tag`), then `NAVIGATOR_IMAGE_TAG`, then the
@@ -1273,30 +1013,6 @@ fn local_image_tag(override_tag: Option<&str>) -> Result<Option<String>> {
         return Ok(Some(tag));
     }
     Ok(None)
-}
-
-/// Pull a published Artifact Registry image, retag it to the local `:dev`
-/// tag the KIND manifests reference, and load it into the cluster.
-/// Retagging (rather than rewriting every manifest to a registry ref)
-/// keeps the overlays byte-identical whether an image was built locally
-/// or pulled. Published images are amd64-only (see
-/// `deploy.yml`), matching prod's amd64 GKE Autopilot nodes, so `docker
-/// pull` fetches the amd64 variant on any host; an Apple-Silicon laptop
-/// loads it under emulation into its KIND node. The registry is private,
-/// so the host's docker must be authorized
-/// (`gcloud auth configure-docker <region>-docker.pkg.dev`).
-fn pull_retag_load(
-    registry: &str,
-    image: &str,
-    tag: &str,
-    dev_tag: &str,
-    cfg: &KindConfig,
-) -> Result<()> {
-    let remote = super::registry::image_ref(registry, image, tag);
-    eprintln!("==> docker pull {remote}");
-    run(Command::new("docker").arg("pull").arg(&remote))?;
-    run(Command::new("docker").arg("tag").arg(&remote).arg(dev_tag))?;
-    kind_load_image_into_cluster(dev_tag, cfg, &format!("linux/{}", docker_daemon_arch()))
 }
 
 /// Path to the `kind create cluster --config` file. At default host ports this
@@ -1331,92 +1047,6 @@ fn kind_config_path(root: &Path, cfg: &KindConfig) -> Result<PathBuf> {
         path.display()
     );
     Ok(path)
-}
-
-fn apply_kustomize(root: &Path, overlay: &str) -> Result<()> {
-    eprintln!("==> kubectl apply -k {overlay}");
-    run(Command::new("kubectl")
-        .arg("apply")
-        .arg("-k")
-        .arg(root.join(overlay)))
-}
-
-pub(super) fn wait_for_condition(namespace: &str, resource: &str, condition: &str) -> Result<()> {
-    if let Some(state) = terminating_state(namespace, resource) {
-        bail!("{}", terminating_wedge_message(namespace, resource, &state));
-    }
-    run(Command::new("kubectl")
-        .arg("--namespace")
-        .arg(namespace)
-        .arg("wait")
-        .arg(format!("--for=condition={condition}"))
-        .arg(resource)
-        .arg("--timeout=300s"))
-}
-
-/// Probe whether `resource` is mid-deletion, so [`wait_for_condition`] can
-/// fail fast with a real diagnosis instead of blocking for the full timeout.
-///
-/// Best-effort by construction: a probe that cannot answer (`NotFound`, no
-/// cluster, no kubectl) yields `None` and lets the `wait` produce the
-/// authoritative error. This only ever *adds* a diagnosis; it never invents a
-/// failure of its own.
-fn terminating_state(namespace: &str, resource: &str) -> Option<Terminating> {
-    let out = Command::new("kubectl")
-        .arg("--namespace")
-        .arg(namespace)
-        .arg("get")
-        .arg(resource)
-        .arg("-o")
-        .arg("jsonpath={.metadata.deletionTimestamp}|{.metadata.finalizers}")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    parse_terminating(&String::from_utf8_lossy(&out.stdout))
-}
-
-/// Wait for a pod matching `selector` in `namespace` to reach `Ready`.
-///
-/// `reload_worker` deletes the running worker pod and lets the
-/// `RestateDeployment`'s `ReplicaSet` recreate it. A bare
-/// `kubectl wait --for=condition=Ready pod` errors with "no matching resources
-/// found" if it runs before the `ReplicaSet` has created the replacement, so
-/// first poll until a pod exists, then block on its readiness. This observes
-/// the actual replacement pod rather than the `RestateDeployment` CR's lagging
-/// `Ready` condition.
-pub(super) fn wait_for_selected_pod_ready(namespace: &str, selector: &str) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_mins(5);
-    loop {
-        let out = Command::new("kubectl")
-            .arg("--namespace")
-            .arg(namespace)
-            .arg("get")
-            .arg("pod")
-            .arg("--selector")
-            .arg(selector)
-            .arg("--output")
-            .arg("jsonpath={.items[*].metadata.name}")
-            .output()
-            .with_context(|| format!("list pods matching {selector} in {namespace}"))?;
-        if out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty() {
-            break;
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for a pod matching '{selector}' to appear in {namespace}");
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    run(Command::new("kubectl")
-        .arg("--namespace")
-        .arg(namespace)
-        .arg("wait")
-        .arg("--for=condition=Ready")
-        .arg("pod")
-        .arg("--selector")
-        .arg(selector)
-        .arg("--timeout=300s"))
 }
 
 /// `dev down [--path <checkout>]`: the inverse of [`up`] for the same root.
@@ -1846,14 +1476,6 @@ impl StateDir {
     }
 }
 
-/// Prepare the one synthetic PostgreSQL store shared by KIND and host fixtures.
-pub(super) fn postgres_bootstrap(path: Option<&Path>, cfg: &KindConfig) -> Result<()> {
-    let root = checkout_root(path)?;
-    let cfg = super::worktree_env::postgres_fixture_config(&root, cfg)?;
-    configure_worktree_kubeconfig(&root, &cfg)?;
-    bootstrap_postgres_in(&root, &cfg, "navigator")
-}
-
 pub(in crate::devx) fn verify_fixture_port(cfg: &KindConfig) -> Result<serde_json::Value> {
     let published = Command::new("docker")
         .args(["inspect", "--format", "{{json .}}"])
@@ -1869,47 +1491,6 @@ pub(in crate::devx) fn verify_fixture_port(cfg: &KindConfig) -> Result<serde_jso
         cfg.postgres_port,
     )?;
     Ok(container)
-}
-
-fn fixture_kube(
-    root: &Path,
-    cfg: &KindConfig,
-    database: &str,
-) -> Result<(super::forgejo::cluster::Kube, serde_json::Value)> {
-    use super::forgejo::cluster::Kube;
-    require_tools(&["kind", "kubectl", "docker", "openssl"])?;
-    super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
-    let clusters = Command::new("kind").args(["get", "clusters"]).output()?;
-    anyhow::ensure!(
-        clusters.status.success()
-            && String::from_utf8_lossy(&clusters.stdout)
-                .lines()
-                .any(|name| name == cfg.cluster),
-        "PostgreSQL fixture requires this task's existing KIND cluster"
-    );
-    let container = verify_fixture_port(cfg)?;
-    let kube = Kube::new(cfg);
-    let read = |kind: &str| -> Result<serde_json::Value> {
-        Ok(serde_json::from_str(
-            &kube.output(&["get", kind, "-o", "json"])?,
-        )?)
-    };
-    super::postgres_fixture::validate_store_identity(
-        &read("configmap/navigator-surreal")?,
-        &read("service/surreal")?,
-        &read("deployment/surreal")?,
-        &cfg.namespace,
-        database,
-        "surreal",
-        super::surreal::SERVICE_PORT,
-    )?;
-    if kube.succeeds(&["get", "service/navigator-postgres"]) {
-        super::postgres_fixture::validate_local_service(
-            &read("service/navigator-postgres")?,
-            "navigator-postgres",
-        )?;
-    }
-    Ok((kube, container))
 }
 
 pub(in crate::devx) fn apply_postgres_host_ingress(
@@ -1929,77 +1510,6 @@ pub(in crate::devx) fn apply_postgres_host_ingress(
     Ok(())
 }
 
-fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Result<()> {
-    use super::forgejo::cluster::prepare_postgres;
-    let (kube, container) = fixture_kube(root, cfg, database)?;
-    let held = hold_fixture_writers(root, cfg, &kube)?;
-    apply_postgres_host_ingress(cfg, &kube, &container)?;
-    let state = StateDir::new(root)?;
-    state.kill_pids();
-    state.write_pids(&[])?;
-    let credentials = prepare_postgres(cfg)?;
-    let directory = root.join(".devx/postgres");
-    fs::create_dir_all(&directory)?;
-    write_fixture_private(
-        &super::postgres_fixture::ca_path(root),
-        credentials.ca.as_bytes(),
-    )?;
-    kube.run(&[
-        "delete",
-        "job",
-        "navigator-postgres-roles",
-        "--ignore-not-found",
-        "--wait=true",
-    ])?;
-    let rendered = super::forgejo::cluster::kustomize(root, "k8s/overlays/kind/postgres")?;
-    kube.apply(&rendered)?;
-    kube.wait_rollout("statefulset/navigator-postgres", "300s")?;
-    kube.wait_job("navigator-postgres-roles")?;
-    kube.wait_rollout("deployment/surreal", "300s")?;
-    kube.wait_rollout("statefulset/seaweedfs", "300s")?;
-    let mut all_pids = state.read_pids()?;
-    for (service, local, remote) in [
-        (
-            "service/surreal",
-            cfg.surreal_port,
-            super::surreal::SERVICE_PORT,
-        ),
-        ("service/navigator-seaweedfs", cfg.seaweedfs_s3_port, 8333),
-    ] {
-        all_pids.push(port_forward(service, local, remote, cfg, &state)?);
-        state.write_pids(&all_pids)?;
-    }
-    wait_for_tcp("127.0.0.1", cfg.postgres_port)?;
-    wait_for_tcp("127.0.0.1", cfg.surreal_port)?;
-    wait_for_tcp("127.0.0.1", cfg.seaweedfs_s3_port)?;
-    hydrate_seaweedfs_environment(cfg)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(enroll_fixture(root, cfg, database, &credentials))?;
-    StateDir::kill(&all_pids[all_pids.len() - 2..]);
-    all_pids.truncate(all_pids.len() - 2);
-    state.write_pids(&all_pids)?;
-    let environment = credentials.environment(cfg, root);
-    write_fixture_private(
-        &super::postgres_fixture::environment_path(root),
-        super::postgres_fixture::render_environment(&environment).as_bytes(),
-    )?;
-    kube.apply(
-        &serde_json::json!({
-            "apiVersion":"v1", "kind":"ConfigMap",
-            "metadata":{"name":"navigator-kind-postgres-ready","namespace":cfg.namespace},
-            "data":{"ready":"true"}
-        })
-        .to_string(),
-    )?;
-    for (resource, replicas) in held {
-        kube.run(&["scale", &resource, &format!("--replicas={replicas}")])?;
-    }
-    fs::remove_file(directory.join("held-writers.json"))?;
-    Ok(())
-}
-
 pub(super) fn write_fixture_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mut file = fs::OpenOptions::new()
@@ -2010,192 +1520,5 @@ pub(super) fn write_fixture_private(path: &Path, bytes: &[u8]) -> Result<()> {
         .open(path)?;
     file.set_permissions(fs::Permissions::from_mode(0o600))?;
     file.write_all(bytes)?;
-    Ok(())
-}
-
-fn hold_fixture_writers(
-    root: &Path,
-    cfg: &KindConfig,
-    kube: &super::forgejo::cluster::Kube,
-) -> Result<std::collections::BTreeMap<String, u32>> {
-    let directory = root.join(".devx/postgres");
-    fs::create_dir_all(&directory)?;
-    let path = directory.join("held-writers.json");
-    let namespace: serde_json::Value =
-        serde_json::from_str(&kube.output(&["get", "namespace", &cfg.namespace, "-o", "json"])?)?;
-    let namespace_uid = namespace["metadata"]["uid"]
-        .as_str()
-        .context("KIND namespace has no identity")?;
-    let mut snapshot = if path.exists() {
-        serde_json::from_slice::<super::postgres_fixture::HeldWriters>(&fs::read(&path)?)?
-    } else {
-        super::postgres_fixture::HeldWriters::new(
-            cfg,
-            namespace_uid,
-            std::collections::BTreeMap::new(),
-        )
-    };
-    snapshot.validate(cfg, namespace_uid)?;
-    let held = &mut snapshot.replicas;
-    for resource in [
-        "deployment/navigator-web",
-        "restatedeployment/workflows-service",
-    ] {
-        if !kube.succeeds(&["get", resource]) {
-            continue;
-        }
-        let value: serde_json::Value =
-            serde_json::from_str(&kube.output(&["get", resource, "-o", "json"])?)?;
-        let replicas = value["spec"]["replicas"]
-            .as_u64()
-            .and_then(|n| u32::try_from(n).ok())
-            .unwrap_or(1);
-        held.entry(resource.into()).or_insert(replicas);
-    }
-    write_fixture_private(&path, &serde_json::to_vec(&snapshot)?)?;
-    let held = snapshot.replicas;
-    for resource in held.keys() {
-        kube.run(&["scale", resource, "--replicas=0"])?;
-    }
-    let deadline = Instant::now() + Duration::from_secs(180);
-    loop {
-        let pods: serde_json::Value = serde_json::from_str(&kube.output(&[
-            "get",
-            "pods",
-            "-l",
-            "app in (navigator-web,workflows-service)",
-            "-o",
-            "json",
-        ])?)?;
-        let mut observed = true;
-        for resource in held.keys() {
-            let state: serde_json::Value =
-                serde_json::from_str(&kube.output(&["get", resource, "-o", "json"])?)?;
-            observed &= if state["kind"] == "RestateDeployment" {
-                let workloads = serde_json::from_str(&kube.output(&[
-                    "get",
-                    "deployments,replicasets",
-                    "-o",
-                    "json",
-                ])?)?;
-                let all_pods = serde_json::from_str(&kube.output(&["get", "pods", "-o", "json"])?)?;
-                super::postgres_fixture::restate_writer_observed_stopped(
-                    &state, &workloads, &all_pods,
-                )
-            } else {
-                super::postgres_fixture::writer_observed_stopped(&state)
-            };
-        }
-        if observed && pods["items"].as_array().is_some_and(Vec::is_empty) {
-            break;
-        }
-        if Instant::now() >= deadline {
-            bail!("KIND application writers did not stop; capture refused");
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    Ok(held)
-}
-
-/// Census the tables present on the frozen source before the archive reader runs.
-async fn fixture_source_counts(
-    source: &store::surreal::SurrealDb,
-) -> Result<std::collections::BTreeMap<String, i64>> {
-    let mut response = source.query("RETURN (INFO FOR DB).tables").await?;
-    let tables: Option<std::collections::BTreeMap<String, String>> = response.take(0)?;
-    let tables = tables.context("synthetic source omitted its live table inventory")?;
-    let mut counts = std::collections::BTreeMap::new();
-    for table in tables.keys() {
-        let mut response = source
-            .query("SELECT VALUE count() FROM type::table($table) GROUP ALL")
-            .bind(("table", table.clone()))
-            .await?;
-        let rows: Vec<i64> = response.take(0)?;
-        counts.insert(table.clone(), rows.first().copied().unwrap_or_default());
-    }
-    Ok(counts)
-}
-
-async fn enroll_fixture(
-    root: &Path,
-    cfg: &KindConfig,
-    database: &str,
-    credentials: &super::postgres_fixture::Credentials,
-) -> Result<()> {
-    use store::postgres_backfill::{self, family};
-    let pg = store::postgres::PostgresDb::connect(credentials.options(cfg, root)).await?;
-    pg.migrate_embedded(None)
-        .await
-        .context("migrate the synthetic PostgreSQL store")?;
-    store::clauses::seed(
-        &pg,
-        &rules::clauses::library_clauses().map_err(anyhow::Error::msg)?,
-    )
-    .await
-    .context("seed the canonical PostgreSQL Clause catalog")?;
-    for item in
-        dotenvy::from_read_iter(super::render_env_for(cfg, database, cfg.web_port, root).as_bytes())
-    {
-        let (key, value) = item?;
-        env::set_var(key, value);
-    }
-    for (key, value) in credentials.environment(cfg, root) {
-        env::set_var(key, value);
-    }
-    let ready = family::require_runtime_scopes(&pg).await;
-    if ready.is_err() {
-        // An invalid/pending present origin is not an invitation to capture Source.
-        family::require_capture_target(&pg).await?;
-        anyhow::ensure!(
-            std::net::TcpStream::connect(("127.0.0.1", cfg.web_port)).is_err(),
-            "stop the task host web before capturing PostgreSQL fixture history"
-        );
-        let enrolled: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM mirror_backfill_run WHERE scope <> 'global')",
-        )
-        .fetch_one(pg.pool())
-        .await?;
-        anyhow::ensure!(
-            !enrolled,
-            "existing family history needs explicit operator recovery; fixture bootstrap will not replace it"
-        );
-        let config = super::surreal::host_config(cfg, database);
-        let source = crate::surreal_archive::connect_http(&config).await?;
-        let counts = fixture_source_counts(&source).await?;
-        super::postgres_fixture::require_fresh_source(&counts)?;
-        let (bytes, receipt) = crate::surreal_archive::capture_quiesced(&source).await?;
-        super::postgres_fixture::require_fresh_source(&receipt.table_counts)?;
-        write_fixture_private(&root.join(".devx/postgres/capture.surql"), &bytes)?;
-        write_fixture_private(
-            &root.join(".devx/postgres/capture.receipt.json"),
-            &serde_json::to_vec(&receipt)?,
-        )?;
-        let global = postgres_backfill::start(&source, &pg, 500, None).await?;
-        anyhow::ensure!(
-            global.is_clean(),
-            "synthetic global import did not verify cleanly"
-        );
-        for family in family::Family::all() {
-            let proof = receipt.clone().verify_export(&bytes)?;
-            let report =
-                postgres_backfill::start_family(&source, &pg, *family, proof, 500, None, true)
-                    .await?;
-            anyhow::ensure!(
-                report.is_clean(),
-                "synthetic scoped import did not verify cleanly"
-            );
-        }
-    }
-    family::require_runtime_scopes(&pg).await?;
-    // Only after real activation may ordinary accessors seed the sample portfolio.
-    let source = store::surreal::SurrealDb::uninitialized();
-    let storage = cloud::from_env().await?;
-    store::seed::seed_environment(
-        &source,
-        &storage,
-        store::DeploymentEnvironment::Dev,
-        store::seed::BrandSeed::Neon,
-    )
-    .await?;
     Ok(())
 }

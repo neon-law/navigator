@@ -11,7 +11,7 @@ layers share the name:
   [`templates/`](../../templates/).
 - **The executed workflow** — how the declared workflow actually runs. The [`workflows`](../../workflows/) crate owns
   this layer: the [Workflow Spec](workflow-spec.md) parser, the [Workflow Runtime](workflow-runtime.md) trait, and the
-  [Restate](restate.md) adapter that drives it durably in production.
+  DBOS adapter that drives it durably in production.
 
 The same YAML is the contract between the two: a lawyer reads it as a flowchart; the engine reads it as a state-machine
 spec. A [Workflow Run](workflow-run.md) is one execution in the runtime. A Workflow diagram shows the declared states

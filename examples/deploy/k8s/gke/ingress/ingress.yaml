@@ -21,7 +21,7 @@
 # - `networking.gke.io/managed-certificates` — comma-separated list
 #   of `ManagedCertificate` CRs that Google's cert-issuer flips to
 #   Active once DNS resolves to this LB's IP: the default public host,
-#   the workflows host, the Forgejo host, and the Firm certificate
+#   the Forgejo host, and the Firm certificate
 #   (`navigator-firm`) carrying every brand host of this environment,
 #   all sharing this single LB. Brands not yet moved onto the Firm
 #   certificate keep their own. `ops ship` rewrites the annotation from
@@ -31,22 +31,12 @@
 # - `networking.gke.io/v1beta1.FrontendConfig` — opts the LB into
 #   HTTP->HTTPS redirect with a 308 once the cert is provisioned.
 # - `cloud.google.com/neg: '{"ingress": true}'` annotation on the
-#   backend Services (`navigator-web`, `workflows-service`,
+#   backend Services (`navigator-web`,
 #   `navigator-forgejo`) so the
 #   LB targets pod endpoints directly (container-native LB, no
 #   NodePort hop).
 #
-# Host-based routing splits the two hostnames:
-#   - NAVIGATOR_PUBLIC_HOST          -> navigator-web:80
-#   - NAVIGATOR_WORKFLOWS_HOST       -> workflows-service:9081
-#     (GitHub posts signed webhooks to workflows.<domain>/webhooks/github/{secret};
-#      Envoy routes that path to the worker's receiver listener, everything
-#      else to the Restate endpoint)
-# The second hostname is the public endpoint Restate Cloud uses to reach the
-# workflow worker, which also hosts the GitHub webhook receiver and the notice
-# services folded in from the former standalone DevX worker. The receiver moved
-# off `www` so that host remains behind the tailnet perimeter — GitHub, an external sender,
-# cannot reach a tailnet-only host, so it posts to the public workflows host.
+# The Ingress routes brand hosts to web and the Forgejo host to the repository service.
 #
 # Naming this `navigator-web-gke` to avoid colliding with the
 # nginx-class Ingress at `base/web/web.yaml` (which has the same
@@ -60,7 +50,7 @@ metadata:
   annotations:
     kubernetes.io/ingress.class: gce
     kubernetes.io/ingress.global-static-ip-name: NAVIGATOR_GATEWAY_IP_NAME
-    networking.gke.io/managed-certificates: navigator-web,navigator-workflows,navigator-forgejo
+    networking.gke.io/managed-certificates: navigator-web,navigator-forgejo
     networking.gke.io/v1beta1.FrontendConfig: navigator-web
 spec:
   rules:
@@ -98,16 +88,6 @@ spec:
     # derived from `views::brand::BrandKey::ALL`. Renders to nothing when
     # this environment serves no other brand.
     # NAVIGATOR_BRAND_HOST_INGRESS_RULES
-    - host: NAVIGATOR_WORKFLOWS_HOST
-      http:
-        paths:
-          - path: /*
-            pathType: ImplementationSpecific
-            backend:
-              service:
-                name: workflows-service
-                port:
-                  number: 9081
     - host: NAVIGATOR_FORGEJO_HOST
       http:
         paths:

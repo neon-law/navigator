@@ -14,9 +14,8 @@ frontmatter of the [shared onboarding letter](../templates/notations/neon_law/on
    `lawyer_review` → `generate_pdf__retainer_pdf` → `sent_for_signature__pending` → `END`, driving render, PDF
    persistence, and "sent for signature".
 
-Both timelines share the same runtime surface ([`workflows::StateMachineRuntime`](../workflows/src/runtime.rs)), keyed
-by `(MachineKind, notation_id)`, and run as a single [Restate](glossary/restate.md) virtual object per Notation. The
-worker that hosts the object lives in [`workflows-service/`](../workflows-service/).
+Both timelines use [StateMachineRuntime](../workflows/src/runtime.rs), keyed by `(MachineKind, notation_id)`. The web
+deployment hosts the DBOS executor and stores each machine's transitions in PostgreSQL.
 
 ## Questionnaire state machine
 
@@ -79,45 +78,9 @@ Every state-changing request carries a CSRF token; auth is enforced by the `requ
 
 ## One POST through the stack
 
-What a single `POST /app/lawyer/notations/:id/step` looks like when `RESTATE_BROKER_URL` is set (the in-cluster
-`restate` Service in KIND, or the GKE-managed broker in production):
-
-```mermaid
-sequenceDiagram
-    participant Chrome
-    participant web as web (host)
-    participant ingress as Restate ingress (:8080)
-    participant worker as workflows-service
-    participant db as SurrealDB
-
-    Chrome->>web: POST /app/lawyer/notations/:id/step
-    web->>db: INSERT answers (question_id, person_id, value)
-    web->>ingress: POST /notation/:id/questionnaire_signal {condition:"_"}
-    ingress->>worker: dispatch handler
-    worker->>worker: ctx.get(spec_yaml, state)
-    worker->>worker: next_state(...)
-    worker->>worker: ctx.set(state, next)
-    worker->>db: ctx.run("append-event", append_event(...))
-    worker-->>ingress: {next_state:"client_name"}
-    ingress-->>web: 200 OK
-    web-->>Chrome: 303 → /app/lawyer/notations/:id/step
-```
-
-The two `db` arrows have two different writers: the walker writes [Answers](notation.md#answer) directly; the worker is
-the sole writer of [Notation Events](glossary/notation-event.md), inside [`ctx.run`](glossary/ctxrun.md) so a crash +
-replay reuses the cached row id instead of double-inserting.
-
-## Persistence
-
-**[Restate](glossary/restate.md) is the source of truth for state; the `notation_event` table is the durable projection
-of that state.** A signal lands in Restate's keyed state first; the SurrealDB row is the worker's `ctx.run` side effect,
-journaled so a replay never double-writes.
-
-Each transition is recorded as one row in `notation_event`
-([`store::notation_events`](../store/src/notation_events.rs)), the append-only journal that mirrors
-[`workflows::WorkflowEvent`](../workflows/src/runtime.rs). The "current state" of a `(notation_id, machine_kind)`
-machine is the `to_state` of the latest row — see [`latest_for_kind`](../store/src/notation_events.rs). For a
-questionnaire signal, the `payload` column carries `{"answer_value": "…"}`; for a workflow signal it is `None`.
+The walker writes [Answers](notation.md#answer). DBOS serializes transitions for each machine and the PostgreSQL
+transaction records one [Notation Event](glossary/notation-event.md) per transition. Reads use the latest event for the
+Notation and machine kind.
 
 Answers themselves are stored in the `answers` table, keyed by `(question_id, person_id)`. The walker pre-fills the
 prior answer when the user navigates back so re-display is read-only.
@@ -128,9 +91,6 @@ Native Notation execution uses the PostgreSQL-backed DBOS worker in
 [`workflows-service/src/dbos_notation.rs`](../workflows-service/src/dbos_notation.rs). It serializes each Notation's
 transitions and persists state and Notation Events through the existing transactional store seams. The application uses
 [`DbosNotationRuntime`](../workflows/src/runtime_dbos.rs) with its explicit ingress and bearer token.
-
-The [Notation HTTP transport](../workflows/src/notation_http.rs) handles start, signal, actor attribution, trace
-propagation, and bodyless state and event reads. Revision-bound approvals use dedicated handlers.
 
 ## The signature seam
 
@@ -180,8 +140,8 @@ infrastructure rather than a future swap-in.
   branches, prior-answer pre-fill), [`webapp/src/intake_review.rs`](../webapp/src/intake_review.rs) the review phases
   and the CSRF token on every write, and [`webapp/src/reask.rs`](../webapp/src/reask.rs) the flagged re-ask.
 - **Notation HTTP transport**: [`workflows/src/notation_http.rs`](../workflows/src/notation_http.rs) uses `wiremock`
-  to pin wire shape, authentication, trace propagation and failures per `MachineKind`. DBOS adapter tests verify
-  revision-bound approval.
+  to pin wire shape, authentication, trace propagation and failures per `MachineKind`. Adapter tests retain legacy
+  service selection and native revision-bound approval checks.
 - **Worker handlers** run transitions in [`dbos_notation.rs`](../workflows-service/src/dbos_notation.rs) and append
   events through [`journal.rs`](../workflows-service/src/journal.rs).
 - **HTTP + browser**: `server/tests/browser_e2e.rs` drives the full retainer walk end-to-end via fantoccini +

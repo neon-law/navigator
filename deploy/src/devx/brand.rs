@@ -33,18 +33,6 @@ pub fn run(cmd: BrandCmd) -> Result<()> {
     }
 }
 
-/// Primary public domain for deployment commands (`ops ship`, Restate
-/// re-register). Branding is Neon Law by default, so this resolves to
-/// [`views::brand::DEFAULT_BRANDING`]'s `neonlaw.com` unless the deployment
-/// opts into custom branding via `NAVIGATOR_CUSTOM_BRANDING`, whose bundle's
-/// `brand.primary_domain` then wins (fail closed within custom mode — a fork
-/// that means to rebrand can't half-rebrand). In the default identity an
-/// operator may override just the domain string with `NAVIGATOR_PRIMARY_DOMAIN`
-/// (e.g. a non-production host) without building a custom bundle.
-pub fn primary_domain() -> Result<String> {
-    primary_domain_with(|key| std::env::var(key).ok())
-}
-
 /// [`primary_domain`] over an explicit lookup instead of the process
 /// environment — `ops ship` resolves it from the selected deployment's
 /// `config.toml` coordinates.
@@ -154,13 +142,6 @@ mod tests {
 
         let err = build(&source.path().join("navigator.yaml"), &output).unwrap_err();
         assert!(err.to_string().contains("already exists"));
-    }
-
-    #[test]
-    fn primary_domain_reads_the_process_environment() {
-        // Exercises the real `primary_domain` wrapper over `std::env`; the
-        // resolved domain is always a non-empty host (Neon Law by default).
-        assert!(!primary_domain().unwrap().is_empty());
     }
 
     #[test]

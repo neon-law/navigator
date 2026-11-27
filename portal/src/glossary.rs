@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn off_site_is_anything_outside_neonlaw_hosts() {
         assert!(is_off_site("https://github.com/neon-law/navigator"));
-        assert!(is_off_site("https://restate.dev"));
+        assert!(is_off_site("https://www.courtlistener.com/"));
         assert!(!is_off_site("https://www.neonlaw.com/glossary"));
         assert!(!is_off_site("https://staging.neonlaw.com/glossary"));
         assert!(!is_off_site("/glossary"));
@@ -448,10 +448,10 @@ mod tests {
             .iter()
             .map(|e| e.body_html.as_str())
             .collect();
-        let surql = at_release("blob", "store/postgres/schema.sql");
+        let schema = at_release("blob", "store/postgres/schema.sql");
         assert!(
             html.contains(&format!(
-                "href=\"{surql}\" target=\"_blank\" rel=\"noopener noreferrer\""
+                "href=\"{schema}\" target=\"_blank\" rel=\"noopener noreferrer\""
             )),
             "GitHub source links open off-site"
         );
@@ -461,9 +461,9 @@ mod tests {
         );
         assert!(
             html.contains(
-                "href=\"https://restate.dev\" target=\"_blank\" rel=\"noopener noreferrer\""
+                "href=\"https://www.courtlistener.com/\" target=\"_blank\" rel=\"noopener noreferrer\""
             ),
-            "https://restate.dev must carry the off-site treatment"
+            "https://www.courtlistener.com/ must carry the off-site treatment"
         );
         assert!(
             html.contains("M8.636 3.5"),

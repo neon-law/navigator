@@ -390,39 +390,24 @@ fn up_locked(
     base_cfg: &KindConfig,
     demo_image: Option<&str>,
 ) -> Result<()> {
+    anyhow::ensure!(
+        runtime == Runtime::Kind,
+        "development runs on PostgreSQL and DBOS in KIND"
+    );
+    super::orchestrate::require_tools(&["kind", "kubectl", "docker", "openssl"])?;
     let slug = slug_for(root)?;
-    let (cfg, db_name, slot) =
-        reserve_worktree_tier(root, &slug, runtime, base_cfg, demo_image.is_some())?;
-    if runtime == Runtime::Kind {
-        super::orchestrate::up_native_in(root, &cfg, no_deps)?;
-        if let Some(image) = demo_image {
-            super::orchestrate::deploy_native_image(root, &cfg, image)?;
-            eprintln!(
-                "==> Demo ready at http://localhost:{}",
-                cfg.ingress_http_port
-            );
-            return Ok(());
-        }
-        print_dev_summary(&slug, &db_name, runtime, &cfg);
-        return Ok(());
-    }
-
-    if no_deps {
-        super::native::restore_environment(root)?;
+    let (cfg, db_name, _) =
+        reserve_worktree_tier(root, &slug, Runtime::Kind, base_cfg, demo_image.is_some())?;
+    super::orchestrate::up_native_in(root, &cfg, no_deps)?;
+    if let Some(image) = demo_image {
+        super::orchestrate::deploy_native_image(root, &cfg, image)?;
+        eprintln!(
+            "==> Demo ready at http://localhost:{}",
+            cfg.ingress_http_port
+        );
     } else {
-        super::native::up(root, slot, &cfg, &db_name)?;
+        print_dev_summary(&slug, &db_name, Runtime::Kind, &cfg);
     }
-    super::sample_project::run_for_root(false, root)?;
-
-    let mut env_body = super::render_env_for(&cfg, &db_name, cfg.web_port, root);
-    super::native::append_environment(&mut env_body, slot, &db_name);
-    write_worktree_env(root, &env_body)?;
-    if !no_deps {
-        super::native::start_workflows(root, slot, cfg.restate_admin_port)?;
-    }
-    ensure_native_deps_ready(&cfg, slot)?;
-
-    print_dev_summary(&slug, &db_name, runtime, &cfg);
     Ok(())
 }
 
@@ -443,21 +428,7 @@ fn reserve_worktree_tier(
         demo || existing.as_ref().is_none_or(|d| d.mode != "demo"),
         "run dev undeploy before starting host development in this demo worktree"
     );
-    let mut db_name = match runtime {
-        Runtime::Kind => String::new(),
-        Runtime::Native => existing
-            .as_ref()
-            .filter(|descriptor| descriptor.runtime == Runtime::Native)
-            .and_then(|descriptor| descriptor.db_name.clone())
-            .unwrap_or_else(|| super::native::database_name(root, slug)),
-    };
-    let claimed_slots = match runtime {
-        Runtime::Kind => claimed_worktree_slots(root, &list_kind_cluster_ports)?,
-        // Native has no KIND containers. The same descriptor read is still
-        // protected by the shared Git lock and reserves live worktrees while
-        // they are between claim and process startup.
-        Runtime::Native => super::native::claimed_slots(root)?,
-    };
+    let claimed_slots = claimed_worktree_slots(root, &list_kind_cluster_ports)?;
     let slot = choose_worktree_slot(
         root,
         existing.as_ref().and_then(WorktreeEnv::dev_slot),
@@ -465,7 +436,7 @@ fn reserve_worktree_tier(
         base_cfg,
         &port_listening,
     )?;
-    let mut cfg = worktree_kind_config(base_cfg, root, slot);
+    let cfg = worktree_kind_config(base_cfg, root, slot);
     if demo {
         anyhow::ensure!(
             !port_listening(cfg.web_port)
@@ -473,29 +444,17 @@ fn reserve_worktree_tier(
             "stop the worktree's host web and DBOS worker before starting the demo image"
         );
     }
-    if runtime == Runtime::Native {
-        // The native lane shares these three listeners host-wide. The slot
-        // still belongs to this descriptor and remains the source of truth
-        // for Restate, web, and every future per-worktree process.
-        cfg.rauthy_port = base_cfg.rauthy_port;
-        cfg.seaweedfs_s3_port = base_cfg.seaweedfs_s3_port;
-        cfg.surreal_port = base_cfg.surreal_port;
-    }
-    if runtime == Runtime::Kind {
-        anyhow::ensure!(
-            existing
-                .as_ref()
-                .is_none_or(|descriptor| descriptor.runtime == Runtime::Kind),
-            "an existing host-process tier requires explicit cleanup before selecting KIND"
-        );
-        db_name = super::native_profile::select_database(
-            root,
-            &cfg,
-            existing
-                .as_ref()
-                .and_then(|descriptor| descriptor.db_name.as_deref()),
-        )?;
-    }
+    anyhow::ensure!(
+        existing.as_ref().is_none_or(|descriptor| descriptor.runtime == Runtime::Kind),
+        "clean up the old host-process environment with its original Hudson version before starting KIND"
+    );
+    let db_name = super::native_profile::select_database(
+        root,
+        &cfg,
+        existing
+            .as_ref()
+            .and_then(|descriptor| descriptor.db_name.as_deref()),
+    )?;
     let mode = if demo { "demo" } else { "dev" };
     eprintln!("==> worktree-env up ({mode}, {runtime}): slug={slug} database={db_name}");
 
@@ -503,10 +462,7 @@ fn reserve_worktree_tier(
     // reason the descriptor is written early: an interrupted setup otherwise
     // leaves a cluster that no clone admits owning, which is exactly what
     // `sweep` would then delete out from under a checkout that still exists.
-    // The native lane starts no cluster, so it has none to claim.
-    if runtime == Runtime::Kind {
-        register_worktree_cluster(&host_cluster_registry_path(), &cfg.cluster, root)?;
-    }
+    register_worktree_cluster(&host_cluster_registry_path(), &cfg.cluster, root)?;
 
     // Record the claim before anything binds a port. An interrupted setup
     // otherwise leaves a cluster holding ports with no reservation behind it,
@@ -602,7 +558,9 @@ fn down_locked(root: &Path, base_cfg: &KindConfig) -> Result<()> {
                 super::down_in(root, &cfg)?;
                 unregister_worktree_cluster(&host_cluster_registry_path(), &cfg.cluster)?;
             }
-            Runtime::Native => super::native::down(root, base_cfg)?,
+            Runtime::Native => anyhow::bail!(
+                "clean up the old host-process environment with its original Hudson version"
+            ),
         }
     } else {
         // A failed setup can stop before writing its descriptor. Reclaim
@@ -610,7 +568,6 @@ fn down_locked(root: &Path, base_cfg: &KindConfig) -> Result<()> {
         // teardown stays scoped to this checkout either way, and the
         // native side only signals PIDs this worktree recorded.
         let cfg = worktree_kind_config(base_cfg, root, derived_worktree_slot(root));
-        super::native::down(root, base_cfg)?;
         super::down_in(root, &cfg)?;
         unregister_worktree_cluster(&host_cluster_registry_path(), &cfg.cluster)?;
     }
@@ -687,18 +644,7 @@ fn status_report(root: &Path, base_cfg: &KindConfig, port_in_use: &dyn Fn(u16) -
                             );
                         }
                     }
-                    // The native lane has no cluster to name, so its
-                    // supervised processes are what there is to report:
-                    // one line each, PID and port, live or not.
-                    Runtime::Native => {
-                        out.push_str("  host processes:\n");
-                        for line in super::native::status_lines(root) {
-                            let _ = writeln!(out, "{line}");
-                        }
-                        for line in super::native::deferred_lines() {
-                            let _ = writeln!(out, "{line}");
-                        }
-                    }
+                    Runtime::Native => out.push_str("  legacy host environment requires cleanup with its original Hudson version\n"),
                 }
             }
         }
@@ -719,20 +665,6 @@ pub(super) fn up_demo(root: &Path, tag: Option<&str>, base_cfg: &KindConfig) -> 
     }
     let _setup_lock = acquire_worktree_env_lock(root)?;
     let _host_lock = acquire_host_worktree_env_lock()?;
-    let existing = read_descriptor(root);
-    if existing.as_ref().is_some_and(|d| {
-        d.db_name.as_deref() == Some("navigator") || (d.mode == "demo" && d.slot.is_none())
-    }) {
-        let cfg = existing
-            .as_ref()
-            .and_then(WorktreeEnv::dev_slot)
-            .map_or_else(
-                || base_cfg.clone(),
-                |slot| worktree_kind_config(base_cfg, root, slot),
-            );
-        verify_postgres_fixture_target(root, &cfg)?;
-        return super::orchestrate::deploy_captured(root, &cfg, tag);
-    }
     let image = super::orchestrate::resolve_demo_image(tag)?;
     up_locked(root, false, Runtime::Kind, base_cfg, Some(&image))
 }
@@ -882,47 +814,6 @@ fn worktree_cluster_name(base_cluster: &str, root: &Path) -> String {
     }
 }
 
-/// Every member of the dependency tier the readiness gate covers, named.
-///
-/// One table, read by both lanes, so neither can quietly answer for
-/// fewer ports than the gate asks about. The native lane serves only
-/// part of this list; the rest is declared in [`super::native::DEFERRED`]
-/// with the issue that will serve it or in [`super::native::EXEMPT`] with
-/// the reason the lane omits it, and a test requires the three native
-/// lists to partition exactly these names.
-/// Dropping a port from the gate to make a lane pass is the failure that
-/// arrangement exists to prevent.
-fn gate_members(cfg: &KindConfig) -> [(&'static str, u16); 10] {
-    [
-        ("KIND ingress HTTP", cfg.ingress_http_port),
-        ("KIND ingress HTTPS", cfg.ingress_https_port),
-        ("Restate ingress", cfg.restate_ingress_port),
-        ("Restate admin", cfg.restate_admin_port),
-        ("Rauthy", cfg.rauthy_port),
-        ("SeaweedFS", cfg.seaweedfs_s3_port),
-        ("OpenObserve", cfg.openobserve_port),
-        ("OpenObserve OTLP", cfg.openobserve_otlp_port),
-        ("ClamAV", cfg.clamav_port),
-        ("SurrealDB", cfg.surreal_port),
-    ]
-}
-
-/// Wait for each dependency the host-process compatibility lane supervises.
-fn ensure_native_deps_ready(cfg: &KindConfig, slot: u16) -> Result<()> {
-    for (name, port) in gate_members(cfg) {
-        if super::native::SUPERVISED.contains(&name) {
-            super::wait_for_tcp("127.0.0.1", port)
-                .with_context(|| format!("the native {name} process must be reachable"))?;
-        }
-    }
-    for line in super::native::deferred_lines() {
-        eprintln!("{line}");
-    }
-    super::wait_for_tcp("127.0.0.1", super::native::worker_listen_port(slot))
-        .context("the native workflows-service listener must be reachable")?;
-    Ok(())
-}
-
 fn worktree_slot_has_listener(
     base: &KindConfig,
     root: &Path,
@@ -945,9 +836,6 @@ fn worktree_slot_has_listener(
         cfg.clamav_port,
         cfg.forgejo_port,
         cfg.postgres_port,
-        super::native::restate_fabric_port(slot),
-        super::native::worker_listen_port(slot),
-        super::native::worker_health_port(slot),
     ]
     .into_iter()
     .any(port_in_use)
@@ -1104,37 +992,12 @@ pub(super) fn web_port(root: &Path) -> Result<u16> {
         .web_port)
 }
 
-pub(super) fn is_native(root: &Path) -> bool {
-    read_descriptor(root)
-        .is_some_and(|descriptor| descriptor.mode == "dev" && descriptor.runtime == Runtime::Native)
-}
-
-pub(super) fn native_worker_coordinates(root: &Path, cfg: &KindConfig) -> Result<(u16, u16)> {
-    let descriptor = read_descriptor(root).context("native worktree descriptor is missing")?;
-    if descriptor.mode != "dev" || descriptor.runtime != Runtime::Native {
-        bail!("the current worktree is not using the native dependency tier");
-    }
-    let slot = descriptor
-        .slot
-        .context("native worktree descriptor has no port slot")?;
-    Ok((
-        slot,
-        worktree_kind_config(cfg, root, slot).restate_admin_port,
-    ))
-}
-
 fn write_descriptor(root: &Path, desc: &WorktreeEnv) -> Result<()> {
     std::fs::create_dir_all(devx_dir(root))
         .with_context(|| format!("create {}", devx_dir(root).display()))?;
     let body = serde_json::to_string_pretty(desc).context("serialize worktree descriptor")?;
     std::fs::write(descriptor_path(root), body)
         .with_context(|| format!("write {}", descriptor_path(root).display()))
-}
-
-fn write_worktree_env(root: &Path, body: &str) -> Result<()> {
-    std::fs::create_dir_all(devx_dir(root))
-        .with_context(|| format!("create {}", devx_dir(root).display()))?;
-    super::orchestrate::write_fixture_private(&env_path(root), body.as_bytes())
 }
 
 fn remove_worktree_state(root: &Path) {
@@ -1818,31 +1681,9 @@ fn sweep(root: &Path, apply: bool, base_cfg: &KindConfig) -> Result<()> {
         &|path| path.is_dir(),
     );
     print!("{}", sweep_report(&plan, apply));
-    let live_worktrees = live_worktree_paths(root)?;
-    let (native_registry_path, native_registry, native_plan) =
-        super::native::sweep_plan(&live_worktrees)?;
-    print!(
-        "{}",
-        super::native::sweep_report(
-            &native_plan,
-            super::native::service_count(&native_registry),
-            apply,
-        )
-    );
     if !apply {
         return Ok(());
     }
-    let native_orphans: Vec<_> = native_plan
-        .iter()
-        .filter(|entry| entry.is_orphaned())
-        .cloned()
-        .collect();
-    super::native::apply_sweep(
-        &native_registry_path,
-        native_registry,
-        &native_orphans,
-        base_cfg,
-    )?;
     let orphans: Vec<&SweptCluster> = plan.iter().filter(|e| e.is_orphaned()).collect();
     if orphans.is_empty() {
         return Ok(());
@@ -2161,66 +2002,6 @@ mod tests {
         print_dev_summary("pr-546", "navigator", Runtime::Kind, &cfg);
     }
 
-    /// The gate covers ten ports; the native lane supervises five.
-    /// The remaining five must be *declared* rather than dropped —
-    /// otherwise a lane that serves a third of the tier reports the same
-    /// "ready" as one that serves all of it. This test is what makes
-    /// adding a dependency force a decision: a new gate member that is
-    /// neither supervised, deferred to an issue, nor exempt fails here.
-    #[test]
-    fn every_gated_port_is_supervised_natively_deferred_or_exempt() {
-        let cfg = worktree_kind_config(
-            &KindConfig::from_env(),
-            Path::new("/tmp/navigator/pr-546"),
-            51,
-        );
-
-        let gated: BTreeSet<&str> = gate_members(&cfg)
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
-        let accounted: BTreeSet<&str> = super::super::native::SUPERVISED
-            .iter()
-            .copied()
-            .chain(super::super::native::DEFERRED.iter().map(|(name, _)| *name))
-            .chain(super::super::native::EXEMPT.iter().map(|(name, _)| *name))
-            .collect();
-
-        assert_eq!(
-            gated, accounted,
-            "every readiness-gate member must be supervised on the native lane, carry the \
-             issue that will supervise it, or record why the lane omits it"
-        );
-    }
-
-    /// The names are matched as strings across two modules, so a typo
-    /// would silently move a member into "deferred" — the gate would
-    /// stop waiting on a port the lane actually serves.
-    #[test]
-    fn the_natively_supervised_members_are_the_ones_the_gate_waits_on() {
-        let cfg = worktree_kind_config(
-            &KindConfig::from_env(),
-            Path::new("/tmp/navigator/pr-546"),
-            51,
-        );
-
-        let supervised: BTreeSet<u16> = gate_members(&cfg)
-            .into_iter()
-            .filter(|(name, _)| super::super::native::SUPERVISED.contains(name))
-            .map(|(_, port)| port)
-            .collect();
-
-        assert_eq!(
-            supervised,
-            BTreeSet::from([
-                cfg.rauthy_port,
-                cfg.seaweedfs_s3_port,
-                cfg.surreal_port,
-                cfg.restate_ingress_port,
-                cfg.restate_admin_port,
-            ])
-        );
-    }
     #[test]
     fn slugify_sanitizes_branch_names() {
         assert_eq!(slugify("codex/blog-rust-ferris"), "codex-blog-rust-ferris");
@@ -2978,30 +2759,6 @@ mod tests {
     }
 
     #[test]
-    fn native_reload_coordinates_use_the_worktrees_slot() {
-        let temp = tempfile::tempdir().unwrap();
-        write_descriptor(
-            temp.path(),
-            &WorktreeEnv {
-                slug: "native".into(),
-                mode: "dev".into(),
-                db_name: Some("navigator_native".into()),
-                web_port: 20_507,
-                slot: Some(7),
-                runtime: Runtime::Native,
-            },
-        )
-        .unwrap();
-
-        let cfg = KindConfig::from_env();
-        assert!(is_native(temp.path()));
-        assert_eq!(
-            native_worker_coordinates(temp.path(), &cfg).unwrap(),
-            (7, WORKTREE_RESTATE_ADMIN_PORT_BASE + 7)
-        );
-    }
-
-    #[test]
     fn worktree_environment_lock_serializes_descriptor_mutation() {
         let (_temp, repo) = git_fixture_with_origin();
         write_descriptor(
@@ -3342,36 +3099,6 @@ mod tests {
     }
 
     #[test]
-    fn status_for_the_native_tier_lists_host_processes_instead_of_a_cluster() {
-        let temp = tempfile::tempdir().unwrap();
-        write_descriptor(
-            temp.path(),
-            &WorktreeEnv {
-                slug: "native".into(),
-                mode: "dev".into(),
-                db_name: Some("navigator_native".into()),
-                web_port: WORKTREE_WEB_PORT_BASE + 3,
-                slot: Some(3),
-                runtime: Runtime::Native,
-            },
-        )
-        .unwrap();
-
-        let report = status_report(temp.path(), &KindConfig::from_env(), &|_| true);
-
-        assert!(report.contains("runtime=native"), "{report}");
-        assert!(
-            report.contains(&format!("  web port {}: yes\n", WORKTREE_WEB_PORT_BASE + 3)),
-            "{report}"
-        );
-        assert!(report.contains("  host processes:\n"), "{report}");
-        for line in super::super::native::deferred_lines() {
-            assert!(report.contains(&line), "missing `{line}` in {report}");
-        }
-        assert!(!report.contains("KIND cluster"), "{report}");
-    }
-
-    #[test]
     fn status_for_a_demo_stack_reports_no_slot_or_database() {
         let temp = tempfile::tempdir().unwrap();
         write_descriptor(
@@ -3648,102 +3375,6 @@ mod tests {
         // Port 1 is privileged and unserved on a development host or runner.
         assert!(!port_listening(1));
         assert_eq!(yes_no(false), "no");
-    }
-
-    #[test]
-    fn a_slot_is_busy_when_any_of_its_ports_has_a_listener() {
-        let base = KindConfig::from_env();
-        let root = Path::new("/tmp/navigator/worktrees/listener");
-        let cfg = worktree_kind_config(&base, root, 12);
-
-        assert!(!worktree_slot_has_listener(&base, root, 12, &|_| false));
-        assert!(worktree_slot_has_listener(&base, root, 12, &|port| {
-            port == cfg.postgres_port
-        }));
-        assert!(worktree_slot_has_listener(&base, root, 12, &|port| {
-            port == super::super::native::worker_health_port(12)
-        }));
-        // A listener on another slot's port does not occupy this one.
-        assert!(!worktree_slot_has_listener(&base, root, 12, &|port| {
-            port == cfg.web_port + 1
-        }));
-    }
-
-    #[test]
-    fn the_retired_descriptor_files_are_removed_with_the_environment() {
-        let temp = tempfile::tempdir().unwrap();
-        write_worktree_env(temp.path(), "NAVIGATOR_WEB_PORT=20601\n").unwrap();
-        for leftover in ["kind-config.yaml", "kubeconfig", "port-forwards.log"] {
-            std::fs::write(temp.path().join(".devx").join(leftover), "x").unwrap();
-        }
-        write_descriptor(
-            temp.path(),
-            &WorktreeEnv {
-                slug: "gone".into(),
-                mode: "dev".into(),
-                db_name: Some("navigator".into()),
-                web_port: 20_601,
-                slot: Some(1),
-                runtime: Runtime::Kind,
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(env_path(temp.path())).unwrap(),
-            "NAVIGATOR_WEB_PORT=20601\n"
-        );
-        assert!(!is_native(temp.path()));
-        let error = native_worker_coordinates(temp.path(), &KindConfig::from_env())
-            .expect_err("a KIND descriptor has no native coordinates");
-        assert!(
-            error
-                .to_string()
-                .contains("not using the native dependency tier"),
-            "{error}"
-        );
-
-        remove_worktree_state(temp.path());
-
-        assert!(read_descriptor(temp.path()).is_none());
-        for gone in [
-            "env",
-            "worktree.json",
-            "kind-config.yaml",
-            "kubeconfig",
-            "port-forwards.log",
-        ] {
-            assert!(
-                !temp.path().join(".devx").join(gone).exists(),
-                "{gone} should be removed"
-            );
-        }
-        let missing = native_worker_coordinates(temp.path(), &KindConfig::from_env())
-            .expect_err("no descriptor at all");
-        assert!(
-            missing.to_string().contains("descriptor is missing"),
-            "{missing}"
-        );
-    }
-
-    #[test]
-    fn a_native_descriptor_without_a_slot_has_no_reload_coordinates() {
-        let temp = tempfile::tempdir().unwrap();
-        write_descriptor(
-            temp.path(),
-            &WorktreeEnv {
-                slug: "native".into(),
-                mode: "dev".into(),
-                db_name: Some("navigator_native".into()),
-                web_port: 20_600,
-                slot: None,
-                runtime: Runtime::Native,
-            },
-        )
-        .unwrap();
-
-        let error = native_worker_coordinates(temp.path(), &KindConfig::from_env())
-            .expect_err("a slotless descriptor cannot locate its worker");
-        assert!(error.to_string().contains("has no port slot"), "{error}");
     }
 
     #[test]

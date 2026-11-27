@@ -172,27 +172,8 @@ pub(super) fn dbos_port(cfg: &KindConfig) -> Result<u16> {
         .ok_or_else(|| anyhow!("native DBOS listener exceeds the local port range"))
 }
 
-fn native_flags(get: &impl Fn(&str) -> Option<String>) -> Result<BTreeMap<String, String>> {
+fn timer_coordinates(get: &impl Fn(&str) -> Option<String>) -> Result<BTreeMap<String, String>> {
     let mut values = BTreeMap::new();
-    for selection in store::workflow_engine::WORKFLOWS {
-        ensure!(
-            get(selection.flag).is_none_or(|value| value.trim() == "true"),
-            "{} must select DBOS for a new native tier",
-            selection.flag
-        );
-        values.insert(selection.flag.into(), "true".into());
-    }
-    for (key, expected) in [
-        (store::workflow_engine::COHOST_ENV, "true"),
-        (store::workflow_engine::DBOS_ENABLED_ENV, "true"),
-        (store::workflow_engine::ENGINE_ENV, "dbos"),
-    ] {
-        ensure!(
-            get(key).is_none_or(|value| value.trim() == expected),
-            "{key} contradicts the native tier"
-        );
-        values.insert(key.into(), expected.into());
-    }
     for key in [
         "NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED",
         "NAVIGATOR_DBOS_RECONCILE_INVOICES_SCHEDULE_ENABLED",
@@ -204,10 +185,6 @@ fn native_flags(get: &impl Fn(&str) -> Option<String>) -> Result<BTreeMap<String
         );
         values.insert(key.into(), value.trim().into());
     }
-    ensure!(
-        store::workflow_engine::dbos_only(&|key| values.get(key).cloned())?,
-        "native caller matrix is incomplete"
-    );
     Ok(values)
 }
 
@@ -246,7 +223,7 @@ pub(super) fn environment(
             )
     });
     values.extend(app);
-    values.extend(native_flags(&get)?);
+    values.extend(timer_coordinates(&get)?);
     values.insert("NAVIGATOR_KIND_DEPS_OVERLAY".into(), OVERLAY.into());
     values.insert("NAVIGATOR_DBOS_HOST".into(), "127.0.0.1".into());
     values.insert("NAVIGATOR_DBOS_PORT".into(), cfg.postgres_port.to_string());
@@ -630,9 +607,8 @@ mod tests {
     }
 
     #[test]
-    fn contradictory_caller_flags_refuse_and_native_timers_are_explicitly_off() {
-        let flags = native_flags(&|_| None).unwrap();
-        assert!(store::workflow_engine::dbos_only(&|key| flags.get(key).cloned()).unwrap());
+    fn native_timers_default_off_and_require_boolean_coordinates() {
+        let flags = timer_coordinates(&|_| None).unwrap();
         assert_eq!(
             flags["NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED"],
             "false"
@@ -641,23 +617,7 @@ mod tests {
             flags["NAVIGATOR_DBOS_RECONCILE_INVOICES_SCHEDULE_ENABLED"],
             "false"
         );
-        assert!(
-            native_flags(&|key| if key == "NAVIGATOR_DBOS_NOTATION_ENABLED" {
-                Some("false".into())
-            } else {
-                None
-            })
-            .is_err()
-        );
-        assert!(
-            native_flags(&|key| if key == store::workflow_engine::ENGINE_ENV {
-                Some("restate".into())
-            } else {
-                None
-            })
-            .is_err()
-        );
-        assert!(native_flags(
+        assert!(timer_coordinates(
             &|key| if key == "NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED" {
                 Some("invalid".into())
             } else {
@@ -665,7 +625,7 @@ mod tests {
             }
         )
         .is_err());
-        let opted = native_flags(&|key| {
+        let opted = timer_coordinates(&|key| {
             if key == "NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED" {
                 Some("true".into())
             } else {
@@ -720,7 +680,7 @@ mod tests {
         let intent = Intent::prepare(root.path(), &cfg).unwrap();
         let credentials = super::super::postgres_fixture::Credentials {
             app_password: "synthetic-app-password".into(),
-            owner_password: "synthetic-owner-password".into(),
+
             ca: "synthetic-local-ca".into(),
         };
         let lanes = super::super::seaweedfs::LANES
@@ -752,7 +712,6 @@ mod tests {
         };
         assert!(build(&native_origin::database_name(Uuid::new_v4()).unwrap()).is_err());
         let values = build(&intent.database().unwrap()).unwrap();
-        assert!(store::workflow_engine::dbos_only(&|key| values.get(key).cloned()).unwrap());
         assert!(values
             .keys()
             .all(|key| !key.starts_with("NAVIGATOR_SURREAL_") && !key.starts_with("RESTATE_")));

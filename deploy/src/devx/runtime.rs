@@ -1,16 +1,4 @@
-//! Which local dependency tier a worktree runs on.
-//!
-//! Two lanes serve the same contract. The native lane runs each
-//! dependency as a host process, sharing most of them across worktrees
-//! through a tenant key; the cluster lane gives each worktree its own
-//! KIND cluster. They differ in topology and in nothing else that a
-//! caller can observe: both write the same `.devx/env` and the same
-//! `.devx/worktree.json`, so `dev grant-lawyer`, `dev browser-e2e`, and
-//! `cargo run -p neon` behave identically under either.
-//!
-//! The env file — not the topology — is the contract. Keeping that true
-//! is what makes the second lane cheap to carry rather than a fork of
-//! the whole loop.
+//! Dependency tier recorded in a worktree descriptor.
 
 use std::fmt;
 
@@ -22,12 +10,12 @@ use serde::{Deserialize, Serialize};
 #[clap(rename_all = "lowercase")]
 pub enum Runtime {
     /// Host processes, most of them shared across worktrees. macOS only.
-    #[default]
     Native,
     /// A KIND cluster per worktree. Slower and heavier, but it is the
     /// topology the deployments run, so it stays a supported choice
     /// rather than a deprecation — `--demo` needs its ingress, and it is
     /// the only lane on a non-macOS host.
+    #[default]
     Kind,
 }
 
@@ -63,10 +51,9 @@ impl fmt::Display for Runtime {
 mod tests {
     use super::Runtime;
 
-    /// Native is the default lane. The cluster is opt-in.
     #[test]
-    fn the_default_lane_is_native() {
-        assert_eq!(Runtime::default(), Runtime::Native);
+    fn the_default_lane_is_kind() {
+        assert_eq!(Runtime::default(), Runtime::Kind);
     }
 
     /// A descriptor written before the field existed describes a
