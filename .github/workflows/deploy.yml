@@ -1519,7 +1519,7 @@ jobs:
           stage: "publish-service ${{ matrix.image }}"
           step: "install cosign"
       - name: install cosign
-        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -1814,7 +1814,7 @@ jobs:
           stage: "publish-triggers ${{ matrix.image }}"
           step: "install cosign"
       - name: install cosign
-        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -3671,7 +3671,7 @@ jobs:
               >/dev/null && jq -r '.["containerimage.digest"]' /tmp/cli-image-metadata.json)"
           test -n "${digest}"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
       - name: sign and record CLI image
         env:
           IMAGE_REF: ${{ env.NAVIGATOR_IMAGE_REGISTRY }}/navigator-cli
