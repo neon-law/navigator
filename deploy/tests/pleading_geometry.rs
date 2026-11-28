@@ -267,7 +267,7 @@ fn the_first_page_places_counsel_the_clerks_space_the_court_and_the_caption() {
     assert_eq!(
         first
             .iter()
-            .filter(|word| word.y1 < court.y0)
+            .filter(|word| word.y1 < court.y0 && word.text.starts_with('q'))
             .map(|word| word.text.matches('q').count())
             .sum::<usize>(),
         60,

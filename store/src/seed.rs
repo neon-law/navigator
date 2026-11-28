@@ -362,6 +362,16 @@ pub const SEEDED_TEMPLATES: &[SeededTemplate] = &[
         markdown: include_str!("../../templates/notations/neon_law/basic_will.md"),
     },
     SeededTemplate {
+        label: "notations/neon_law/civil_complaint__california.md",
+        markdown: include_str!("../../templates/notations/neon_law/civil_complaint__california.md"),
+    },
+    SeededTemplate {
+        label: "notations/neon_law/motion_and_memorandum__california.md",
+        markdown: include_str!(
+            "../../templates/notations/neon_law/motion_and_memorandum__california.md"
+        ),
+    },
+    SeededTemplate {
         label: "notations/neon_law/onboarding__letter.md",
         markdown: canonical::TEMPLATE_ONBOARDING_LETTER,
     },
@@ -7474,6 +7484,12 @@ records:
         assert!(codes.iter().any(|code| code == "onboarding__letter"));
         assert!(codes.iter().any(|code| code == "offboarding__letter"));
         assert!(codes.iter().any(|code| code == "nv__llc_formation"));
+        assert!(codes
+            .iter()
+            .any(|code| code == "civil_complaint__california"));
+        assert!(codes
+            .iter()
+            .any(|code| code == "motion_and_memorandum__california"));
         assert!(
             !codes
                 .iter()
