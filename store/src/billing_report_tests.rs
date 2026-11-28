@@ -775,8 +775,8 @@ async fn configured_plan_keeps_benefit_filing_and_deadlines_independent() {
     )
     .await
     .unwrap();
-    let filed = deadlines().await;
-    assert_eq!(filed.len(), 1);
-    assert_eq!(filed[0].0, "complete");
-    assert_eq!(filed[0].1, saved[0].1);
+    let completed_deadlines = deadlines().await;
+    assert_eq!(completed_deadlines.len(), 1);
+    assert_eq!(completed_deadlines[0].0, "complete");
+    assert_eq!(completed_deadlines[0].1, saved[0].1);
 }
