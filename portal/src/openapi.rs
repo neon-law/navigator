@@ -3248,6 +3248,55 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/time-entry-proposals": {
+          "get": {
+            "summary": "List a matter's time for review",
+            "description": "Time Entry Proposals and staged Jujutsu time awaiting review, discarded proposals, and approved Time Entries, oldest work first. A backfilled row was recorded after the day of the work. Authorization: lawyer tier and firm-side participation; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["pending_review", "approved", "unbilled", "billed", "discarded"] } }],
+            "responses": { "200": { "description": "The review list", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          },
+          "post": {
+            "summary": "Record time for lawyer review",
+            "description": "Creates one pending Time Entry Proposal. A past date is allowed and marks it backfilled. Replaying `request_id` returns the first row. The timekeeper, a Person UUID or email, defaults to the caller and must be firm-side on the Project.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["request_id", "performed_on", "minutes", "narrative"], "properties": { "request_id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer", "minimum": 1, "maximum": 1440 }, "narrative": { "type": "string" }, "timekeeper": { "type": "string" } } } } } },
+            "responses": { "201": { "description": "The proposal, or the first one for a replayed request", "content": { "application/json": { "schema": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } }, "409": { "description": "The request id was used for other time" }, "422": { "description": "Invalid minutes, narrative, or future date, or the timekeeper is not firm-side" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/time-entry-proposals/backfill": {
+          "post": {
+            "summary": "Propose Time Entries from a matter's dated record",
+            "description": "Proposes one pending entry per Communication, filed document, completed Deadline, and e-filing not yet proposed, with minutes from the published default table. A dry run writes nothing. Nothing is approved.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "since": { "type": "string", "format": "date" }, "dry_run": { "type": "boolean", "default": false } } } } } },
+            "responses": { "200": { "description": "The default minutes table and the proposals written or previewed", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The caller is not firm-side on the Project" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/time-entry-proposals/{proposal_id}": {
+          "patch": {
+            "summary": "Edit a pending Time Entry Proposal",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "proposal_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer", "minimum": 1, "maximum": 1440 }, "narrative": { "type": "string" } } } } } },
+            "responses": { "200": { "description": "The edited proposal", "content": { "application/json": { "schema": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } }, "409": { "description": "The proposal is approved or discarded, or the id names staged Jujutsu time" }, "422": { "description": "Invalid minutes, narrative, or date" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/time-entry-proposals/{proposal_id}/approve": {
+          "post": {
+            "summary": "Approve reviewed time as a Time Entry",
+            "description": "Prices the proposal or staged Jujutsu time and creates its Time Entry in one transaction: billable at the resolved rate, no charge, or linked to a Legal Plan Claim. Approving an approved proposal returns it unchanged. Staged Jujutsu time needs a narrative and may lower its minutes.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "proposal_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "decision": { "type": "string", "enum": ["bill", "no_charge", "plan_claim"], "default": "bill" }, "claim_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "minutes": { "type": "integer" } } } } } },
+            "responses": { "200": { "description": "The approved row and its Time Entry", "content": { "application/json": { "schema": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } }, "409": { "description": "The proposal was discarded" }, "422": { "description": "No rate, an unmatched claim, or minutes above the staged time" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/time-entry-proposals/{proposal_id}/discard": {
+          "post": {
+            "summary": "Discard a pending proposal or deny staged time",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "proposal_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "reason": { "type": "string" } } } } } },
+            "responses": { "200": { "description": "The discarded row", "content": { "application/json": { "schema": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } }, "409": { "description": "The proposal was approved" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
         "/app/api/projects/{id}/time-entries": {
           "get": {
             "summary": "List a matter's time entries",

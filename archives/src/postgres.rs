@@ -118,6 +118,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "billing_annotation",
     "billed_call",
     "time_entry_events",
+    "time_entry_proposal",
     "timer",
     "ssh_public_key",
     "person",

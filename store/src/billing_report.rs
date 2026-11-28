@@ -16,6 +16,7 @@ use crate::{
     postgres::PostgresDb,
     projects::Project,
     time_entries::{self, BillingStatus, TimeEntry},
+    time_proposals,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -102,6 +103,7 @@ async fn collect_time_and_claims(
     }
     let timekeeper = (!scope.project_view).then_some(attorney);
     let entries = time_entries::for_billing(&mut tx, project.id, timekeeper, on).await?;
+    let backfilled = time_proposals::backfilled_entries(&mut tx, project.id).await?;
     let work = if scope.project_view {
         report.project_time.get_or_insert_with(Vec::new)
     } else {
@@ -115,32 +117,17 @@ async fn collect_time_and_claims(
         timekeeper: scope.project_view.then_some(entry.attorney_id),
         description: entry.description.clone(),
         status: entry.billing_status.as_str().to_owned(),
+        backfilled: backfilled.contains(&entry.id),
     }));
-    for (id, owner, change, tenths, performed_on) in
-        billing_annotations::pending_for_billing(&mut tx, project.id, timekeeper).await?
-    {
-        if owner == attorney {
-            report
-                .needs_my_action
-                .push(BillingAction::PendingAnnotation {
-                    project: project.code.clone(),
-                    annotation_id: id,
-                    change_id: change.clone(),
-                    performed_on,
-                    next_action: "Review your staged Jujutsu time on the Project's Billing tab"
-                        .into(),
-                });
-        }
-        work.push(BillingTime {
-            project: project.code.clone(),
-            id,
-            performed_on,
-            minutes: tenths * 6,
-            timekeeper: scope.project_view.then_some(owner),
-            description: change,
-            status: "pending_review".to_owned(),
-        });
-    }
+    add_pending_time(
+        report,
+        &mut tx,
+        project,
+        timekeeper,
+        attorney,
+        scope.project_view,
+    )
+    .await?;
     if scope.responsible && scope.claims_firm.is_some() && project.legal_plan_id.is_some() {
         let allocated_entries: Vec<_> = claim_entries.iter().copied().collect();
         let unallocated: bool = sqlx::query_scalar(
@@ -175,6 +162,82 @@ async fn collect_time_and_claims(
         has_plan_claims,
         has_completed_work,
     })
+}
+
+/// Staged Jujutsu time and pending Time Entry Proposals: review actions for
+/// the caller's own, and each pending block in the time list.
+async fn add_pending_time(
+    report: &mut BillingReport,
+    connection: &mut sqlx::PgConnection,
+    project: &Project,
+    timekeeper: Option<Uuid>,
+    attorney: Uuid,
+    project_view: bool,
+) -> Result<(), BillingReportError> {
+    let mut pending = Vec::new();
+    for (id, owner, change, tenths, performed_on) in
+        billing_annotations::pending_for_billing(&mut *connection, project.id, timekeeper).await?
+    {
+        if owner == attorney {
+            report
+                .needs_my_action
+                .push(BillingAction::PendingAnnotation {
+                    project: project.code.clone(),
+                    annotation_id: id,
+                    change_id: change.clone(),
+                    performed_on,
+                    next_action: "Review your staged Jujutsu time: `navigator project time approve` or the Project's Billing tab"
+                        .into(),
+                });
+        }
+        pending.push(BillingTime {
+            project: project.code.clone(),
+            id,
+            performed_on,
+            minutes: tenths * 6,
+            timekeeper: project_view.then_some(owner),
+            description: change,
+            status: "pending_review".to_owned(),
+            backfilled: false,
+        });
+    }
+    let proposals = time_proposals::pending_for_billing(&mut *connection, project.id, timekeeper)
+        .await
+        .map_err(|error| match error {
+            time_proposals::ProposalError::Database(error) => BillingReportError::Database(error),
+            other => BillingReportError::Database(sqlx::Error::Protocol(other.to_string())),
+        })?;
+    let mine = proposals
+        .iter()
+        .filter(|proposal| proposal.timekeeper_id == attorney)
+        .count();
+    if mine > 0 {
+        report.needs_my_action.push(BillingAction::PendingProposals {
+            project: project.code.clone(),
+            pending_proposals: mine,
+            next_action: format!(
+                "Review Time Entry Proposals: `navigator project time list --project {} --status pending-review`",
+                project.code
+            ),
+        });
+    }
+    let work = if project_view {
+        report.project_time.get_or_insert_with(Vec::new)
+    } else {
+        &mut report.my_time
+    };
+    work.extend(pending);
+    work.extend(proposals.into_iter().map(|proposal| BillingTime {
+        project: project.code.clone(),
+        id: proposal.id,
+        performed_on: proposal.performed_on,
+        minutes: proposal.minutes,
+        timekeeper: project_view.then_some(proposal.timekeeper_id),
+        description: proposal.narrative,
+        status: "pending_review".to_owned(),
+        backfilled: proposal.backfilled,
+    }));
+    Ok(())
 }
 
 fn add_claim(report: &mut BillingReport, claim: ClaimBilling, responsible: bool) {

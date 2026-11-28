@@ -207,6 +207,7 @@ pub mod template_source;
 pub mod templates;
 pub mod testimonials;
 pub mod time_entries;
+pub mod time_proposals;
 pub mod timers;
 #[path = "runtime/tls.rs"]
 pub mod tls;

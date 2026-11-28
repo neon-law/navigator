@@ -134,11 +134,39 @@ and provider systems. Keep negotiated plan terms private.
 
 ## Claims and collections
 
-Start with `navigator billing`. **Needs my action** lists your staged Jujutsu time awaiting review and claims on matters
-where you are the responsible lawyer. Review staged time on the Project's Finances tab. **My time** shows your time
+Start with `navigator billing`. **Needs my action** lists your time awaiting review and claims on matters where you are
+the responsible lawyer. Review it with `navigator project time` or on the Project's Finances tab. **My time** shows your time
 across matters. Run `navigator project billing` from the checkout for the matter view, or pass `--project
 <code-or-uuid>`. The matter view shows the team's time and keeps review actions for staged time specific to the
 signed-in timekeeper. Add `--json` for structured output.
+
+### Record time from the CLI
+
+Hourly benefits are claimed from recorded time. `navigator project time` records work that has no commit, such as calls,
+emails, court appearances, and document review, and reviews it before it is billed. Run it from the Project checkout or
+pass `--project <code-or-uuid>` and `--host <host>`.
+
+```bash
+navigator project time add --performed-on 2026-11-20 --minutes 30 --narrative "Call with opposing counsel"
+navigator project time list --status pending-review
+navigator project time edit <id> --minutes 18
+navigator project time approve <id>
+navigator project time approve <id> --charge plan-claim --claim <claim-uuid>
+navigator project time discard <id>
+```
+
+`add` writes a [Time Entry Proposal](glossary/time-entry-proposal.md) for review; a past date marks it backfilled.
+`--timekeeper <email-or-uuid>` credits another firm-side participant. Pass a stable `--request-id <uuid>` when a script
+may retry: the retry returns the first proposal instead of adding a second. `approve` prices the time into a [Time
+Entry](glossary/time-entry.md) and is safe to repeat. Staged Jujutsu time appears in the same list; approving it needs
+`--narrative`, the invoice wording, and `--minutes` records less than the change attested. `list --status` reads
+`pending-review`, `approved`, `unbilled`, `billed`, or `discarded`.
+
+`navigator project time backfill` proposes entries from the Project's dated record: each Communication, filed document,
+completed Deadline, and e-filing not yet proposed. It prints the default minutes it used. Add `--since <date>` to limit
+the record and `--dry-run` to preview without writing. Nothing is approved until the lawyer reviews each proposal, and a
+second run proposes nothing already proposed, approved, or discarded. Staged Jujutsu changes reach the list through
+their `Billing-Time` trailers, not through backfill.
 
 Run `navigator legal-plans --firm <firm> collections --filing-review` to see the number of claims awaiting filing review
 and their verified dollar amount for ARAG and LegalEASE. The report includes the Projects you can access. Add

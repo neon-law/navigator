@@ -515,6 +515,51 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Time Entry Proposals: `navigator project time`. GET/POST the review list and
+# new time, POST .../backfill, PATCH one pending proposal, and POST
+# .../{approve,discard}. Lawyer tier; the handler answers 404 without
+# firm-side participation.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "time-entry-proposals"
+    count(input.path) == 5
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "time-entry-proposals"
+    count(input.path) == 6
+    time_proposal_item_method(input.path[5], input.method)
+    is_lawyer(input.session)
+}
+
+time_proposal_item_method(segment, method) if {
+    segment == "backfill"
+    method == "POST"
+}
+
+time_proposal_item_method(segment, method) if {
+    segment != "backfill"
+    method == "PATCH"
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "time-entry-proposals"
+    input.path[6] in {"approve", "discard"}
+    count(input.path) == 7
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
 # Project Labels are private firm-side metadata.
 route_allow if {
     input.path[0] == "app"

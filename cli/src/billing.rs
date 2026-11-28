@@ -104,6 +104,9 @@ fn render(report: &BillingReport) -> Result<String, std::fmt::Error> {
             "  {} · {} · {} min · {} · {} · {}",
             time.project, time.performed_on, time.minutes, time.status, time.id, time.description
         )?;
+        if time.backfilled {
+            write!(text, " · backfilled")?;
+        }
         if let Some(timekeeper) = time.timekeeper {
             write!(text, " · timekeeper {timekeeper}")?;
         }
@@ -185,7 +188,12 @@ fn write_actions(text: &mut String, actions: &[BillingAction]) -> std::fmt::Resu
                     "  {project} · {performed_on} · {change_id} · {next_action}"
                 )?;
             }
-            BillingAction::UnallocatedWork {
+            BillingAction::PendingProposals {
+                project,
+                next_action,
+                ..
+            }
+            | BillingAction::UnallocatedWork {
                 project,
                 next_action,
             } => {

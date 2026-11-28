@@ -46,6 +46,12 @@ pub enum BillingAction {
         performed_on: NaiveDate,
         next_action: String,
     },
+    /// Time Entry Proposals awaiting the lawyer's review.
+    PendingProposals {
+        project: String,
+        pending_proposals: usize,
+        next_action: String,
+    },
     UnallocatedWork {
         project: String,
         next_action: String,
@@ -76,6 +82,9 @@ pub struct BillingTime {
     pub minutes: i32,
     pub description: String,
     pub status: String,
+    /// Recorded after the day the work was done.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub backfilled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

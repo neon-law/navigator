@@ -1734,6 +1734,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "time_entry_proposal",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "timer",
         "kind": "table",
         "accessible": true

@@ -772,6 +772,36 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ("POST", "/app/api/projects/{id}/billing-annotations", post(crate::time_tracking_api::stage_annotation)),
         (
             "GET",
+            "/app/api/projects/{id}/time-entry-proposals",
+            get(crate::time_proposals_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entry-proposals",
+            post(crate::time_proposals_api::add),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entry-proposals/backfill",
+            post(crate::time_proposals_api::backfill),
+        ),
+        (
+            "PATCH",
+            "/app/api/projects/{id}/time-entry-proposals/{proposal_id}",
+            patch(crate::time_proposals_api::edit),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entry-proposals/{proposal_id}/approve",
+            post(crate::time_proposals_api::approve),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entry-proposals/{proposal_id}/discard",
+            post(crate::time_proposals_api::discard),
+        ),
+        (
+            "GET",
             "/app/api/projects/{id}/time-entries",
             get(crate::time_tracking_api::list_entries),
         ),

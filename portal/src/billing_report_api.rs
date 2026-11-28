@@ -145,6 +145,7 @@ fn action_key(action: &BillingAction) -> (Option<chrono::NaiveDate>, &str, Optio
             performed_on,
             ..
         } => (Some(*performed_on), project, Some(*annotation_id)),
-        BillingAction::UnallocatedWork { project, .. } => (None, project, None),
+        BillingAction::PendingProposals { project, .. }
+        | BillingAction::UnallocatedWork { project, .. } => (None, project, None),
     }
 }
