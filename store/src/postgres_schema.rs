@@ -1454,6 +1454,7 @@ mod tests {
             ("20261127200500_firm_workspace_provider.sql", include_str!("../postgres/migrations/20261127200500_firm_workspace_provider.sql")),
             ("20261127232000_onboarding_signature_evidence.sql", include_str!("../postgres/migrations/20261127232000_onboarding_signature_evidence.sql")),
             ("20261128010000_plan_filing_rules.sql", include_str!("../postgres/migrations/20261128010000_plan_filing_rules.sql")),
+            ("20261128042000_link_efiling_fee_settlements.sql", include_str!("../postgres/migrations/20261128042000_link_efiling_fee_settlements.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

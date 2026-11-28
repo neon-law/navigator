@@ -858,6 +858,19 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Confirm a reviewed envelope/card-charge match. The portal also checks
+# firm-side participation and the owning Firm's journal capability.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "efilings"
+    input.path[5] == "settle-fee"
+    count(input.path) == 6
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
 # Legal-files-only handoffs: POST /app/api/projects/{id}/handoffs (lawyer tier)
 # and GET .../handoffs/{handoff} and .../handoffs/{handoff}/bundle (any
 # authenticated session; the handler admits only a lawyer on the matter or the

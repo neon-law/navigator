@@ -539,9 +539,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // Firm Forgejo parity admits interactive administrators and denies lawyers, clients, and CI.
     // Receipt-backed cost posting admits lawyers and denies clients, clerks, and anonymous callers.
     // Imported Dropbox Sign retainer verification admits lawyers and denies clerks, clients, and anonymous callers.
+    // Filing-fee settlement admits Lawyer and denies Client and Clerk. The handler checks Project and Firm scope.
     assert_eq!(
         test_names.len(),
-        729,
+        730,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

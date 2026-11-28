@@ -22,6 +22,8 @@ pub use model::efiling_transactions::{
     normalize_transaction_id, STATUS_ACCEPTED, STATUS_REJECTED, STATUS_SUBMITTED, STATUS_UNKNOWN,
 };
 
+pub mod fees;
+
 const TABLE: &str = "efiling_transactions";
 
 /// Every status a transaction can carry.
@@ -67,8 +69,16 @@ pub enum EfilingError {
     Postgres(#[from] matter::MatterAuthorityError),
     #[error("{0}")]
     Invalid(String),
+    #[error(transparent)]
+    Cost(#[from] crate::project_costs::ProjectCostError),
     #[error("writing an e-filing transaction returned no usable row")]
     WriteReturnedNothing,
+}
+
+impl From<sqlx::Error> for EfilingError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Postgres(error.into())
+    }
 }
 
 /// One status report for a transaction. `None` keeps the stored value.
@@ -144,17 +154,28 @@ pub async fn find(
 /// date, acceptance date or conformed copy on a transaction that is not
 /// `accepted`, or a document that is not on this Project.
 pub async fn record(
-    _application_store: &ApplicationStore,
+    application_store: &ApplicationStore,
     report: &EfilingReport,
 ) -> Result<EfilingTransaction, EfilingError> {
-    let pg = matter::authority_for(TABLE).await?;
-    record_postgres(&pg, report).await
+    Ok(record_with_fee(application_store, report, None)
+        .await?
+        .filing)
 }
 
-async fn record_postgres(
+pub async fn record_with_fee(
+    _application_store: &ApplicationStore,
+    report: &EfilingReport,
+    receipt_id: Option<Uuid>,
+) -> Result<fees::FilingWithFee, EfilingError> {
+    let pg = matter::authority_for(TABLE).await?;
+    record_postgres_with_fee(&pg, report, receipt_id).await
+}
+
+async fn record_postgres_with_fee(
     pg: &crate::postgres::PostgresDb,
     report: &EfilingReport,
-) -> Result<EfilingTransaction, EfilingError> {
+    receipt_id: Option<Uuid>,
+) -> Result<fees::FilingWithFee, EfilingError> {
     let transaction =
         normalize_transaction_id(&report.transaction_id).map_err(EfilingError::Invalid)?;
     let mut tx = pg
@@ -196,16 +217,22 @@ async fn record_postgres(
             }
         }
     }
-    let stored = matter::upsert_on(
+    let stored: EfilingTransaction = matter::upsert_on(
         &mut *tx,
         TABLE,
         serde_json::to_value(row).map_err(matter::MatterAuthorityError::from)?,
     )
     .await?;
-    tx.commit()
-        .await
-        .map_err(matter::MatterAuthorityError::from)?;
-    Ok(stored)
+    let fee = if let Some(receipt_id) = receipt_id {
+        Some(fees::observe(&mut tx, &stored, receipt_id).await?)
+    } else {
+        None
+    };
+    tx.commit().await?;
+    Ok(fees::FilingWithFee {
+        filing: stored,
+        fee,
+    })
 }
 
 /// Fold one report into the stored row (or a new one), enforcing that only an

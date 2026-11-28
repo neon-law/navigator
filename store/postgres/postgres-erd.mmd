@@ -526,6 +526,14 @@ erDiagram
         uuid conformed_document_id
         string court
         string efsp
+        int fee_amount_cents
+        uuid fee_bank_account_id
+        uuid fee_cost_id
+        string fee_currency
+        datetime fee_matched_at
+        uuid fee_matched_by
+        uuid fee_receipt_document_id
+        string fee_source_reference
         string filed_on
         uuid id
         datetime inserted_at
@@ -2419,6 +2427,9 @@ erDiagram
     project }o--|| docusign_completion : references
     firm }o--|| docusign_completion_cursor : references
     durable_object_handover }o--|| durable_object_ownership : references
+    asset }o--|| efiling_transactions : references
+    person }o--|| efiling_transactions : references
+    project_costs }o--|| efiling_transactions : references
     firm }o--|| email_conversation : references
     notation }o--|| email_conversation : references
     person }o--|| email_conversation : references

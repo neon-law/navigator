@@ -3178,6 +3178,12 @@ test_admin_denied_owner_inbox if {
 
 # ---------- E-Filing Transaction writes under /app/api/projects/{id}/efilings (lawyer tier, LAW-128) ----------
 
+test_efiling_fee_settlement_requires_lawyer_tier if {
+    authz.allow with input as {"path": ["app", "api", "projects", "p1", "efilings", "settle-fee"], "method": "POST", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "projects", "p1", "efilings", "settle-fee"], "method": "POST", "session": client_session}
+    not authz.allow with input as {"path": ["app", "api", "projects", "p1", "efilings", "settle-fee"], "method": "POST", "session": clerk_session}
+}
+
 test_lawyer_can_record_an_efiling if {
 	authz.allow with input as {"path": ["app", "api", "projects", "p1", "efilings"], "method": "POST", "session": lawyer_session}
 }

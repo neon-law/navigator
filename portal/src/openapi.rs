@@ -4045,7 +4045,7 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/efilings": {
           "get": {
             "summary": "List a Project's e-filing transactions",
-            "description": "E-Filing Transactions recorded on a Project the caller participates in, most recently changed first. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "description": "E-Filing Transactions recorded on a Project the caller participates in, most recently changed first. Fee observations are visible only to firm-side participants. Authorization: lawyer tier and a participation row; otherwise 404.",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
             ],
@@ -4057,7 +4057,7 @@ fn canonical_document(base: &str) -> Value {
           },
           "post": {
             "summary": "Record an e-filing transaction status",
-            "description": "Record one EFSP status report, keyed by transaction_id, and return the stored row. status is submitted, accepted, rejected, or unknown. filed_on, accepted_on, and conformed_document_id are refused unless the status is accepted, and a report without a decision never replaces a recorded accepted or rejected status.",
+            "description": "Record one EFSP status report, keyed by transaction_id, and return the stored row. status is submitted, accepted, rejected, or unknown. filed_on, accepted_on, and conformed_document_id are refused unless the status is accepted, and a report without a decision never replaces a recorded accepted or rejected status. A firm-side participant may supply fee_receipt_document_id for the accepted envelope’s internal Receipt Document.",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
             ],
@@ -4066,6 +4066,34 @@ fn canonical_document(base: &str) -> Value {
               "400": { "description": "The report is not valid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/efilings/settle-fee": {
+          "post": {
+            "summary": "Post a confirmed filing-fee Project Cost",
+            "description": "Confirm a reviewed match between a private accepted-envelope receipt and one exact, posted, settled Mercury card charge. An identical replay returns the existing cost. Authorization: firm-side Project participation and ManageJournal on the owning Firm.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": {
+              "type": "object", "required": ["envelope", "account_id", "transaction_id", "confirm"],
+              "properties": {
+                "envelope": { "type": "string" },
+                "account_id": { "type": "string", "format": "uuid" },
+                "transaction_id": { "type": "string", "format": "uuid" },
+                "confirm": { "type": "boolean", "enum": [true] }
+              }
+            } } } },
+            "responses": {
+              "200": { "description": "The confirmed Project Cost", "content": { "application/json": { "schema": {
+                "type": "object", "required": ["project_cost_id"],
+                "properties": { "project_cost_id": { "type": "string", "format": "uuid" } }
+              } } } },
+              "400": { "description": "Confirmation, receipt, or settled charge did not match" },
+              "401": { "description": "No authenticated session" },
+              "404": { "description": "Project or Firm outside the caller's scope" },
+              "502": { "description": "Bank evidence could not be read" }
             }
           }
         },
