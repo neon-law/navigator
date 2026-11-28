@@ -694,13 +694,17 @@ pub(crate) struct GenerateInvoiceForm {
     pub(crate) confirm: Option<String>,
     #[serde(default)]
     pub(crate) digest: Option<String>,
+    /// The responsible lawyer's reason to collect this invoice into the
+    /// Firm's Operating account. Blank means trust.
+    #[serde(default)]
+    pub(crate) operating_reason: Option<String>,
 }
 
 /// `POST /app/projects/{code}/invoices` — the generate-invoice action's two
 /// halves. Without `confirm`, the POST only opens the compose preview (the
-/// confirm step renders at `?confirm=1`); with it, the composed invoice is
-/// raised through the provider seam. Raising is externally visible — Xero is
-/// the books — so the confirm step is not optional.
+/// confirm step renders at `?confirm=1`); with it, the composed invoice
+/// becomes an unsent Stripe draft. The confirm step shows where the money
+/// will land, so it is not optional.
 pub(crate) async fn generate_invoice(
     State(admin): State<crate::admin::AdminState>,
     session: Option<Extension<SessionData>>,
@@ -723,9 +727,19 @@ pub(crate) async fn generate_invoice(
     else {
         return not_found_response();
     };
-    if !firm_side_viewer(&admin.application_store, &session, project.id).await {
+    let viewer = store::access::matter_viewer(
+        &admin.application_store,
+        session.person_id,
+        session.role,
+        project.id,
+    )
+    .await
+    .ok()
+    .flatten()
+    .filter(|viewer| viewer.is_firm_side());
+    let Some(viewer) = viewer else {
         return not_found_response();
-    }
+    };
     // The first POST is the action's start: nothing provider-bound has run,
     // and the compose preview is a read rendered at `?confirm=1`.
     if input.confirm.is_none() {
@@ -743,11 +757,17 @@ pub(crate) async fn generate_invoice(
     match crate::project_billing_api::generate_invoice(
         &admin.application_store,
         &pg,
-        admin.billing_provider.as_ref(),
+        admin.runtime_kms.as_ref(),
         project.id,
-        person_id,
+        (person_id, viewer == store::access::MatterViewer::LawyerDri),
         now,
-        input.digest.as_deref(),
+        &crate::project_billing_api::GenerateInput {
+            preview_digest: input.digest.clone(),
+            operating_reason: input
+                .operating_reason
+                .clone()
+                .filter(|reason| !reason.trim().is_empty()),
+        },
     )
     .await
     {
@@ -760,24 +780,26 @@ pub(crate) async fn generate_invoice(
 /// of the books — and the work it consumed. The amount itself renders in the
 /// invoice table the redirect lands on, formatted once, by the tab.
 fn raise_confirmation(receipt: &crate::project_billing_api::InvoiceReceipt) -> String {
-    if let Some(iolta) = receipt.stripe_iolta {
-        return if iolta {
-            "The draft is ready for review in the state trust account for this matter.".to_string()
-        } else {
-            "Stripe draft created for lawyer review. This is not IOLTA billing.".to_string()
-        };
-    }
-    if receipt.flat_fee {
+    let destination = if receipt.stripe_iolta {
+        "collected into the matter's trust account"
+    } else {
+        "collected into the Firm's Operating account, as you approved"
+    };
+    let work = if receipt.flat_fee {
         format!(
-            "Invoice {} raised in Xero — the matter's flat fee, with {} expenses billed alongside it.",
-            receipt.reference, receipt.consumed_costs
+            "the matter's flat fee and {} expenses",
+            receipt.consumed_costs
         )
     } else {
         format!(
-            "Invoice {} raised in Xero — {} time entries and {} expenses billed.",
-            receipt.reference, receipt.consumed_time_entries, receipt.consumed_costs
+            "{} time entries and {} expenses",
+            receipt.consumed_time_entries, receipt.consumed_costs
         )
-    }
+    };
+    format!(
+        "Stripe draft {} is ready for your review — {work}, {destination}. Nothing is sent until you send it.",
+        receipt.reference
+    )
 }
 
 /// The store's typed refusals, rendered as flash copy in the user's
@@ -793,14 +815,7 @@ fn flash_for_invoice(
         InvoiceGenerationError::StripeUnavailable => {
             "Stripe billing is unavailable for this Firm and jurisdiction.".to_string()
         }
-        InvoiceGenerationError::BillingUnavailable => {
-            tracing::warn!(
-                event = "invoice_generation_billing_unavailable",
-                outcome = "unavailable",
-                project_id = %project_id
-            );
-            "Invoicing is unavailable right now — try again shortly.".to_string()
-        }
+        InvoiceGenerationError::Destination(error) => error.to_string(),
         InvoiceGenerationError::NothingToInvoice => {
             "There is nothing unbilled to invoice on this matter yet.".to_string()
         }
@@ -814,8 +829,7 @@ fn flash_for_invoice(
             "The matter's agreed flat fee is already billed — amend the fee for additional work."
                 .to_string()
         }
-        InvoiceGenerationError::ReconciliationRequired
-        | InvoiceGenerationError::InvoiceNotBillable => {
+        InvoiceGenerationError::ReconciliationRequired => {
             "The last invoice attempt needs reconciliation before another raise — ask support to reconcile it.".to_string()
         }
         InvoiceGenerationError::CurrencyMismatch(currency) => format!(
@@ -835,7 +849,7 @@ fn flash_for_invoice(
                 outcome = "provider_error",
                 project_id = %project_id
             );
-            "Xero refused the invoice — nothing was raised. Try again in a moment; a retry raises the same invoice.".to_string()
+            "Stripe refused the draft — nothing was created. Try again in a moment; a retry resumes the same draft.".to_string()
         }
         _ => "The billing record is unavailable right now — try again shortly.".to_string(),
     }
@@ -983,73 +997,40 @@ mod tests {
         );
     }
 
-    #[test]
-    fn raise_confirmation_names_the_reference_and_what_it_consumed() {
-        let receipt = crate::project_billing_api::InvoiceReceipt {
-            xero_invoice_id: Some("xero-1".to_string()),
-            stripe_invoice_id: None,
-            stripe_iolta: None,
-            reference: "INV-001".to_string(),
+    fn receipt() -> crate::project_billing_api::InvoiceReceipt {
+        crate::project_billing_api::InvoiceReceipt {
+            stripe_invoice_id: "in_synthetic".to_string(),
+            matter_invoice_id: Uuid::nil(),
+            stripe_iolta: true,
+            destination_approval_id: None,
+            reference: "Matter acme".to_string(),
             currency: "USD".to_string(),
             total_cents: 12_345,
             line_items: Vec::new(),
             consumed_time_entries: 4,
             consumed_costs: 2,
             flat_fee: false,
-        };
-        assert_eq!(
-            raise_confirmation(&receipt),
-            "Invoice INV-001 raised in Xero — 4 time entries and 2 expenses billed."
-        );
-    }
-
-    #[test]
-    fn a_flat_fee_invoice_confirms_the_fee_rather_than_itemized_time() {
-        let receipt = crate::project_billing_api::InvoiceReceipt {
-            flat_fee: true,
-            consumed_costs: 3,
-            ..flat_fee_receipt()
-        };
-        assert_eq!(
-            raise_confirmation(&receipt),
-            "Invoice INV-FLAT raised in Xero — the matter's flat fee, with 3 expenses billed alongside it."
-        );
-    }
-
-    fn flat_fee_receipt() -> crate::project_billing_api::InvoiceReceipt {
-        crate::project_billing_api::InvoiceReceipt {
-            xero_invoice_id: None,
-            stripe_invoice_id: None,
-            stripe_iolta: None,
-            reference: "INV-FLAT".to_string(),
-            currency: "USD".to_string(),
-            total_cents: 5_000,
-            line_items: Vec::new(),
-            consumed_time_entries: 9,
-            consumed_costs: 0,
-            flat_fee: true,
         }
     }
 
     #[test]
-    fn stripe_drafts_split_the_confirmation_by_iolta() {
-        // The Stripe branch answers before the reference is ever read: the
-        // draft lives in the law firm's Stripe account, not Xero.
-        let iolta = crate::project_billing_api::InvoiceReceipt {
-            stripe_iolta: Some(true),
-            ..flat_fee_receipt()
-        };
+    fn the_confirmation_names_the_work_and_where_the_money_lands() {
         assert_eq!(
-            raise_confirmation(&iolta),
-            "The draft is ready for review in the state trust account for this matter."
+            raise_confirmation(&receipt()),
+            "Stripe draft Matter acme is ready for your review — 4 time entries and 2 expenses, \
+             collected into the matter's trust account. Nothing is sent until you send it."
         );
-        let not_iolta = crate::project_billing_api::InvoiceReceipt {
-            stripe_iolta: Some(false),
-            ..flat_fee_receipt()
+        let operating = crate::project_billing_api::InvoiceReceipt {
+            stripe_iolta: false,
+            flat_fee: true,
+            consumed_costs: 3,
+            ..receipt()
         };
         assert_eq!(
-            raise_confirmation(&not_iolta),
-            "Stripe draft created for lawyer review. This is not IOLTA billing."
+            raise_confirmation(&operating),
+            "Stripe draft Matter acme is ready for your review — the matter's flat fee and 3 \
+             expenses, collected into the Firm's Operating account, as you approved. Nothing is \
+             sent until you send it."
         );
     }
 
@@ -1140,8 +1121,11 @@ mod tests {
             "Stripe billing is unavailable for this Firm and jurisdiction."
         );
         assert_eq!(
-            rendered(InvoiceGenerationError::BillingUnavailable),
-            "Invoicing is unavailable right now — try again shortly."
+            rendered(InvoiceGenerationError::Destination(
+                store::invoice_destinations::DestinationError::TrustRouteMissing
+            )),
+            "no trust account receives this matter's payments; link the state's IOLTA, or approve \
+             the Operating account for this invoice with a reason"
         );
         assert_eq!(
             rendered(InvoiceGenerationError::NothingToInvoice),
@@ -1167,10 +1151,6 @@ mod tests {
             "The last invoice attempt needs reconciliation before another raise — ask support to reconcile it."
         );
         assert_eq!(
-            rendered(InvoiceGenerationError::InvoiceNotBillable),
-            "The last invoice attempt needs reconciliation before another raise — ask support to reconcile it."
-        );
-        assert_eq!(
             rendered(InvoiceGenerationError::CurrencyMismatch("EUR".to_string())),
             "An unbilled expense is in EUR; matter invoices are raised in USD."
         );
@@ -1186,9 +1166,9 @@ mod tests {
         );
         assert_eq!(
             rendered(InvoiceGenerationError::Billing(
-                billing::BillingError::Provider("xero unavailable".to_string())
+                billing::BillingError::Provider("stripe unavailable".to_string())
             )),
-            "Xero refused the invoice — nothing was raised. Try again in a moment; a retry raises the same invoice."
+            "Stripe refused the draft — nothing was created. Try again in a moment; a retry resumes the same draft."
         );
         // Everything unlisted — a missing matter row among them — answers
         // with the record-unavailable sentence, never a variant name.
@@ -1467,6 +1447,7 @@ mod tests {
             Form(GenerateInvoiceForm {
                 confirm: None,
                 digest: None,
+                operating_reason: None,
             }),
         )
         .await;
@@ -1482,6 +1463,7 @@ mod tests {
             Form(GenerateInvoiceForm {
                 confirm: None,
                 digest: None,
+                operating_reason: None,
             }),
         )
         .await;
@@ -1497,6 +1479,7 @@ mod tests {
             Form(GenerateInvoiceForm {
                 confirm: None,
                 digest: None,
+                operating_reason: None,
             }),
         )
         .await;
@@ -1517,6 +1500,7 @@ mod tests {
             Form(GenerateInvoiceForm {
                 confirm: None,
                 digest: None,
+                operating_reason: None,
             }),
         )
         .await;
@@ -1568,56 +1552,11 @@ mod end_to_end_tests {
     }
 
     #[test]
-    fn the_raise_confirmation_names_the_destination_and_the_work() {
-        use crate::project_billing_api::InvoiceReceipt;
-
-        let receipt = InvoiceReceipt {
-            xero_invoice_id: Some("stub-invoice-1".into()),
-            stripe_invoice_id: None,
-            stripe_iolta: None,
-            reference: "INV-22".into(),
-            currency: "USD".into(),
-            total_cents: 225_000,
-            line_items: Vec::new(),
-            consumed_time_entries: 3,
-            consumed_costs: 2,
-            flat_fee: false,
-        };
-        assert_eq!(
-            raise_confirmation(&receipt),
-            "Invoice INV-22 raised in Xero — 3 time entries and 2 expenses billed."
-        );
-
-        let mut flat_fee_receipt = receipt.clone();
-        flat_fee_receipt.flat_fee = true;
-        assert_eq!(
-            raise_confirmation(&flat_fee_receipt),
-            "Invoice INV-22 raised in Xero — the matter's flat fee, with 2 expenses billed alongside it."
-        );
-
-        let mut iolta_receipt = receipt.clone();
-        iolta_receipt.stripe_iolta = Some(true);
-        assert_eq!(
-            raise_confirmation(&iolta_receipt),
-            "The draft is ready for review in the state trust account for this matter."
-        );
-        iolta_receipt.stripe_iolta = Some(false);
-        assert_eq!(
-            raise_confirmation(&iolta_receipt),
-            "Stripe draft created for lawyer review. This is not IOLTA billing."
-        );
-    }
-
-    #[test]
     fn every_invoice_refusal_lands_in_lawyer_copy_never_in_variant_names() {
         use crate::project_billing_api::InvoiceGenerationError;
 
         let flash = |error: &InvoiceGenerationError| flash_for_invoice(error, Uuid::new_v4());
 
-        assert_eq!(
-            flash(&InvoiceGenerationError::BillingUnavailable),
-            "Invoicing is unavailable right now — try again shortly."
-        );
         assert_eq!(
             flash(&InvoiceGenerationError::StripeUnavailable),
             "Stripe billing is unavailable for this Firm and jurisdiction."
@@ -1633,12 +1572,6 @@ mod end_to_end_tests {
         assert_eq!(
             flash(&InvoiceGenerationError::FlatFeeAlreadyBilled),
             "The matter's agreed flat fee is already billed — amend the fee for additional work."
-        );
-        // The two hold-still refusals share one copy: the caller's remedy is
-        // the same either way.
-        assert_eq!(
-            flash(&InvoiceGenerationError::ReconciliationRequired),
-            flash(&InvoiceGenerationError::InvoiceNotBillable)
         );
         assert!(flash(&InvoiceGenerationError::ReconciliationRequired)
             .starts_with("The last invoice attempt needs reconciliation"));
@@ -1660,7 +1593,7 @@ mod end_to_end_tests {
         assert!(flash(&InvoiceGenerationError::Billing(
             billing::BillingError::Provider("synthetic provider fault".into())
         ))
-        .starts_with("Xero refused the invoice"));
+        .starts_with("Stripe refused the draft"));
         // The fallthrough refusal keeps the transport failure out of the flash.
         assert_eq!(
             flash(&InvoiceGenerationError::NoMatter),

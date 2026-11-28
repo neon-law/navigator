@@ -600,10 +600,13 @@ async fn approval_prices_only_the_selected_plan_claim_and_replaces_attested_time
     .fetch_one(pg.pool())
     .await
     .unwrap();
-    assert!(matches!(
-        time_entries::mark_invoiced(&pg, &[entry.id], fixture.lawyer, ledger, false).await,
-        Err(time_entries::TimeEntryError::Invalid(_))
-    ), "claim-linked time is never invoiced directly");
+    assert!(
+        matches!(
+            time_entries::mark_invoiced(&pg, &[entry.id], fixture.lawyer, ledger, false).await,
+            Err(time_entries::TimeEntryError::Invalid(_))
+        ),
+        "claim-linked time is never invoiced directly"
+    );
     let mut connection = pg.pool().acquire().await.unwrap();
     let rows = plan_claims::for_matter_billing(&mut connection, &project, firm)
         .await

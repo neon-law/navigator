@@ -969,21 +969,45 @@ async fn load_records(
         }
         Err(_) => cx.project_costs.unavailable = true,
     }
-    cx.invoices = store::xero_invoices::for_projects(application_store, &[project_id])
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|invoice| {
-            let paid =
-                invoice.amount_cents > 0 && invoice.amount_paid_cents >= invoice.amount_cents;
-            super::SectionRow {
-                label: crate::portal_project_detail::format_usd(invoice.amount_cents),
-                detail: format!("Issued {}", invoice.issued_at.format("%Y-%m-%d")),
-                status: if paid { "Paid" } else { "Due" }.to_string(),
-            }
-        })
-        .collect();
+    cx.invoices = invoice_rows(
+        store::matter_invoices::for_projects(application_store, &[project_id])
+            .await
+            .map_err(|e| e.to_string())?,
+        client_lens,
+    );
     Ok(())
+}
+
+/// The matter's invoices as the page lists them. A client sees only
+/// invoices sent to them; a lawyer also sees drafts.
+#[cfg(feature = "server")]
+fn invoice_rows(
+    invoices: Vec<store::matter_invoices::MatterInvoice>,
+    client_lens: bool,
+) -> Vec<super::SectionRow> {
+    invoices
+        .into_iter()
+        .filter(|invoice| !client_lens || invoice.client_visible)
+        .filter_map(|invoice| {
+            use store::matter_invoices::Status;
+            let status = match invoice.status {
+                Status::Sent => "Due",
+                Status::Paid => "Paid",
+                Status::Void => "Void",
+                Status::Uncollectible => "Unpaid",
+                Status::Draft if !client_lens => "Draft",
+                Status::Pending | Status::Draft => return None,
+            };
+            Some(super::SectionRow {
+                label: crate::portal_project_detail::format_usd(invoice.amount_cents),
+                detail: invoice.issued_on.map_or_else(
+                    || invoice.reference.clone(),
+                    |issued| format!("Issued {}", issued.format("%Y-%m-%d")),
+                ),
+                status: status.to_string(),
+            })
+        })
+        .collect()
 }
 
 /// The deadline rows a section shows on `lens`: open deadlines, soonest

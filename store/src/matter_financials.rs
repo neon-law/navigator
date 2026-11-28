@@ -169,9 +169,9 @@ pub async fn for_project(
 #[cfg(test)]
 mod tests {
     use super::{outstanding_cents, unbilled_costs_cents, unbilled_time_cents, MatterFinancials};
+    use crate::matter_invoices::{MatterInvoice, Source, Status};
     use crate::project_costs::ProjectCost;
     use crate::time_entries::{BillingStatus, TimeEntry, TimeEntrySource};
-    use crate::matter_invoices::{MatterInvoice, Source, Status};
     use chrono::{NaiveDate, Utc};
     use uuid::Uuid;
 
@@ -231,7 +231,6 @@ mod tests {
             client_visible: true,
             stripe_account_id: None,
             destination: None,
-            billing_batch_id: None,
             inserted_at: Utc::now(),
             updated_at: Utc::now(),
         }

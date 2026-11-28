@@ -307,7 +307,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         });
     let uri = dioxus_fullstack_core::FullstackContext::extract::<axum::http::Uri, _>().await?;
     if uri.path().ends_with("/finances") {
-        let invoices = store::xero_invoices::firm_thirty_day_rollup(
+        let invoices = store::matter_invoices::firm_thirty_day_rollup(
             &application_store,
             firm.id,
             chrono::Utc::now(),

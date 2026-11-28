@@ -45,8 +45,8 @@ fn entry_view(row: &time_entries::TimeEntry) -> serde_json::Value {
         "updated_at": row.updated_at,
     });
     match &row.billing_status {
-        time_entries::BillingStatus::Invoiced { xero_invoice_id } => {
-            view["xero_invoice_id"] = serde_json::json!(xero_invoice_id);
+        time_entries::BillingStatus::Invoiced { invoice_id } => {
+            view["matter_invoice_id"] = serde_json::json!(invoice_id);
         }
         time_entries::BillingStatus::WrittenOff { reason } => {
             view["written_off_reason"] = serde_json::json!(reason);
@@ -325,11 +325,12 @@ pub(crate) async fn create_entry(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InvoiceInput {
-    xero_invoice_id: String,
+    /// The Matter Invoice on this Project that bills the entry.
+    matter_invoice_id: Uuid,
 }
 
 /// `POST /app/api/projects/{id}/time-entries/{entry_id}/invoice` — mark one
-/// unbilled entry `invoiced` under the Xero invoice that carries it. Replaying
+/// unbilled entry `invoiced` under the Matter Invoice that carries it. Replaying
 /// the same call is a no-op; the same entry under a different invoice id is a
 /// conflict (409).
 pub(crate) async fn mark_invoiced(
@@ -351,7 +352,7 @@ pub(crate) async fn mark_invoiced(
     if entry.project_id != project_id {
         return Err(ApiError::NotFound);
     }
-    match time_entries::mark_invoiced(&pg, &[entry_id], actor_id, &input.xero_invoice_id, false)
+    match time_entries::mark_invoiced(&pg, &[entry_id], actor_id, input.matter_invoice_id, false)
         .await
     {
         Ok(mut rows) => Ok(Json(entry_view(&rows.remove(0))).into_response()),

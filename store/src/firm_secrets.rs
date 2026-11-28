@@ -758,12 +758,26 @@ mod trust_route_tests {
                 .unwrap()
                 .map(|route| route.account)
         };
-        assert_eq!(account(Some("CA")).as_deref(), Some("acct_California"), "exact state first");
+        assert_eq!(
+            account(Some("CA")).as_deref(),
+            Some("acct_California"),
+            "exact state first"
+        );
         assert_eq!(account(Some("NV")).as_deref(), Some("acct_Nevada"));
-        assert_eq!(account(None).as_deref(), Some("acct_Nevada"), "no state: Nevada default");
-        assert_eq!(account(Some("UT")).as_deref(), Some("acct_Nevada"), "a listed state");
+        assert_eq!(
+            account(None).as_deref(),
+            Some("acct_Nevada"),
+            "no state: Nevada default"
+        );
+        assert_eq!(
+            account(Some("UT")).as_deref(),
+            Some("acct_Nevada"),
+            "a listed state"
+        );
         assert_eq!(account(Some("WA")), None, "an unlisted state has no route");
-        assert!(trust_route(Some(other), None, Some(&config)).unwrap().is_none());
+        assert!(trust_route(Some(other), None, Some(&config))
+            .unwrap()
+            .is_none());
         let misplaced = serde_json::json!([
             {"firm": firm, "state": "CA", "account": "acct_X", "fallback_states": ["UT"]},
         ])

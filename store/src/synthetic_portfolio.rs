@@ -1394,7 +1394,9 @@ async fn plan_invoice_reconcile(
             None,
             &crate::matter_invoices::NewPayment {
                 amount_cents: amount_paid_cents - invoice.amount_paid_cents,
-                received_on: invoice.issued_on.unwrap_or_else(|| chrono::Utc::now().date_naive()),
+                received_on: invoice
+                    .issued_on
+                    .unwrap_or_else(|| chrono::Utc::now().date_naive()),
                 source: crate::matter_invoices::Source::Other,
                 external_id: Some(format!("{external_id}:paid:{amount_paid_cents}")),
                 payer: None,
@@ -2315,12 +2317,13 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
-            assert!(
-                crate::matter_invoices::find_for_allocation(&application_store, XERO_INVOICE_ID)
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(crate::matter_invoices::find_for_allocation(
+                &application_store,
+                XERO_INVOICE_ID
+            )
+            .await
+            .unwrap()
+            .is_none());
             assert!(
                 crate::iolta_withdrawals::find(&application_store, IOLTA_XERO_TRANSACTION_ID)
                     .await
@@ -2901,7 +2904,10 @@ mod tests {
             assert_eq!(unpaid.amount_paid_cents, 0);
             assert_eq!(unpaid.amount_cents, INVOICE_MATRIX_UNPAID_CENTS);
             assert_eq!(unpaid.currency, "USD");
-            assert_eq!(unpaid.issued_on, Some(fixed_date(PERIOD_TWO_ISSUED).date_naive()));
+            assert_eq!(
+                unpaid.issued_on,
+                Some(fixed_date(PERIOD_TWO_ISSUED).date_naive())
+            );
             assert_eq!(unpaid.due_on, Some(fixed_date(PERIOD_TWO_DUE).date_naive()));
 
             let overdue = invoices
@@ -2911,8 +2917,14 @@ mod tests {
             assert_eq!(overdue.status, crate::matter_invoices::Status::Sent);
             assert_eq!(overdue.amount_paid_cents, 0);
             assert_eq!(overdue.currency, "USD");
-            assert_eq!(overdue.issued_on, Some(fixed_date(PERIOD_ONE_ISSUED).date_naive()));
-            assert_eq!(overdue.due_on, Some(fixed_date(PERIOD_ONE_DUE).date_naive()));
+            assert_eq!(
+                overdue.issued_on,
+                Some(fixed_date(PERIOD_ONE_ISSUED).date_naive())
+            );
+            assert_eq!(
+                overdue.due_on,
+                Some(fixed_date(PERIOD_ONE_DUE).date_naive())
+            );
             assert!(
                 overdue.due_on.unwrap() < unpaid.issued_on.unwrap(),
                 "the overdue invoice's due date falls in the earlier reporting period, the unpaid \
@@ -2927,8 +2939,14 @@ mod tests {
             assert_eq!(partial.amount_paid_cents, INVOICE_MATRIX_PARTIAL_PAID_CENTS);
             assert!(partial.amount_paid_cents < partial.amount_cents);
             assert_eq!(partial.currency, "USD");
-            assert_eq!(partial.issued_on, Some(fixed_date(PERIOD_ONE_ISSUED).date_naive()));
-            assert_eq!(partial.due_on, Some(fixed_date(PERIOD_TWO_DUE).date_naive()));
+            assert_eq!(
+                partial.issued_on,
+                Some(fixed_date(PERIOD_ONE_ISSUED).date_naive())
+            );
+            assert_eq!(
+                partial.due_on,
+                Some(fixed_date(PERIOD_TWO_DUE).date_naive())
+            );
 
             let paid = invoices
                 .iter()

@@ -345,7 +345,9 @@ pub async fn mark_invoiced(
     refuse_claim_time(&mut tx, entry_ids).await?;
     let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
     if rows.iter().any(|entry| entry.project_id != invoice_project) {
-        return Err(TimeEntryError::Invalid("invoice belongs to another Project"));
+        return Err(TimeEntryError::Invalid(
+            "invoice belongs to another Project",
+        ));
     }
     for entry in &rows {
         match &entry.billing_status {

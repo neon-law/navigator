@@ -5,8 +5,8 @@ use crate::application_store::ApplicationStore;
 use crate::finance_aggregate::{self, FinanceReport, Money, Parameters};
 use crate::iolta_accounts::{self, UpsertIoltaAccount};
 use crate::iolta_withdrawals::{self, WithdrawalInput};
-use crate::postgres::fixtures::{connect, fresh_schema};
 use crate::matter_invoices::{self, NewPayment, NewRecord, Source, Status};
+use crate::postgres::fixtures::{connect, fresh_schema};
 use chrono::{TimeZone, Utc};
 use uuid::Uuid;
 
@@ -95,7 +95,10 @@ async fn matter_invoices_record_payments_and_allocation_reads_are_postgres_only(
         let created = matter_invoices::record(project, None, &invoice("in_one", "Matter ACCT-1"))
             .await
             .unwrap();
-        assert_eq!((created.status, created.amount_paid_cents), (Status::Sent, 0));
+        assert_eq!(
+            (created.status, created.amount_paid_cents),
+            (Status::Sent, 0)
+        );
         assert_eq!(
             matter_invoices::record(project, None, &invoice("in_one", "Matter ACCT-1"))
                 .await
@@ -122,23 +125,34 @@ async fn matter_invoices_record_payments_and_allocation_reads_are_postgres_only(
             matter_invoices::record_payment(project, created.id, None, &payment(40_000, "1001"))
                 .await
                 .unwrap();
-        assert_eq!((partial.status, partial.balance_due_cents()), (Status::Sent, 60_000));
+        assert_eq!(
+            (partial.status, partial.balance_due_cents()),
+            (Status::Sent, 60_000)
+        );
         let (replayed, _) =
             matter_invoices::record_payment(project, created.id, None, &payment(40_000, "1001"))
                 .await
                 .unwrap();
-        assert_eq!(replayed.amount_paid_cents, 40_000, "a replayed payment counts once");
+        assert_eq!(
+            replayed.amount_paid_cents, 40_000,
+            "a replayed payment counts once"
+        );
         let (paid, _) =
             matter_invoices::record_payment(project, created.id, None, &payment(60_000, "1002"))
                 .await
                 .unwrap();
         assert_eq!((paid.status, paid.balance_due_cents()), (Status::Paid, 0));
-        assert_eq!(matter_invoices::payments(created.id).await.unwrap().len(), 2);
-        assert!(sqlx::query("DELETE FROM matter_invoice_payment WHERE invoice_id=$1")
-            .bind(created.id)
-            .execute(pg.pool())
-            .await
-            .is_err());
+        assert_eq!(
+            matter_invoices::payments(created.id).await.unwrap().len(),
+            2
+        );
+        assert!(
+            sqlx::query("DELETE FROM matter_invoice_payment WHERE invoice_id=$1")
+                .bind(created.id)
+                .execute(pg.pool())
+                .await
+                .is_err()
+        );
 
         // A second Project's invoice with the same reference makes the
         // reference ambiguous; the issuer id and ledger id stay exact.
@@ -178,19 +192,27 @@ async fn matter_invoices_record_payments_and_allocation_reads_are_postgres_only(
         );
 
         // Voiding needs a reason and an open invoice.
-        assert!(matter_invoices::set_status(competitor, other.id, Status::Void, None)
-            .await
-            .is_err());
-        let void = matter_invoices::set_status(competitor, other.id, Status::Void, Some("Sent twice"))
-            .await
-            .unwrap();
+        assert!(
+            matter_invoices::set_status(competitor, other.id, Status::Void, None)
+                .await
+                .is_err()
+        );
+        let void =
+            matter_invoices::set_status(competitor, other.id, Status::Void, Some("Sent twice"))
+                .await
+                .unwrap();
         assert_eq!(void.status_reason.as_deref(), Some("Sent twice"));
-        assert!(matter_invoices::set_status(competitor, other.id, Status::Sent, None)
-            .await
-            .is_err());
-        assert!(matter_invoices::set_status(project, created.id, Status::Void, Some("x"))
-            .await
-            .is_err(), "a paid invoice is not voided");
+        assert!(
+            matter_invoices::set_status(competitor, other.id, Status::Sent, None)
+                .await
+                .is_err()
+        );
+        assert!(
+            matter_invoices::set_status(project, created.id, Status::Void, Some("x"))
+                .await
+                .is_err(),
+            "a paid invoice is not voided"
+        );
         assert_eq!(
             matter_invoices::for_projects(&application_store, &[project, competitor])
                 .await
@@ -291,9 +313,10 @@ async fn iolta_withdrawal_writes_and_reads_are_postgres_only() {
     let (jurisdiction, project) = seed_project(&pg).await;
 
     with_test_db(pg.clone(), async {
-        let settled = matter_invoices::record(project, None, &invoice("in_settled", "Matter ACCT-1"))
-            .await
-            .unwrap();
+        let settled =
+            matter_invoices::record(project, None, &invoice("in_settled", "Matter ACCT-1"))
+                .await
+                .unwrap();
         let input = WithdrawalInput {
             xero_transaction_id: "txn-1".to_string(),
             xero_account_id: "xero-nv".to_string(),

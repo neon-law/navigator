@@ -208,18 +208,29 @@ async fn an_operating_batch_commits_with_its_retained_approval() {
         .unwrap()
         .expect("approval retained");
     assert_eq!(
-        (recorded.approved_by, recorded.reason.as_str(), recorded.preview_digest.as_str()),
+        (
+            recorded.approved_by,
+            recorded.reason.as_str(),
+            recorded.preview_digest.as_str()
+        ),
         (actor, "Earned fees for completed work", "synthetic-digest")
     );
-    assert!(crate::invoice_destinations::find(&pg, uuid::Uuid::new_v4(), project, approval)
-        .await
-        .unwrap()
-        .is_none(), "another Firm reads nothing");
+    assert!(
+        crate::invoice_destinations::find(&pg, uuid::Uuid::new_v4(), project, approval)
+            .await
+            .unwrap()
+            .is_none(),
+        "another Firm reads nothing"
+    );
     for statement in [
         "UPDATE invoice_destination_approval SET reason='changed' WHERE id=$1",
         "DELETE FROM invoice_destination_approval WHERE id=$1",
     ] {
-        assert!(sqlx::query(statement).bind(approval).execute(pg.pool()).await.is_err());
+        assert!(sqlx::query(statement)
+            .bind(approval)
+            .execute(pg.pool())
+            .await
+            .is_err());
     }
     pg.pool().close().await;
 }

@@ -137,7 +137,6 @@ pub struct MatterInvoice {
     pub client_visible: bool,
     pub stripe_account_id: Option<String>,
     pub destination: Option<String>,
-    pub billing_batch_id: Option<Uuid>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -223,10 +222,7 @@ pub async fn for_projects(
 ///
 /// # Errors
 /// [`MatterInvoiceError::Postgres`] if the lookup fails.
-pub async fn find(
-    project: Uuid,
-    id: Uuid,
-) -> Result<Option<MatterInvoice>, MatterInvoiceError> {
+pub async fn find(project: Uuid, id: Uuid) -> Result<Option<MatterInvoice>, MatterInvoiceError> {
     let pg = authority::authority().await?;
     let query = sqlx::query(concat!(
         "SELECT ",
@@ -341,10 +337,14 @@ impl NewRecord {
             ));
         }
         if self.amount_cents < 0 {
-            return Err(MatterInvoiceError::Invalid("amount must be zero or more cents"));
+            return Err(MatterInvoiceError::Invalid(
+                "amount must be zero or more cents",
+            ));
         }
         if !(self.currency.len() == 3 && self.currency.bytes().all(|b| b.is_ascii_uppercase())) {
-            return Err(MatterInvoiceError::Invalid("currency must be an ISO code like USD"));
+            return Err(MatterInvoiceError::Invalid(
+                "currency must be an ISO code like USD",
+            ));
         }
         if !text(Some(&self.external_id), 200)
             || !text(self.reference.as_deref(), 200)
@@ -518,7 +518,8 @@ pub async fn record_payment(
             payment.id == id
                 || (input.external_id.is_some()
                     && payment.source == input.source
-                    && payment.external_id.as_deref() == input.external_id.as_deref().map(str::trim))
+                    && payment.external_id.as_deref()
+                        == input.external_id.as_deref().map(str::trim))
         })
         .ok_or(MatterInvoiceError::NotFound)?;
     if recorded.amount_cents != input.amount_cents {
@@ -537,7 +538,8 @@ pub async fn record_payment(
 }
 
 /// Move an invoice to `status` with a reason: sent, void, uncollectible, or
-/// paid. A void or uncollectible invoice needs the reason.
+/// paid. A void or uncollectible invoice needs the reason. A sent invoice
+/// has reached the client, so the client's portal shows it from then on.
 ///
 /// # Errors
 /// [`MatterInvoiceError::Invalid`] for a missing reason or a transition the
@@ -552,8 +554,7 @@ pub async fn set_status(
         .await?
         .ok_or(MatterInvoiceError::NotFound)?;
     let needs_reason = matches!(status, Status::Void | Status::Uncollectible);
-    if (needs_reason && reason.is_none_or(|reason| reason.trim().is_empty()))
-        || !text(reason, 1000)
+    if (needs_reason && reason.is_none_or(|reason| reason.trim().is_empty())) || !text(reason, 1000)
     {
         return Err(MatterInvoiceError::Invalid(
             "voiding or marking an invoice uncollectible needs a reason",
@@ -573,7 +574,8 @@ pub async fn set_status(
     }
     let pg = authority::authority().await?;
     let query = sqlx::query(
-        "UPDATE matter_invoice SET status=$3, status_reason=coalesce($4,status_reason), updated_at=now()
+        "UPDATE matter_invoice SET status=$3, status_reason=coalesce($4,status_reason),
+         client_visible = client_visible OR $3 = 'sent', updated_at=now()
          WHERE project_id=$1 AND id=$2",
     )
     .bind(project)
@@ -606,7 +608,6 @@ pub struct DraftPlan {
     pub stripe_account_id: String,
     pub destination_approval_id: Option<Uuid>,
     pub billed_person_id: Uuid,
-    pub billing_batch_id: Option<Uuid>,
     pub created_by: Uuid,
 }
 
@@ -620,8 +621,8 @@ pub async fn insert_pending(plan: &DraftPlan) -> Result<MatterInvoice, MatterInv
     let query = sqlx::query(
         "INSERT INTO matter_invoice (id,project_id,source,reference,status,amount_cents,currency,
          issued_on,due_on,memo,request_id,composition,destination,trust_state,stripe_account_id,
-         destination_approval_id,billed_person_id,billing_batch_id,created_by)
-         VALUES ($1,$2,'stripe',$3,'pending',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         destination_approval_id,billed_person_id,created_by)
+         VALUES ($1,$2,'stripe',$3,'pending',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
          ON CONFLICT (project_id,request_id) DO NOTHING",
     )
     .bind(Uuid::now_v7())
@@ -639,12 +640,81 @@ pub async fn insert_pending(plan: &DraftPlan) -> Result<MatterInvoice, MatterInv
     .bind(&plan.stripe_account_id)
     .bind(plan.destination_approval_id)
     .bind(plan.billed_person_id)
-    .bind(plan.billing_batch_id)
     .bind(plan.created_by);
     authority::execute(&pg, query).await?;
     let existing = by_request(plan.project_id, plan.request_id)
         .await?
         .ok_or(MatterInvoiceError::NotFound)?;
+    replayed(existing, plan)
+}
+
+/// Freeze an Operating invoice with the lawyer's approval in one
+/// transaction (ENG-1343): the approval names who, when, why, and the
+/// reviewed `digest`; the invoice references it. A replayed request id
+/// returns the first row and records no second approval.
+///
+/// # Errors
+/// [`MatterInvoiceError::Conflict`] when the request id names other terms.
+pub async fn insert_pending_operating(
+    plan: &DraftPlan,
+    firm: Uuid,
+    reason: &str,
+    digest: &str,
+) -> Result<MatterInvoice, MatterInvoiceError> {
+    if let Some(existing) = by_request(plan.project_id, plan.request_id).await? {
+        return replayed(existing, plan);
+    }
+    let pg = authority::authority().await?;
+    let mut tx = pg
+        .pool()
+        .begin()
+        .await
+        .map_err(authority::AccountingAuthorityError::from)?;
+    let approval = crate::invoice_destinations::record_in_tx(
+        &mut tx,
+        firm,
+        plan.project_id,
+        plan.created_by,
+        reason,
+        digest,
+    )
+    .await
+    .map_err(|_| MatterInvoiceError::Invalid("the Operating approval could not be recorded"))?;
+    sqlx::query(
+        "INSERT INTO matter_invoice (id,project_id,source,reference,status,amount_cents,currency,
+         issued_on,due_on,memo,request_id,composition,destination,stripe_account_id,
+         destination_approval_id,billed_person_id,created_by)
+         VALUES ($1,$2,'stripe',$3,'pending',$4,$5,$6,$7,$8,$9,$10,'operating',$11,$12,$13,$14)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(plan.project_id)
+    .bind(plan.reference.trim())
+    .bind(plan.amount_cents)
+    .bind(&plan.currency)
+    .bind(plan.issued_on)
+    .bind(plan.due_on)
+    .bind(plan.memo.as_deref().map(str::trim))
+    .bind(plan.request_id)
+    .bind(&plan.composition)
+    .bind(&plan.stripe_account_id)
+    .bind(approval.id)
+    .bind(plan.billed_person_id)
+    .bind(plan.created_by)
+    .execute(&mut *tx)
+    .await
+    .map_err(authority::AccountingAuthorityError::from)?;
+    tx.commit()
+        .await
+        .map_err(authority::AccountingAuthorityError::from)?;
+    by_request(plan.project_id, plan.request_id)
+        .await?
+        .ok_or(MatterInvoiceError::NotFound)
+}
+
+fn replayed(
+    existing: MatterInvoice,
+    plan: &DraftPlan,
+) -> Result<MatterInvoice, MatterInvoiceError> {
     if existing.amount_cents != plan.amount_cents
         || existing.stripe_account_id.as_deref() != Some(plan.stripe_account_id.as_str())
     {
@@ -706,7 +776,9 @@ pub async fn attach_stripe(
     stripe_invoice_id: &str,
 ) -> Result<MatterInvoice, MatterInvoiceError> {
     if !stripe_invoice_id.starts_with("in_") {
-        return Err(MatterInvoiceError::Invalid("a Stripe invoice id starts with in_"));
+        return Err(MatterInvoiceError::Invalid(
+            "a Stripe invoice id starts with in_",
+        ));
     }
     let pg = authority::authority().await?;
     let query = sqlx::query(
@@ -893,13 +965,15 @@ pub async fn firm_thirty_day_rollup(
     Ok(FirmInvoiceRollup {
         currencies: by_currency
             .into_iter()
-            .map(|(currency, (by_brand, by_lawyer_dri))| CurrencyInvoiceRollup {
-                total_invoiced_cents: by_brand.values().map(|(i, _)| *i).sum(),
-                total_paid_cents: by_brand.values().map(|(_, p)| *p).sum(),
-                currency,
-                by_brand: totals_into_groups(by_brand),
-                by_lawyer_dri: totals_into_groups(by_lawyer_dri),
-            })
+            .map(
+                |(currency, (by_brand, by_lawyer_dri))| CurrencyInvoiceRollup {
+                    total_invoiced_cents: by_brand.values().map(|(i, _)| *i).sum(),
+                    total_paid_cents: by_brand.values().map(|(_, p)| *p).sum(),
+                    currency,
+                    by_brand: totals_into_groups(by_brand),
+                    by_lawyer_dri: totals_into_groups(by_lawyer_dri),
+                },
+            )
             .collect(),
     })
 }

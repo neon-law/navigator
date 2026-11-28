@@ -36,13 +36,17 @@ fn only_an_open_invoice_has_a_balance_due() {
         client_visible: false,
         stripe_account_id: None,
         destination: None,
-        billing_batch_id: None,
         inserted_at: Utc::now(),
         updated_at: Utc::now(),
     };
     assert_eq!(invoice(Status::Sent, 2_500).balance_due_cents(), 7_500);
     assert_eq!(invoice(Status::Sent, 12_000).balance_due_cents(), 0);
-    for closed in [Status::Paid, Status::Void, Status::Uncollectible, Status::Pending] {
+    for closed in [
+        Status::Paid,
+        Status::Void,
+        Status::Uncollectible,
+        Status::Pending,
+    ] {
         assert_eq!(invoice(closed, 0).balance_due_cents(), 0, "{closed:?}");
     }
     assert!(Status::Sent.is_open() && !Status::Draft.is_open());
