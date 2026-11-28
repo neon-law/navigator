@@ -1120,19 +1120,23 @@ mod tests {
                 "{alert}"
             );
         }
-        assert!(expr("ForgejoMetricsAbsent").contains("forgejo"));
-        assert!(expr("ForgejoGateFailedOnMain").contains(r#""forgejo.workflow"="gate.yml""#));
-        assert!(expr("ForgejoCdFailed").contains(r#""forgejo.workflow"="cd.yml""#));
+        assert!(expr("ForgejoMetricsAbsent").contains(r#"service_name="forgejo""#));
+        assert!(expr("ForgejoGateFailedOnMain").contains(r#"forgejo_workflow="gate.yml""#));
+        assert!(expr("ForgejoCdFailed").contains(r#"forgejo_workflow="cd.yml""#));
         for alert in [
             "ForgejoJobWaitingNoRunner",
             "ForgejoGateFailedOnMain",
             "ForgejoCdFailed",
         ] {
-            assert!(expr(alert).contains(r#""forgejo.run_number""#), "{alert}");
+            assert!(
+                expr(alert).contains("max by (forgejo_repository, forgejo_run_number)"),
+                "{alert}"
+            );
             assert!(rule(alert)["annotations"]["description"].as_str().unwrap().contains(
                 "YOUR_FORGEJO_ROOT_URL/{{ $labels.forgejo_repository }}/actions/runs/{{ $labels.forgejo_run_number }}"
             ), "{alert}");
         }
+        assert!(expr("ForgejoCdMissed").contains("max by (forgejo_repository)"));
         let text = serde_yaml::to_string(&rules).unwrap();
         for content in ["title", "commit message", "head_branch"] {
             assert!(!text.contains(content), "{content}");
