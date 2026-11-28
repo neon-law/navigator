@@ -326,6 +326,7 @@ struct Branch {
     sha: String,
     #[serde(rename = "ref")]
     name: String,
+    label: Option<String>,
     repo: Option<Repository>,
 }
 #[derive(Deserialize)]
@@ -500,7 +501,12 @@ impl Forge for ForgejoForge {
         self.open(request, false).await.map(|(review, _)| review)
     }
 
-    async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>> {
+    async fn find_merged_review(
+        &self,
+        branch: &str,
+        base: &str,
+        sha: &str,
+    ) -> Result<Option<ReviewRef>> {
         let mut page = 1;
         loop {
             let pulls: Vec<Pull> = self
@@ -508,9 +514,14 @@ impl Forge for ForgejoForge {
                 .await?;
             let count = pulls.len();
             for pull in pulls {
+                // Forgejo keeps the original topic in the label after it
+                // replaces a deleted branch with the review's retained ref.
+                let matches_topic = pull.head.name == branch
+                    || (pull.head.label.as_deref() == Some(branch)
+                        && pull.head.name == format!("refs/pull/{}/head", pull.number));
                 if pull.merged
-                    && pull.base.name == "main"
-                    && pull.head.name == branch
+                    && pull.base.name == base
+                    && matches_topic
                     && pull.head.sha == sha
                     && pull
                         .head
@@ -764,11 +775,16 @@ mod tests {
     #[tokio::test]
     async fn merged_review_resumption_matches_the_exact_topic_and_head() {
         let server = MockServer::start().await;
-        let pull = |number, repository, head| {
+        let pull = |number, repository, head, topic, base| {
             json!({
                 "number": number,
-                "head": {"sha": head, "ref": "push/change", "repo": {"full_name": repository}},
-                "base": {"sha": "base", "ref": "main"},
+                "head": {
+                    "sha": head,
+                    "ref": format!("refs/pull/{number}/head"),
+                    "label": topic,
+                    "repo": {"full_name": repository}
+                },
+                "base": {"sha": "base", "ref": base},
                 "html_url": format!("https://forge.example/pulls/{number}"),
                 "draft": false, "merged": true, "merge_commit_sha": "merged", "mergeable": false
             })
@@ -777,9 +793,41 @@ mod tests {
             .and(path("/api/v1/repos/example/sample-litigation/pulls"))
             .and(query_param("state", "closed"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-                pull(7, "another/sample-litigation", "head"),
-                pull(8, "example/sample-litigation", "older-head"),
-                pull(9, "example/sample-litigation", "head"),
+                pull(
+                    7,
+                    "another/sample-litigation",
+                    "head",
+                    "push/change",
+                    "release"
+                ),
+                pull(
+                    8,
+                    "example/sample-litigation",
+                    "older-head",
+                    "push/change",
+                    "release"
+                ),
+                pull(
+                    9,
+                    "example/sample-litigation",
+                    "head",
+                    "push/other",
+                    "release"
+                ),
+                pull(
+                    10,
+                    "example/sample-litigation",
+                    "head",
+                    "push/change",
+                    "main"
+                ),
+                pull(
+                    11,
+                    "example/sample-litigation",
+                    "head",
+                    "push/change",
+                    "release"
+                ),
             ])))
             .expect(1)
             .mount(&server)
@@ -787,11 +835,11 @@ mod tests {
         let forge =
             ForgejoForge::new(&server.uri(), "example/sample-litigation", "t".into()).unwrap();
         let review = forge
-            .find_merged_review("push/change", "head")
+            .find_merged_review("push/change", "release", "head")
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(review.number, 9);
+        assert_eq!(review.number, 11);
     }
 
     #[tokio::test]
@@ -996,7 +1044,10 @@ mod tests {
         let error = forge.identity().await.unwrap_err();
         assert_eq!(error.to_string(), "Forgejo request refused");
         assert!(forge.remote_reachable().await.is_err());
-        assert!(forge.find_merged_review("change", "head").await.is_err());
+        assert!(forge
+            .find_merged_review("change", "main", "head")
+            .await
+            .is_err());
 
         let repository = format!("repos/{REPOSITORY}/");
         answer(

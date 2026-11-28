@@ -104,7 +104,7 @@ async fn run_jj(
     let head = selected.commit_id;
     run_forge_preflight(forge).await?;
     let mirror = github && has_forgejo_remote(dir)?;
-    let review = if let Some(review) = forge.find_merged_review(&target, &head).await? {
+    let review = if let Some(review) = forge.find_merged_review(&target, "main", &head).await? {
         review
     } else {
         // The document gate reads the checkout, so it must see the same
@@ -146,7 +146,7 @@ async fn run_jj(
         super::jj::push_revision(dir, &head, true)?;
         super::jj_billing::stage_outgoing(dir, outgoing).await?;
         super::jj::push_revision(dir, &head, false)?;
-        if let Some(review) = forge.find_merged_review(&target, &head).await? {
+        if let Some(review) = forge.find_merged_review(&target, "main", &head).await? {
             review
         } else {
             let reference = format!("refs/heads/{target}");
@@ -367,25 +367,42 @@ where
     }
 
     git_text(dir, &["add", "-A"]).context("stage the change")?;
-    if git_text(dir, &["status", "--porcelain"])?.is_empty() {
-        println!("commit: nothing to commit; continuing to the open review request");
+    let retry_head = if git_text(dir, &["status", "--porcelain"])?.is_empty() {
+        println!("commit: nothing to commit; checking for an existing review request");
+        Some(git_text(dir, &["rev-parse", "HEAD"])?)
     } else {
         git_text(dir, &["commit", "-S", "-m", title]).context("signed commit")?;
         println!("commit: signed");
+        None
+    };
+
+    let sync_mirror = github && base == "main" && target != base;
+    if let Some(head) = &retry_head {
+        if let Some(review) = forge.find_merged_review(&target, base, head).await? {
+            return land_review(dir, sync_mirror, target, forge, review, sleep).await;
+        }
     }
 
     push_topic(dir, &target, github)?;
 
-    // Review request, ready for review — never a draft (LAW-220 step 2).
-    let review = forge
-        .open_review(ReviewRequest {
-            head_branch: target.clone(),
-            base_branch: base.to_string(),
-            title: title.to_string(),
-            body: body.unwrap_or_default().to_string(),
-        })
-        .await?;
-    let sync_mirror = github && base == "main" && target != base;
+    // An armed review can merge while the retry is publishing its branch.
+    let merged = match retry_head {
+        Some(head) => forge.find_merged_review(&target, base, &head).await?,
+        None => None,
+    };
+    let review = match merged {
+        Some(review) => review,
+        None => {
+            forge
+                .open_review(ReviewRequest {
+                    head_branch: target.clone(),
+                    base_branch: base.to_string(),
+                    title: title.to_string(),
+                    body: body.unwrap_or_default().to_string(),
+                })
+                .await?
+        }
+    };
     land_review(dir, sync_mirror, target, forge, review, sleep).await
 }
 
@@ -1061,9 +1078,15 @@ mod tests {
             Ok(self.review.clone())
         }
 
-        async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>> {
+        async fn find_merged_review(
+            &self,
+            branch: &str,
+            base: &str,
+            sha: &str,
+        ) -> Result<Option<ReviewRef>> {
             if matches!(self.arm, ArmOutcome::MergedNow { .. }) {
                 assert_eq!(branch, "push/stable-change");
+                assert_eq!(base, "main");
                 assert_eq!(sha, self.review.head_sha);
                 return Ok(Some(self.review.clone()));
             }
@@ -1148,6 +1171,39 @@ mod tests {
         assert_eq!(report.merge_commit, forge.merge_sha);
         assert_eq!(report.deployment.unwrap().commit, forge.merge_sha);
         assert_eq!(report.ci.unwrap().commit, forge.review.head_sha);
+    }
+
+    #[tokio::test]
+    async fn retrying_a_merged_git_review_does_not_republish_its_head() {
+        let checkout = TempCheckout::new().with_signing();
+        let branch = "push/stable-change";
+        git_sh(Some(checkout.path()), &["checkout", "-b", branch]);
+        let mut forge = MockForge::green_after(1);
+        forge.review.head_sha = super::git_text(checkout.path(), &["rev-parse", "HEAD"]).unwrap();
+        forge.arm = ArmOutcome::MergedNow {
+            merge_commit: forge.merge_sha.clone(),
+        };
+
+        let report = super::run(
+            checkout.path(),
+            "main",
+            Some(branch),
+            "Signed change",
+            None,
+            false,
+            false,
+            &forge,
+            instant_sleep,
+        )
+        .await
+        .unwrap();
+
+        assert!(forge.opened.lock().unwrap().is_empty());
+        assert!(super::git_text(checkout.path(), &["ls-remote", "origin"])
+            .unwrap()
+            .is_empty());
+        assert_eq!(report.merge_commit, forge.merge_sha);
+        assert_eq!(report.deployment.unwrap().commit, forge.merge_sha);
     }
 
     #[tokio::test]
