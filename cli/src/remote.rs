@@ -827,7 +827,7 @@ async fn mint_actions_ci_token(
     let first = mint_ci_token(client, base, mint_path, &token).await;
     if !first
         .as_ref()
-        .is_err_and(|error| error.is::<ForgejoOidcReplay>())
+        .is_err_and(anyhow::Error::is::<ForgejoOidcReplay>)
     {
         return first;
     }
@@ -843,7 +843,7 @@ async fn mint_actions_ci_token(
     };
     if result
         .as_ref()
-        .is_err_and(|error| error.is::<ForgejoOidcReplay>())
+        .is_err_and(anyhow::Error::is::<ForgejoOidcReplay>)
     {
         eprintln!(
             "{}",
