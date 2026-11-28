@@ -332,12 +332,14 @@ fn the_california_library_drafts_preview_and_refuse_unfinished_final_export() {
     for (name, source, expected) in [
         (
             "civil_complaint__california",
-            include_str!("../../templates/notations/neon_law/civil_complaint__california.md"),
+            include_str!("../../templates/notations/neon_law/firm/civil_complaint__california.md"),
             "General allegations",
         ),
         (
             "motion_and_memorandum__california",
-            include_str!("../../templates/notations/neon_law/motion_and_memorandum__california.md"),
+            include_str!(
+                "../../templates/notations/neon_law/firm/motion_and_memorandum__california.md"
+            ),
             "Memorandum of points and authorities",
         ),
     ] {

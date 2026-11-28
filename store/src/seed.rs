@@ -362,13 +362,15 @@ pub const SEEDED_TEMPLATES: &[SeededTemplate] = &[
         markdown: include_str!("../../templates/notations/neon_law/basic_will.md"),
     },
     SeededTemplate {
-        label: "notations/neon_law/civil_complaint__california.md",
-        markdown: include_str!("../../templates/notations/neon_law/civil_complaint__california.md"),
+        label: "notations/neon_law/firm/civil_complaint__california.md",
+        markdown: include_str!(
+            "../../templates/notations/neon_law/firm/civil_complaint__california.md"
+        ),
     },
     SeededTemplate {
-        label: "notations/neon_law/motion_and_memorandum__california.md",
+        label: "notations/neon_law/firm/motion_and_memorandum__california.md",
         markdown: include_str!(
-            "../../templates/notations/neon_law/motion_and_memorandum__california.md"
+            "../../templates/notations/neon_law/firm/motion_and_memorandum__california.md"
         ),
     },
     SeededTemplate {
