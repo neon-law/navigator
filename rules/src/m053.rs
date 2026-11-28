@@ -17,7 +17,8 @@ fn parse_definition(line: &str) -> Option<(String, String)> {
     let end = rest.find("]:")?;
     let label = rest[..end].trim().to_string();
     let raw = rest[..end].to_string();
-    if label.is_empty() {
+    // A caret label defines a footnote, which is used by `[^label]`.
+    if label.is_empty() || label.starts_with('^') {
         return None;
     }
     Some((raw, normalize_local(&label)))
@@ -92,5 +93,12 @@ mod tests {
     fn flags_unused_definition() {
         let v = M053LinkImageReferenceDefinitions.lint(&f("Body.\n\n[stale]: https://x\n"));
         assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn a_footnote_is_not_a_reference_link_definition() {
+        assert!(M053LinkImageReferenceDefinitions
+            .lint(&f("Body.[^record]\n\n[^record]: A record citation.\n"))
+            .is_empty());
     }
 }

@@ -11,6 +11,7 @@ pub fn filing_from(contents: &str) -> Filing {
             .filter(|value| !value.is_empty())
     };
     Filing {
+        short_caption: field("short_caption").as_deref() == Some("true"),
         caption_title: field("caption_title").unwrap_or_default(),
         footer_title: field("footer_title").unwrap_or_default(),
         hearing_date: field("hearing_date"),

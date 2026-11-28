@@ -3,7 +3,8 @@
 use std::fmt::Write as _;
 use std::io::{Cursor, Write as _};
 
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use crate::paper::{BriefTable, AUTHORITY_LINK_TITLE};
+use pulldown_cmark::{Event, HeadingLevel, Tag, TagEnd};
 use zip::write::SimpleFileOptions;
 
 use crate::provenance::{Provenance, PROVENANCE_PART, PROVENANCE_RELATIONSHIP_TYPE};
@@ -69,6 +70,14 @@ pub struct PleadingFrame {
     pub rail_lines: Option<u32>,
 }
 
+impl PleadingFrame {
+    /// Width from the body’s left margin to the physical middle of Letter paper.
+    #[must_use]
+    pub fn to_page_center_twips(self) -> u32 {
+        PAGE_WIDTH_TWIPS / 2 - self.left_margin_twips
+    }
+}
+
 /// Where the rail's numbers sit: 0.75in from the page's left edge, in a
 /// 0.35in column, the same placement the PDF rail uses.
 const RAIL_X_TWIPS: u32 = 1080;
@@ -116,6 +125,13 @@ struct Paragraph {
     /// next, so Word moves the whole group together when it fits and
     /// breaks it where it must when it does not.
     group: Option<usize>,
+    brief_table: Option<BriefTable>,
+    fields: Vec<(usize, InlineField)>,
+}
+
+enum InlineField {
+    Footnote { id: usize, first: bool },
+    Authority(String),
 }
 
 /// A GFM pipe table: the header row first, every row padded to the header's
@@ -144,6 +160,10 @@ pub fn render_notation(
         .transpose()?;
     let body = paper.as_ref().map_or(markdown, |paper| paper.body.as_str());
     let mut blocks = blocks(body);
+    let notes = crate::paper::referenced_footnotes(body);
+    let has_tables = blocks.iter().any(
+        |block| matches!(block, Block::Paragraph(paragraph) if paragraph.brief_table.is_some()),
+    );
     if options.preview {
         highlight_open_items(&mut blocks);
     }
@@ -159,7 +179,7 @@ pub fn render_notation(
     write_entry(
         &mut archive,
         "[Content_Types].xml",
-        content_types(letterhead.is_some()).as_bytes(),
+        content_types(letterhead.is_some(), !notes.is_empty(), has_tables).as_bytes(),
         file_options,
     )?;
     write_entry(
@@ -205,9 +225,25 @@ pub fn render_notation(
     write_entry(
         &mut archive,
         "word/_rels/document.xml.rels",
-        document_rels(letterhead.is_some()).as_bytes(),
+        document_rels(letterhead.is_some(), !notes.is_empty(), has_tables).as_bytes(),
         file_options,
     )?;
+    if !notes.is_empty() {
+        write_entry(
+            &mut archive,
+            "word/footnotes.xml",
+            footnotes_xml(&notes).as_bytes(),
+            file_options,
+        )?;
+    }
+    if has_tables {
+        write_entry(
+            &mut archive,
+            "word/settings.xml",
+            UPDATE_FIELDS_XML.as_bytes(),
+            file_options,
+        )?;
+    }
     write_entry(
         &mut archive,
         "word/header1.xml",
@@ -369,13 +405,84 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
     let mut current_start: Option<usize> = None;
     let mut current_kind = SourceBlockKind::Paragraph;
     let mut table_start = 0usize;
-    for (event, range) in Parser::new_ext(
-        markdown,
-        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH,
-    )
-    .into_offset_iter()
-    {
+    let note_ids: std::collections::BTreeMap<_, _> = crate::paper::referenced_footnotes(markdown)
+        .into_iter()
+        .enumerate()
+        .map(|(index, (label, _))| (label, index + 1))
+        .collect();
+    let mut seen_notes = std::collections::BTreeSet::new();
+    let mut in_definition = false;
+    let mut authority_start = None;
+    let authorities = markdown.contains("<!-- table-of-authorities -->");
+    for (event, range) in crate::paper::filing_events(markdown).into_offset_iter() {
         match event {
+            Event::Start(Tag::FootnoteDefinition(_)) => in_definition = true,
+            Event::End(TagEnd::FootnoteDefinition) => {
+                in_definition = false;
+                continue;
+            }
+            _ => {}
+        }
+        if in_definition {
+            continue;
+        }
+        match event {
+            Event::FootnoteReference(label) => {
+                if let Some(paragraph) = cell.as_mut().or(current.as_mut()) {
+                    if let Some(&id) = note_ids.get(label.as_ref()) {
+                        let first = seen_notes.insert(id);
+                        paragraph
+                            .fields
+                            .push((paragraph.text.len(), InlineField::Footnote { id, first }));
+                    } else {
+                        append_text(
+                            paragraph,
+                            &markdown[range],
+                            italic_depth > 0,
+                            bold_depth > 0,
+                        );
+                    }
+                }
+            }
+            Event::Start(Tag::Link { title, .. })
+                if authorities && title.as_ref() == AUTHORITY_LINK_TITLE =>
+            {
+                authority_start = cell.as_ref().or(current.as_ref()).map(|p| p.text.len());
+            }
+            Event::End(TagEnd::Link) => {
+                if let Some((paragraph, start)) = cell
+                    .as_mut()
+                    .or(current.as_mut())
+                    .zip(authority_start.take())
+                {
+                    let citation = paragraph.text[start..].trim();
+                    if !citation.is_empty() {
+                        paragraph.fields.push((
+                            paragraph.text.len(),
+                            InlineField::Authority(citation.into()),
+                        ));
+                    }
+                }
+            }
+            Event::Html(html)
+                if quote_depth == 0
+                    && lists.is_empty()
+                    && current.is_none()
+                    && table.is_none()
+                    && BriefTable::from_comment(&html).is_some() =>
+            {
+                if let Some(table) = BriefTable::from_comment(&html) {
+                    result.push(SourcePair {
+                        kind: SourceBlockKind::Paragraph,
+                        source: range,
+                        block: Block::Paragraph(Paragraph {
+                            text: table.title().into(),
+                            brief_table: Some(table),
+                            ..Paragraph::default()
+                        }),
+                    });
+                }
+            }
             Event::Start(Tag::Heading { level, .. }) => {
                 current_start.get_or_insert(range.start);
                 current_kind = SourceBlockKind::Heading;
@@ -604,13 +711,16 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                 if let Some(mut paragraph) = current.take() {
                     if quote_depth > 0 {
                         paragraph.text.insert_str(0, "    ");
+                        for (offset, _) in &mut paragraph.fields {
+                            *offset += 4;
+                        }
                         for range in &mut paragraph.italics {
                             range.start += 4;
                             range.end += 4;
                         }
                     }
                     strip_trailing_escaped_break(&mut paragraph.text);
-                    if !paragraph.text.is_empty() {
+                    if !paragraph.text.is_empty() || !paragraph.fields.is_empty() {
                         paragraph.group = group;
                         let kind = if quote_depth > 0 {
                             SourceBlockKind::Quote
@@ -690,6 +800,19 @@ fn document_xml(
                 continue;
             }
         };
+        if let Some(table) = paragraph.brief_table {
+            let title = table.title();
+            let instruction = match table {
+                BriefTable::Contents => r#"TOC \o "1-5" \h"#,
+                BriefTable::Authorities => r#"TOA \c "1""#,
+            };
+            let _ = write!(
+                body,
+                r#"<w:p><w:pPr><w:keepNext/><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>{title}</w:t></w:r></w:p><w:p>{}</w:p>"#,
+                updating_field(instruction)
+            );
+            continue;
+        }
         body.push_str("<w:p>");
         let keep_next = paragraph.group.is_some()
             && matches!(
@@ -822,14 +945,31 @@ fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
         cuts.push(range.start.min(length));
         cuts.push(range.end.min(length));
     }
+    cuts.extend(
+        paragraph
+            .fields
+            .iter()
+            .map(|(offset, _)| (*offset).min(length)),
+    );
     cuts.sort_unstable();
     cuts.dedup();
     let covers = |ranges: &[std::ops::Range<usize>], at: usize| {
         ranges.iter().any(|range| range.contains(&at))
     };
     let mut out = String::new();
-    for window in cuts.windows(2) {
-        let (start, end) = (window[0], window[1]);
+    let mut fields = paragraph.fields.iter().peekable();
+    for (index, &start) in cuts.iter().enumerate() {
+        while fields
+            .peek()
+            .is_some_and(|(offset, _)| (*offset).min(length) == start)
+        {
+            if let Some((_, field)) = fields.next() {
+                out.push_str(&inline_field_xml(field));
+            }
+        }
+        let Some(&end) = cuts.get(index + 1) else {
+            break;
+        };
         let style = RunStyle {
             bold: bold || covers(&paragraph.bold, start),
             italic: covers(&paragraph.italics, start),
@@ -838,6 +978,54 @@ fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
         };
         out.push_str(&runs_xml(&paragraph.text[start..end], style));
     }
+    out
+}
+
+fn inline_field_xml(field: &InlineField) -> String {
+    match field {
+        InlineField::Footnote { id, first: true } => format!(
+            r#"<w:bookmarkStart w:id="{id}" w:name="NavigatorNote{id}"/><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="{id}"/></w:r><w:bookmarkEnd w:id="{id}"/>"#
+        ),
+        InlineField::Footnote { id, first: false } => format!(
+            r#"<w:fldSimple w:instr=" NOTEREF NavigatorNote{id} \f \h "><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>{id}</w:t></w:r></w:fldSimple>"#
+        ),
+        InlineField::Authority(citation) => {
+            let citation = citation.replace('\\', "\\\\").replace('"', "\\\"");
+            let instruction = xml(&format!(r#" TA \l "{citation}" \s "{citation}" \c 1 "#));
+            format!(
+                r#"<w:r><w:rPr><w:vanish/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:rPr><w:vanish/></w:rPr><w:instrText xml:space="preserve">{instruction}</w:instrText></w:r><w:r><w:rPr><w:vanish/></w:rPr><w:fldChar w:fldCharType="end"/></w:r>"#
+            )
+        }
+    }
+}
+
+fn updating_field(instruction: &str) -> String {
+    format!(
+        r#"<w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r><w:r><w:instrText xml:space="preserve"> {} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        xml(instruction)
+    )
+}
+
+fn footnotes_xml(notes: &[(String, String)]) -> String {
+    let mut out = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote><w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>"#,
+    );
+    for (index, (_, note)) in notes.iter().enumerate() {
+        let _ = write!(out, r#"<w:footnote w:id="{}">"#, index + 1);
+        out.push_str(r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>"#);
+        let mut first = true;
+        for block in blocks(note) {
+            if let Block::Paragraph(paragraph) = block {
+                if !first {
+                    out.push_str(r#"</w:p><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>"#);
+                }
+                out.push_str(&paragraph_runs_xml(&paragraph, false));
+                first = false;
+            }
+        }
+        out.push_str("</w:p></w:footnote>");
+    }
+    out.push_str("</w:footnotes>");
     out
 }
 
@@ -1200,10 +1388,15 @@ fn caption_cell(frame: &PleadingFrame, width: u32, borders: &str, lines: &[Strin
     )
 }
 
-fn caption_table(widths: [u32; 2], height: u32, cells: &[String; 2]) -> String {
+fn caption_table(widths: [u32; 2], height: u32, cells: &[String; 2], split: bool) -> String {
     let total = widths[0] + widths[1];
+    let row_properties = if split {
+        String::new()
+    } else {
+        format!(r#"<w:cantSplit/><w:trHeight w:val="{height}" w:hRule="atLeast"/>"#)
+    };
     format!(
-        r#"<w:tbl><w:tblPr><w:tblW w:w="{total}" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:left w:w="0" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="{}"/><w:gridCol w:w="{}"/></w:tblGrid><w:tr><w:trPr><w:cantSplit/><w:trHeight w:val="{height}" w:hRule="atLeast"/></w:trPr>{}{}</w:tr></w:tbl>"#,
+        r#"<w:tbl><w:tblPr><w:tblW w:w="{total}" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:left w:w="0" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="{}"/><w:gridCol w:w="{}"/></w:tblGrid><w:tr><w:trPr>{row_properties}</w:trPr>{}{}</w:tr></w:tbl>"#,
         widths[0], widths[1], cells[0], cells[1]
     )
 }
@@ -1217,6 +1410,7 @@ fn caption_xml(frame: &PleadingFrame, caption: &crate::paper::Caption) -> String
     let text_width = PAGE_WIDTH_TWIPS - frame.left_margin_twips - frame.right_margin_twips;
     let grid = frame.line_pitch_twips;
     let mut out = String::new();
+    let mut counsel_height = 0;
     if caption.page_count {
         // In the top margin of page 1, clear of the rail and the text: a
         // page-anchored frame half an inch down.
@@ -1231,20 +1425,25 @@ fn caption_xml(frame: &PleadingFrame, caption: &crate::paper::Caption) -> String
     let reserve_blank =
         caption.counsel.is_empty() && frame.rail_lines.is_some() && !caption.court.is_empty();
     if !caption.counsel.is_empty() || reserve_blank {
-        let counsel_width = text_width * 58 / 100;
+        let counsel_width = if caption.california {
+            frame.to_page_center_twips()
+        } else {
+            text_width * 58 / 100
+        };
         let min = if frame.rail_lines.is_some() {
             COUNSEL_LINES
         } else {
             0
         };
-        let height = grid_lines_for(frame, &caption.counsel, counsel_width, min) * grid;
+        counsel_height = grid_lines_for(frame, &caption.counsel, counsel_width, min) * grid;
         out.push_str(&caption_table(
             [counsel_width, text_width - counsel_width],
-            height,
+            counsel_height,
             &[
                 caption_cell(frame, counsel_width, "", &caption.counsel),
                 caption_cell(frame, text_width - counsel_width, "", &[]),
             ],
+            false,
         ));
     }
     for line in &caption.court {
@@ -1255,30 +1454,41 @@ fn caption_xml(frame: &PleadingFrame, caption: &crate::paper::Caption) -> String
         );
     }
     if !caption.parties.is_empty() || !caption.case.is_empty() {
-        let half = text_width / 2;
-        let height = grid_lines_for(frame, &caption.parties, half, 1).max(grid_lines_for(
+        let left = if caption.california {
+            frame.to_page_center_twips()
+        } else {
+            text_width / 2
+        };
+        let right = text_width - left;
+        let height = grid_lines_for(frame, &caption.parties, left, 1).max(grid_lines_for(
             frame,
             &caption.case,
-            half,
+            right,
             1,
         )) * grid;
         out.push_str(&caption_table(
-            [half, text_width - half],
+            [left, right],
             height,
             &[
                 caption_cell(
                     frame,
-                    half,
+                    left,
                     r#"<w:tcBorders><w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tcBorders>"#,
                     &caption.parties,
                 ),
                 caption_cell(
                     frame,
-                    text_width - half,
+                    right,
                     r#"<w:tcMar><w:left w:w="160" w:type="dxa"/></w:tcMar>"#,
                     &caption.case,
                 ),
             ],
+            caption.california
+                && frame.rail_lines.is_some_and(|count| {
+                    let court_lines = u32::try_from(caption.court.len()).unwrap_or(u32::MAX);
+                    (count.saturating_sub(court_lines) * grid).saturating_sub(counsel_height)
+                        < height
+                }),
         ));
     }
     out
@@ -1385,26 +1595,56 @@ fn first_header_xml(letterhead: &RenderLetterhead<'_>) -> String {
     )
 }
 
-fn document_rels(has_letterhead: bool) -> String {
+const UPDATE_FIELDS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:updateFields w:val="true"/></w:settings>"#;
+
+fn additional_parts(
+    has_footnotes: bool,
+    has_tables: bool,
+) -> impl Iterator<Item = (&'static str, &'static str)> {
+    [
+        (has_footnotes, "rId6", "footnotes"),
+        (has_tables, "rId7", "settings"),
+    ]
+    .into_iter()
+    .filter_map(|(include, id, part)| include.then_some((id, part)))
+}
+
+fn document_rels(has_letterhead: bool, has_footnotes: bool, has_tables: bool) -> String {
     let first = if has_letterhead {
         r#"<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header2.xml"/>"#
     } else {
         ""
     };
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>{first}<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer2.xml"/></Relationships>"#
-    )
+    let mut rels = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>{first}<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer2.xml"/>"#
+    );
+    for (id, part) in additional_parts(has_footnotes, has_tables) {
+        let _ = write!(
+            rels,
+            r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{part}" Target="{part}.xml"/>"#
+        );
+    }
+    rels.push_str("</Relationships>");
+    rels
 }
 
-fn content_types(has_letterhead: bool) -> String {
+fn content_types(has_letterhead: bool, has_footnotes: bool, has_tables: bool) -> String {
     let header = if has_letterhead {
         r#"<Override PartName="/word/header2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>"#
     } else {
         ""
     };
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>{header}<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>"#
-    )
+    let mut types = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>{header}<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>"#
+    );
+    for (_, part) in additional_parts(has_footnotes, has_tables) {
+        let _ = write!(
+            types,
+            r#"<Override PartName="/word/{part}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.{part}+xml"/>"#
+        );
+    }
+    types.push_str("</Types>");
+    types
 }
 
 fn core_xml(revision: Option<&str>) -> String {
@@ -1509,6 +1749,28 @@ mod tests {
             .read_to_string(&mut xml)
             .unwrap();
         xml
+    }
+
+    #[test]
+    fn word_brief_exports_editable_footnotes_and_tables() {
+        let body = concat!(
+            "# MOTION\n\n<!-- table-of-contents -->\n\n<!-- table-of-authorities -->\n\n",
+            "## 1. Argument\n\n",
+            "A [Synthetic Rule](https://example.com/rule \"authority\")[^note] applies.[^note]\n\n",
+            "[^note]: A **synthetic** footnote.\n",
+        );
+        let bytes = render_notation(body, None, &RenderOptions::default()).unwrap();
+        let document = part(&bytes, "word/document.xml");
+        let refs = part(&bytes, "word/_rels/document.xml.rels");
+        let notes = part(&bytes, "word/footnotes.xml");
+        assert!(refs.contains("Target=\"footnotes.xml\""));
+        assert!(part(&bytes, "word/settings.xml").contains("w:updateFields"));
+        assert!(document.contains("TOC \\o") && document.contains("TOA \\c"));
+        assert!(document.contains(" TA \\l &quot;Synthetic Rule&quot;"));
+        assert!(document.contains(r#"<w:footnoteReference w:id="1"/>"#));
+        assert!(document.contains("NOTEREF NavigatorNote1"));
+        assert!(notes.contains(r#"<w:footnote w:id="1">"#) && notes.contains("synthetic"));
+        assert!(!document.contains("synthetic</w:t>"));
     }
 
     /// Rail numbers in a header, in order: the text of each framed paragraph.

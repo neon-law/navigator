@@ -132,7 +132,8 @@ fn is_rail(word: &Word) -> bool {
 /// The numbered rail restarts at 1 on every page, runs 1 through 28, and
 /// holds a 24pt pitch (CRC 2.108: at least three numbers per inch).
 fn assert_rail(page_number: usize, words: &[Word]) {
-    let rail: Vec<&Word> = words.iter().filter(|w| is_rail(w)).collect();
+    let mut rail: Vec<&Word> = words.iter().filter(|w| is_rail(w)).collect();
+    rail.sort_by(|left, right| left.y0.total_cmp(&right.y0));
     let numbers: Vec<u32> = rail.iter().map(|w| w.text.parse().unwrap()).collect();
     assert_eq!(
         numbers,
@@ -235,6 +236,18 @@ fn the_first_page_places_counsel_the_clerks_space_the_court_and_the_caption() {
         return;
     }
     let work = matter_tree();
+    let manifest = work.path().join("navigator.yaml");
+    let contents = fs::read_to_string(&manifest).unwrap();
+    let contents = contents
+        .replace(
+            "firm: SAMPLE SYNTHETIC LAW GROUP, APC",
+            "firm: EXAMPLE OFFICE FOR SYNTHETIC COMMERCIAL LITIGATION AND APPEALS",
+        )
+        .replace(
+            "    email: pat@example.invalid",
+            &format!("    email: {}@example.invalid", "q".repeat(60)),
+        );
+    fs::write(manifest, contents).unwrap();
     let pdf = render(&work, "rfa_responses", "pdf");
     let first = &pages(&pdf)[0];
 
@@ -246,13 +259,23 @@ fn the_first_page_places_counsel_the_clerks_space_the_court_and_the_caption() {
         counsel.y0
     );
 
-    // The block is seven lines; the clerk's space to its right stays clear
-    // through line 7 (the first 7 * 24pt below the top margin).
+    // The clerk's space stays clear through line 7. A taller counsel block
+    // stays left of the midpoint all the way to the court title.
     let clerk_top = 72.0;
-    let clerk_bottom = 72.0 + 7.0 * 24.0;
-    let counsel_right = COLUMN_LEFT + 0.58 * COLUMN_WIDTH + 1.0;
+    let court = bbox(first, "SUPERIOR");
+    assert_eq!(bbox(first, "APPEALS").text, "APPEALS");
+    assert_eq!(
+        first
+            .iter()
+            .filter(|word| word.y1 < court.y0 && word.text.starts_with('q'))
+            .map(|word| word.text.matches('q').count())
+            .sum::<usize>(),
+        60,
+        "the entire unbroken token survives wrapping"
+    );
+    let counsel_right = PAGE_W / 2.0 + 1.0;
     for word in first.iter().filter(|w| !is_rail(w)) {
-        if word.y0 >= clerk_top && word.y1 <= clerk_bottom {
+        if word.y0 >= clerk_top && word.y1 < court.y0 {
             assert!(
                 word.x1 <= counsel_right,
                 "`{}` reaches {}pt into the clerk's space",
@@ -264,7 +287,6 @@ fn the_first_page_places_counsel_the_clerks_space_the_court_and_the_caption() {
 
     // CRC 2.111(3): the court's title sits at or below 3⅓ inches (240pt),
     // after the whole counsel block.
-    let court = bbox(first, "SUPERIOR");
     assert!(court.y0 >= 240.0 - 1.0, "court title at {}pt", court.y0);
     let last_counsel = bbox(first, "Attorney");
     assert!(court.y0 > last_counsel.y1);
@@ -276,10 +298,15 @@ fn the_first_page_places_counsel_the_clerks_space_the_court_and_the_caption() {
     let case_no = bbox(first, "Case");
     let party = bbox(first, "SAMPLE");
     assert!(
-        case_no.x0 > COLUMN_LEFT + COLUMN_WIDTH / 2.0 - 1.0,
+        case_no.x0 > PAGE_W / 2.0 - 1.0,
         "case cell is the right column"
     );
-    assert!(party.x0 < 108.0 + 5.0, "party cell is the left column");
+    assert!(
+        first.iter().any(|word| word.text == party.text
+            && word.y0 >= case_no.y0 - 1.0
+            && word.x0 < COLUMN_LEFT + 5.0),
+        "party cell is the left column"
+    );
     assert!(
         case_no.y0 >= court.y1,
         "caption sits below the court's title"
@@ -297,6 +324,82 @@ fn docx_part(path: &Path, name: &str) -> String {
         .read_to_string(&mut xml)
         .unwrap();
     xml
+}
+
+#[test]
+fn the_california_library_drafts_preview_and_refuse_unfinished_final_export() {
+    let work = matter_tree();
+    for (name, source, expected) in [
+        (
+            "civil_complaint__california",
+            include_str!("../../templates/notations/neon_law/firm/civil_complaint__california.md"),
+            "General allegations",
+        ),
+        (
+            "motion_and_memorandum__california",
+            include_str!(
+                "../../templates/notations/neon_law/firm/motion_and_memorandum__california.md"
+            ),
+            "Memorandum of points and authorities",
+        ),
+    ] {
+        let source_path = work.path().join("templates").join(format!("{name}.md"));
+        let mut source = source.replacen("---\n", "---\ndocket: 00CV000000\n", 1);
+        if name.starts_with("motion") {
+            source = source.replace(
+                "## 1. Notice of motion and motion",
+                "<!-- table-of-contents -->\n\n<!-- table-of-authorities -->\n\n## 1. Notice of motion and motion",
+            );
+            source = source.replace(
+                "{{custom_text__motion_argument}}",
+                concat!("{{custom_text__motion_argument}}\n\n",
+                        "The [Synthetic Rule](https://example.com/rule \"authority\") applies.[^record]\n\n",
+                        "[^record]: A synthetic record citation."),
+            );
+        }
+        fs::write(&source_path, source).unwrap();
+        for (format, ext) in [("pdf", "pdf"), ("word", "docx")] {
+            let output = work.path().join(format!("{name}.{ext}"));
+            let command = || {
+                let mut command = Command::new(cargo_bin("hudson"));
+                command
+                    .args(["notation", format])
+                    .arg(&source_path)
+                    .arg("--out")
+                    .arg(&output);
+                command
+            };
+            let rejected = command().output().unwrap();
+            assert!(!rejected.status.success());
+            let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+            assert!(diagnostic.contains("unanswered"), "{diagnostic}");
+            let result = command().arg("--preview").output().unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            if format == "word" {
+                let docx = docx_part(&output, "word/document.xml");
+                assert!(docx.contains(expected));
+                assert!(docx.contains("DRAFT") && docx.contains("w:highlight"));
+            } else if poppler() {
+                let text = pages(&output)
+                    .into_iter()
+                    .flatten()
+                    .map(|word| word.text)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert!(text.contains(expected), "{text}");
+                assert!(text.contains("DRAFT"), "{text}");
+                if name.starts_with("motion") {
+                    assert!(text.contains("TABLE OF AUTHORITIES"), "{text}");
+                    assert!(text.contains("A synthetic record citation"), "{text}");
+                }
+            }
+        }
+    }
 }
 
 /// Every numeric `w:<attr>="N"` after `marker`, in document order.
@@ -368,7 +471,7 @@ fn the_word_pleading_carries_the_same_page_rail_caption_and_footer() {
         assert!(counsel_rows[0] >= 7 * 480, "{counsel_rows:?}");
         assert!(1440 + counsel_rows[0] >= 4800);
         let columns = numbers_after(tables[0], "<w:gridCol ", "w:w");
-        assert_eq!(columns[0], 9360 * 58 / 100);
+        assert_eq!(columns[0], 12240 / 2 - 2160);
         // The caption is one row of two ruled cells: no header row to repeat.
         assert_eq!(
             tables[1]
