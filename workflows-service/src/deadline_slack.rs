@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Write,
     sync::Arc,
     time::Duration,
 };
@@ -387,7 +388,11 @@ impl Delivery {
                 ids.insert(id);
             }
         }
-        Ok(ids.into_iter().map(|id| format!("<@{id}> ")).collect())
+        let mut mentions = String::new();
+        for id in ids {
+            let _ = write!(mentions, "<@{id}> ");
+        }
+        Ok(mentions)
     }
 }
 
@@ -402,7 +407,7 @@ fn message(
     let authority = slack_plain_text(&deadline.authority.chars().take(300).collect::<String>());
     let due = deadline.due_on.as_ref().map_or_else(
         || instant.format("%a, %b %-d at %-I:%M %p %:z").to_string(),
-        |on| on.display_date(),
+        project_deadlines::DueOn::display_date,
     );
     let local = if deadline
         .due_on
