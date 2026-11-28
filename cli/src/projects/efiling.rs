@@ -78,7 +78,8 @@ pub fn parse_email(raw: &[u8]) -> Result<EfspEmail> {
         text.push_str(&body);
     }
     let transaction_id = transaction_id(&text)
-        .ok_or_else(|| anyhow!("the email names no e-filing transaction id"))?;
+        .or_else(|| envelope_number(&text))
+        .ok_or_else(|| anyhow!("the email names no e-filing envelope or transaction id"))?;
     let fields = labelled_fields(&text);
     let field = |names: &[&str]| {
         fields
@@ -88,6 +89,7 @@ pub fn parse_email(raw: &[u8]) -> Result<EfspEmail> {
     };
     let status = field(&["status", "filing status", "transaction status"])
         .and_then(|value| status_word(&value))
+        .or_else(|| message.subject().and_then(status_subject))
         .or_else(|| status_phrase(&text))
         .unwrap_or(model::efiling_transactions::STATUS_UNKNOWN);
     let decided = status == model::efiling_transactions::STATUS_ACCEPTED;
@@ -162,6 +164,38 @@ pub fn parse_email(raw: &[u8]) -> Result<EfspEmail> {
     })
 }
 
+/// Fallback for provider notices that name an envelope without a transaction id.
+fn envelope_number(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    [
+        "envelope number",
+        "envelope no.",
+        "envelope no",
+        "envelope #",
+    ]
+    .iter()
+    .find_map(|label| {
+        lower.match_indices(label).find_map(|(start, _)| {
+            if start > 0 && lower.as_bytes()[start - 1].is_ascii_alphanumeric() {
+                return None;
+            }
+            let rest = text[start + label.len()..].trim_start();
+            let value = if label.ends_with('#') {
+                rest.trim_start_matches(':').trim_start()
+            } else {
+                rest.strip_prefix([':', '#'])?.trim_start()
+            };
+            let end = value
+                .find(|ch: char| !ch.is_ascii_alphanumeric() && !matches!(ch, '-' | '_'))
+                .unwrap_or(value.len());
+            let id = value[..end].trim_end_matches(['-', '_']);
+            id.bytes()
+                .any(|byte| byte.is_ascii_digit())
+                .then(|| id.to_owned())
+        })
+    })
+}
+
 /// The token after the first `transaction [id|number|no.|#] :` in `text`.
 fn transaction_id(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
@@ -171,8 +205,9 @@ fn transaction_id(text: &str) -> Option<String> {
         from = start;
         let mut rest = text[start..].trim_start();
         for qualifier in ["id", "number", "no.", "no", "#"] {
-            if rest.len() >= qualifier.len()
-                && rest[..qualifier.len()].eq_ignore_ascii_case(qualifier)
+            if rest
+                .get(..qualifier.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(qualifier))
             {
                 rest = rest[qualifier.len()..].trim_start();
                 break;
@@ -220,6 +255,33 @@ fn status_word(value: &str) -> Option<&'static str> {
         }
         _ => None,
     }
+}
+
+fn status_subject(subject: &str) -> Option<&'static str> {
+    let subject = subject.trim().to_ascii_lowercase();
+    [
+        (
+            "filing accepted",
+            model::efiling_transactions::STATUS_ACCEPTED,
+        ),
+        (
+            "filing rejected",
+            model::efiling_transactions::STATUS_REJECTED,
+        ),
+        (
+            "filing submitted",
+            model::efiling_transactions::STATUS_SUBMITTED,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(label, status)| {
+        subject
+            .strip_prefix(label)
+            .filter(|rest| {
+                rest.is_empty() || rest.starts_with(|ch: char| !ch.is_ascii_alphanumeric())
+            })
+            .map(|_| status)
+    })
 }
 
 fn status_phrase(text: &str) -> Option<&'static str> {
@@ -270,6 +332,7 @@ pub struct Overrides {
     pub case_number: Option<String>,
     pub filed_on: Option<String>,
     pub judge_signed: bool,
+    pub fee_receipt: Option<Uuid>,
 }
 
 struct Coordinates {
@@ -451,6 +514,40 @@ pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
     )
 }
 
+#[derive(serde::Serialize)]
+pub struct FeeMatch {
+    pub envelope: String,
+    pub account_id: Uuid,
+    pub transaction_id: Uuid,
+    pub confirm: bool,
+}
+
+/// Confirm a reviewed match and let the server verify the exact bank charge.
+pub async fn settle_fee(
+    host: Option<&str>,
+    project: Option<&str>,
+    fee_match: FeeMatch,
+) -> ExitCode {
+    finish(
+        "settle fee",
+        async {
+            let at = coordinates(host, project).await?;
+            call(
+                reqwest::Client::new()
+                    .post(format!(
+                        "{}/app/api/projects/{}/efilings/settle-fee",
+                        at.base, at.project_id
+                    ))
+                    .bearer_auth(&at.token)
+                    .json(&fee_match),
+                "settle fee",
+            )
+            .await
+        }
+        .await,
+    )
+}
+
 /// `navigator project efiling record <email.eml>`
 pub async fn record(
     host: Option<&str>,
@@ -462,6 +559,34 @@ pub async fn record(
         "record",
         record_email(host, project, email, overrides).await,
     )
+}
+
+async fn file_email_copy(
+    at: &Coordinates,
+    transaction_id: &str,
+    attachment: &Attachment,
+    filed_on: &str,
+    overrides: &Overrides,
+) -> Result<Uuid> {
+    let existing = find_row(at, transaction_id).await?;
+    require_linkable(existing.as_ref(), overrides.submitted, transaction_id)?;
+    let submitted = overrides.submitted.map(|id| id.to_string()).or_else(|| {
+        existing
+            .as_ref()
+            .and_then(|row| row["submitted_document_id"].as_str())
+            .map(str::to_string)
+    });
+    upload_conformed(
+        at,
+        &ConformedUpload {
+            transaction_id,
+            bytes: &attachment.bytes,
+            filed_on,
+            submitted: submitted.as_deref(),
+            judge_signed: overrides.judge_signed,
+        },
+    )
+    .await
 }
 
 async fn record_email(
@@ -480,6 +605,9 @@ async fn record_email(
             parsed.status
         ));
     }
+    if !accepted && overrides.fee_receipt.is_some() {
+        return Err(anyhow!("a fee receipt requires an accepted envelope"));
+    }
     let conformed = parsed.attachment.as_ref().filter(|_| accepted);
     if let Some(attachment) = &parsed.attachment {
         if !accepted {
@@ -497,33 +625,16 @@ async fn record_email(
 
     let at = coordinates(host, project).await?;
     let conformed_id = match (conformed, filed_on.as_deref()) {
-        (Some(attachment), Some(filed_on)) => {
-            let existing = find_row(&at, &parsed.transaction_id).await?;
-            require_linkable(
-                existing.as_ref(),
-                overrides.submitted,
+        (Some(attachment), Some(filed_on)) => Some(
+            file_email_copy(
+                &at,
                 &parsed.transaction_id,
-            )?;
-            let submitted = overrides.submitted.map(|id| id.to_string()).or_else(|| {
-                existing
-                    .as_ref()
-                    .and_then(|row| row["submitted_document_id"].as_str())
-                    .map(str::to_string)
-            });
-            Some(
-                upload_conformed(
-                    &at,
-                    &ConformedUpload {
-                        transaction_id: &parsed.transaction_id,
-                        bytes: &attachment.bytes,
-                        filed_on,
-                        submitted: submitted.as_deref(),
-                        judge_signed: overrides.judge_signed,
-                    },
-                )
-                .await?,
+                attachment,
+                filed_on,
+                &overrides,
             )
-        }
+            .await?,
+        ),
         _ => None,
     };
 
@@ -531,6 +642,11 @@ async fn record_email(
         "transaction_id": parsed.transaction_id,
         "status": parsed.status,
     });
+    insert_some(
+        &mut body,
+        "fee_receipt_document_id",
+        overrides.fee_receipt.map(|id| id.to_string()),
+    );
     insert_some(&mut body, "efsp", overrides.efsp.or(parsed.efsp));
     insert_some(&mut body, "court", overrides.court.or(parsed.court));
     insert_some(
@@ -654,6 +770,30 @@ mod tests {
     const ACCEPTED: &[u8] = include_bytes!("../../tests/fixtures/efiling/accepted.eml");
     const REJECTED: &[u8] = include_bytes!("../../tests/fixtures/efiling/rejected.eml");
     const NOTIFICATION: &[u8] = include_bytes!("../../tests/fixtures/efiling/notification.eml");
+
+    #[test]
+    fn envelope_notices_share_id_and_leave_service_notifications_unknown() {
+        for (subject, status) in [
+            ("Filing Submitted", "submitted"),
+            ("Notification of Service", "unknown"),
+            ("Filing Accepted", "accepted"),
+        ] {
+            let eml = format!(
+                "From: Filing Service <filing@example.test>\r\nSubject: {subject}\r\n\r\n\
+                 Envelope Number: TEST-4242\r\n"
+            );
+            let parsed = super::parse_email(eml.as_bytes()).unwrap();
+            assert_eq!(parsed.transaction_id, "TEST-4242");
+            assert_eq!(parsed.status, status);
+        }
+    }
+
+    #[test]
+    fn existing_transaction_label_keeps_its_key_when_an_envelope_is_also_named() {
+        let raw = b"From: Filing Service <filing@example.test>\r\nSubject: Filing Accepted\r\n\r\n\
+                    Envelope Number: TEST-4242\r\nTransaction Number: TEST-7423\r\n";
+        assert_eq!(super::parse_email(raw).unwrap().transaction_id, "TEST-7423");
+    }
 
     #[test]
     fn an_acceptance_email_yields_the_filed_date_and_the_conformed_copy() {

@@ -303,7 +303,61 @@ async fn create_postgres(
     input: &NewProjectCost,
     skip_existing_source: bool,
 ) -> Result<(ProjectCost, bool), ProjectCostError> {
+    let mut tx = pg.0.begin().await?;
+    lock_project(&mut tx, project_id).await?;
+    lock_source(&mut tx, &input.source_reference).await?;
+    let result = create_on(&mut tx, project_id, actor_id, input, skip_existing_source).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub(crate) async fn lock_project(
+    tx: &mut Transaction<'_, sqlx::Postgres>,
+    project_id: Uuid,
+) -> Result<(), ProjectCostError> {
+    sqlx::query("SELECT id FROM project WHERE id=$1 FOR UPDATE")
+        .bind(project_id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(ProjectCostError::Invalid(
+            "Project is not mirrored to PostgreSQL",
+        ))?;
+    Ok(())
+}
+
+/// Serialize claims on one provider charge across Projects. Callers lock their
+/// own Project first and treat this guard as a transaction-local reservation.
+pub(crate) async fn lock_source(
+    tx: &mut Transaction<'_, sqlx::Postgres>,
+    source: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 2148053987))")
+        .bind(source)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Insert under the caller's Project and source locks, allowing envelope
+/// settlement and Project Cost creation to share one transaction.
+pub(crate) async fn create_on(
+    tx: &mut Transaction<'_, sqlx::Postgres>,
+    project_id: Uuid,
+    actor_id: Uuid,
+    input: &NewProjectCost,
+    skip_existing_source: bool,
+) -> Result<(ProjectCost, bool), ProjectCostError> {
     validate(input)?;
+    let settled_elsewhere: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT FROM efiling_transactions WHERE fee_source_reference=$1 AND project_id<>$2)",
+    )
+    .bind(&input.source_reference)
+    .bind(project_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if settled_elsewhere {
+        return Err(ProjectCostError::SourceTaken);
+    }
     let id = Uuid::new_v4();
     let now = Utc::now();
     let desired = serde_json::json!({
@@ -314,26 +368,18 @@ async fn create_postgres(
         "receipt_document_id": input.receipt_document_id,
         "source_reference": input.source_reference, "xero_invoice_id": null
     });
-    let mut tx = pg.0.begin().await?;
-    sqlx::query("SELECT id FROM project WHERE id=$1 FOR UPDATE")
-        .bind(project_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(ProjectCostError::Invalid(
-            "Project is not mirrored to PostgreSQL",
-        ))?;
     // Every insert locks the Project before probing the source, including
     // Mercury imports, so concurrent posting paths cannot double-charge it.
-    let source_taken = match find_source(&mut *tx, project_id, &input.source_reference).await? {
+    let source_taken = match find_source(&mut **tx, project_id, &input.source_reference).await? {
         Some(cost) if skip_existing_source => return Ok((cost, false)),
         Some(_) => true,
         None => false,
     };
     let existing = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 AND idempotency_key=$2 FOR UPDATE")
-        .bind(project_id).bind(input.idempotency_key.trim()).fetch_optional(&mut *tx).await?.as_ref().map(from_row).transpose()?;
+        .bind(project_id).bind(input.idempotency_key.trim()).fetch_optional(&mut **tx).await?.as_ref().map(from_row).transpose()?;
     if let Some(cost) = existing {
         let payload: Option<(sqlx::types::Json<serde_json::Value>,)> = sqlx::query_as("SELECT after_state->'request' FROM project_cost_events WHERE project_cost_id=$1 AND event_kind='created' ORDER BY occurred_at,id LIMIT 1")
-            .bind(cost.id).fetch_optional(&mut *tx).await?;
+            .bind(cost.id).fetch_optional(&mut **tx).await?;
         return if payload.is_some_and(|(stored,)| stored.0 == desired) {
             Ok((cost, false))
         } else {
@@ -343,9 +389,9 @@ async fn create_postgres(
     if source_taken {
         return Err(ProjectCostError::SourceTaken);
     }
-    set_audit_context(&mut tx, actor_id, "created", None).await?;
+    set_audit_context(tx, actor_id, "created", None).await?;
     let result = sqlx::query("INSERT INTO project_costs(id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,idempotency_key,idempotency_payload,inserted_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'unbilled',$9,$10,$11,$12,$13,$13)")
-        .bind(id).bind(project_id).bind(input.occurred_on).bind(input.payee.trim()).bind(input.description.trim()).bind(input.amount_cents).bind(&input.currency).bind(&input.amount_status).bind(input.receipt_document_id).bind(&input.source_reference).bind(input.idempotency_key.trim()).bind(sqlx::types::Json(desired.clone())).bind(now).execute(&mut *tx).await;
+        .bind(id).bind(project_id).bind(input.occurred_on).bind(input.payee.trim()).bind(input.description.trim()).bind(input.amount_cents).bind(&input.currency).bind(&input.amount_status).bind(input.receipt_document_id).bind(&input.source_reference).bind(input.idempotency_key.trim()).bind(sqlx::types::Json(desired.clone())).bind(now).execute(&mut **tx).await;
     if let Err(error) = result {
         if error.as_database_error().is_some_and(|e| {
             e.constraint() == Some("project_costs_project_id_receipt_document_id_key")
@@ -354,8 +400,8 @@ async fn create_postgres(
         }
         return Err(ProjectCostError::Database(error));
     }
-    tx.commit().await?;
-    fetch(pg, id).await.map(|cost| (cost, true))
+    let cost = fetch_on(&mut **tx, id).await?;
+    Ok((cost, true))
 }
 
 /// Confirm a pending amount. The prior amount and state remain in the event log.
@@ -591,7 +637,9 @@ pub async fn for_expense_review(
                 CASE WHEN a.kind IS NOT NULL AND a.deleted_at IS NULL AND a.purged_at IS NULL
                      THEN a.id END AS receipt_id
          FROM project_costs c
-         LEFT JOIN asset a ON a.id = c.receipt_document_id AND a.project_id = c.project_id
+         LEFT JOIN efiling_transactions f ON f.fee_cost_id = c.id AND f.project_id = c.project_id
+         LEFT JOIN asset a ON a.id = COALESCE(f.fee_receipt_document_id, c.receipt_document_id)
+           AND a.project_id = c.project_id
          WHERE c.project_id = ANY($1)
            AND (NOT $2 OR (c.amount_status = 'confirmed' AND c.billing_status = 'unbilled'))
          ORDER BY c.project_id, c.occurred_on DESC, c.id",
@@ -708,8 +756,15 @@ pub async fn list_client_visible(
 }
 
 async fn fetch(pg: &PostgresDb, id: Uuid) -> Result<ProjectCost, ProjectCostError> {
+    fetch_on(&pg.0, id).await
+}
+
+async fn fetch_on<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    id: Uuid,
+) -> Result<ProjectCost, ProjectCostError> {
     sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1")
-        .bind(id).fetch_optional(&pg.0).await?.as_ref().map(from_row).transpose()?.ok_or(ProjectCostError::NotFound)
+        .bind(id).fetch_optional(executor).await?.as_ref().map(from_row).transpose()?.ok_or(ProjectCostError::NotFound)
 }
 
 #[cfg(test)]

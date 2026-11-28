@@ -987,6 +987,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             post(crate::efilings_api::record_efiling),
         ),
         (
+            "POST",
+            "/app/api/projects/{id}/efilings/settle-fee",
+            post(crate::efilings_api::settle_fee),
+        ),
+        (
             "GET",
             "/app/api/projects/{id}/notations",
             get(list_notations_door),

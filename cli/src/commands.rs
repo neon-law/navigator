@@ -2472,8 +2472,31 @@ pub enum EfilingCmd {
     Record {
         /// The EFSP status email, saved as `.eml`.
         email: std::path::PathBuf,
+        /// Internal Receipt Document UUID for the accepted envelope's fee.
+        #[arg(long)]
+        fee_receipt: Option<uuid::Uuid>,
         #[command(flatten)]
         details: EfilingDetails,
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Post a confirmed Project Cost from a reviewed, settled card charge.
+    SettleFee {
+        /// Accepted envelope identifier.
+        #[arg(long)]
+        envelope: String,
+        /// Mercury account UUID.
+        #[arg(long)]
+        account: uuid::Uuid,
+        /// Exact Mercury transaction UUID reviewed against the envelope receipt.
+        #[arg(long)]
+        transaction: uuid::Uuid,
+        /// Confirm you reviewed this exact envelope receipt and card charge.
+        #[arg(long, required = true)]
+        confirm: bool,
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -2532,6 +2555,7 @@ impl EfilingDetails {
             case_number: self.case_number,
             filed_on: self.filed_on,
             judge_signed: self.judge_signed,
+            fee_receipt: None,
         }
     }
 }
@@ -3261,6 +3285,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
             EfilingCmd::Record {
                 email,
+                fee_receipt,
                 details,
                 project,
                 host,
@@ -3269,7 +3294,30 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     host.host.as_deref(),
                     project.as_deref(),
                     &email,
-                    details.into_overrides(),
+                    projects::efiling::Overrides {
+                        fee_receipt,
+                        ..details.into_overrides()
+                    },
+                )
+                .await
+            }
+            EfilingCmd::SettleFee {
+                envelope,
+                account,
+                transaction,
+                confirm,
+                project,
+                host,
+            } => {
+                projects::efiling::settle_fee(
+                    host.host.as_deref(),
+                    project.as_deref(),
+                    projects::efiling::FeeMatch {
+                        envelope,
+                        account_id: account,
+                        transaction_id: transaction,
+                        confirm,
+                    },
                 )
                 .await
             }

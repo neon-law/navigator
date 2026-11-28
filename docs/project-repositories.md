@@ -527,13 +527,13 @@ the write without making it. Lawyer or Admin only; the API audit records the act
 `navigator project gate --check` rewrites the pointer's `kind`.
 
 **An EFSP status email records an E-Filing Transaction.** `navigator project efiling record <email.eml>` reads a status
-email from an e-filing service provider, takes the transaction id from it, and records the reported status (`submitted`,
-`accepted`, `rejected`, or `unknown`) on the Project. An email that names the transaction but not its status records
-`unknown`, with a note to log in to the provider, never `accepted`. When an acceptance email attaches the court-stamped
-PDF, the command files it as kind `filing` under `efilings/<transaction id>.pdf`, then records its asset id, the
-court-filed date, and the acceptance date on the transaction. The filed date and the acceptance date are kept apart, and
-both are refused on a transaction that is not accepted. Filing a stamped copy needs the submitted revision: pass
-`--submitted <asset_id>` the first time, or the command refuses before uploading. `navigator project efiling list`
+email from an e-filing service provider, uses the transaction id or its envelope-number fallback, and records the status
+(`submitted`, `accepted`, `rejected`, or `unknown`) on the Project. An email that names the transaction but not its
+status records `unknown`, with a note to log in to the provider, never `accepted`. When an acceptance email attaches the
+court-stamped PDF, the command files it as kind `filing` under `efilings/<transaction id>.pdf`, then records its asset
+id, the court-filed date, and the acceptance date on the transaction. The filed date and the acceptance date are kept
+apart, and both are refused on a transaction that is not accepted. Filing a stamped copy needs the submitted revision:
+pass `--submitted <asset_id>` the first time, or the command refuses before uploading. `navigator project efiling list`
 prints the recorded transactions. See [E-Filing Transaction](glossary/e-filing-transaction.md).
 
 **A hand-downloaded stamped copy is paired, not uploaded.** When the provider's email carries no PDF, the attorney
@@ -542,6 +542,18 @@ downloads the stamped copy in their own signed-in browser and runs `navigator pr
 transaction as accepted with that filed date, and links the copy to the submitted revision, which `--submitted` names
 when the transaction does not already. A transaction recorded as rejected is refused. `--judge-signed` marks a proposed
 order that came back only as a received copy, so the transaction shows that the entered order is still needed.
+
+**A fee receipt is recorded before settlement.** File the provider's printable fee receipt as an internal [Receipt
+Document](glossary/receipt-document.md) in the matter. Its receipt metadata records the total fee, currency, payee,
+filing-fee category, and the transaction identifier used by `efiling record`. Pass the Receipt Document UUID with
+`--fee-receipt` when recording the acceptance email. `efiling list` shows the observation on the envelope. A fee without
+a linked confirmed cost remains pending.
+
+A Firm journal administrator who participates in the matter reviews the private receipt against the exact posted Mercury
+card charge. They run `navigator project efiling settle-fee --envelope <id> --account <account-uuid> --transaction
+<transaction-uuid> --confirm`. Navigator reads that single charge and checks the amount in cents before recording one
+confirmed Project Cost. Repeating the same match returns that cost. Finances links the filed receipt and includes
+confirmed, unbilled costs in the appropriate category.
 
 **The Portal is retired.** `/app/projects/<code>/portal`, `/app/projects/<code>/portal/`, and every path beneath them
 answer `301 Moved Permanently` to the matter show page `/app/projects/<code>` (`portal/src/project_portal.rs`). No

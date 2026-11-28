@@ -27,6 +27,8 @@ pub struct Transaction {
     pub amount: Box<serde_json::value::RawValue>,
     pub status: String,
     pub posted_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
     /// Free-text fields a bulk import may allocate a Project code against.
