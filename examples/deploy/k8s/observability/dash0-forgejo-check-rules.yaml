@@ -9,6 +9,8 @@
 #   navigator.forgejo.runner.orphan_cleaned            (no attributes)
 #   navigator.forgejo.cd.missed                        forgejo.repository
 #   up{job="forgejo"}                                  the collector's Forgejo scrape
+# Dash0 exposes OpenTelemetry attribute keys as underscore-separated PromQL
+# labels. Use those names in selectors, grouping and notification templates.
 # The repository is `<firm>/<project code>`. No rule, label or annotation
 # carries a PR title, branch name or commit message: each can hold
 # client-identifying text. Substitute the staging Forgejo origin without a
@@ -38,7 +40,7 @@ spec:
         # that waits five minutes has no runner coming.
         - alert: ForgejoJobWaitingNoRunner
           expr: |
-            max by ("forgejo.repository", "forgejo.run_number") (
+            max by (forgejo_repository, forgejo_run_number) (
               {otel_metric_name="navigator.forgejo.queue.waiting_seconds"}
             ) > 300
           for: 0m
@@ -74,8 +76,8 @@ spec:
         # failure stays in the pull request.
         - alert: ForgejoGateFailedOnMain
           expr: |
-            max by ("forgejo.repository", "forgejo.run_number") (
-              {otel_metric_name="navigator.forgejo.queue.recent_failure", "forgejo.workflow"="gate.yml"}
+            max by (forgejo_repository, forgejo_run_number) (
+              {otel_metric_name="navigator.forgejo.queue.recent_failure", forgejo_workflow="gate.yml"}
             ) > 0
           for: 0m
           annotations:
@@ -91,8 +93,8 @@ spec:
         # in practice this is the document check or the seed import.
         - alert: ForgejoCdFailed
           expr: |
-            max by ("forgejo.repository", "forgejo.run_number") (
-              {otel_metric_name="navigator.forgejo.queue.recent_failure", "forgejo.workflow"="cd.yml"}
+            max by (forgejo_repository, forgejo_run_number) (
+              {otel_metric_name="navigator.forgejo.queue.recent_failure", forgejo_workflow="cd.yml"}
             ) > 0
           for: 0m
           annotations:
@@ -108,7 +110,7 @@ spec:
         # it: the push did not trigger CD, or the run was never created.
         - alert: ForgejoCdMissed
           expr: |
-            max by ("forgejo.repository") (
+            max by (forgejo_repository) (
               {otel_metric_name="navigator.forgejo.cd.missed"}
             ) > 0
           for: 0m
@@ -141,7 +143,7 @@ spec:
         - alert: ForgejoMetricsAbsent
           expr: |
             (
-              max({otel_metric_name="up", "service.name"="forgejo"})
+              max({otel_metric_name="up", service_name="forgejo"})
               or vector(0)
             ) < 1
           for: 10m
