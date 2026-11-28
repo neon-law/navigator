@@ -238,10 +238,15 @@ fn the_first_page_places_counsel_the_clerks_space_the_court_and_the_caption() {
     let work = matter_tree();
     let manifest = work.path().join("navigator.yaml");
     let contents = fs::read_to_string(&manifest).unwrap();
-    let contents = contents.replace(
-        "firm: ",
-        "firm: EXAMPLE OFFICE FOR SYNTHETIC COMMERCIAL LITIGATION AND APPEALS # ",
-    );
+    let contents = contents
+        .replace(
+            "firm: SAMPLE SYNTHETIC LAW GROUP, APC",
+            "firm: EXAMPLE OFFICE FOR SYNTHETIC COMMERCIAL LITIGATION AND APPEALS",
+        )
+        .replace(
+            "    email: pat@example.invalid",
+            &format!("    email: {}@example.invalid", "q".repeat(60)),
+        );
     fs::write(manifest, contents).unwrap();
     let pdf = render(&work, "rfa_responses", "pdf");
     let first = &pages(&pdf)[0];
@@ -254,14 +259,23 @@ fn the_first_page_places_counsel_the_clerks_space_the_court_and_the_caption() {
         counsel.y0
     );
 
-    // The block is seven lines; the clerk's space to its right stays clear
-    // through line 7 (the first 7 * 24pt below the top margin).
+    // The clerk's space stays clear through line 7. A taller counsel block
+    // stays left of the midpoint all the way to the court title.
     let clerk_top = 72.0;
-    let clerk_bottom = 72.0 + 7.0 * 24.0;
+    let court = bbox(first, "SUPERIOR");
     assert_eq!(bbox(first, "APPEALS").text, "APPEALS");
+    assert_eq!(
+        first
+            .iter()
+            .filter(|word| word.y1 < court.y0)
+            .map(|word| word.text.matches('q').count())
+            .sum::<usize>(),
+        60,
+        "the entire unbroken token survives wrapping"
+    );
     let counsel_right = PAGE_W / 2.0 + 1.0;
     for word in first.iter().filter(|w| !is_rail(w)) {
-        if word.y0 >= clerk_top && word.y1 <= clerk_bottom {
+        if word.y0 >= clerk_top && word.y1 < court.y0 {
             assert!(
                 word.x1 <= counsel_right,
                 "`{}` reaches {}pt into the clerk's space",
@@ -273,7 +287,6 @@ fn the_first_page_places_counsel_the_clerks_space_the_court_and_the_caption() {
 
     // CRC 2.111(3): the court's title sits at or below 3⅓ inches (240pt),
     // after the whole counsel block.
-    let court = bbox(first, "SUPERIOR");
     assert!(court.y0 >= 240.0 - 1.0, "court title at {}pt", court.y0);
     let last_counsel = bbox(first, "Attorney");
     assert!(court.y0 > last_counsel.y1);

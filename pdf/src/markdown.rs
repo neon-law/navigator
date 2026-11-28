@@ -692,7 +692,7 @@ fn is_pagebreak_comment(html: &str) -> bool {
 /// Render `s` as a Typst double-quoted string literal, escaping the two
 /// characters significant inside one. Used for `#raw(..)` / `#link(..)`
 /// arguments, where the content is a string expression, not markup.
-fn typst_string(s: &str) -> String {
+pub(crate) fn typst_string(s: &str) -> String {
     let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
 }

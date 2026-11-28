@@ -644,13 +644,17 @@ fn caption_typst(variant: Variant, caption: &word::paper::Caption) -> String {
     // no counsel block (Washington) keeps them blank, which is what holds
     // the court's title below GR 14's 3in first-page margin.
     if !caption.counsel.is_empty() || (variant.has_rail() && !caption.court.is_empty()) {
+        let counsel = if caption.california && !caption.counsel.is_empty() {
+            wrap_counsel(&mut out, &caption.counsel, page_center)
+        } else {
+            caption_lines(&caption.counsel)
+        };
         let _ = write!(
             out,
             "#snap(min: {counsel_min})[\n\
              #set par(leading: {CAPTION_LEADING_POINTS}pt, spacing: {CAPTION_LEADING_POINTS}pt)\n\
-             #block(width: {counsel_width})[{}]\n\
-             ]\n",
-            caption_lines(&caption.counsel)
+             #block(width: {counsel_width})[{counsel}]\n\
+             ]\n"
         );
     }
     if !caption.court.is_empty() {
@@ -664,6 +668,36 @@ fn caption_typst(variant: Variant, caption: &word::paper::Caption) -> String {
         write_caption_columns(&mut out, variant, caption, page_center, gap);
     }
     out
+}
+
+/// Give exceptionally wide tokens invisible line-break opportunities. The
+/// rest of the counsel block wraps at its ordinary word boundaries.
+fn wrap_counsel(out: &mut String, lines: &[String], width: f64) -> String {
+    let _ = writeln!(
+        out,
+        r#"#let wrap-counsel(lines) = context {{
+  lines.map(line => line.split(" ").map(word => {{
+    if measure(text(word)).width > {width}pt {{
+      let pieces = ()
+      let piece = ""
+      for cluster in word.clusters() {{
+        if piece != "" and measure(text(piece + cluster)).width > {width}pt {{
+          pieces.push(piece)
+          piece = cluster
+        }} else {{ piece += cluster }}
+      }}
+      pieces.push(piece)
+      text(pieces.join("\u{{200b}}"))
+    }} else {{ text(word) }}
+  }}).join([ ])).join(linebreak())
+}}"#
+    );
+    let arguments = lines
+        .iter()
+        .map(|line| crate::markdown::typst_string(line))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("#wrap-counsel(({arguments},))")
 }
 
 fn write_caption_columns(
