@@ -337,14 +337,13 @@ fn is_signed_pdf_filename(filename: &str) -> bool {
 /// `docusign_envelope_id` is the only structural signal a pointer carries
 /// for "this is the signed copy", so the naming rule is enforced as a
 /// biconditional under the two engagement folders: the id implies the
-/// `_signed.pdf` name, and the name implies the id. Under `invoices/`,
-/// `xero_invoice_id` is required unconditionally — every invoice pointer
-/// names its Xero record, there is no unsigned-draft equivalent.
+/// `_signed.pdf` name, and the name implies the id. Under `invoices/`, every
+/// pointer names its invoice record (LAW-507): a `stripe_invoice_id`, or the
+/// `source` and `external_id` of money collected outside Stripe.
 ///
-/// Only checks the id's *shape* (already enforced by `DocumentPointer`'s own
-/// `Uuid` field type via `from_yaml`); resolving the id against a live
-/// `DocuSign` envelope or Xero invoice is `project gate --check`'s separate
-/// live-check pass (ENG-863), not this offline rule.
+/// Only checks the ids' *shape* (`DocumentPointer::validate` enforces it);
+/// resolving an envelope against `DocuSign` is `project gate --check`'s
+/// separate live-check pass (ENG-863), not this offline rule.
 pub fn validate_folder_pointer_keys(
     relative: &Path,
     pointer: &model::document_pointers::DocumentPointer,
@@ -369,9 +368,9 @@ pub fn validate_folder_pointer_keys(
             ));
         }
     }
-    if is_invoice_capture(relative) && pointer.xero_invoice_id.is_none() {
+    if is_invoice_capture(relative) && !pointer.names_invoice_record() {
         return Err(anyhow!(
-            "{} is under invoices/ but its pointer has no xero_invoice_id",
+            "{} is under invoices/ but its pointer names no stripe_invoice_id, or source and external_id",
             relative.display()
         ));
     }
@@ -605,7 +604,9 @@ async fn sync_authority_capture(
         // An Authority capture is never a signed engagement letter or an
         // invoice — those two keys are always absent here.
         docusign_envelope_id: None,
-        xero_invoice_id: None,
+        stripe_invoice_id: None,
+        source: None,
+        external_id: None,
         signing: None,
         notarization: Vec::new(),
         // An Authority capture resolves the Authority keys, not exhibit
@@ -757,8 +758,12 @@ fn recorded_external_keys(
     if pointer.docusign_envelope_id.is_some() {
         keys.push("docusign_envelope_id");
     }
-    if pointer.xero_invoice_id.is_some() {
-        keys.push("xero_invoice_id");
+    if pointer.stripe_invoice_id.is_some() {
+        keys.push("stripe_invoice_id");
+    }
+    if pointer.external_id.is_some() {
+        keys.push("source");
+        keys.push("external_id");
     }
     if pointer.signing.is_some() {
         keys.push("signing");
@@ -781,7 +786,11 @@ fn carry_recorded_keys(
 ) {
     pointer.folder = from.folder;
     pointer.docusign_envelope_id = from.docusign_envelope_id;
-    pointer.xero_invoice_id = from.xero_invoice_id;
+    pointer
+        .stripe_invoice_id
+        .clone_from(&from.stripe_invoice_id);
+    pointer.source = from.source;
+    pointer.external_id.clone_from(&from.external_id);
     pointer.signing = pointer.signing.or(from.signing);
     if pointer.notarization.is_empty() {
         pointer.notarization.clone_from(&from.notarization);
@@ -1118,7 +1127,11 @@ fn project_sync_plans_scoped(
                         current.metadata.as_ref(),
                     )
                 }),
-            xero_invoice_id: local.as_ref().and_then(|local| local.xero_invoice_id),
+            stripe_invoice_id: local
+                .as_ref()
+                .and_then(|local| local.stripe_invoice_id.clone()),
+            source: local.as_ref().and_then(|local| local.source),
+            external_id: local.as_ref().and_then(|local| local.external_id.clone()),
             // The live record wins; a block recorded by hand on the committed
             // pointer is kept while the live row has none.
             signing: current
@@ -3377,7 +3390,9 @@ mod tests {
             previous_version: None,
             authority_id: None,
             docusign_envelope_id,
-            xero_invoice_id: None,
+            stripe_invoice_id: None,
+            source: None,
+            external_id: None,
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
@@ -3385,7 +3400,9 @@ mod tests {
         }
     }
 
-    fn invoice_pointer(xero_invoice_id: Option<Uuid>) -> store::document_pointers::DocumentPointer {
+    fn invoice_pointer(
+        stripe_invoice_id: Option<&str>,
+    ) -> store::document_pointers::DocumentPointer {
         store::document_pointers::DocumentPointer {
             receipt: None,
             checkout_path: None,
@@ -3404,7 +3421,9 @@ mod tests {
             previous_version: None,
             authority_id: None,
             docusign_envelope_id: None,
-            xero_invoice_id,
+            stripe_invoice_id: stripe_invoice_id.map(str::to_owned),
+            source: None,
+            external_id: None,
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
@@ -3519,7 +3538,7 @@ mod tests {
         root: &Path,
         asset_id: Uuid,
         envelope: Option<Uuid>,
-        invoice: Option<Uuid>,
+        invoice: Option<&str>,
     ) {
         let mut pointer = project_sync_plans(
             root,
@@ -3530,7 +3549,7 @@ mod tests {
         .remove(0)
         .pointer;
         pointer.docusign_envelope_id = envelope;
-        pointer.xero_invoice_id = invoice;
+        pointer.stripe_invoice_id = invoice.map(str::to_owned);
         let target = root.join("blobs/onboarding/letter_signed.pdf.yaml");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(target, pointer.to_yaml().unwrap()).unwrap();
@@ -3543,7 +3562,7 @@ mod tests {
     fn project_sync_plans_keeps_external_ids_for_an_unchanged_revision() {
         let asset_id = Uuid::now_v7();
         let envelope = Uuid::now_v7();
-        let invoice = Uuid::now_v7();
+        let invoice = "in_1Synthetic";
         let root = tempfile::tempdir().unwrap();
         write_local_pointer(root.path(), asset_id, Some(envelope), Some(invoice));
 
@@ -3555,7 +3574,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(plans[0].pointer.docusign_envelope_id, Some(envelope));
-        assert_eq!(plans[0].pointer.xero_invoice_id, Some(invoice));
+        assert_eq!(plans[0].pointer.stripe_invoice_id.as_deref(), Some(invoice));
         assert!(
             !plans[0].pointer_changed,
             "an unchanged revision must not rewrite its pointer"
@@ -3915,12 +3934,16 @@ mod tests {
     }
 
     #[test]
-    fn every_invoice_pointer_needs_a_xero_invoice_id() {
+    fn every_invoice_pointer_names_its_invoice_record() {
         assert!(validate_folder_pointer_keys(
             Path::new("invoices/INV-1.pdf"),
-            &invoice_pointer(Some(Uuid::now_v7())),
+            &invoice_pointer(Some("in_1Synthetic")),
         )
         .is_ok());
+        let mut check = invoice_pointer(None);
+        check.source = Some(model::document_pointers::CollectionSource::Check);
+        check.external_id = Some("1001".into());
+        assert!(validate_folder_pointer_keys(Path::new("invoices/INV-2.pdf"), &check).is_ok());
         assert!(validate_folder_pointer_keys(
             Path::new("invoices/INV-1.pdf"),
             &invoice_pointer(None),
@@ -4186,7 +4209,7 @@ mod tests {
             legacy_pointer_yaml(),
         )
         .unwrap();
-        let other = invoice_pointer(Some(Uuid::nil())).to_yaml().unwrap();
+        let other = invoice_pointer(Some("in_1Other")).to_yaml().unwrap();
         std::fs::write(root.path().join("blobs/b.pdf.yaml"), &other).unwrap();
 
         let error = migrate_legacy_layout(root.path()).unwrap_err();
@@ -4903,7 +4926,9 @@ mod folder_pointer_rule_tests {
             previous_version: None,
             authority_id: None,
             docusign_envelope_id: envelope,
-            xero_invoice_id: None,
+            stripe_invoice_id: None,
+            source: None,
+            external_id: None,
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
@@ -4940,9 +4965,9 @@ mod folder_pointer_rule_tests {
         .is_ok());
     }
 
-    /// Every staged invoice capture must name the Xero invoice it came from.
+    /// Every staged invoice capture must name its invoice record.
     #[test]
-    fn invoice_captures_demand_their_xero_invoice_id() {
+    fn invoice_captures_demand_their_invoice_record() {
         let pointer = store::document_pointers::DocumentPointer {
             receipt: None,
             checkout_path: None,
@@ -4961,7 +4986,9 @@ mod folder_pointer_rule_tests {
             previous_version: None,
             authority_id: None,
             docusign_envelope_id: None,
-            xero_invoice_id: None,
+            stripe_invoice_id: None,
+            source: None,
+            external_id: None,
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
@@ -4969,7 +4996,10 @@ mod folder_pointer_rule_tests {
         };
         let invoice = std::path::Path::new("invoices/INV-1.pdf");
         let error = validate_folder_pointer_keys(invoice, &pointer).unwrap_err();
-        assert!(error.to_string().contains("no xero_invoice_id"), "{error}");
+        assert!(
+            error.to_string().contains("names no stripe_invoice_id"),
+            "{error}"
+        );
         // The same pointer outside invoices/ is nobody's invoice capture.
         assert!(
             validate_folder_pointer_keys(std::path::Path::new("exhibits/INV-1.pdf"), &pointer)

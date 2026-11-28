@@ -362,8 +362,8 @@ writing the pointer finishes on the next run, with no second upload. A pointer w
 hold is reported as `cannot reconcile` and left alone.
 
 An upload is a new revision on the same slug, so `document log` keeps the history. Its kind and visibility come from the
-pointer; the `docusign_envelope_id`, `xero_invoice_id`, `signing`, `notarization`, and `service` the pointer records are
-carried onto the new pointer. The local bytes stay, and the matching SHA-256 is what makes the next run a no-op: two
+pointer; the `docusign_envelope_id`, invoice record keys, `signing`, `notarization`, and `service` the pointer records
+are carried onto the new pointer. The local bytes stay, and the matching SHA-256 is what makes the next run a no-op: two
 runs in a row with no change write nothing to the cloud.
 
 Every overwrite asks. The question shows the slug, both SHA-256 prefixes, the sizes, and the revision numbers, and takes
@@ -376,9 +376,10 @@ each refused item is listed on stderr, and the command exits non-zero.
 `navigator project sync --dry-run` performs the authorized inventory and prints, without writing or uploading, one line
 per document: `would add` or `would download`, `would rewrite pointer` (the bytes match; only the pointer's metadata
 changes), `would ask to overwrite the local copy`, `would ask to upload local edits`, `conflict` (local edits are
-overwritten if live wins), `cannot reconcile`, and the batch of new files. A pointer's `docusign_envelope_id`,
-`xero_invoice_id`, `signing`, `notarization`, and `service` survive while it names the same bytes; a new live revision
-with different bytes drops them, and the sync names each dropped key before it rewrites the pointer.
+overwritten if live wins), `cannot reconcile`, and the batch of new files. A pointer's `docusign_envelope_id`, invoice
+record keys (`stripe_invoice_id`, `source`, `external_id`), `signing`, `notarization`, and `service` survive while it
+names the same bytes; a new live revision with different bytes drops them, and the sync names each dropped key before it
+rewrites the pointer.
 
 A 401 or 403 never means "absent". A refused inventory stops the run before anything is written or uploaded. A revision
 that the inventory lists but the download door refuses, or an upload the server refuses, is reported as `could not read`

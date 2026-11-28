@@ -9,7 +9,7 @@
 //! A custom connection is bound to a **single** Xero organisation, so the
 //! minted token already scopes to one tenant; the caller still passes the
 //! `Xero-Tenant-Id` on each Accounting API call (see
-//! [`crate::billing::XeroBillingProvider`]).
+//! [`crate::XeroBillingProvider`]).
 //!
 //! The Basic-auth header builder is pure and unit-tested without a
 //! network. [`XeroClientCredentials::mint`] is the one network call; the
@@ -28,20 +28,20 @@ const DEFAULT_TOKEN_URL: &str = "https://identity.xero.com/connect/token";
 /// conservatively in case a token response omits `expires_in`.
 const DEFAULT_EXPIRES_IN: u64 = 1800;
 
-/// Scopes a billing integration needs: create/read invoices, resolve (or
-/// create) the billed contact, and **read** the IOLTA side — the pooled
-/// trust bank accounts and the deposits, refunds, and withdrawals that move
-/// through them. These are the **granular** scopes a Xero custom connection
-/// grants today — the legacy parent `accounting.transactions` is not offered
-/// in the connection scope picker, so requesting it fails token minting with
-/// `invalid_scope`. `accounting.invoices` is exactly the scope an `ACCREC`
-/// invoice POST needs; the two `.read` scopes are exactly what the IOLTA
-/// mirror needs and no more, so a leaked token cannot move client funds.
+/// Scopes the Xero integration needs: resolve (or create) the billed
+/// contact, and **read** the IOLTA side — the pooled trust bank accounts and
+/// the deposits, refunds, and withdrawals that move through them. Invoices
+/// are issued through Stripe, so no invoice scope is requested. These are
+/// the **granular** scopes a Xero custom connection grants today — the
+/// legacy parent `accounting.transactions` is not offered in the connection
+/// scope picker, so requesting it fails token minting with `invalid_scope`.
+/// The two `.read` scopes are exactly what the IOLTA mirror needs and no
+/// more, so a leaked token cannot move client funds.
 /// `offline_access` is deliberately absent — client-credentials issues no
 /// refresh token; the provider just re-mints. These scopes must also be
 /// granted on the custom connection in the developer portal.
-const DEFAULT_SCOPE: &str = "accounting.contacts accounting.invoices \
-                             accounting.settings.read accounting.transactions.read";
+const DEFAULT_SCOPE: &str =
+    "accounting.contacts accounting.settings.read accounting.transactions.read";
 
 /// Build the HTTP Basic `Authorization` header value the token request
 /// carries (`Basic base64(client_id:client_secret)`). Pure — exposed so
@@ -124,7 +124,7 @@ impl XeroClientCredentials {
     ///
     /// Required: `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET`. Optional:
     /// `XERO_TOKEN_URL` (defaults to Xero's identity endpoint),
-    /// `XERO_SCOPE` (defaults to the invoice + contact scopes).
+    /// `XERO_SCOPE` (defaults to the contact + trust-read scopes).
     #[must_use]
     pub fn from_env() -> Option<Self> {
         let get = |k: &str| std::env::var(k).ok().filter(|s| !s.is_empty());
@@ -207,7 +207,7 @@ mod tests {
                 basic_auth_header("ck", "cs").as_str(),
             ))
             .and(body_string_contains("grant_type=client_credentials"))
-            .and(body_string_contains("accounting.invoices"))
+            .and(body_string_contains("accounting.contacts"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "access_token": "xero-tok",
                 "token_type": "Bearer",
@@ -221,7 +221,7 @@ mod tests {
             "ck",
             "cs",
             format!("{}/connect/token", server.uri()),
-            "accounting.contacts accounting.invoices",
+            "accounting.contacts accounting.settings.read",
         );
         let minted = auth.mint().await.expect("mint succeeds against the mock");
         assert_eq!(minted.access_token, "xero-tok");

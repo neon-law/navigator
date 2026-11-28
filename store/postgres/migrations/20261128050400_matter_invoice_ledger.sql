@@ -35,7 +35,6 @@ CREATE TABLE matter_invoice (
     stripe_account_id TEXT CHECK (stripe_account_id IS NULL OR stripe_account_id ~ '^acct_[A-Za-z0-9]+$'),
     destination_approval_id UUID UNIQUE REFERENCES invoice_destination_approval(id),
     billed_person_id UUID REFERENCES person(id),
-    billing_batch_id UUID UNIQUE REFERENCES matter_billing_batch(id),
     first_attempted_at TIMESTAMPTZ,
     created_by UUID REFERENCES person(id),
     inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -556,7 +556,7 @@ mod tests {
             "git_access_tokens",
             "git_repositories",
             "invoices",
-            "xero_invoice",
+            "matter_invoice",
             "person_project_roles",
             "testimonials",
             "playbooks",

@@ -1,9 +1,9 @@
 //! PostgreSQL authority for the accounting domain:
-//! `xero_invoice`, `iolta_account`, `iolta_allocation`, `iolta_withdrawal`,
+//! `matter_invoice`, `iolta_account`, `iolta_allocation`, `iolta_withdrawal`,
 //! and `finance_aggregate`.
 //!
 //! Whenever `NAVIGATOR_POSTGRES_HOST` is set ([`PostgresDb::configured`]),
-//! each owning module (`xero_invoices`, `iolta_accounts`,
+//! each owning module (`matter_invoices`, `iolta_accounts`,
 //! `iolta_withdrawals`, `finance_aggregate`) reads and writes PostgreSQL
 //! only, a PostgreSQL failure is returned rather than falling back, and the
 //! mirror stops copying SurrealDB rows over the authoritative ones. Without

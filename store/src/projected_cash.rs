@@ -16,7 +16,7 @@
 //! **Privacy of the Firm rollup.** [`firm_rollup`] is the one place that
 //! builds its labels, and they are only a brand's display name, a lead
 //! lawyer's display name, or `"Unassigned"`, the rule
-//! [`crate::xero_invoices::firm_thirty_day_rollup`] set for the invoice
+//! [`crate::matter_invoices::firm_thirty_day_rollup`] set for the invoice
 //! graphs. No Project code, matter name, client name, Project id, or
 //! invoice id reaches its output; the concentration warning is a share, not
 //! a matter.

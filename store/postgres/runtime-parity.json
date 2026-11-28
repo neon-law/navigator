@@ -1761,7 +1761,14 @@
       "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
     ]
   },
-  "xero_invoice": {
+  "matter_invoice": {
+    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+    "runtime_tests": [],
+    "remaining": [
+      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+    ]
+  },
+  "matter_invoice_payment": {
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "runtime_tests": [],
     "remaining": [

@@ -957,7 +957,13 @@
     "scope": "platform",
     "through": "installation governance; no matter visibility grant"
   },
-  "xero_invoice": {
+  "matter_invoice": {
+    "migration_slice": "accounting-storage",
+    "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+    "scope": "project",
+    "through": "project_id -> Project.firm_id"
+  },
+  "matter_invoice_payment": {
     "migration_slice": "accounting-storage",
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "scope": "project",

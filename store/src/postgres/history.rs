@@ -740,7 +740,7 @@ const REFERENCE_COLUMNS: &[(&str, &[&str])] = &[
     ("iolta_account", &["jurisdiction_id"]),
     (
         "iolta_allocation",
-        &["project_id", "withdrawal_id", "xero_invoice_id"],
+        &["matter_invoice_id", "project_id", "withdrawal_id"],
     ),
     ("iolta_withdrawal", &["jurisdiction_id"]),
     ("lead", &["person_id"]),
@@ -832,7 +832,6 @@ const REFERENCE_COLUMNS: &[(&str, &[&str])] = &[
     ("template", &["asset_id", "firm_id", "project_id"]),
     ("testimonial", &["person_id", "project_id"]),
     ("verification", &["citation_id", "verifier_person_id"]),
-    ("xero_invoice", &["project_id"]),
 ];
 
 fn reference_column(table: &str, field: &str) -> bool {

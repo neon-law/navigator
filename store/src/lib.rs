@@ -8,7 +8,8 @@
 //! # Accounting
 //!
 //! [`firm_journal`] owns the Firm's authoritative, immutable journal.
-//! [`xero_invoices`] and the trust imports preserve external evidence and links.
+//! [`matter_invoices`] keeps each matter's invoices and payments; the trust
+//! imports preserve external evidence and links.
 //! Navigator also stores rate and quoted usage provenance for Notations.
 //! [`cap_table_holdings`] records a Project's current holdings; each cap-table
 //! ledger remains outside Navigator.
@@ -202,8 +203,8 @@ pub mod social_publications;
 pub mod source_pages;
 pub mod ssh_public_keys;
 pub mod statutory_deadlines;
-pub mod summary_sender_approvals;
 pub mod stripe_customers;
+pub mod summary_sender_approvals;
 pub mod synthetic_portfolio;
 pub mod task_handoffs;
 pub mod tasks;
@@ -216,7 +217,6 @@ pub mod timers;
 #[path = "runtime/tls.rs"]
 pub mod tls;
 pub mod trust;
-
 
 #[cfg(feature = "test-support")]
 pub mod test_support;

@@ -973,6 +973,16 @@ erDiagram
         uuid suggested_project_id
         datetime updated_at
     }
+    invoice_destination_approval {
+        datetime approved_at
+        uuid approved_by
+        string destination
+        uuid firm_id
+        uuid id
+        string preview_digest
+        uuid project_id
+        string reason
+    }
     iolta_account {
         int balance_cents
         string currency
@@ -990,11 +1000,11 @@ erDiagram
         string id
         datetime inserted_at
         string invoice_reference
+        uuid matter_invoice_id
         datetime occurred_at
         uuid project_id
         datetime updated_at
         string withdrawal_id
-        string xero_invoice_id
     }
     iolta_withdrawal {
         string currency
@@ -1122,6 +1132,7 @@ erDiagram
     }
     legal_plan {
         int acceptance_sla_hours
+        json claim_filing
         string contact
         uuid firm_id
         uuid id
@@ -1184,10 +1195,12 @@ erDiagram
     }
     matter_billing_batch {
         uuid actor_id
+        uuid billed_person_id
         string contact_email
         string contact_name
         string cost_ids
         string currency
+        uuid destination_approval_id
         datetime due_date
         string entry_ids
         datetime first_attempted_at
@@ -1195,6 +1208,7 @@ erDiagram
         uuid id
         datetime inserted_at
         json line_items
+        uuid matter_invoice_id
         uuid project_id
         string reference
         string status
@@ -1204,8 +1218,6 @@ erDiagram
         int total_cents
         string trust_state
         datetime updated_at
-        string xero_contact_id
-        string xero_invoice_id
     }
     matter_caption {
         string case_number
@@ -1226,6 +1238,47 @@ erDiagram
         string fee_cents
         string inserted_at
         string project_id
+    }
+    matter_invoice {
+        int amount_cents
+        uuid billed_person_id
+        boolean client_visible
+        json composition
+        uuid created_by
+        string currency
+        string destination
+        uuid destination_approval_id
+        datetime due_on
+        string external_id
+        datetime first_attempted_at
+        uuid id
+        datetime inserted_at
+        datetime issued_on
+        string memo
+        string payer
+        uuid project_id
+        uuid receipt_document_id
+        string reference
+        uuid request_id
+        string source
+        string status
+        string status_reason
+        string stripe_account_id
+        string trust_state
+        datetime updated_at
+    }
+    matter_invoice_payment {
+        int amount_cents
+        boolean client_visible
+        string external_id
+        uuid id
+        datetime inserted_at
+        uuid invoice_id
+        string memo
+        string payer
+        datetime received_on
+        uuid recorded_by
+        string source
     }
     matter_outcome {
         uuid author_person_id
@@ -1827,13 +1880,13 @@ erDiagram
         string idempotency_key
         json idempotency_payload
         datetime inserted_at
+        uuid matter_invoice_id
         datetime occurred_on
         string payee
         uuid project_id
         uuid receipt_document_id
         string source_reference
         datetime updated_at
-        string xero_invoice_id
     }
     project_deadlines {
         string authority
@@ -2268,6 +2321,14 @@ erDiagram
         datetime trigger_on
         datetime updated_at
     }
+    stripe_customer {
+        string customer_id
+        uuid firm_id
+        datetime inserted_at
+        uuid person_id
+        string stripe_account_id
+        datetime updated_at
+    }
     summary_sender_approval {
         uuid firm_id
         uuid id
@@ -2325,6 +2386,7 @@ erDiagram
         string description
         uuid id
         datetime inserted_at
+        uuid matter_invoice_id
         int minutes
         datetime performed_on
         uuid project_id
@@ -2333,7 +2395,6 @@ erDiagram
         uuid stage
         datetime updated_at
         string written_off_reason
-        string xero_invoice_id
     }
     time_entry_events {
         uuid actor_person_id
@@ -2343,6 +2404,25 @@ erDiagram
         uuid id
         datetime occurred_at
         uuid time_entry_id
+    }
+    time_entry_proposal {
+        boolean backfilled
+        uuid created_by
+        uuid entry_id
+        uuid id
+        datetime inserted_at
+        int minutes
+        string narrative
+        datetime performed_on
+        uuid project_id
+        uuid request_id
+        datetime reviewed_at
+        uuid reviewed_by
+        uuid source_id
+        string source_kind
+        string status
+        uuid timekeeper_id
+        datetime updated_at
     }
     timer {
         string id
@@ -2373,20 +2453,6 @@ erDiagram
         string status_class
         datetime updated_at
         int visits
-    }
-    xero_invoice {
-        int amount_cents
-        int amount_paid_cents
-        string currency
-        datetime due_at
-        string id
-        datetime inserted_at
-        datetime issued_at
-        uuid project_id
-        string reference
-        string status
-        datetime updated_at
-        string xero_invoice_id
     }
     entity }o--|| address : references
     person }o--|| address : references
@@ -2478,6 +2544,10 @@ erDiagram
     firm }o--|| inbox_triage : references
     message }o--|| inbox_triage : references
     project }o--|| inbox_triage : references
+    firm }o--|| invoice_destination_approval : references
+    person }o--|| invoice_destination_approval : references
+    project }o--|| invoice_destination_approval : references
+    matter_invoice }o--|| iolta_allocation : references
     firm }o--|| journal_entry : references
     journal_entry }o--|| journal_entry : references
     journal_entry }o--|| journal_entry_source : references
@@ -2499,11 +2569,19 @@ erDiagram
     legal_plan }o--|| legal_plan_filing_rule : references
     mailroom }o--|| letter : references
     address }o--|| mailroom : references
+    invoice_destination_approval }o--|| matter_billing_batch : references
+    matter_invoice }o--|| matter_billing_batch : references
     person }o--|| matter_billing_batch : references
     project }o--|| matter_billing_batch : references
     firm }o--|| matter_caption : references
     project }o--|| matter_caption : references
     project }o--|| matter_flat_fee : references
+    asset }o--|| matter_invoice : references
+    invoice_destination_approval }o--|| matter_invoice : references
+    person }o--|| matter_invoice : references
+    project }o--|| matter_invoice : references
+    matter_invoice }o--|| matter_invoice_payment : references
+    person }o--|| matter_invoice_payment : references
     matter_outcome }o--|| matter_outcome : references
     person }o--|| matter_outcome : references
     project }o--|| matter_outcome : references
@@ -2568,6 +2646,7 @@ erDiagram
     person }o--|| project_cost_events : references
     project_costs }o--|| project_cost_events : references
     asset }o--|| project_costs : references
+    matter_invoice }o--|| project_costs : references
     project }o--|| project_costs : references
     asset }o--|| project_deadlines : references
     person }o--|| project_deadlines : references
@@ -2618,6 +2697,8 @@ erDiagram
     project }o--|| stage_event : references
     stage_definition }o--|| stage_event : references
     project }o--|| statutory_deadline : references
+    firm }o--|| stripe_customer : references
+    person }o--|| stripe_customer : references
     firm }o--|| summary_sender_approval : references
     person }o--|| summary_sender_approval : references
     project }o--|| summary_sender_approval : references
@@ -2629,10 +2710,15 @@ erDiagram
     project }o--|| template : references
     person }o--|| testimonial : references
     project }o--|| testimonial : references
+    matter_invoice }o--|| time_entry : references
     person_project_role }o--|| time_entry : references
     project }o--|| time_entry : references
     stage_definition }o--|| time_entry : references
     person }o--|| time_entry_events : references
     time_entry }o--|| time_entry_events : references
+    person }o--|| time_entry_proposal : references
+    person_project_role }o--|| time_entry_proposal : references
+    project }o--|| time_entry_proposal : references
+    time_entry }o--|| time_entry_proposal : references
     person }o--|| timer : references
     project }o--|| timer : references

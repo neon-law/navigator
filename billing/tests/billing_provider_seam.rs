@@ -3,22 +3,19 @@
 //! The crate's inline tests cover each method against the Xero wire
 //! format in isolation; these tests exercise the public [`BillingProvider`]
 //! trait object the way `billing-workflows` consumes it — multi-step flows
-//! (auth → contact → invoice → reconcile read) and the money invariants:
-//! minor units at the boundary, floats never entering the money path, and
-//! read-only IOLTA lanes failing closed.
+//! (auth → contact → trust reads) and the money invariants: minor units at
+//! the boundary, floats never entering the money path, and read-only IOLTA
+//! lanes failing closed.
 
 use billing::xero_auth::XeroClientCredentials;
 use billing::{
-    BillingError, BillingProvider, ContactRequest, InvoiceLine, InvoiceRequest,
-    StubBillingProvider, TrustTransactionKind, XeroBillingProvider,
+    BillingError, BillingProvider, ContactRequest, TrustTransactionKind, XeroBillingProvider,
 };
-use uuid::Uuid;
 use wiremock::matchers::{body_partial_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const TENANT: &str = "tenant-guid";
 const PAYER_EMAIL: &str = "payer@example.com";
-const MATTER: &str = "sample-matter";
 
 /// A client-credentials provider pointed at `server`, minting from the
 /// mocked identity endpoint.
@@ -27,7 +24,7 @@ fn client_credentials_provider(server: &MockServer) -> XeroBillingProvider {
         "client-id",
         "client-secret",
         format!("{}/connect/token", server.uri()),
-        "accounting.contacts accounting.invoices",
+        "accounting.contacts accounting.settings.read accounting.transactions.read",
     );
     XeroBillingProvider::with_client_credentials(server.uri(), TENANT, auth)
 }
@@ -46,13 +43,14 @@ async fn mount_token_endpoint(server: &MockServer) {
         .await;
 }
 
-/// The contact find-or-create, invoice POST, and reconcile read mocks.
-/// The email lookup misses, so the provider creates contact `contact-1`
-/// and bills it; the reconcile read reports `PAID` with 1111.00 dollars —
-/// exactly `111_100` cents — issued 2026-06-01.
-async fn mount_billing_flow_mocks(server: &MockServer) {
+/// The contact find-or-create mocks: the email lookup misses, so the
+/// provider creates contact `contact-1`. Both calls carry the minted bearer
+/// and the tenant.
+async fn mount_contact_mocks(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/Contacts"))
+        .and(header("authorization", "Bearer minted-tok"))
+        .and(header("Xero-Tenant-Id", TENANT))
         .and(query_param(
             "where",
             format!("EmailAddress==\"{PAYER_EMAIL}\""),
@@ -73,46 +71,6 @@ async fn mount_billing_flow_mocks(server: &MockServer) {
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({ "Contacts": [{ "ContactID": "contact-1" }] })),
         )
-        .expect(1)
-        .mount(server)
-        .await;
-
-    Mock::given(method("POST"))
-        .and(path("/Invoices"))
-        .and(header("authorization", "Bearer minted-tok"))
-        .and(header("Xero-Tenant-Id", TENANT))
-        .and(body_partial_json(serde_json::json!({
-            "Type": "ACCREC",
-            "Reference": format!("Matter {MATTER}"),
-            "Contact": { "ContactID": "contact-1" },
-            "LineItems": [{
-                "Description": "Flat fee",
-                "Quantity": 1,
-                "UnitAmount": "1111.00",
-                "AccountCode": "200",
-            }],
-        })))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({ "Invoices": [{ "InvoiceID": "inv-1" }] })),
-        )
-        .expect(1)
-        .mount(server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/Invoices/inv-1"))
-        .and(header("Xero-Tenant-Id", TENANT))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "Invoices": [{
-                "InvoiceID": "inv-1",
-                "Status": "PAID",
-                "Total": 1111.0,
-                "AmountPaid": 1111.0,
-                "CurrencyCode": "USD",
-                "DateString": "2026-06-01T00:00:00",
-            }]
-        })))
         .expect(1)
         .mount(server)
         .await;
@@ -210,7 +168,7 @@ async fn mount_bank_transaction_pages(server: &MockServer) {
 }
 
 #[tokio::test]
-async fn matter_billing_flow_mints_one_token_and_carries_tenant_auth() {
+async fn contact_and_trust_reads_mint_one_token_and_carry_tenant_auth() {
     let server = MockServer::start().await;
 
     // The identity endpoint is hit exactly once across the whole flow —
@@ -225,7 +183,8 @@ async fn matter_billing_flow_mints_one_token_and_carries_tenant_auth() {
         .expect(1)
         .mount(&server)
         .await;
-    mount_billing_flow_mocks(&server).await;
+    mount_contact_mocks(&server).await;
+    mount_iolta_mocks(&server).await;
 
     let provider = client_credentials_provider(&server);
     let provider: &dyn BillingProvider = &provider;
@@ -239,36 +198,13 @@ async fn matter_billing_flow_mints_one_token_and_carries_tenant_auth() {
         .expect("contact find-or-create");
     assert_eq!(contact.0, "contact-1");
 
-    let invoice = provider
-        .create_invoice(
-            Uuid::nil(),
-            &InvoiceRequest {
-                contact_id: Some(contact.clone()),
-                contact_name: "Acme Corp".into(),
-                contact_email: PAYER_EMAIL.into(),
-                reference: format!("Matter {MATTER}"),
-                line_items: vec![InvoiceLine {
-                    description: "Flat fee".into(),
-                    quantity: 1,
-                    unit_amount_cents: 111_100,
-                    account_code: "200".into(),
-                }],
-                issued_date: None,
-                due_date: None,
-            },
-        )
+    let accounts = provider.list_bank_accounts().await.expect("bank accounts");
+    assert_eq!(accounts.len(), 2);
+    let transactions = provider
+        .list_trust_transactions()
         .await
-        .expect("invoice creation");
-    assert_eq!(invoice.0, "inv-1");
-
-    let status = provider.get_invoice("inv-1").await.expect("reconcile read");
-    assert_eq!(status.status, "PAID");
-    assert_eq!(status.amount_cents, Some(111_100));
-    assert_eq!(status.amount_paid_cents, 111_100);
-    assert_eq!(
-        status.issued_at.map(|at| at.to_rfc3339()),
-        Some("2026-06-01T00:00:00+00:00".into())
-    );
+        .expect("trust transactions");
+    assert_eq!(transactions.len(), 2);
 }
 
 #[tokio::test]
@@ -352,67 +288,4 @@ async fn read_only_trust_lanes_map_http_errors_to_provider_errors() {
     let transactions = provider.list_trust_transactions().await;
     assert!(matches!(transactions, Err(BillingError::Provider(_))));
     assert!(transactions.err().unwrap().to_string().contains("403"));
-}
-
-#[tokio::test]
-async fn stub_provider_settlement_invariant_through_the_trait() {
-    let provider = StubBillingProvider::new();
-    let provider: &dyn BillingProvider = &provider;
-
-    // Contact resolution is deterministic on the payer's email — the
-    // same address always returns the same contact, never duplicated.
-    let request = ContactRequest {
-        name: "Acme Corp".into(),
-        email: PAYER_EMAIL.into(),
-    };
-    let first = provider.ensure_contact(&request).await.unwrap();
-    let second = provider.ensure_contact(&request).await.unwrap();
-    assert_eq!(first, second);
-
-    // The stub derives the invoice's amount in minor units from the
-    // line items — quantity × unit_amount_cents, summed — so a settle
-    // path reading it back sees whole cents, never a float.
-    let invoice = provider
-        .create_invoice(
-            Uuid::nil(),
-            &InvoiceRequest {
-                contact_id: Some(first),
-                contact_name: "Acme Corp".into(),
-                contact_email: PAYER_EMAIL.into(),
-                reference: format!("Matter {MATTER}"),
-                line_items: vec![
-                    InvoiceLine {
-                        description: "Flat fee".into(),
-                        quantity: 1,
-                        unit_amount_cents: 111_100,
-                        account_code: "200".into(),
-                    },
-                    InvoiceLine {
-                        description: "Filing fee".into(),
-                        quantity: 2,
-                        unit_amount_cents: 2_500,
-                        account_code: "200".into(),
-                    },
-                ],
-                issued_date: None,
-                due_date: None,
-            },
-        )
-        .await
-        .expect("invoice creation");
-
-    let status = provider
-        .get_invoice(&invoice.0)
-        .await
-        .expect("reconcile read");
-    assert_eq!(status.status, "AUTHORISED", "create-time default status");
-    assert_eq!(status.amount_cents, Some(116_100));
-    assert_eq!(status.amount_paid_cents, 0);
-    assert_eq!(status.currency.as_deref(), Some("USD"));
-
-    // An id the stub was never told about reads as the create-time
-    // default — authorised, nothing paid.
-    let unknown = provider.get_invoice("stub-never-created").await.unwrap();
-    assert_eq!(unknown.status, "AUTHORISED");
-    assert_eq!(unknown.amount_paid_cents, 0);
 }

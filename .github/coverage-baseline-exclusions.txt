@@ -464,7 +464,6 @@ store/src/testimonials/compatibility_tests.rs
 store/src/testimonials/native_tests.rs
 store/src/trust.rs
 store/src/verifications.rs
-store/src/xero_invoices.rs
 store/tests/brand_move_mirror.rs
 store/tests/document_folder.rs
 store/tests/entity_native_delete.rs
