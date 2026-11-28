@@ -434,6 +434,9 @@ pub struct MatterClaim {
     pub plan_case_number: String,
     pub attorney_minutes: Option<i32>,
     pub time_entry_ids: Vec<Uuid>,
+    pub covered_minutes: Option<i32>,
+    /// The verified hourly rate for approval, with zero for an authorized fixed fee.
+    pub annotation_rate: Option<i32>,
     pub billing: model::billing_report::ClaimBilling,
 }
 
@@ -446,12 +449,21 @@ pub async fn for_matter_billing(
     claim_rows(connection, project.id, firm)
         .await?
         .into_iter()
-        .map(|((id, _, _, plan_case_number, state), plan_name)| {
+        .map(|((id, _, plan_id, plan_case_number, state), plan_name)| {
+            let current_case = project.legal_plan_id == Some(plan_id)
+                && project.plan_case_number.as_deref() == Some(plan_case_number.as_str());
             Ok(MatterClaim {
                 billing: state.billing(id, &project.code)?,
                 plan_name,
                 plan_case_number,
                 attorney_minutes: state.work.attorney_minutes,
+                covered_minutes: match state.work.authorization.as_ref() {
+                    Some(Authorization::CappedHours {
+                        covered_minutes, ..
+                    }) => Some(*covered_minutes),
+                    _ => None,
+                },
+                annotation_rate: current_case.then(|| state.annotation_rate()).flatten(),
                 time_entry_ids: state.0.work.time_entry_ids,
             })
         })
@@ -471,6 +483,19 @@ pub(crate) async fn billing_rows(
 }
 
 impl ClaimState {
+    fn annotation_rate(&self) -> Option<i32> {
+        if self.stage != Stage::Completed || !self.work.time_entry_ids.is_empty() {
+            return None;
+        }
+        match self.work.authorization.as_ref()? {
+            Authorization::FixedFee { .. } => Some(0),
+            Authorization::CappedHours {
+                rate_cents_per_hour,
+                ..
+            } => Some(*rate_cents_per_hour),
+        }
+    }
+
     fn billing(
         &self,
         id: Uuid,
@@ -517,6 +542,81 @@ impl ClaimState {
             net_cash_received_cents: self.net_cents,
         })
     }
+}
+
+/// Lock the current plan case before loading a claim for explicit approval.
+pub(crate) async fn for_annotation(
+    tx: &mut Transaction<'_, Postgres>,
+    project: Uuid,
+    claim_id: Uuid,
+    date: NaiveDate,
+    minutes: i32,
+) -> Result<(Claim, i32), crate::time_entries::TimeEntryError> {
+    use crate::time_entries::TimeEntryError;
+    sqlx::query("SELECT id FROM project WHERE id=$1 FOR UPDATE")
+        .bind(project)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(TimeEntryError::NotFound)?;
+    let row: ClaimRow = sqlx::query_as(
+        "SELECT c.id, c.project_id, c.legal_plan_id, c.plan_case_number, c.state
+         FROM legal_plan_claim c JOIN project p ON p.id=c.project_id
+         JOIN legal_plan l ON l.id=c.legal_plan_id AND l.firm_id=p.firm_id
+         WHERE c.id=$1 AND p.id=$2 AND c.legal_plan_id=p.legal_plan_id
+           AND c.plan_case_number=p.plan_case_number",
+    )
+    .bind(claim_id)
+    .bind(project)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(TimeEntryError::NotFound)?;
+    let claim = Claim::from(row);
+    let rate = claim
+        .state
+        .annotation_rate()
+        .filter(|_| {
+            claim.state.work.performed_on == date
+                && claim
+                    .state
+                    .work
+                    .attorney_minutes
+                    .is_none_or(|attested| attested == minutes)
+        })
+        .ok_or(TimeEntryError::Invalid("claim does not match this time"))?;
+    Ok((claim, rate))
+}
+
+/// Replace attested claim minutes with their Time Entry evidence in the same transaction.
+pub(crate) async fn link_annotation(
+    tx: &mut Transaction<'_, Postgres>,
+    mut claim: Claim,
+    actor: Uuid,
+    entry: Uuid,
+    minutes: i32,
+) -> Result<(), sqlx::Error> {
+    let work = &mut claim.state.0.work;
+    work.time_entry_ids.push(entry);
+    work.attorney_minutes = Some(minutes);
+    let mut evidence = work.clone();
+    evidence.attorney_minutes = None;
+    sqlx::query("UPDATE legal_plan_claim SET state=$1 WHERE id=$2")
+        .bind(&claim.state)
+        .bind(claim.id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO legal_plan_claim_event (id,claim_id,legal_plan_id,actor_id,occurred_on,event)
+         VALUES ($1,$2,$3,$4,$5,$6)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(claim.id)
+    .bind(claim.legal_plan_id)
+    .bind(actor)
+    .bind(Utc::now().date_naive())
+    .bind(Json(Event::WorkRecorded { work: evidence }))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)] // Transaction keeps claim snapshot, evidence, and retry checks together.
@@ -659,26 +759,27 @@ async fn verified_work(
                 "supply Time Entry IDs or attested minutes",
             ));
         }
-        let (entries, minutes): (i64, Option<i64>) = sqlx::query_as(
-            "SELECT count(*), sum(t.minutes) FROM time_entry t
+        let minutes: Vec<i32> = sqlx::query_scalar(
+            "SELECT t.minutes FROM time_entry t
              WHERE t.id = ANY($1) AND t.project_id = $2 AND t.performed_on <= $3
+             AND t.billing_status = 'unbilled'
              AND NOT EXISTS (
                  SELECT 1 FROM legal_plan_claim c WHERE c.project_id = $2 AND c.id <> $4
                  AND (c.state->'work'->'time_entry_ids') ? t.id::text
-             )",
+             ) ORDER BY t.performed_on, t.id FOR UPDATE OF t",
         )
         .bind(&work.time_entry_ids)
         .bind(project)
         .bind(work.performed_on)
         .bind(claim)
-        .fetch_one(&mut **tx)
+        .fetch_all(&mut **tx)
         .await?;
-        if usize::try_from(entries).ok() != Some(work.time_entry_ids.len()) {
+        if minutes.len() != work.time_entry_ids.len() {
             return Err(ClaimError::Invalid(
                 "Time Entries must be distinct, unused, and on this Project",
             ));
         }
-        work.attorney_minutes = minutes.and_then(|minutes| i32::try_from(minutes).ok());
+        work.attorney_minutes = Some(minutes.into_iter().sum());
     }
     work.validate(plan, today)?;
     Ok(work)

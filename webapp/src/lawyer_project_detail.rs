@@ -335,6 +335,8 @@ pub struct LawyerDetailView {
     #[serde(default)]
     pub billing_claims: Vec<crate::project_billing::PlanClaimRow>,
     #[serde(default)]
+    pub billing_plan_linked: bool,
+    #[serde(default)]
     pub billing_annotations: Vec<crate::project_billing::AnnotationRow>,
     /// The Billing tab's resolved fee structure — the reader's hourly rate
     /// on this matter and the matter's agreed flat fee, server-formatted.
@@ -715,20 +717,21 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
             ),
             _ => Default::default(),
         };
-    let billing_claims = match pg.as_ref().filter(|_| active_tab == MatterTab::Billing) {
-        Some(pg) => {
-            crate::project_billing::read_claims(
-                &application_store,
-                pg,
-                &project,
-                viewer,
-                store_role,
-                person_id,
-            )
-            .await?
-        }
-        None => Vec::new(),
-    };
+    let (billing_plan_linked, billing_claims) =
+        match pg.as_ref().filter(|_| active_tab == MatterTab::Billing) {
+            Some(pg) => {
+                crate::project_billing::read_claims(
+                    &application_store,
+                    pg,
+                    &project,
+                    viewer,
+                    store_role,
+                    person_id,
+                )
+                .await?
+            }
+            None => (false, Vec::new()),
+        };
     let running_timer = match (pg.as_ref(), person_id) {
         (Some(pg), Some(person_id)) => {
             crate::project_billing::read_timer(&application_store, pg, person_id, id).await?
@@ -1013,6 +1016,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         stage,
         billing_entries,
         billing_claims,
+        billing_plan_linked,
         billing_annotations,
         billing_fees,
         billing_invoices,
@@ -1413,6 +1417,7 @@ pub fn LawyerProjectDetail() -> Element {
                             timer: view.running_timer.clone(),
                             entries: view.billing_entries.clone(),
                             claims: view.billing_claims.clone(),
+                            plan_linked: view.billing_plan_linked,
                             annotations: view.billing_annotations.clone(),
                             fees: view.billing_fees.clone(),
                             invoices: view.billing_invoices.clone(),

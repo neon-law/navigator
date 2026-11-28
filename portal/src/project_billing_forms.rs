@@ -71,6 +71,7 @@ async fn firm_side_viewer(
 pub(crate) struct AnnotationReview {
     decision: store::billing_annotations::Decision,
     note: String,
+    claim_id: Option<String>,
 }
 
 pub(crate) async fn review_annotation(
@@ -97,6 +98,31 @@ pub(crate) async fn review_annotation(
     if !firm_side_viewer(&db, &session, project.id).await {
         return not_found_response();
     }
+    if matches!(input.decision, store::billing_annotations::Decision::Bill)
+        && input.claim_id.as_deref().is_some_and(|id| !id.is_empty())
+    {
+        return back_to_billing(
+            &code,
+            None,
+            Some("Use Approve to claim for the selected legal plan claim."),
+        );
+    }
+    let claim_id = if matches!(
+        input.decision,
+        store::billing_annotations::Decision::PlanClaim
+    ) {
+        let Some(firm) = project.firm_id else {
+            return not_found_response();
+        };
+        if !matches!(store::firm_capability::FirmCapability::ViewDirectory
+            .resolve(&db, session.role, Some(actor), firm).await, Ok(decision) if decision.is_allowed())
+        {
+            return not_found_response();
+        }
+        input.claim_id.as_deref().and_then(|id| id.parse().ok())
+    } else {
+        None
+    };
     let Ok(pg) =
         crate::time_tracking_api::prepared_store(&db, "review_annotation", project.id).await
     else {
@@ -106,12 +132,28 @@ pub(crate) async fn review_annotation(
             Some("Billing is unavailable. Try again shortly."),
         );
     };
-    let result =
-        store::billing_annotations::review(&pg, project.id, actor, id, input.decision, &input.note)
-            .await;
+    let result = store::billing_annotations::review_with_claim(
+        &pg,
+        project.id,
+        actor,
+        id,
+        input.decision,
+        &input.note,
+        claim_id,
+    )
+    .await;
     let error = match result {
         Ok(()) => return back_to_billing(&code, Some("Billing review recorded."), None),
         Err(TimeEntryError::Conflict) => "This annotation is no longer awaiting review.".to_owned(),
+        Err(TimeEntryError::NotFound) if claim_id.is_some() => {
+            "The selected claim is unavailable on this matter.".to_owned()
+        }
+        Err(TimeEntryError::Invalid("select a legal plan claim")) => {
+            "Select a legal plan claim before approving plan time.".to_owned()
+        }
+        Err(TimeEntryError::Invalid("claim does not match this time")) => {
+            "Select an unlinked claim with verified terms for the same date and minutes.".to_owned()
+        }
         Err(TimeEntryError::Invalid("contingency agreement has no hourly fee")) => {
             "The contingency agreement has no hourly fee. Record the time at no charge or deny it."
                 .to_owned()

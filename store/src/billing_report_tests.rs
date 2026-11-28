@@ -468,3 +468,148 @@ async fn pending_annotations_are_actions_for_their_timekeeper_in_both_billing_vi
     }
     pg.pool().close().await;
 }
+
+async fn two_matching_plan_claims(
+    pg: &PostgresDb,
+    project: &Project,
+    lawyer: Uuid,
+    on: chrono::NaiveDate,
+    synthetic_rate: i32,
+) -> (Uuid, Uuid) {
+    use plan_claims::{Authorization, Change, Event, Service, Work};
+    let firm = project.firm_id.unwrap();
+    let plan_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO legal_plan (firm_id,name,acceptance_sla_hours,turnaround_sla_days)
+         VALUES ($1,'ARAG',24,7) RETURNING id",
+    )
+    .bind(firm)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    sqlx::query("UPDATE project SET legal_plan_id=$1,plan_case_number='SYNTHETIC' WHERE id=$2")
+        .bind(plan_id)
+        .bind(project.id)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let first = Uuid::new_v4();
+    let selected = Uuid::new_v4();
+    for (claim_id, benefit) in [
+        (first, "First synthetic service"),
+        (selected, "Second synthetic service"),
+    ] {
+        plan_claims::record(
+            pg,
+            project.id,
+            firm,
+            lawyer,
+            Change {
+                claim_id,
+                event_id: Uuid::new_v4(),
+                occurred_on: on,
+                event: Event::WorkRecorded {
+                    work: Work {
+                        service: Service::AragRepresentation,
+                        benefit: benefit.into(),
+                        performed_on: on,
+                        attorney_minutes: Some(18),
+                        time_entry_ids: Vec::new(),
+                        authorization: Some(Authorization::CappedHours {
+                            reference: "verified-synthetic".into(),
+                            rate_cents_per_hour: synthetic_rate,
+                            covered_minutes: 240,
+                            pending_minutes: 0,
+                        }),
+                    },
+                },
+            },
+        )
+        .await
+        .unwrap();
+    }
+    (first, selected)
+}
+
+#[tokio::test]
+async fn approval_prices_only_the_selected_plan_claim_and_replaces_attested_time() {
+    use billing_annotations::{Annotation, Decision};
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let (fixture, project) = billing_matter(&pg).await;
+    let firm = project.firm_id.unwrap();
+    let on = Utc::now().date_naive();
+    let synthetic_rate = 10_000;
+    let (first, selected) =
+        two_matching_plan_claims(&pg, &project, fixture.lawyer, on, synthetic_rate).await;
+    let annotation = Annotation {
+        id: Uuid::new_v4(),
+        change_id: "k".repeat(32),
+        commit_id: "a".repeat(40),
+        tenths: 3,
+        performed_on: on,
+    };
+    billing_annotations::stage(&pg, project.id, fixture.lawyer, &annotation)
+        .await
+        .unwrap();
+    let approve = |claim| {
+        billing_annotations::review_with_claim(
+            &pg,
+            project.id,
+            fixture.lawyer,
+            annotation.id,
+            Decision::PlanClaim,
+            "Reviewed synthetic work",
+            Some(claim),
+        )
+    };
+    assert!(matches!(
+        approve(Uuid::new_v4()).await,
+        Err(time_entries::TimeEntryError::NotFound)
+    ));
+    approve(selected).await.unwrap();
+    assert!(matches!(
+        approve(selected).await,
+        Err(time_entries::TimeEntryError::Conflict)
+    ));
+    let entries = time_entries::list_for_project(&pg, project.id)
+        .await
+        .unwrap();
+    let [entry] = entries.as_slice() else {
+        panic!("expected one entry");
+    };
+    assert_eq!(
+        (entry.minutes, entry.rate_cents_per_hour),
+        (18, synthetic_rate)
+    );
+    assert!(time_entries::unbilled_billable(&pg, project.id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(time_entries::mark_invoiced(
+        &pg,
+        &[entry.id],
+        fixture.lawyer,
+        "synthetic-invoice",
+        false
+    )
+    .await
+    .is_err());
+    let mut connection = pg.pool().acquire().await.unwrap();
+    let rows = plan_claims::for_matter_billing(&mut connection, &project, firm)
+        .await
+        .unwrap();
+    let linked = rows.iter().find(|row| row.billing.id == selected).unwrap();
+    assert_eq!(
+        (linked.attorney_minutes, linked.covered_minutes),
+        (Some(18), Some(240))
+    );
+    assert_eq!(linked.time_entry_ids, [entry.id]);
+    assert!(rows
+        .iter()
+        .find(|row| row.billing.id == first)
+        .unwrap()
+        .time_entry_ids
+        .is_empty());
+}

@@ -28,13 +28,13 @@ pub(crate) async fn read_claims(
     viewer: store::access::MatterViewer,
     role: store::persons::Role,
     person: Option<uuid::Uuid>,
-) -> Result<Vec<PlanClaimRow>, ServerFnError> {
+) -> Result<(bool, Vec<PlanClaimRow>), ServerFnError> {
     use crate::lawyer_project_detail::server_error;
     use crate::portal_project_detail::format_usd;
     use store::firm_capability::FirmCapability;
 
     let Some(firm) = project.firm_id.filter(|_| viewer.is_firm_side()) else {
-        return Ok(Vec::new());
+        return Ok((false, Vec::new()));
     };
     if !FirmCapability::ViewDirectory
         .resolve(application_store, role, person, firm)
@@ -42,10 +42,11 @@ pub(crate) async fn read_claims(
         .map_err(server_error)?
         .is_allowed()
     {
-        return Ok(Vec::new());
+        return Ok((false, Vec::new()));
     }
     let mut connection = pg.pool().acquire().await.map_err(server_error)?;
-    Ok(
+    Ok((
+        project.legal_plan_id.is_some(),
         store::plan_claims::for_matter_billing(&mut connection, project, firm)
             .await
             .map_err(server_error)?
@@ -59,6 +60,14 @@ pub(crate) async fn read_claims(
                     benefit: billing.benefit,
                     service_date: billing.performed_on.to_string(),
                     minutes: claim.attorney_minutes,
+                    covered_minutes: claim.covered_minutes,
+                    annotation_price: claim.annotation_rate.map(|rate| {
+                        if rate == 0 {
+                            "Verified fixed fee".to_owned()
+                        } else {
+                            format!("{} per hour", format_usd(i64::from(rate)))
+                        }
+                    }),
                     status: crate::sections::instruments::words(&billing.status),
                     projected: billing.projected_fee_cents.map(format_usd),
                     filed: billing
@@ -70,7 +79,7 @@ pub(crate) async fn read_claims(
                 }
             })
             .collect(),
-    )
+    ))
 }
 
 /// One time entry on the matter, for the tab's table.
@@ -105,12 +114,23 @@ pub struct PlanClaimRow {
     benefit: String,
     service_date: String,
     minutes: Option<i32>,
+    covered_minutes: Option<i32>,
+    annotation_price: Option<String>,
     status: String,
     projected: Option<String>,
     filed: Option<String>,
     outstanding: Option<String>,
     received: String,
     time_entry_ids: Vec<uuid::Uuid>,
+}
+
+impl PlanClaimRow {
+    fn coverage(&self) -> Option<String> {
+        let cap = self.covered_minutes?;
+        let used = self.minutes?.min(cap);
+        let remaining = cap - used;
+        Some(format!("{used} of {cap} used · {remaining} remaining"))
+    }
 }
 
 /// Source and service date awaiting a lawyer's billing decision.
@@ -123,6 +143,8 @@ pub struct AnnotationRow {
     pub attorney: String,
     pub hours: String,
     pub date: String,
+    #[serde(default)]
+    pub minutes: i32,
 }
 
 /// One of the matter's invoices, read from the local Xero mirror — the same
@@ -426,6 +448,7 @@ pub fn BillingTab(
     timer: Option<TimerView>,
     entries: Vec<TimeEntryRow>,
     #[props(default)] claims: Vec<PlanClaimRow>,
+    #[props(default)] plan_linked: bool,
     #[props(default)] annotations: Vec<AnnotationRow>,
     fees: FeeStructureView,
     invoices: Vec<InvoiceRow>,
@@ -449,6 +472,20 @@ pub fn BillingTab(
     let rate_error = error.as_deref().is_some_and(|message| {
         message.contains("hourly rate") || message.contains("rate for this matter")
     });
+    let reviews: Vec<_> = annotations
+        .iter()
+        .map(|row| {
+            let matches: Vec<_> = claims
+                .iter()
+                .filter(|claim| {
+                    claim.annotation_price.is_some()
+                        && claim.service_date == row.date
+                        && claim.minutes.is_none_or(|minutes| minutes == row.minutes)
+                })
+                .collect();
+            (row, matches)
+        })
+        .collect();
     rsx! {
         section { class: "lawyer-detail__section lawyer-detail__billing",
             h2 { "Finances" }
@@ -463,10 +500,13 @@ pub fn BillingTab(
                 h3 { "Fee structure" }
                 if let Some(rate) = fees.hourly_rate.clone() {
                     p { class: "matter-billing-current-rate", "Effective today, your hourly rate is " strong { "{rate} per hour" } "." }
-                } else {
+                } else if !plan_linked {
                     p { class: "nav-callout matter-billing-current-rate", role: "status",
                         "No hourly rate is on file for you on this matter — new billable time cannot be priced until one is recorded."
                     }
+                }
+                if plan_linked {
+                    p { "Legal plan time uses the verified terms on the selected claim. Review the claim before approving time." }
                 }
                 p { class: "nav-muted",
                     "A matter override takes effect on its effective date. Otherwise, your firm-wide rate applies. New rates never change Time Entries already recorded."
@@ -515,7 +555,7 @@ pub fn BillingTab(
                     p { class: "nav-muted", "No Jujutsu time awaits review. Stage an annotated change with "
                         code { "navigator project jj stage-time" } "." }
                 }
-                for row in &annotations {
+                for (row, matches) in &reviews {
                     form { key: "{row.id}", class: "nav-form",
                         method: "post", action: "/app/projects/{code}/billing-annotations/{row.id}/review",
                         input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
@@ -532,8 +572,24 @@ pub fn BillingTab(
                             label { class: "nav-label", "Invoice description or reason for denial"
                                 input { class: "nav-input", name: "note", required: true, maxlength: "2000" }
                             }
+                            if !matches.is_empty() {
+                                label { class: "nav-label", "Legal plan claim"
+                                    select { class: "nav-input", name: "claim_id",
+                                        option { value: "", "Select a claim" }
+                                        for claim in matches {
+                                            option { value: "{claim.id}",
+                                                "{claim.benefit} · {claim.annotation_price.as_deref().unwrap_or_default()}" }
+                                        }
+                                    }
+                                }
+                            }
                             div { class: "lawyer-detail__actions",
-                                button { class: "nav-btn", r#type: "submit", name: "decision", value: "bill", "Approve billable time" }
+                                if !matches.is_empty() {
+                                    button { class: "nav-btn", r#type: "submit", name: "decision", value: "plan_claim", "Approve to claim" }
+                                }
+                                button { class: "nav-btn", r#type: "submit", name: "decision", value: "bill",
+                                    if plan_linked { "Approve for direct invoice" } else { "Approve billable time" }
+                                }
                                 button { class: "nav-btn nav-btn--secondary", r#type: "submit", name: "decision", value: "no_charge", "Record at no charge" }
                                 button { class: "nav-btn nav-btn--secondary", r#type: "submit", name: "decision", value: "deny", "Deny" }
                             }
@@ -615,7 +671,11 @@ pub fn BillingTab(
                                             Badge { tone: BadgeTone::Source, "{source_label(&row.source)}" }
                                         }
                                         td {
-                                            Badge { tone: status_tone(&row.billing_status), "{status_label(&row.billing_status)}" }
+                                            if linked_claims.contains_key(&row.id) {
+                                                Badge { tone: BadgeTone::Source, "Legal plan claim" }
+                                            } else {
+                                                Badge { tone: status_tone(&row.billing_status), "{status_label(&row.billing_status)}" }
+                                            }
                                         }
                                     }
                                 }
@@ -635,6 +695,7 @@ pub fn BillingTab(
                                 th { scope: "col", "Benefit" }
                                 th { scope: "col", "Service date" }
                                 th { scope: "col", "Actual minutes" }
+                                th { scope: "col", "Covered minutes" }
                                 th { scope: "col", "Claim status" }
                                 th { scope: "col", "Projected fee" }
                                 th { scope: "col", "Filed amount" }
@@ -647,6 +708,7 @@ pub fn BillingTab(
                                     td { "{claim.benefit}" }
                                     td { "{claim.service_date}" }
                                     td { if let Some(minutes) = claim.minutes { "{minutes}" } else { "—" } }
+                                    td { {claim.coverage().unwrap_or_else(|| "—".to_owned())} }
                                     td { "{claim.status}" }
                                     td { {claim.projected.as_deref().unwrap_or("Unverified")} }
                                     td { {claim.filed.as_deref().unwrap_or("—")} }
@@ -1024,6 +1086,7 @@ pub(crate) async fn read_billing(
     let annotations = pending
         .into_iter()
         .map(|row| AnnotationRow {
+            minutes: row.tenths * 6,
             id: row.id.to_string(),
             change_id: row.change_id,
             change_url: repository_url
@@ -1530,6 +1593,60 @@ mod tests {
                 today: "2026-11-04".to_string(),
             }
         })
+    }
+
+    #[test]
+    fn plan_time_review_offers_the_matching_claims_for_explicit_selection() {
+        let id = uuid::Uuid::from_u128(11);
+        let other = uuid::Uuid::from_u128(12);
+        let stale = uuid::Uuid::from_u128(13);
+        let claims = vec![
+            (id, "2026-11-03"),
+            (other, "2026-11-03"),
+            (stale, "2026-11-02"),
+        ]
+        .into_iter()
+        .map(|(id, date)| PlanClaimRow {
+            id,
+            plan: "Synthetic Plan".into(),
+            case_number: "SYNTHETIC".into(),
+            benefit: format!("Synthetic service {id}"),
+            service_date: date.into(),
+            minutes: Some(18),
+            covered_minutes: Some(240),
+            annotation_price: Some("Verified terms".into()),
+            status: "Completed".into(),
+            projected: None,
+            filed: None,
+            outstanding: None,
+            received: String::new(),
+            time_entry_ids: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+        let annotations = vec![AnnotationRow {
+            id: "synthetic".into(),
+            change_id: "synthetic-change".into(),
+            change_url: None,
+            attorney: "Synthetic Lawyer".into(),
+            hours: "0.3".into(),
+            date: "2026-11-03".into(),
+            minutes: 18,
+        }];
+        let html = dioxus_ssr::render_element(rsx! {
+            BillingTab {
+                code: "acme".to_owned(), csrf: "synthetic".to_owned(), timer: None,
+                entries: Vec::new(), claims, annotations, plan_linked: true,
+                fees: FeeStructureView::default(), invoices: Vec::new(), expenses: Vec::new(),
+                trust: TrustView::default(), generate: GenerateInvoiceView::default(),
+                today: "2026-11-04".to_owned(),
+            }
+        });
+        assert!(html.contains("Approve to claim"));
+        assert!(html.contains(&format!("value=\"{id}\"")));
+        assert!(html.contains(&format!("value=\"{other}\"")));
+        assert!(!html.contains(&format!("value=\"{stale}\"")));
+        assert!(html.contains("18 of 240 used"));
+        assert!(!html.contains("No hourly rate is on file"));
     }
 
     #[test]
