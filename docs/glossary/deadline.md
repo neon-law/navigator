@@ -102,8 +102,11 @@ unset when the client lead is unset.
 stored local offset. It marks overdue rows and dates within the viewer's lead time (internal or client), shows the
 calendar role and authority kind as chips, and lets the reader expand the authority citation. Complete and cancelled
 rows remain in a collapsed *Past* section. A client's view lists only rows that carry a client lead time, including in
-*Past*; an internal date never reaches it. The synced `deadline` Agent Skill records a date through `navigator project
-deadline` and reminds the Project's private Slack channel.
+*Past*; an internal date never reaches it.
+
+**Slack reminders.** With Slack connected for the Firm, the worker posts reminders for open, confirmed Deadlines in the
+Project's private channel. It tags the Lawyer DRIs and the firm-side deadline owner whose Slack accounts resolve. It
+checks the current record at delivery and sends one post when multiple reminders fall on the same day.
 
 **Hard or soft.** A Matter Page's `deadline_board` marks each row *hard* when a statute, court rule, court order, or
 contract binds the date, and *soft* for an internal target. The mark is read from `authority_kind`, never stored.

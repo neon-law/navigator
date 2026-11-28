@@ -17,6 +17,7 @@ pub mod dbos_project_slack;
 pub mod dbos_reconcile;
 pub mod dbos_sandbox_reset;
 pub mod dbos_social_publisher;
+mod deadline_slack;
 pub mod email_config;
 pub mod email_summary;
 pub mod finance_aggregate;

@@ -201,7 +201,7 @@ async fn repository_activity(
 }
 
 // Escape Slack control characters so a citation cannot mention a channel or person.
-fn slack_plain_text(value: &str) -> String {
+pub(crate) fn slack_plain_text(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -209,7 +209,7 @@ fn slack_plain_text(value: &str) -> String {
 }
 
 /// The matter show page, which renders the Project's declared Matter Pages.
-fn matter_link(origin: Option<&str>, code: &str) -> String {
+pub(crate) fn matter_link(origin: Option<&str>, code: &str) -> String {
     let path = format!("/app/projects/{code}");
     match origin {
         Some(origin) => format!("{}{path}", origin.trim_end_matches('/')),

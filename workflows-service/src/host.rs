@@ -422,6 +422,9 @@ async fn run_host(
     // Every Project channel is reached through its owning Firm's own Slack
     // bot, unsealed from the Firm's `slack_bot_token` credential (ENG-392).
     let project_slack_bots: Arc<dyn ProjectSlackBots> = Arc::new(FirmSlackBots::new(kms.clone()));
+    let deadline_slack_store = application_store.clone();
+    let deadline_slack_bots = Arc::clone(&project_slack_bots);
+    let deadline_slack_origin = portal_origin.clone();
     let dbos_nightly_surreal = application_store.clone();
     let dbos_notation_surreal = application_store.clone();
     let dbos_nightly_slack = slack_bot.clone();
@@ -539,6 +542,12 @@ async fn run_host(
             },
             move |dbos| {
                 let mut launchers = register_external(dbos)?;
+                launchers.push(crate::deadline_slack::register(
+                    dbos,
+                    deadline_slack_store,
+                    deadline_slack_bots,
+                    deadline_slack_origin,
+                )?);
                 let mut registered_ingress = crate::dbos_ingress::WorkerIngress {
                     manual_schedules: manual_token.map(|token| {
                         crate::dbos_ingress::ManualIngress {
