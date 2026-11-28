@@ -55,6 +55,35 @@ directory. A Firm member without directory access can run `list` with the UUID.
 
 `create` needs the `manage_legal_plans` capability, which only Owner and an Admin of the Firm hold.
 
+## Configure filing rules from a private checkout
+
+An Owner or Firm Admin can keep one YAML file per plan in a private Firm Library checkout beside its skills, or in
+another approved private repository. Supply its path explicitly. The import updates only the selected Firm and can
+validate the entire document without saving it.
+
+```yaml
+name: Example Plan
+filing_rules:
+  - benefit_code: EXAMPLE-REVIEW
+    effective_on: 2026-01-01
+    trigger: service_completed
+    filing_window_days: 30
+    filing_destination: https://claims.example/
+    filer: Handling lawyer
+```
+
+```bash
+navigator legal-plans --firm <firm> configure --file <private-yaml> --dry-run
+navigator legal-plans --firm <firm> configure --file <private-yaml>
+```
+
+Use one benefit rule per exact code and effective date. The service date selects the latest applicable version when a
+claim first records its rule. A version accepts identical retries. For revised terms, enter a new effective date. Use
+`hours_exhausted`, `matter_closed`, or `hours_exhausted_or_matter_closed` when the verified agreement uses those
+milestones. Omit `filing_window_days` if the agreement supplies no verified calendar-day window. The configured filer
+and destination guide manual handling. Store member identifiers, claim evidence and credentials in the authorized matter
+and provider systems. Keep negotiated plan terms private.
+
 ## A plan matter, from referral to payment
 
 1. **Case request.** The plan emails a case request that names its Plan Case Number. ARAG asks the Firm to answer
@@ -93,6 +122,8 @@ directory. A Firm member without directory access can run `list` with the UUID.
    ```
 
    The example uses synthetic terms. When setting a cap shape, enter the complete terms from the verified authorization.
+   If the engagement separately establishes a member-paid hourly rate, include `--member-rate-cents-per-hour` with those
+   terms.
 
    `navigator project legal-plan show` displays the recorded terms.
 

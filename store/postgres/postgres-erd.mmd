@@ -1141,6 +1141,15 @@ erDiagram
         string reference
         string reference_kind
     }
+    legal_plan_filing_rule {
+        string benefit_code
+        datetime effective_on
+        string filer
+        string filing_destination
+        int filing_window_days
+        uuid legal_plan_id
+        string trigger
+    }
     letter {
         string direction
         uuid id
@@ -1722,6 +1731,7 @@ erDiagram
         int plan_contested_cap_cents
         string plan_matter_type
         string plan_member_id
+        int plan_member_rate_cents_per_hour
         int plan_paralegal_rate_cents_per_hour
         int plan_rate_cents_per_hour
         string plan_state
@@ -2475,6 +2485,7 @@ erDiagram
     project }o--|| legal_plan_claim : references
     legal_plan_claim }o--|| legal_plan_claim_event : references
     person }o--|| legal_plan_claim_event : references
+    legal_plan }o--|| legal_plan_filing_rule : references
     mailroom }o--|| letter : references
     address }o--|| mailroom : references
     person }o--|| matter_billing_batch : references

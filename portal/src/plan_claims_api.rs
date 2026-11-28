@@ -13,12 +13,15 @@ use uuid::Uuid;
 
 use super::{legal_plans_api, participates_as_firm, ApiError, ApiState, LawyerSession};
 
-async fn scope(state: &ApiState, lawyer: &LawyerSession, project: Uuid) -> Result<Uuid, ApiError> {
+async fn scope(
+    state: &ApiState,
+    lawyer: &LawyerSession,
+    project: Uuid,
+) -> Result<(store::projects::Project, Uuid), ApiError> {
     if !participates_as_firm(state, lawyer, project).await {
         return Err(ApiError::NotFound);
     }
-    let (_, firm) = legal_plans_api::firm_project(state, &lawyer.0, project).await?;
-    Ok(firm)
+    legal_plans_api::firm_project(state, &lawyer.0, project).await
 }
 
 fn response<T: serde::Serialize>(result: Result<T, ClaimError>) -> Response {
@@ -29,7 +32,9 @@ fn response<T: serde::Serialize>(result: Result<T, ClaimError>) -> Response {
                 ClaimError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
                 ClaimError::NotFound => StatusCode::NOT_FOUND,
                 ClaimError::Duplicate => StatusCode::CONFLICT,
-                ClaimError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                ClaimError::Database(_) | ClaimError::Deadline(_) => {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
             };
             (
                 status,
@@ -45,7 +50,7 @@ pub(super) async fn list(
     lawyer: LawyerSession,
     Path(project): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let firm = scope(&state, &lawyer, project).await?;
+    let (_, firm) = scope(&state, &lawyer, project).await?;
     let pg = match legal_plans_api::plan_store().await {
         Ok(pg) => pg,
         Err(unavailable) => return Ok(unavailable),
@@ -59,14 +64,17 @@ pub(super) async fn record(
     Path(project): Path<Uuid>,
     Json(change): Json<Change>,
 ) -> Result<Response, ApiError> {
-    let firm = scope(&state, &lawyer, project).await?;
+    let (matter, firm) = scope(&state, &lawyer, project).await?;
+    let timezone = store::projects::calendar_timezone(&state.application_store, &matter)
+        .await
+        .map_err(|_| ApiError::Db("read the Project calendar timezone".to_owned()))?;
     let actor = lawyer.0.person_id.ok_or(ApiError::Forbidden)?;
     let pg = match legal_plans_api::plan_store().await {
         Ok(pg) => pg,
         Err(unavailable) => return Ok(unavailable),
     };
     Ok(response(
-        plan_claims::record(&pg, project, firm, actor, change).await,
+        plan_claims::record(&pg, project, firm, actor, timezone, change).await,
     ))
 }
 

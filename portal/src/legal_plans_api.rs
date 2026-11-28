@@ -3,11 +3,12 @@
 //! to one by its plan columns, the Plan Case Number first among them.
 use super::{ApiError, ApiState, LawyerSession};
 use axum::{
-    extract::{Path, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
+use model::plan_filing::PlanBillingConfiguration;
 use serde::{Deserialize, Serialize};
 use store::firm_capability::FirmCapability;
 use store::legal_plans::{self, LegalPlan, LegalPlanError, NewLegalPlan, PlanBenefitTerms};
@@ -64,6 +65,9 @@ fn plan_error(error: &LegalPlanError) -> Response {
         LegalPlanError::PlanNotInFirm => (StatusCode::UNPROCESSABLE_ENTITY, "legal_plan_refused"),
         LegalPlanError::NotFound => (StatusCode::NOT_FOUND, "legal_plan_not_found"),
         LegalPlanError::Exists => (StatusCode::CONFLICT, "legal_plan_exists"),
+        LegalPlanError::FilingRuleConflict => {
+            (StatusCode::CONFLICT, "legal_plan_filing_rule_conflict")
+        }
         LegalPlanError::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "legal_plan_refused"),
     };
     (status, Json(serde_json::json!({ "error": code }))).into_response()
@@ -105,6 +109,44 @@ pub(super) async fn create(
         Ok(plan) => (StatusCode::CREATED, Json(plan)).into_response(),
         Err(e) => plan_error(&e),
     })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ConfigurationOptions {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// Apply Firm-owned plan metadata and filing rules without echoing private terms.
+pub(super) async fn configure(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path(firm): Path<Uuid>,
+    Query(options): Query<ConfigurationOptions>,
+    input: Result<Json<PlanBillingConfiguration>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    if session.scope.is_some() {
+        return Err(ApiError::NotFound);
+    }
+    authorize(&state, &session, firm, FirmCapability::ManageLegalPlans).await?;
+    let Ok(Json(input)) = input else {
+        return Ok((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": "legal_plan_configuration_invalid"})),
+        )
+            .into_response());
+    };
+    let pg = match plan_store().await {
+        Ok(pg) => pg,
+        Err(unavailable) => return Ok(unavailable),
+    };
+    Ok(
+        match legal_plans::configure(&pg, firm, &input, options.dry_run).await {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(error) => plan_error(&error),
+        },
+    )
 }
 
 /// The plan one Project is paid through: the Firm's plan row (portal,

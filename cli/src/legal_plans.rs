@@ -3,7 +3,7 @@
 //! which links one matter to its plan by Plan Case Number. The plans are Firm
 //! data held by the deployment, never by this repository
 //! (`docs/legal-plans.md`).
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -11,6 +11,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
 use clap::{Args, Subcommand, ValueEnum};
 use model::plan_benefit::{PlanBenefitTerms, PlanCapShape};
+use model::plan_filing::PlanBillingConfiguration;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -33,6 +34,18 @@ pub enum LegalPlansCmd {
         /// Show each carrier’s count and verified dollars awaiting filing review.
         #[arg(long)]
         filing_review: bool,
+        /// Omit claim amounts from the filing-review table.
+        #[arg(long, requires = "filing_review")]
+        counts_only: bool,
+    },
+    /// Register a plan and effective-dated rules from a private YAML file.
+    Configure {
+        /// Read the policy at this explicit path.
+        #[arg(long)]
+        file: PathBuf,
+        /// Verify the policy against the Firm without saving it.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Add a plan to the Firm's vocabulary.
     Create {
@@ -93,6 +106,9 @@ pub struct PlanFields {
     /// Verified paralegal rate, in cents per hour.
     #[arg(long, requires = "cap_shape")]
     pub paralegal_rate_cents_per_hour: Option<i32>,
+    /// Verified member-paid rate for separately agreed uncovered work, in cents per hour.
+    #[arg(long, requires = "cap_shape")]
+    pub member_rate_cents_per_hour: Option<i32>,
     /// `document_review`, `letter`, `uncontested_divorce`, `court_appearance`,
     /// `contested_divorce`, `custody`, or `probate`.
     #[arg(long)]
@@ -136,6 +152,7 @@ impl PlanFields {
                 contested_cap_cents: self.contested_cap_cents,
                 plan_rate_cents_per_hour: self.plan_rate_cents_per_hour,
                 paralegal_rate_cents_per_hour: self.paralegal_rate_cents_per_hour,
+                member_rate_cents_per_hour: self.member_rate_cents_per_hour,
             };
             terms.validate().map_err(|diagnostic| anyhow!(diagnostic))?;
             body.insert("benefit_terms".into(), serde_json::to_value(terms)?);
@@ -173,6 +190,13 @@ pub async fn run(firm: String, host: Option<String>, action: LegalPlansCmd) -> E
             ..
         }
     );
+    let counts_only = matches!(
+        action,
+        LegalPlansCmd::Collections {
+            counts_only: true,
+            ..
+        }
+    );
     let result = async {
         let (base, token) = remote::resolve(host.as_deref())?;
         firm_command(&base, &token, &firm, action).await
@@ -181,27 +205,52 @@ pub async fn run(firm: String, host: Option<String>, action: LegalPlansCmd) -> E
     if filing_review {
         return crate::billing::finish(
             "legal-plans",
-            result.and_then(|value| render_filing_review(&value)),
+            result.and_then(|value| render_filing_review(&value, counts_only)),
         );
     }
     finish("legal-plans", result)
 }
 
-fn render_filing_review(report: &Value) -> Result<String> {
+fn render_filing_review(report: &Value, counts_only: bool) -> Result<String> {
     use std::fmt::Write;
 
     let review = model::billing_report::FilingReview::deserialize(&report["filing_review"])
         .context("the site did not return complete filing-review totals")?;
-    let mut text = String::from("Carrier   Claims awaiting filing review   Verified amount\n");
-    for (carrier, total) in [("ARAG", review.arag), ("LegalEASE", review.legal_ease)] {
-        writeln!(
+    let mut text = String::from("Carrier   Claims awaiting filing review");
+    if !counts_only {
+        text.push_str("   Verified amount");
+    }
+    text.push('\n');
+    for (carrier, total) in [("ARAG", review.arag), ("LegalEASE", review.legal_ease)]
+        .into_iter()
+        .chain(
+            review
+                .other_plans
+                .iter()
+                .map(|(name, total)| (name.as_str(), *total)),
+        )
+    {
+        write!(
             text,
-            "{carrier:<9} {:>28}   {:>15}",
-            total.eligible_unsubmitted_count,
-            crate::billing::money(Some(total.eligible_unsubmitted_cents))
+            "{carrier:<9} {:>28}",
+            total.eligible_unsubmitted_count
         )?;
+        if !counts_only {
+            write!(
+                text,
+                "   {:>15}",
+                crate::billing::money(Some(total.eligible_unsubmitted_cents))
+            )?;
+        }
+        text.push('\n');
     }
     Ok(text)
+}
+
+fn read_configuration(file: &Path) -> Result<PlanBillingConfiguration> {
+    let content = std::fs::read(file).context("read private Legal Plan configuration")?;
+    serde_yaml::from_slice(&content)
+        .map_err(|_| anyhow!("invalid private Legal Plan configuration; check the YAML schema"))
 }
 
 async fn firm_command(base: &str, token: &str, firm: &str, action: LegalPlansCmd) -> Result<Value> {
@@ -227,6 +276,23 @@ async fn firm_command(base: &str, token: &str, firm: &str, action: LegalPlansCmd
             .await
         }
 
+        LegalPlansCmd::Configure { file, dry_run } => {
+            let configuration = read_configuration(&file)?;
+            let response = client
+                .put(format!("{route}/configuration"))
+                .query(&[("dry_run", dry_run)])
+                .bearer_auth(token)
+                .json(&configuration)
+                .timeout(Duration::from_secs(30))
+                .send()
+                .await
+                .context("request private Legal Plan configuration")?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(anyhow!("Legal Plan configuration refused ({status})"));
+            }
+            Ok(json!({ "configuration": if dry_run { "validated" } else { "saved" } }))
+        }
         LegalPlansCmd::Create {
             name,
             portal,
@@ -402,6 +468,7 @@ enum ClaimService {
     AragRepresentation,
     LegalEaseLegalGuard,
     LegalEasePaymentAuthorization,
+    Manual,
 }
 
 #[derive(Args)]
@@ -885,10 +952,42 @@ mod collections_tests {
             LegalPlansCmd::Collections {
                 totals_only: false,
                 filing_review: false,
+                counts_only: false,
             },
         )
         .await
         .unwrap();
         assert_eq!(result, report);
+    }
+}
+
+#[cfg(test)]
+mod private_configuration_tests {
+    use super::*;
+
+    #[test]
+    fn private_plan_configuration_rejects_case_data_without_echoing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legal-plan.yaml");
+        std::fs::write(
+            &path,
+            "name: Example Plan\nfiling_rules: []\ncase_number: SYNTHETIC_MARKER\n",
+        )
+        .unwrap();
+        let error = read_configuration(&path).unwrap_err();
+        assert!(!format!("{error:#}").contains("SYNTHETIC_MARKER"));
+    }
+
+    #[test]
+    fn filing_review_can_omit_amounts_including_for_configured_plans() {
+        let report = json!({"filing_review": {
+            "ARAG": {"eligible_unsubmitted_count": 0, "eligible_unsubmitted_cents": 0},
+            "LegalEASE": {"eligible_unsubmitted_count": 0, "eligible_unsubmitted_cents": 0},
+            "Example Plan": {"eligible_unsubmitted_count": 1, "eligible_unsubmitted_cents": 100}
+        }});
+        let text = render_filing_review(&report, true).unwrap();
+        assert!(text.contains("Example Plan"));
+        assert!(!text.contains('$'));
+        assert!(!text.contains("Verified amount"));
     }
 }

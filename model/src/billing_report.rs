@@ -1,10 +1,12 @@
 //! Read-only billing views used by Navigator and the portal.
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Claims with verified fee terms awaiting a lawyer's filing review.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct FilingReviewTotal {
     pub eligible_unsubmitted_count: usize,
     pub eligible_unsubmitted_cents: i64,
@@ -17,6 +19,8 @@ pub struct FilingReview {
     pub arag: FilingReviewTotal,
     #[serde(rename = "LegalEASE")]
     pub legal_ease: FilingReviewTotal,
+    #[serde(flatten)]
+    pub other_plans: BTreeMap<String, FilingReviewTotal>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

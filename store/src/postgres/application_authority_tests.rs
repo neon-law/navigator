@@ -954,6 +954,7 @@ async fn verified_plan_terms_follow_the_selected_benefit() {
             contested_cap_cents: None,
             plan_rate_cents_per_hour: Some(9000),
             paralegal_rate_cents_per_hour: Some(4500),
+            member_rate_cents_per_hour: Some(100),
         };
         let read = || legal_plans::project_benefit_terms(&pg, firm, project);
         projects::set_plan_columns_with_benefit(&source, &pg, project, &columns, Some(&terms))

@@ -53,6 +53,9 @@ pub struct PlanBenefitTerms {
     pub contested_cap_cents: Option<i32>,
     pub plan_rate_cents_per_hour: Option<i32>,
     pub paralegal_rate_cents_per_hour: Option<i32>,
+    /// Verified hourly rate paid by the member for separately agreed uncovered work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_rate_cents_per_hour: Option<i32>,
 }
 
 impl PlanBenefitTerms {
@@ -84,6 +87,7 @@ impl PlanBenefitTerms {
         if [
             self.plan_rate_cents_per_hour,
             self.paralegal_rate_cents_per_hour,
+            self.member_rate_cents_per_hour,
         ]
         .into_iter()
         .flatten()

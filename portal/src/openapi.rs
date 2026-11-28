@@ -1487,6 +1487,46 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/firms/{id}/legal-plans/configuration": {
+          "put": {
+            "summary": "Configure a Firm's Legal Plan and its dated filing rules",
+            "description": "Adds one plan by name or updates its supplied metadata, preserving omitted fields and existing filing rules. Rules with changed terms require a new effective date. The manage_legal_plans capability and an unscoped session are required.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+              { "name": "dry_run", "in": "query", "schema": { "type": "boolean", "default": false } }
+            ],
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "type": "object", "additionalProperties": false, "required": ["name"], "properties": {
+                "name": { "type": "string" },
+                "contact": { "type": ["string", "null"] },
+                "portal": { "type": ["string", "null"] },
+                "acceptance_sla_hours": { "type": ["integer", "null"], "minimum": 1 },
+                "turnaround_sla_days": { "type": ["integer", "null"], "minimum": 1 },
+                "reporting_requirements": { "type": ["string", "null"] },
+                "filing_rules": { "type": "array", "items": { "type": "object", "additionalProperties": false,
+                  "required": ["benefit_code", "effective_on", "trigger", "filing_destination", "filer"],
+                  "properties": {
+                    "benefit_code": { "type": "string" },
+                    "effective_on": { "type": "string", "format": "date" },
+                    "trigger": { "type": "string", "enum": ["service_completed", "hours_exhausted", "matter_closed", "hours_exhausted_or_matter_closed"] },
+                    "filing_window_days": { "type": ["integer", "null"], "minimum": 1 },
+                    "filing_destination": { "type": "string" },
+                    "filer": { "type": "string" }
+                  }
+                } }
+              } }
+            } } },
+            "responses": {
+              "204": { "description": "Configuration applied, or validated only during a dry run" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Session lacks lawyer-tier access" },
+              "404": { "description": "Firm unavailable to this session" },
+              "409": { "description": "Ambiguous plan name or changed terms for an existing effective date" },
+              "422": { "description": "Invalid configuration" },
+              "503": { "description": "Legal Plan storage is unavailable" }
+            }
+          }
+        },
         "/app/api/billing": {
           "get": {
             "summary": "Read the signed-in lawyer's billing worklist",

@@ -1028,6 +1028,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "legal_plan_filing_rule",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "letter",
         "kind": "table",
         "accessible": true

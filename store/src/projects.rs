@@ -2251,7 +2251,7 @@ pub async fn set_plan_columns_with_benefit(
 fn plan_benefit_columns<'a>(
     columns: &'a PlanColumns,
     terms: Option<&model::plan_benefit::PlanBenefitTerms>,
-) -> [crate::postgres::projects::Column<'a>; 6] {
+) -> [crate::postgres::projects::Column<'a>; 7] {
     use crate::postgres::projects::Column::{Integer, KeepPlanBenefit, Text};
 
     if let Some(terms) = terms {
@@ -2265,6 +2265,10 @@ fn plan_benefit_columns<'a>(
                 "plan_paralegal_rate_cents_per_hour",
                 terms.paralegal_rate_cents_per_hour,
             ),
+            Integer(
+                "plan_member_rate_cents_per_hour",
+                terms.member_rate_cents_per_hour,
+            ),
         ]
     } else {
         [
@@ -2274,6 +2278,7 @@ fn plan_benefit_columns<'a>(
             "plan_contested_cap_cents",
             "plan_rate_cents_per_hour",
             "plan_paralegal_rate_cents_per_hour",
+            "plan_member_rate_cents_per_hour",
         ]
         .map(|name| KeepPlanBenefit(name, columns.legal_plan_id, columns.benefit_code.as_deref()))
     }

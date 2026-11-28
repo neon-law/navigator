@@ -27,8 +27,10 @@ fn legal_ease_cap_excludes_pending_minutes_and_arag_requires_its_own_service_pat
         }),
     );
     assert_eq!(work.estimate().unwrap(), Some(12_000));
-    assert!(work.validate("ARAG", date("2026-11-21")).is_err());
-    assert!(work.validate("LegalEASE", date("2026-11-21")).is_ok());
+    assert!(work.validate("ARAG", date("2026-11-21"), false).is_err());
+    assert!(work
+        .validate("LegalEASE", date("2026-11-21"), false)
+        .is_ok());
     assert_eq!(
         claim(Service::AragAdviceOnly, None).estimate().unwrap(),
         None
@@ -41,9 +43,11 @@ fn legal_ease_cap_excludes_pending_minutes_and_arag_requires_its_own_service_pat
         }),
     );
     assert_eq!(fixed.estimate().unwrap(), Some(9_500));
-    assert!(fixed.validate("Legal Ease", date("2026-11-21")).is_ok());
     assert!(fixed
-        .validate("Legal Ease ARAG", date("2026-11-21"))
+        .validate("Legal Ease", date("2026-11-21"), false)
+        .is_ok());
+    assert!(fixed
+        .validate("Legal Ease ARAG", date("2026-11-21"), false)
         .is_err());
 }
 
@@ -137,6 +141,8 @@ fn the_rate_includes_unpaid_work_and_reports_cash_with_unknown_time_separately()
             state: Json(state),
             recorded_this_week: true,
             net_collected_this_week_cents: net_cents,
+            closed_on: None,
+            filing_rule: None,
         }
     };
     let worklist = summarize(
@@ -219,6 +225,8 @@ fn filing_review_groups_verified_unfiled_work_by_carrier() {
             state: Json(state),
             recorded_this_week: true,
             net_collected_this_week_cents: 0,
+            closed_on: None,
+            filing_rule: None,
         }
     };
     let report = summarize(
@@ -253,4 +261,69 @@ fn filing_review_groups_verified_unfiled_work_by_carrier() {
     let empty = serde_json::to_value(summarize(today, vec![], false).unwrap()).unwrap();
     assert_eq!(empty["filing_review"]["ARAG"], totals(0, 0));
     assert_eq!(empty["filing_review"]["LegalEASE"], totals(0, 0));
+}
+
+#[test]
+fn configured_claim_uses_the_benefit_trigger_and_filing_window() {
+    let mut work = claim(
+        Service::LegalEasePaymentAuthorization,
+        Some(Authorization::CappedHours {
+            reference: "synthetic-authorization".into(),
+            rate_cents_per_hour: 100,
+            covered_minutes: 120,
+            pending_minutes: 15,
+        }),
+    );
+    let mut rule = FilingRule {
+        benefit_code: work.benefit.clone(),
+        effective_on: date("2026-10-01"),
+        trigger: FilingTrigger::HoursExhaustedOrMatterClosed,
+        filing_window_days: Some(30),
+        filing_destination: "https://plan.example/claims".into(),
+        filer: "Handling lawyer".into(),
+    };
+    assert_eq!(
+        work.filing(Some(&rule), None, date("2026-11-02"))
+            .unwrap()
+            .status,
+        FilingStatus::Accruing
+    );
+    let closed = Some(date("2026-11-03"));
+    let filing = work
+        .filing(Some(&rule), closed, date("2026-11-03"))
+        .unwrap();
+    assert_eq!(filing.status, FilingStatus::Ready);
+    assert_eq!(filing.due_on, Some(date("2026-12-03")));
+    assert_eq!(
+        work.filing(Some(&rule), closed, date("2026-12-04"))
+            .unwrap()
+            .status,
+        FilingStatus::Expired
+    );
+    work.attorney_minutes = Some(120);
+    assert_eq!(
+        work.filing(Some(&rule), closed, date("2026-12-01"))
+            .unwrap()
+            .due_on,
+        Some(date("2026-12-01"))
+    );
+    rule.trigger = FilingTrigger::ServiceCompleted;
+    work.authorization = None;
+    assert_eq!(
+        work.filing(Some(&rule), None, date("2026-11-02"))
+            .unwrap()
+            .status,
+        FilingStatus::VerifyTerms
+    );
+}
+
+#[test]
+fn manual_service_requires_a_configured_benefit_without_overriding_named_carrier_paths() {
+    let mut work = claim(Service::Manual, None);
+    let today = date("2026-11-02");
+    assert!(work.validate("Example Plan", today, false).is_err());
+    assert!(work.validate("Example Plan", today, true).is_ok());
+    assert!(work.validate("ARAG", today, true).is_err());
+    work.service = Service::AragRepresentation;
+    assert!(work.validate("Example Plan", today, true).is_err());
 }

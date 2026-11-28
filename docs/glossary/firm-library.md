@@ -12,6 +12,7 @@ The repository holds:
 
 - `AGENTS.md` — the Firm's rules for agents working in its Projects: its name, vendors, accounts, and voice.
 - `skills/<skill>/SKILL.md` — the Firm's own Agent Skills. Nothing here ships in a public `navigator` release.
+- Optional private Legal Plan configuration files, applied explicitly with [the Legal Plan import](../legal-plans.md).
 - `drafts/*.md` — [Drafts](draft.md) in exactly the Project repository format, validated by the same rules.
 - `library.yaml` — a closed manifest. `retainer: <code>` names the [Template](template.md) every new matter of the Firm
   opens on: a Draft in the library, or a shared-catalog code. Its `kind` must open a matter. An unknown key is refused.

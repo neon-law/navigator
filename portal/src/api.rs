@@ -321,6 +321,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             post(legal_plans_api::create),
         ),
         (
+            "PUT",
+            "/app/api/firms/{id}/legal-plans/configuration",
+            put(legal_plans_api::configure),
+        ),
+        (
             "GET",
             "/app/api/projects/{id}/legal-plan",
             get(legal_plans_api::project),
