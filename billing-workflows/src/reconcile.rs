@@ -483,21 +483,15 @@ mod tests {
     fn the_finance_notice_names_codes_and_cents_and_nothing_client_facing() {
         let body = super::finance_message(&report(), false);
 
-        assert!(
-            !body.contains("Invoices"),
-            "invoices are not mirrored: {body}"
-        );
-        assert!(
-            body.contains("1 deposit(s), 0 refund(s), 1 withdrawal(s)"),
-            "{body}"
-        );
-        assert!(body.contains("acme-formation deposit $5,000.00"), "{body}");
-        assert!(body.contains("libra-estate draw $1,234.56"), "{body}");
+        assert!(!body.contains("Invoices"), "invoices are not mirrored");
+        assert!(body.contains("1 deposit(s), 0 refund(s), 1 withdrawal(s)"),);
+        assert!(body.contains("acme-formation deposit $5,000.00"));
+        assert!(body.contains("libra-estate draw $1,234.56"));
 
         for forbidden in ["@", "linear.app", "http", "/app/projects"] {
             assert!(
                 !body.contains(forbidden),
-                "the #finance notice must not carry {forbidden:?}: {body}"
+                "the #finance notice must not carry {forbidden:?}"
             );
         }
     }
@@ -511,20 +505,17 @@ mod tests {
         report.iolta_unscoped = 3;
 
         let body = super::finance_message(&report, false);
-        assert!(
-            body.contains(
-                "2 trust movement(s) unscoped, 1 withdrawal(s) refused, 3 bank account(s) unscoped"
-            ),
-            "{body}"
-        );
+        assert!(body.contains(
+            "2 trust movement(s) unscoped, 1 withdrawal(s) refused, 3 bank account(s) unscoped"
+        ),);
     }
 
     /// A quiet night still says so, without a "needs a look" line.
     #[test]
     fn a_quiet_night_reports_zeroes_and_flags_nothing() {
         let body = super::finance_message(&super::ReconcileReport::default(), false);
-        assert!(body.contains("0 deposit(s)"), "{body}");
-        assert!(!body.contains("Needs a look"), "{body}");
+        assert!(body.contains("0 deposit(s)"));
+        assert!(!body.contains("Needs a look"));
     }
 
     /// The notice lands in `#finance` and nowhere else — one post, to the

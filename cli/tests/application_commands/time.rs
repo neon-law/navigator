@@ -54,7 +54,7 @@ async fn backfilled_time_is_added_edited_approved_and_billed_once() {
         assert_eq!(site.json(&add)["id"], id.as_str());
         let billing = site.json(&["billing"]);
         let time = billing["project_time"].as_array().unwrap();
-        assert_eq!(time.len(), 1, "{billing:#}");
+        assert_eq!(time.len(), 1);
         assert_eq!(time[0]["id"], entry.as_str());
         assert_eq!(time[0]["minutes"], 18);
         assert_eq!(time[0]["backfilled"], true);
