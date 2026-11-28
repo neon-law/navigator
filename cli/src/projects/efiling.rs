@@ -921,6 +921,7 @@ mod tests {
             case_number: Some("26EXCV00099".into()),
             filed_on: None,
             judge_signed: true,
+            fee_receipt: None,
         };
         let email = files.path().join("rejected.eml");
         let recorded = record(Some(&host), Some(CODE), &email, overrides.clone()).await;
