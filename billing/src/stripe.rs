@@ -25,6 +25,14 @@ struct StripeObject {
 }
 
 #[derive(Deserialize)]
+struct Customer {
+    id: String,
+    livemode: bool,
+    #[serde(default)]
+    deleted: bool,
+}
+
+#[derive(Deserialize)]
 struct Invoice {
     id: String,
     livemode: bool,
@@ -86,6 +94,58 @@ impl<'a> StripeInvoiceClient<'a> {
             ));
         }
         Ok(account.id)
+    }
+
+    /// The billed party's Stripe Customer on this account: the saved one when
+    /// it still exists, else a new one created under `key`'s idempotency.
+    pub async fn ensure_customer(
+        &self,
+        saved: Option<&str>,
+        key: Uuid,
+        name: &str,
+        email: &str,
+    ) -> Result<String, BillingError> {
+        let live = self.live_mode();
+        if let Some(saved) = saved.filter(|id| stripe_identifier(id, "cus_")) {
+            let customer: Customer = self
+                .call(Method::GET, &format!("customers/{saved}"), None, &[])
+                .await?;
+            if customer.id == saved && customer.livemode == live && !customer.deleted {
+                return Ok(customer.id);
+            }
+        }
+        let customer: StripeObject = self
+            .call(
+                Method::POST,
+                "customers",
+                Some(&format!("{key}/customer")),
+                &[("name", name), ("email", email)],
+            )
+            .await?;
+        if customer.livemode != live || !customer.id.starts_with("cus_") {
+            return Err(provider_error("Stripe returned an invalid customer"));
+        }
+        Ok(customer.id)
+    }
+
+    /// Create and confirm an unsent draft for a known customer. All writes
+    /// use the batch's stable key and attach items to their invoice.
+    pub async fn create_draft(
+        &self,
+        batch: Uuid,
+        request: &InvoiceRequest,
+        customer: &str,
+    ) -> Result<InvoiceId, BillingError> {
+        let due = request
+            .due_date
+            .ok_or_else(|| provider_error("invoice due date missing"))?
+            .and_hms_opt(23, 59, 59)
+            .ok_or_else(|| provider_error("invoice due date invalid"))?
+            .and_utc()
+            .timestamp()
+            .to_string();
+        self.create_draft_for_customer(batch, request, customer, &due)
+            .await
     }
 
     /// Create and confirm an unsent draft. All writes use the batch's stable

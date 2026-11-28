@@ -591,15 +591,19 @@ async fn approval_prices_only_the_selected_plan_claim_and_replaces_attested_time
         .await
         .unwrap()
         .is_empty());
-    assert!(time_entries::mark_invoiced(
-        &pg,
-        &[entry.id],
-        fixture.lawyer,
-        "synthetic-invoice",
-        false
+    let ledger: Uuid = sqlx::query_scalar(
+        "INSERT INTO matter_invoice (id,project_id,source,external_id,reference,status,amount_cents,currency)
+         VALUES ($1,$2,'stripe','in_synthetic','Matter synthetic','sent',1000,'USD') RETURNING id",
     )
+    .bind(Uuid::new_v4())
+    .bind(project.id)
+    .fetch_one(pg.pool())
     .await
-    .is_err());
+    .unwrap();
+    assert!(matches!(
+        time_entries::mark_invoiced(&pg, &[entry.id], fixture.lawyer, ledger, false).await,
+        Err(time_entries::TimeEntryError::Invalid(_))
+    ), "claim-linked time is never invoiced directly");
     let mut connection = pg.pool().acquire().await.unwrap();
     let rows = plan_claims::for_matter_billing(&mut connection, &project, firm)
         .await

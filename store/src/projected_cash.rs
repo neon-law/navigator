@@ -22,7 +22,7 @@
 //! a matter.
 use std::collections::BTreeMap;
 
-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, NaiveDate};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -49,7 +49,7 @@ pub enum ProjectedCashError {
     #[error(transparent)]
     Projects(#[from] crate::projects::ProjectStoreError),
     #[error(transparent)]
-    Invoices(Box<crate::xero_invoices::XeroInvoiceError>),
+    Invoices(Box<crate::matter_invoices::MatterInvoiceError>),
     #[error(transparent)]
     Brands(#[from] crate::brands::BrandError),
 }
@@ -60,8 +60,8 @@ impl From<MatterProjectionError> for ProjectedCashError {
     }
 }
 
-impl From<crate::xero_invoices::XeroInvoiceError> for ProjectedCashError {
-    fn from(error: crate::xero_invoices::XeroInvoiceError) -> Self {
+impl From<crate::matter_invoices::MatterInvoiceError> for ProjectedCashError {
+    fn from(error: crate::matter_invoices::MatterInvoiceError) -> Self {
         Self::Invoices(Box::new(error))
     }
 }
@@ -328,7 +328,7 @@ fn into_groups(groups: BTreeMap<String, (i64, usize)>) -> Vec<CashGroup> {
 /// names, and its projection.
 fn fold_firm(
     matters: &[FirmMatter<'_>],
-    invoices: &[crate::xero_invoices::FirmInvoice],
+    invoices: &[crate::matter_invoices::FirmInvoice],
     today: NaiveDate,
 ) -> FirmProjectedCash {
     let today = Quarter::of(today);
@@ -363,7 +363,7 @@ fn fold_firm(
         }
     }
     for invoice in invoices.iter().filter(|invoice| invoice.currency == "USD") {
-        let quarter = Quarter::of(invoice.issued_at.date_naive());
+        let quarter = Quarter::of(invoice.issued_on);
         if let Some(totals) = by_quarter.get_mut(&quarter) {
             totals.1 += invoice.amount_cents;
             totals.2 += invoice.amount_paid_cents;
@@ -426,19 +426,15 @@ pub async fn firm_rollup(
             projection,
         })
         .collect();
-    let since = Utc.from_utc_datetime(
-        &Quarter(Quarter::of(on).0 - 3)
-            .start()
-            .and_hms_opt(0, 0, 0)
-            .unwrap_or_default(),
-    );
-    let invoices = crate::xero_invoices::for_firm_since(application_store, firm_id, since).await?;
+    let since = Quarter(Quarter::of(on).0 - 3).start();
+    let invoices =
+        crate::matter_invoices::for_firm_since(application_store, firm_id, since).await?;
     Ok(fold_firm(&matters, &invoices, on))
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::{NaiveDate, TimeZone, Utc};
+    use chrono::NaiveDate;
 
     use super::{fold_firm, FirmMatter, Quarter};
     use crate::contingency_terms::CostsDeducted;
@@ -561,14 +557,14 @@ mod tests {
         let matters: Vec<_> = (0..5)
             .map(|_| firm_matter("Neon Law", &[], estimated((2027, 1, 15))))
             .collect();
-        let issued = |y, m, d| Utc.with_ymd_and_hms(y, m, d, 12, 0, 0).unwrap();
-        let invoice = |issued_at, currency: &str| crate::xero_invoices::FirmInvoice {
+        let issued = |y, m, d| NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        let invoice = |issued_on, currency: &str| crate::matter_invoices::FirmInvoice {
             project_id: uuid::Uuid::nil(),
-            xero_invoice_id: "INV-1".to_string(),
-            status: "PAID".to_string(),
+            invoice_id: uuid::Uuid::nil(),
+            status: crate::matter_invoices::Status::Paid,
             amount_cents: 10_000,
             amount_paid_cents: 4_000,
-            issued_at,
+            issued_on,
             currency: currency.to_string(),
             brand: "neon".to_string(),
             lawyer_dris: vec![],

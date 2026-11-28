@@ -142,6 +142,30 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
         if current.is_none() && line.starts_with("DROP VIEW ") && line.ends_with(';') {
             continue;
         }
+        // An index changes no table, column, or reference shape.
+        if current.is_none()
+            && line.starts_with("DROP INDEX ")
+            && line.ends_with(';')
+            && line.split_whitespace().count() == 3
+        {
+            continue;
+        }
+        // A retired table leaves the model, and nothing may still name it.
+        if let Some(dropped) = line
+            .strip_prefix("DROP TABLE ")
+            .and_then(|rest| rest.strip_suffix(';'))
+            .filter(|_| current.is_none())
+        {
+            let dropped = dropped.trim().trim_matches('"');
+            if tables.remove(dropped).is_none()
+                || tables
+                    .values()
+                    .any(|table: &Table| table.references.contains(dropped))
+            {
+                return Err(Error::UnsupportedSql(line.to_string()));
+            }
+            continue;
+        }
         // Privileges do not change table, column, or reference shape.
         if let Some(revoked) = line.strip_prefix("REVOKE ALL ON ") {
             let target = revoked.strip_suffix(" FROM PUBLIC;");
@@ -306,7 +330,9 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
                 }
                 continue;
             }
-            if let [name, "ALTER", "COLUMN", column, "DROP", "NOT", "NULL"] = words.as_slice() {
+            if let [name, "ALTER", "COLUMN", column, "DROP" | "SET", "NOT", "NULL"] =
+                words.as_slice()
+            {
                 if !tables
                     .get(*name)
                     .is_some_and(|table| table.columns.contains_key(*column))
@@ -1457,6 +1483,9 @@ mod tests {
             ("20261128042000_link_efiling_fee_settlements.sql", include_str!("../postgres/migrations/20261128042000_link_efiling_fee_settlements.sql")),
             ("20261128050000_time_entry_proposal.sql", include_str!("../postgres/migrations/20261128050000_time_entry_proposal.sql")),
             ("20261128050100_legal_plan_claim_filing.sql", include_str!("../postgres/migrations/20261128050100_legal_plan_claim_filing.sql")),
+            ("20261128050200_invoice_destination_approval.sql", include_str!("../postgres/migrations/20261128050200_invoice_destination_approval.sql")),
+            ("20261128050300_stripe_customer.sql", include_str!("../postgres/migrations/20261128050300_stripe_customer.sql")),
+            ("20261128050400_matter_invoice_ledger.sql", include_str!("../postgres/migrations/20261128050400_matter_invoice_ledger.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

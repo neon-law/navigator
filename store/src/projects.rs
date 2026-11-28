@@ -2985,12 +2985,12 @@ pub async fn delete_project(
     {
         return Err(ProjectCommandError::Referenced("notations".into()));
     }
-    if !crate::xero_invoices::for_projects(application_store, &[id])
+    if !crate::matter_invoices::for_projects(application_store, &[id])
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
         .is_empty()
     {
-        return Err(ProjectCommandError::Referenced("xero_invoice".into()));
+        return Err(ProjectCommandError::Referenced("matter_invoice".into()));
     }
     // The remaining five reference checks, each asked of the module that
     // owns the table. All five moved to SurrealDB — `templates` and

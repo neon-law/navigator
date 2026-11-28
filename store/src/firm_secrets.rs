@@ -610,6 +610,12 @@ pub struct TrustRoute {
     pub account: String,
     #[serde(default)]
     pub dedicated_nevada: bool,
+    /// States whose matters may collect into this Nevada IOLTA while they
+    /// have no trust account of their own. Only a Nevada route carries it,
+    /// and a state is listed only once the Firm has confirmed that state's
+    /// rules allow it (LAW-374).
+    #[serde(default)]
+    pub fallback_states: Vec<String>,
 }
 
 impl TrustRoute {
@@ -658,7 +664,11 @@ fn trust_route(
     let mut destinations = std::collections::HashSet::new();
     let mut states = std::collections::HashSet::new();
     for route in &routes {
-        if (route.dedicated_nevada && route.state != "NV")
+        if ((route.dedicated_nevada || !route.fallback_states.is_empty()) && route.state != "NV")
+            || route
+                .fallback_states
+                .iter()
+                .any(|state| state.len() != 2 || !state.bytes().all(|b| b.is_ascii_uppercase()))
             || route.state.len() != 2
             || !route.state.bytes().all(|b| b.is_ascii_uppercase())
             || !route
@@ -671,9 +681,22 @@ fn trust_route(
             return Err(SecretStoreError::InvalidKind);
         }
     }
-    Ok(routes
-        .into_iter()
-        .find(|route| Some(route.firm) == firm && Some(route.state.as_str()) == state))
+    let mut firm_routes = routes.into_iter().filter(|route| Some(route.firm) == firm);
+    let (mut exact, mut nevada) = (None, None);
+    for route in firm_routes.by_ref() {
+        if Some(route.state.as_str()) == state {
+            exact = Some(route);
+        } else if route.state == "NV" {
+            nevada = Some(route);
+        }
+    }
+    // A matter with no state of its own, or a state the Firm listed, falls
+    // back to the Firm's Nevada IOLTA. Any other state has no route.
+    Ok(exact.or_else(|| {
+        nevada.filter(|route| {
+            state.is_none_or(|state| route.fallback_states.iter().any(|listed| listed == state))
+        })
+    }))
 }
 
 pub async fn stripe_trust_route(
@@ -719,6 +742,33 @@ mod trust_route_tests {
         let duplicate =
             serde_json::json!([route,{"firm":id,"state":"WA","account":"acct_A"}]).to_string();
         assert!(trust_route(Some(id), Some("CA"), Some(&duplicate)).is_err());
+    }
+
+    #[test]
+    fn a_matter_without_its_own_route_falls_back_to_nevada_only_where_listed() {
+        let (firm, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let config = serde_json::json!([
+            {"firm": firm, "state": "NV", "account": "acct_Nevada", "dedicated_nevada": true,
+             "fallback_states": ["UT"]},
+            {"firm": firm, "state": "CA", "account": "acct_California"},
+        ])
+        .to_string();
+        let account = |state: Option<&str>| {
+            trust_route(Some(firm), state, Some(&config))
+                .unwrap()
+                .map(|route| route.account)
+        };
+        assert_eq!(account(Some("CA")).as_deref(), Some("acct_California"), "exact state first");
+        assert_eq!(account(Some("NV")).as_deref(), Some("acct_Nevada"));
+        assert_eq!(account(None).as_deref(), Some("acct_Nevada"), "no state: Nevada default");
+        assert_eq!(account(Some("UT")).as_deref(), Some("acct_Nevada"), "a listed state");
+        assert_eq!(account(Some("WA")), None, "an unlisted state has no route");
+        assert!(trust_route(Some(other), None, Some(&config)).unwrap().is_none());
+        let misplaced = serde_json::json!([
+            {"firm": firm, "state": "CA", "account": "acct_X", "fallback_states": ["UT"]},
+        ])
+        .to_string();
+        assert!(trust_route(Some(firm), Some("CA"), Some(&misplaced)).is_err());
     }
 }
 

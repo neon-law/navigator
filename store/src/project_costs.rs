@@ -29,7 +29,7 @@ pub enum ProjectCostError {
     #[error("Document lookup failed")]
     Asset(#[from] crate::assets::AssetError),
     #[error("invoice lookup failed")]
-    Invoice(#[from] Box<crate::xero_invoices::XeroInvoiceError>),
+    Invoice(#[from] Box<crate::matter_invoices::MatterInvoiceError>),
     #[error("PostgreSQL is unavailable")]
     Postgres(#[from] crate::postgres::PostgresError),
 }
@@ -47,7 +47,8 @@ pub struct ProjectCost {
     pub billing_status: String,
     pub receipt_document_id: Uuid,
     pub source_reference: Option<String>,
-    pub xero_invoice_id: Option<String>,
+    /// The Matter Invoice the cost is billed on.
+    pub matter_invoice_id: Option<Uuid>,
     pub inserted_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
 }
@@ -110,7 +111,7 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<ProjectCost, sqlx::Error> {
         billing_status: row.try_get("billing_status")?,
         receipt_document_id: row.try_get("receipt_document_id")?,
         source_reference: row.try_get("source_reference")?,
-        xero_invoice_id: row.try_get("xero_invoice_id")?,
+        matter_invoice_id: row.try_get("matter_invoice_id")?,
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -366,7 +367,7 @@ pub(crate) async fn create_on(
         "amount_cents": input.amount_cents, "currency": input.currency,
         "amount_status": input.amount_status, "billing_status": "unbilled",
         "receipt_document_id": input.receipt_document_id,
-        "source_reference": input.source_reference, "xero_invoice_id": null
+        "source_reference": input.source_reference, "matter_invoice_id": null
     });
     // Every insert locks the Project before probing the source, including
     // Mercury imports, so concurrent posting paths cannot double-charge it.
@@ -375,7 +376,7 @@ pub(crate) async fn create_on(
         Some(_) => true,
         None => false,
     };
-    let existing = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 AND idempotency_key=$2 FOR UPDATE")
+    let existing = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,matter_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 AND idempotency_key=$2 FOR UPDATE")
         .bind(project_id).bind(input.idempotency_key.trim()).fetch_optional(&mut **tx).await?.as_ref().map(from_row).transpose()?;
     if let Some(cost) = existing {
         let payload: Option<(sqlx::types::Json<serde_json::Value>,)> = sqlx::query_as("SELECT after_state->'request' FROM project_cost_events WHERE project_cost_id=$1 AND event_kind='created' ORDER BY occurred_at,id LIMIT 1")
@@ -416,7 +417,7 @@ pub async fn confirm_amount(
     }
     let now = Utc::now();
     let mut tx = pg.0.begin().await?;
-    let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1 FOR UPDATE")
+    let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,matter_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1 FOR UPDATE")
         .bind(id).fetch_optional(&mut *tx).await?.as_ref().map(from_row).transpose()?.ok_or(ProjectCostError::NotFound)?;
     if before.amount_status != "estimated" {
         return Err(ProjectCostError::Invalid(
@@ -437,22 +438,25 @@ pub async fn confirm_amount(
     fetch(pg, id).await
 }
 
-/// Link the cost to a later invoice already present in the Xero mirror.
+/// Link the cost to a Matter Invoice on the same Project, issued on or
+/// after the cost.
 pub async fn link_invoice(
-    application_store: &ApplicationStore,
+    _application_store: &ApplicationStore,
     pg: &PostgresDb,
     id: Uuid,
     actor_id: Uuid,
-    invoice_id: &str,
+    invoice_id: Uuid,
     allow_reserved: bool,
 ) -> Result<ProjectCost, ProjectCostError> {
     let mut tx = pg.0.begin().await?;
-    let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1 FOR UPDATE")
+    let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,matter_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1 FOR UPDATE")
         .bind(id).fetch_optional(&mut *tx).await?.as_ref().map(from_row).transpose()?.ok_or(ProjectCostError::NotFound)?;
-    let invoice = crate::xero_invoices::find_for_allocation(application_store, invoice_id)
+    let invoice = crate::matter_invoices::find(before.project_id, invoice_id)
         .await
         .map_err(Box::new)?
-        .ok_or(ProjectCostError::Invalid("Xero invoice not found"))?;
+        .ok_or(ProjectCostError::Invalid(
+            "no such Matter Invoice on this Project",
+        ))?;
     if invoice.project_id != before.project_id {
         return Err(ProjectCostError::Invalid(
             "invoice belongs to another Project",
@@ -463,10 +467,13 @@ pub async fn link_invoice(
             "invoice currency does not match the cost currency",
         ));
     }
-    if invoice.status == "VOIDED" {
+    if invoice.status == crate::matter_invoices::Status::Void {
         return Err(ProjectCostError::Invalid("invoice is voided"));
     }
-    if invoice.issued_at.date_naive() < before.occurred_on {
+    if invoice
+        .issued_on
+        .is_some_and(|issued| issued < before.occurred_on)
+    {
         return Err(ProjectCostError::Invalid(
             "cost cannot be linked to an earlier invoice",
         ));
@@ -475,7 +482,7 @@ pub async fn link_invoice(
         // Linked under the same invoice: the replay no-op — a resumed batch
         // re-links every cost it reserved, and the ones the first attempt
         // got to must not refuse it.
-        if before.xero_invoice_id.as_deref() == Some(invoice_id) {
+        if before.matter_invoice_id == Some(invoice_id) {
             // A replay already holds the unchanged row. Release the
             // transaction rather than acquiring a second pool connection.
             tx.commit().await?;
@@ -495,7 +502,7 @@ pub async fn link_invoice(
     }
     let now = Utc::now();
     set_audit_context(&mut tx, actor_id, "invoice_linked", None).await?;
-    sqlx::query("UPDATE project_costs SET billing_status='invoiced',xero_invoice_id=$2,updated_at=$3 WHERE id=$1")
+    sqlx::query("UPDATE project_costs SET billing_status='invoiced',matter_invoice_id=$2,updated_at=$3 WHERE id=$1")
         .bind(id).bind(invoice_id).bind(now).execute(&mut *tx).await?;
     tx.commit().await?;
     fetch(pg, id).await
@@ -513,7 +520,7 @@ pub async fn resolve(
     }
     let now = Utc::now();
     let mut tx = pg.0.begin().await?;
-    let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1 FOR UPDATE")
+    let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,matter_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1 FOR UPDATE")
         .bind(id).fetch_optional(&mut *tx).await?.as_ref().map(from_row).transpose()?.ok_or(ProjectCostError::NotFound)?;
     if before.billing_status != "unbilled" {
         return Err(ProjectCostError::Invalid("cost is already resolved"));
@@ -557,7 +564,7 @@ pub(crate) async fn reserve_in_tx(
     cost_ids: &[Uuid],
     actor_id: Uuid,
 ) -> Result<(), ProjectCostError> {
-    let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id = ANY($1) FOR UPDATE")
+    let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,matter_invoice_id,inserted_at,updated_at FROM project_costs WHERE id = ANY($1) FOR UPDATE")
         .bind(cost_ids).fetch_all(&mut **tx).await?;
     if before.len() != cost_ids.len() {
         return Err(ProjectCostError::NotFound);
@@ -603,7 +610,7 @@ pub async fn list_for_project(
     pg: &PostgresDb,
     project_id: Uuid,
 ) -> Result<Vec<ProjectCost>, ProjectCostError> {
-    sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 ORDER BY occurred_on DESC,id")
+    sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,matter_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 ORDER BY occurred_on DESC,id")
         .bind(project_id).fetch_all(&pg.0).await?.iter().map(from_row).collect::<Result<_,_>>().map_err(Into::into)
 }
 
@@ -691,7 +698,7 @@ async fn find_source<'e>(
     project_id: Uuid,
     source_reference: &str,
 ) -> Result<Option<ProjectCost>, ProjectCostError> {
-    sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 AND source_reference=$2 ORDER BY inserted_at,id LIMIT 1")
+    sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,matter_invoice_id,inserted_at,updated_at FROM project_costs WHERE project_id=$1 AND source_reference=$2 ORDER BY inserted_at,id LIMIT 1")
         .bind(project_id)
         .bind(source_reference)
         .fetch_optional(executor)
@@ -763,7 +770,7 @@ async fn fetch_on<'e>(
     executor: impl sqlx::PgExecutor<'e>,
     id: Uuid,
 ) -> Result<ProjectCost, ProjectCostError> {
-    sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1")
+    sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,matter_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1")
         .bind(id).fetch_optional(executor).await?.as_ref().map(from_row).transpose()?.ok_or(ProjectCostError::NotFound)
 }
 
