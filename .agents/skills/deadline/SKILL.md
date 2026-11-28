@@ -139,7 +139,8 @@ Reminders go out from 8 a.m. in the governing time zone on the internal lead dat
 date. Earlier cutoffs move the due-day reminder earlier. Overlapping reminders produce one post. An open Deadline gets
 one overdue escalation within 24 hours of the cutoff. Completing or cancelling the Deadline stops future reminders.
 
-When completing or cancelling a Deadline, post a status note with its ID in the same channel if Slack is connected.
+When completing or cancelling a Deadline, post a status note with its ID if Slack is connected. Use the
+`private_slack_channel` listed in `navigator.yaml` for that manual note.
 
 Use the channel's actual message when verifying delivery. Keep client identities and matter facts out of any manual
 follow-up beyond what the private channel already holds.
