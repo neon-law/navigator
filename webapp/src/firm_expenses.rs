@@ -188,7 +188,7 @@ fn group_expenses(rows: Vec<store::project_costs::ExpenseReviewRow>) -> Vec<Expe
 #[cfg(all(feature = "server", test))]
 mod tests {
     use super::*;
-    use model::documents::ExpenseCategory;
+    use store::documents::ExpenseCategory;
     use store::project_costs::ExpenseReviewRow;
 
     #[test]
