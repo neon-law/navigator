@@ -134,11 +134,39 @@ and provider systems. Keep negotiated plan terms private.
 
 ## Claims and collections
 
-Start with `navigator billing`. **Needs my action** lists your staged Jujutsu time awaiting review and claims on matters
-where you are the responsible lawyer. Review staged time on the Project's Finances tab. **My time** shows your time
-across matters. Run `navigator project billing` from the checkout for the matter view, or pass `--project
+Start with `navigator billing`. **Needs my action** lists your time awaiting review and claims on matters where you are
+the responsible lawyer. Review it with `navigator project time` or on the Project's Finances tab. **My time** shows your
+time across matters. Run `navigator project billing` from the checkout for the matter view, or pass `--project
 <code-or-uuid>`. The matter view shows the team's time and keeps review actions for staged time specific to the
 signed-in timekeeper. Add `--json` for structured output.
+
+### Record time from the CLI
+
+Hourly benefits are claimed from recorded time. `navigator project time` records work that has no commit, such as calls,
+emails, court appearances, and document review, and reviews it before it is billed. Run it from the Project checkout or
+pass `--project <code-or-uuid>` and `--host <host>`.
+
+```bash
+navigator project time add --performed-on 2026-11-20 --minutes 30 --narrative "Call with opposing counsel"
+navigator project time list --status pending-review
+navigator project time edit <id> --minutes 18
+navigator project time approve <id>
+navigator project time approve <id> --charge plan-claim --claim <claim-uuid>
+navigator project time discard <id>
+```
+
+`add` writes a [Time Entry Proposal](glossary/time-entry-proposal.md) for review; a past date marks it backfilled.
+`--timekeeper <email-or-uuid>` credits another firm-side participant. Pass a stable `--request-id <uuid>` when a script
+may retry: the retry returns the first proposal instead of adding a second. `approve` prices the time into a [Time
+Entry](glossary/time-entry.md) and is safe to repeat. Staged Jujutsu time appears in the same list; approving it needs
+`--narrative`, the invoice wording, and `--minutes` records less than the change attested. `list --status` reads
+`pending-review`, `approved`, `unbilled`, `billed`, or `discarded`.
+
+`navigator project time backfill` proposes entries from the Project's dated record: each Communication, filed document,
+completed Deadline, and e-filing not yet proposed. It prints the default minutes it used. Add `--since <date>` to limit
+the record and `--dry-run` to preview without writing. Nothing is approved until the lawyer reviews each proposal, and a
+second run proposes nothing already proposed, approved, or discarded. Staged Jujutsu changes reach the list through
+their `Billing-Time` trailers, not through backfill.
 
 Run `navigator legal-plans --firm <firm> collections --filing-review` to see the number of claims awaiting filing review
 and their verified dollar amount for ARAG and LegalEASE. The report includes the Projects you can access. Add
@@ -186,6 +214,35 @@ navigator project billing pay --claim <claim-uuid> --on 2026-11-10 \
 navigator project billing
 ```
 
+### File a claim packet
+
+A plan that takes claims by email wants a claim form, an itemized invoice, and proof in one message. `billing packet`
+writes them as one PDF, files it on the Project as an internal invoice document, and links it to the claim:
+
+```bash
+navigator project billing packet --claim <claim-uuid> --out claim.pdf
+navigator project billing submit --claim <claim-uuid> --on 2026-11-02 --sent-message <gmail-message-id>
+navigator project billing reference --claim <claim-uuid> --on 2026-11-09 --provider-reference sample-claim
+```
+
+The form takes the plan, Plan Case Number, member ID, member, and plan type (the benefit code) from the Project's plan
+link. The invoice names the Firm's billing entity, the service dates, each linked Time Entry or the attested minutes,
+the fixed fee or hourly terms, the covered amount, and the member share. The proof pages are the filed PDFs themselves.
+A packet for the same claim and content files once; the output names any proof the Project lacks.
+
+Where the claim goes comes from the Firm's rules for the plan, not from Navigator. A Firm admin records them once per
+plan; `{case_number}` in the subject becomes the Plan Case Number:
+
+```bash
+navigator legal-plans --firm <firm> claim-filing --plan <plan> --file-with claims@example.com \
+  --subject "Claim Submission {case_number}" --invoice-to invoices@example.com --proof engagement-letter
+```
+
+Without rules the packet includes the signed engagement letter. `--proof filed-document` adds the latest e-filed
+document. Email the packet as a draft for the lawyer to send, then record the filing with `submit --sent-message`: the
+claim shows as submitted and awaiting payment, and leaves the filing queue. Add the provider's reference with
+`reference` when it arrives. One sent message evidences one claim.
+
 Use the claim UUID printed by `work` for later actions. If two claims share the same benefit, service type, and
 completion date, give them distinct, stable `--work-key` labels. Retry an action with the same arguments and evidence
 date. Use `--time-entry <uuid>` in place of `--attorney-minutes` to reuse recorded time. Use `--rate-cents-per-hour`,
@@ -224,7 +281,8 @@ Reuse the outer fields with a fresh event UUID and the date of each action.
 | -- | -- | -- |
 | `authorization_confirmed` | `authorization` | The provider verifies or revises the benefit terms. |
 | `prepared` | None | The completed work has a verified payable amount and is ready for manual filing. |
-| `submission` | `provider_reference`, optional `claimed_cents` | The lawyer confirms the filing. |
+| `submission` | `provider_reference` or `sent_message_id`, optional `claimed_cents` | The lawyer confirms the filing. |
+| `provider_reference` | `provider_reference` | The provider answers an email-filed claim with its reference. |
 | `approval` | `reference`, `cents` | The provider confirms the amount approved. |
 | `denial` | `reference` | The provider denies the claim or the remaining balance. |
 | `correction` | `provider_reference`, optional `claimed_cents` | The lawyer confirms a corrected filing. |

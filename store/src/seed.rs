@@ -1946,12 +1946,13 @@ async fn seed_sample_portfolio_into(
     Ok(())
 }
 
-/// One trailing-30-day Xero invoice per sample matter (ENG-591), invented
+/// One trailing-30-day Stripe invoice per sample matter (ENG-591), invented
 /// exactly like every other row this table carries, so the local Firm show
 /// page's invoice graphs have something to draw. One is fully paid, one is
 /// partly paid, and one is unpaid, across the fixture's three house brands.
 async fn seed_sample_invoices(application_store: &ApplicationStore) -> anyhow::Result<()> {
-    let now = chrono::Utc::now();
+    use crate::matter_invoices::{self, NewPayment, NewRecord, Source, Status};
+    let today = chrono::Utc::now().date_naive();
     for (matter, amount_cents, paid_cents, days_ago) in [
         (&SAMPLE_MATTERS[0], 480_000_i64, 480_000_i64, 3_i64),
         (&SAMPLE_MATTERS[1], 250_000_i64, 0_i64, 10_i64),
@@ -1961,32 +1962,40 @@ async fn seed_sample_invoices(application_store: &ApplicationStore) -> anyhow::R
         else {
             continue;
         };
-        let xero_invoice_id = format!("sample-invoice-{}", matter.code);
-        crate::xero_invoices::upsert(
-            application_store,
-            &crate::xero_invoices::UpsertXeroInvoice {
-                project_id: project.id,
-                xero_invoice_id: xero_invoice_id.clone(),
-                reference: format!("Sample invoice for {}", matter.code),
-                status: "AUTHORISED".to_string(),
+        let issued_on = today - chrono::Duration::days(days_ago);
+        let invoice = matter_invoices::record(
+            project.id,
+            None,
+            &NewRecord {
+                source: Source::Stripe,
+                external_id: format!("in_sample{}", matter.code.replace('-', "")),
                 amount_cents,
                 currency: "USD".to_string(),
-                issued_at: now - chrono::Duration::days(days_ago),
-                due_at: None,
+                status: Status::Sent,
+                reference: Some(format!("Sample invoice for {}", matter.code)),
+                issued_on: Some(issued_on),
+                due_on: None,
+                payer: None,
+                memo: None,
+                client_visible: true,
+                receipt_document_id: None,
             },
         )
         .await?;
         if paid_cents > 0 {
-            let status = if paid_cents >= amount_cents {
-                "PAID"
-            } else {
-                "AUTHORISED"
-            };
-            crate::xero_invoices::record_reconcile(
-                application_store,
-                &xero_invoice_id,
-                status,
-                paid_cents,
+            matter_invoices::record_payment(
+                project.id,
+                invoice.id,
+                None,
+                &NewPayment {
+                    amount_cents: paid_cents,
+                    received_on: issued_on,
+                    source: Source::Stripe,
+                    external_id: Some(format!("py_sample{}", matter.code.replace('-', ""))),
+                    payer: None,
+                    memo: None,
+                    client_visible: true,
+                },
             )
             .await?;
         }

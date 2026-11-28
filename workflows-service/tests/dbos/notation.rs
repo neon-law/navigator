@@ -1120,6 +1120,81 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
     }).await;
 }
 
+#[tokio::test]
+async fn dbos_approval_that_cannot_render_fails_at_lawyer_review_without_parking() {
+    with_persisted(|fixture| async move {
+        fixture
+            .start(
+                MachineKind::Workflow,
+                "BEGIN:\n  _: lawyer_review\nlawyer_review:\n  approved: generate_pdf__letter\ngenerate_pdf__letter:\n  pdf_persisted: END\nEND: {}\n",
+            )
+            .await;
+        assert_eq!(
+            fixture.signal(MachineKind::Workflow, "_", None).await,
+            "lawyer_review"
+        );
+        let notation = store::notations::update_state(&fixture.application_store, fixture.id, "lawyer_review")
+            .await
+            .unwrap();
+        let postgres = fixture.database.store();
+        let (runtime, server) = approval_runtime(&fixture, postgres.clone()).await;
+        let storage_key = store::notations::document_pdf_storage_key(fixture.id);
+        // Typst refuses an unterminated code block, so the render fails.
+        let payload = serde_json::to_string(&workflows::DocumentPayload::Typst {
+            storage_key: storage_key.clone(),
+            typst_source: "#let broken = (".into(),
+        })
+        .unwrap();
+        let review_revision = notation.updated_at.timestamp_micros();
+        runtime
+            .approve(
+                fixture.id,
+                review_revision,
+                &payload,
+                Some(workflows::SignalContext {
+                    acting_person_id: fixture.actor,
+                }),
+            )
+            .await
+            .unwrap();
+        let run_id = format!("NotationApproval:{}:{review_revision}", fixture.id);
+        let handle = fixture.worker
+            .retrieve_workflow::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(&run_id)
+            .unwrap();
+        let failure = tokio::time::timeout(DEADLINE, handle.result())
+            .await
+            .unwrap()
+            .unwrap_err()
+            .to_string();
+        assert!(failure.contains("dispatch"), "{failure}");
+        assert_eq!(
+            runtime
+                .approval_progress(fixture.id, review_revision)
+                .await
+                .unwrap(),
+            Some(workflows::ApprovalProgress::Failed)
+        );
+        let machine = store::notation_machine_state::read(&postgres, fixture.id, "workflow")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(machine.current_state, "lawyer_review", "the run never parks at the render step");
+        let persisted = store::notations::find_by_id(&fixture.application_store, fixture.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.state, "lawyer_review");
+        let storage = cloud::FsStorage::new(fixture.directory.path()).await.unwrap();
+        assert!(cloud::StorageService::get(&storage, &storage_key).await.is_err());
+        assert!(fixture
+            .events()
+            .await
+            .iter()
+            .all(|event| event.condition != "approved"));
+        server.abort();
+    }).await;
+}
+
 async fn assert_stale_approval_fails(
     fixture: &PersistedNotation,
     runtime: &workflows::DbosNotationRuntime,

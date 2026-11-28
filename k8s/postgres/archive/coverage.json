@@ -902,6 +902,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "invoice_destination_approval",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "iolta_account",
         "kind": "table",
         "accessible": true
@@ -1071,6 +1078,20 @@
         "action": "export",
         "schema": "public",
         "name": "matter_flat_fee",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "matter_invoice",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "matter_invoice_payment",
         "kind": "table",
         "accessible": true
       },
@@ -1692,6 +1713,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "stripe_customer",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "summary_sender_approval",
         "kind": "table",
         "accessible": true
@@ -1734,6 +1762,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "time_entry_proposal",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "timer",
         "kind": "table",
         "accessible": true
@@ -1749,13 +1784,6 @@
         "action": "export",
         "schema": "public",
         "name": "visitor_route_count",
-        "kind": "table",
-        "accessible": true
-      },
-      {
-        "action": "export",
-        "schema": "public",
-        "name": "xero_invoice",
         "kind": "table",
         "accessible": true
       }

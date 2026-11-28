@@ -929,6 +929,27 @@ pub async fn ingest_bytes_exactly_once_as(
     bytes: &[u8],
 ) -> Result<IngestedDocument, IngestError> {
     if args.kind == "onboarding" {
+        // The same envelope's copy is filed once, whatever name an earlier
+        // delivery used (LAW-586).
+        if args.source == "docusign" {
+            let sha_hex = crate::assets::sha256_hex(bytes);
+            if let Some(existing) =
+                crate::assets::find_live_by_sha256(db, args.project_id, &sha_hex)
+                    .await?
+                    .filter(|asset| {
+                        asset.kind.as_deref() == Some("onboarding")
+                            && matches_provider_filing(args, identity, asset)
+                    })
+            {
+                return Ok(IngestedDocument {
+                    asset_id: existing.id,
+                    storage_key: existing.storage_key,
+                    sha256_hex: existing.sha256_hex,
+                    byte_size: existing.byte_size,
+                    reused: true,
+                });
+            }
+        }
         return ingest_bytes_as(db, storage, args, identity, bytes).await;
     }
     let sha_hex = crate::assets::sha256_hex(bytes);

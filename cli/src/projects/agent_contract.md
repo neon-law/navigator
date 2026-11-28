@@ -98,8 +98,8 @@ the gap in the private matter handoff.
   revision. The Blob is the revision's bytes in Navigator-managed storage.
   * `blobs/onboarding/` and `blobs/offboarding/` hold the pointers for the letters that open and close the Project. A
     signed copy is named `<name>_signed.pdf` and its pointer carries `docusign_envelope_id`.
-  * `blobs/invoices/` holds the pointers for invoices named `INV-<digits>.<ext>`; every pointer carries
-    `xero_invoice_id`.
+  * `blobs/invoices/` holds the pointers for invoices named `INV-<digits>.<ext>`; every pointer carries its
+    `stripe_invoice_id`, or the `source` and `external_id` of money collected outside Stripe.
   * A pointer's optional `folder:` names the Matter Folder its bytes belong in; without it, the folder follows from
     `kind`.
 * `documents/` is git-ignored. It holds the bytes `navigator project sync` pulls down or uploads, organised the way a

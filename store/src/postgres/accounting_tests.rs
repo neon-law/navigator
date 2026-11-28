@@ -5,8 +5,8 @@ use crate::application_store::ApplicationStore;
 use crate::finance_aggregate::{self, FinanceReport, Money, Parameters};
 use crate::iolta_accounts::{self, UpsertIoltaAccount};
 use crate::iolta_withdrawals::{self, WithdrawalInput};
+use crate::matter_invoices::{self, NewPayment, NewRecord, Source, Status};
 use crate::postgres::fixtures::{connect, fresh_schema};
-use crate::xero_invoices::{self, UpsertXeroInvoice};
 use chrono::{TimeZone, Utc};
 use uuid::Uuid;
 
@@ -55,51 +55,107 @@ fn when() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 17, 0, 0, 0).unwrap()
 }
 
-fn invoice(project_id: Uuid, xero_invoice_id: &str, reference: &str) -> UpsertXeroInvoice {
-    UpsertXeroInvoice {
-        project_id,
-        xero_invoice_id: xero_invoice_id.to_string(),
-        reference: reference.to_string(),
-        status: "AUTHORISED".to_string(),
+fn invoice(external_id: &str, reference: &str) -> NewRecord {
+    NewRecord {
+        source: Source::Stripe,
+        external_id: external_id.to_string(),
         amount_cents: 100_000,
         currency: "USD".to_string(),
-        issued_at: when(),
-        due_at: None,
+        status: Status::Sent,
+        reference: Some(reference.to_string()),
+        issued_on: Some(when().date_naive()),
+        due_on: None,
+        payer: None,
+        memo: None,
+        client_visible: true,
+        receipt_document_id: None,
+    }
+}
+
+fn payment(cents: i64, external_id: &str) -> NewPayment {
+    NewPayment {
+        amount_cents: cents,
+        received_on: when().date_naive(),
+        source: Source::Check,
+        external_id: Some(external_id.to_string()),
+        payer: Some("Synthetic Client".to_string()),
+        memo: None,
+        client_visible: true,
     }
 }
 
 #[tokio::test]
-async fn xero_invoice_upsert_reconcile_and_reads_are_postgres_only() {
+#[allow(clippy::too_many_lines)] // One ledger walk: record, replay, pay, look up, void.
+async fn matter_invoices_record_payments_and_allocation_reads_are_postgres_only() {
     let Some(pg) = database().await else { return };
     let application_store = ApplicationStore::uninitialized();
     let (_, project) = seed_project(&pg).await;
 
     with_test_db(pg.clone(), async {
-        let created = xero_invoices::upsert(
-            &application_store,
-            &invoice(project, "xero-1", "Matter ACCT-1"),
-        )
-        .await
-        .unwrap();
-        assert_eq!(created.xero_invoice_id, "xero-1");
-        assert_eq!(created.amount_paid_cents, 0);
-        assert_eq!(created.status, "AUTHORISED");
-
-        // A second upsert of the same invoice refreshes the fields the
-        // upsert owns and preserves the reconciled amount_paid_cents.
-        let mut refreshed = invoice(project, "xero-1", "Matter ACCT-1");
-        refreshed.amount_cents = 120_000;
-        refreshed.status = "VOIDED".to_string();
-        let updated = xero_invoices::upsert(&application_store, &refreshed)
+        let created = matter_invoices::record(project, None, &invoice("in_one", "Matter ACCT-1"))
             .await
             .unwrap();
-        assert_eq!(updated.amount_cents, 120_000);
-        assert_eq!(updated.status, "VOIDED");
-        assert_eq!(updated.amount_paid_cents, 0);
-        assert_eq!(updated.inserted_at, created.inserted_at);
+        assert_eq!(
+            (created.status, created.amount_paid_cents),
+            (Status::Sent, 0)
+        );
+        assert_eq!(
+            matter_invoices::record(project, None, &invoice("in_one", "Matter ACCT-1"))
+                .await
+                .unwrap()
+                .id,
+            created.id,
+            "a replay returns the first row"
+        );
+        let mut changed = invoice("in_one", "Matter ACCT-1");
+        changed.amount_cents = 1;
+        assert!(matches!(
+            matter_invoices::record(project, None, &changed).await,
+            Err(matter_invoices::MatterInvoiceError::Conflict(_))
+        ));
+        let mut xero = invoice("x-1", "Matter ACCT-1");
+        xero.source = Source::Xero;
+        assert!(matches!(
+            matter_invoices::record(project, None, &xero).await,
+            Err(matter_invoices::MatterInvoiceError::Invalid(_))
+        ));
+
+        // A partial payment leaves a balance; the rest settles it.
+        let (partial, _) =
+            matter_invoices::record_payment(project, created.id, None, &payment(40_000, "1001"))
+                .await
+                .unwrap();
+        assert_eq!(
+            (partial.status, partial.balance_due_cents()),
+            (Status::Sent, 60_000)
+        );
+        let (replayed, _) =
+            matter_invoices::record_payment(project, created.id, None, &payment(40_000, "1001"))
+                .await
+                .unwrap();
+        assert_eq!(
+            replayed.amount_paid_cents, 40_000,
+            "a replayed payment counts once"
+        );
+        let (paid, _) =
+            matter_invoices::record_payment(project, created.id, None, &payment(60_000, "1002"))
+                .await
+                .unwrap();
+        assert_eq!((paid.status, paid.balance_due_cents()), (Status::Paid, 0));
+        assert_eq!(
+            matter_invoices::payments(created.id).await.unwrap().len(),
+            2
+        );
+        assert!(
+            sqlx::query("DELETE FROM matter_invoice_payment WHERE invoice_id=$1")
+                .bind(created.id)
+                .execute(pg.pool())
+                .await
+                .is_err()
+        );
 
         // A second Project's invoice with the same reference makes the
-        // allocation lookup ambiguous, and ambiguity reads as absent.
+        // reference ambiguous; the issuer id and ledger id stay exact.
         let competitor = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO project (id, code, name, status, entity_id) \
@@ -110,71 +166,60 @@ async fn xero_invoice_upsert_reconcile_and_reads_are_postgres_only() {
         .execute(pg.pool())
         .await
         .unwrap();
-        xero_invoices::upsert(
-            &application_store,
-            &invoice(competitor, "xero-2", "Matter ACCT-1"),
-        )
-        .await
-        .unwrap();
+        let other = matter_invoices::record(competitor, None, &invoice("in_two", "Matter ACCT-1"))
+            .await
+            .unwrap();
+        for (reference, expected) in [
+            ("Matter ACCT-1", None),
+            ("in_one", Some(created.id)),
+            ("in_two", Some(other.id)),
+        ] {
+            assert_eq!(
+                matter_invoices::find_for_allocation(&application_store, reference)
+                    .await
+                    .unwrap()
+                    .map(|found| found.id),
+                expected,
+                "{reference}"
+            );
+        }
+        assert_eq!(
+            matter_invoices::find_for_allocation(&application_store, &other.id.to_string())
+                .await
+                .unwrap()
+                .map(|found| found.project_id),
+            Some(competitor)
+        );
+
+        // Voiding needs a reason and an open invoice.
         assert!(
-            xero_invoices::find_for_allocation(&application_store, "Matter ACCT-1")
+            matter_invoices::set_status(competitor, other.id, Status::Void, None)
+                .await
+                .is_err()
+        );
+        let void =
+            matter_invoices::set_status(competitor, other.id, Status::Void, Some("Sent twice"))
+                .await
+                .unwrap();
+        assert_eq!(void.status_reason.as_deref(), Some("Sent twice"));
+        assert!(
+            matter_invoices::set_status(competitor, other.id, Status::Sent, None)
+                .await
+                .is_err()
+        );
+        assert!(
+            matter_invoices::set_status(project, created.id, Status::Void, Some("x"))
+                .await
+                .is_err(),
+            "a paid invoice is not voided"
+        );
+        assert_eq!(
+            matter_invoices::for_projects(&application_store, &[project, competitor])
                 .await
                 .unwrap()
-                .is_none()
+                .len(),
+            2
         );
-
-        let reconciled =
-            xero_invoices::record_reconcile(&application_store, "xero-1", "PAID", 120_000)
-                .await
-                .unwrap()
-                .expect("reconciled");
-        assert_eq!(reconciled.status, "PAID");
-        assert_eq!(reconciled.amount_paid_cents, 120_000);
-
-        assert_eq!(
-            xero_invoices::find_for_allocation(&application_store, "xero-1")
-                .await
-                .unwrap(),
-            Some(reconciled)
-        );
-        assert_eq!(
-            xero_invoices::find_for_allocation(&application_store, "xero-2")
-                .await
-                .unwrap()
-                .map(|found| found.xero_invoice_id),
-            Some("xero-2".to_string())
-        );
-
-        // issued_at orders the for_projects listing (newest first): keep
-        // this invoice strictly newer than xero-1 so the order is stable.
-        let mut late = invoice(project, "xero-3", "Matter ACCT-3");
-        late.issued_at = when() + chrono::Duration::seconds(1);
-        let unique = xero_invoices::upsert(&application_store, &late)
-            .await
-            .unwrap();
-        let projects = xero_invoices::for_projects(&application_store, &[project])
-            .await
-            .unwrap();
-        assert_eq!(
-            projects
-                .iter()
-                .map(|row| row.xero_invoice_id.as_str())
-                .collect::<Vec<_>>(),
-            ["xero-3", "xero-1"]
-        );
-        // needing_reconcile does not order its results; compare as a set.
-        let mut needing = xero_invoices::needing_reconcile(&application_store)
-            .await
-            .unwrap();
-        needing.sort_by(|a, b| a.xero_invoice_id.cmp(&b.xero_invoice_id));
-        assert_eq!(
-            needing
-                .iter()
-                .map(|row| row.xero_invoice_id.as_str())
-                .collect::<Vec<_>>(),
-            ["xero-2", "xero-3"]
-        );
-        assert_eq!(unique.project_id, project);
     })
     .await;
 }
@@ -268,12 +313,10 @@ async fn iolta_withdrawal_writes_and_reads_are_postgres_only() {
     let (jurisdiction, project) = seed_project(&pg).await;
 
     with_test_db(pg.clone(), async {
-        let settled = xero_invoices::upsert(
-            &application_store,
-            &invoice(project, "xero-1", "Matter ACCT-1"),
-        )
-        .await
-        .unwrap();
+        let settled =
+            matter_invoices::record(project, None, &invoice("in_settled", "Matter ACCT-1"))
+                .await
+                .unwrap();
         let input = WithdrawalInput {
             xero_transaction_id: "txn-1".to_string(),
             xero_account_id: "xero-nv".to_string(),
@@ -306,7 +349,7 @@ async fn iolta_withdrawal_writes_and_reads_are_postgres_only() {
             .await
             .unwrap();
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].xero_invoice_id, "xero-1");
+        assert_eq!(lines[0].matter_invoice_id, settled.id);
         assert_eq!(lines[0].project_id, project);
         assert_eq!(lines[0].amount_cents, 40_000);
 

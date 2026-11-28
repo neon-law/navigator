@@ -214,9 +214,24 @@ pub enum Event {
     AuthorizationConfirmed {
         authorization: Authorization,
     },
+    /// The lawyer filed the claim. A claim filed by email may carry only the
+    /// sent message's id; its provider reference is recorded later.
     Submission {
-        provider_reference: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_reference: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sent_message_id: Option<String>,
         claimed_cents: Option<i32>,
+    },
+    /// The provider's claim reference for a claim filed without one.
+    ProviderReference {
+        provider_reference: String,
+    },
+    /// The claim packet filed on the Project for this claim. Recorded by the
+    /// packet command, never from the wire.
+    PacketFiled {
+        asset_id: Uuid,
+        sha256: String,
     },
     Approval {
         reference: String,
@@ -241,13 +256,37 @@ pub enum Event {
 
 impl Event {
     fn reference(&self) -> Result<Option<(&'static str, String)>, ClaimError> {
+        let message;
         let (kind, value) = match self {
             Self::Submission {
-                provider_reference, ..
+                provider_reference: None,
+                sent_message_id: None,
+                ..
+            } => {
+                return Err(ClaimError::Invalid(
+                    "enter the provider reference or the sent message id",
+                ))
             }
+            Self::Submission {
+                provider_reference: Some(provider_reference),
+                ..
+            }
+            | Self::ProviderReference { provider_reference }
             | Self::Correction {
                 provider_reference, ..
             } => ("claim", provider_reference),
+            Self::Submission {
+                sent_message_id: Some(sent),
+                ..
+            } => {
+                // The message is the filing's evidence until the provider
+                // answers with a reference; it may evidence one claim only.
+                message = format!("message:{}", sent.trim());
+                if !label(sent) {
+                    return Err(ClaimError::Invalid("enter the sent message id as sent"));
+                }
+                ("claim", &message)
+            }
             Self::Payment { reference, .. } | Self::Reversal { reference, .. } => {
                 ("payment", reference)
             }
@@ -282,6 +321,10 @@ struct ClaimState {
     work: Work,
     stage: Stage,
     provider_reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sent_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    packet_asset_id: Option<Uuid>,
     submitted_on: Option<NaiveDate>,
     claimed_cents: Option<i32>,
     approved_cents: Option<i32>,
@@ -298,6 +341,8 @@ impl ClaimState {
             work,
             stage: Stage::Completed,
             provider_reference: None,
+            sent_message_id: None,
+            packet_asset_id: None,
             submitted_on: None,
             claimed_cents: None,
             approved_cents: None,
@@ -357,17 +402,32 @@ impl ClaimState {
             }
             Event::Submission {
                 provider_reference,
+                sent_message_id,
                 claimed_cents,
             } if self.stage == Stage::Prepared
                 || (self.stage == Stage::Completed && claimed_cents.is_none()) =>
             {
-                self.submit(on, provider_reference, *claimed_cents)?;
+                self.submit(on, provider_reference.as_deref(), *claimed_cents)?;
+                self.sent_message_id.clone_from(sent_message_id);
+            }
+            Event::ProviderReference { provider_reference }
+                if self.submitted_on.is_some() && self.provider_reference.is_none() =>
+            {
+                self.provider_reference = Some(provider_reference.clone());
+            }
+            Event::PacketFiled { asset_id, .. }
+                if matches!(
+                    self.stage,
+                    Stage::Completed | Stage::Prepared | Stage::Submitted
+                ) =>
+            {
+                self.packet_asset_id = Some(*asset_id);
             }
             Event::Correction {
                 provider_reference,
                 claimed_cents,
             } if self.submitted_on.is_some() => {
-                self.submit(on, provider_reference, *claimed_cents)?;
+                self.submit(on, Some(provider_reference), *claimed_cents)?;
             }
             Event::Approval { cents, .. } if self.stage == Stage::Submitted && *cents > 0 => {
                 self.stage = Stage::Approved;
@@ -398,7 +458,7 @@ impl ClaimState {
     fn submit(
         &mut self,
         on: NaiveDate,
-        reference: &str,
+        reference: Option<&str>,
         cents: Option<i32>,
     ) -> Result<(), ClaimError> {
         if let Some(cents) = cents {
@@ -410,7 +470,7 @@ impl ClaimState {
             }
         }
         self.stage = Stage::Submitted;
-        self.provider_reference = Some(reference.to_owned());
+        self.provider_reference = reference.map(str::to_owned);
         self.submitted_on.get_or_insert(on);
         self.claimed_cents = cents;
         self.approved_cents = None;
@@ -756,8 +816,30 @@ pub(crate) async fn link_annotation(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)] // Transaction keeps claim snapshot, evidence, and retry checks together.
+/// Record one lawyer-confirmed claim event. A retry with the same event id
+/// and payload returns the claim unchanged.
+///
+/// # Errors
+/// [`ClaimError`] for an invalid transition, a reused reference, or a
+/// database failure.
 pub async fn record(
+    pg: &PostgresDb,
+    project: Uuid,
+    firm: Uuid,
+    actor: Uuid,
+    timezone: chrono_tz::Tz,
+    change: Change,
+) -> Result<Claim, ClaimError> {
+    if matches!(change.event, Event::PacketFiled { .. }) {
+        return Err(ClaimError::Invalid(
+            "file a claim packet with `navigator project billing packet`",
+        ));
+    }
+    record_change(pg, project, firm, actor, timezone, change).await
+}
+
+#[allow(clippy::too_many_lines)] // Transaction keeps claim snapshot, evidence, and retry checks together.
+async fn record_change(
     pg: &PostgresDb,
     project: Uuid,
     firm: Uuid,
@@ -996,6 +1078,95 @@ async fn adopt_filing_rule(
         .await?;
     }
     Ok(())
+}
+
+/// Link a filed claim packet to its claim. Filing the same packet again
+/// changes nothing.
+///
+/// # Errors
+/// [`ClaimError`] when the claim is not on the Project or its stage is past
+/// filing.
+pub async fn record_packet(
+    pg: &PostgresDb,
+    project: Uuid,
+    firm: Uuid,
+    actor: Uuid,
+    claim: Uuid,
+    (asset_id, sha256): (Uuid, &str),
+    timezone: chrono_tz::Tz,
+) -> Result<Claim, ClaimError> {
+    let event = Event::PacketFiled {
+        asset_id,
+        sha256: sha256.to_owned(),
+    };
+    // One event per (claim, packet): a repeated filing replays it.
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(format!("packet:{claim}:{asset_id}"));
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    let event_id = uuid::Builder::from_random_bytes(bytes).into_uuid();
+    record_change(
+        pg,
+        project,
+        firm,
+        actor,
+        timezone,
+        Change {
+            claim_id: claim,
+            event_id,
+            occurred_on: Utc::now().date_naive(),
+            event,
+        },
+    )
+    .await
+}
+
+/// The claim and its plan for a packet: the verified work, its plan case,
+/// and the stage it stands at.
+pub struct PacketClaim {
+    pub id: Uuid,
+    pub plan_id: Uuid,
+    pub plan_name: String,
+    pub plan_case_number: String,
+    pub work: Work,
+    pub stage: &'static str,
+    pub covered_cents: Option<i64>,
+    pub claimed_cents: Option<i32>,
+}
+
+/// Read one claim on `project` for its packet.
+///
+/// # Errors
+/// [`ClaimError::NotFound`] outside the Project and Firm.
+pub async fn for_packet(
+    pg: &PostgresDb,
+    project: Uuid,
+    firm: Uuid,
+    claim: Uuid,
+) -> Result<PacketClaim, ClaimError> {
+    let mut connection = pg.pool().acquire().await?;
+    let ((id, _, plan_id, plan_case_number, state), plan_name) =
+        claim_rows(&mut connection, project, firm)
+            .await?
+            .into_iter()
+            .find(|((id, ..), _)| *id == claim)
+            .ok_or(ClaimError::NotFound)?;
+    let state = state.0;
+    Ok(PacketClaim {
+        id,
+        plan_id,
+        plan_name,
+        plan_case_number,
+        covered_cents: state.work.estimate()?,
+        claimed_cents: state.claimed_cents,
+        stage: match state.stage {
+            Stage::Completed => "completed",
+            Stage::Prepared => "prepared",
+            Stage::Submitted => "submitted",
+            Stage::Approved => "approved",
+            Stage::Denied => "denied",
+        },
+        work: state.work,
+    })
 }
 
 async fn verified_work(

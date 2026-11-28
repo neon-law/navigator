@@ -287,7 +287,7 @@ values = [
   "chooser",
   "sos", "civ", "slack", "durable", "split", "config", "send", "email",
   "fileName", "missing", "mounted", "kebab", "megadeth", "nautilus", "rust",
-  "linux", "dioxus", "mermaid", "kubernetes", "instagram", "youtube", "xero",
+  "linux", "dioxus", "mermaid", "kubernetes", "instagram", "youtube", "xero", "stripe",
   "twilio", "claude", "gmail", "facebook", "linkedin", "forgejo", "neon",
   "enabling", "solving", "reversible", "direct", "authenticated", "backfill",
   "complete", "this", "billing", "scopes", "undesignated", "split", "panda",

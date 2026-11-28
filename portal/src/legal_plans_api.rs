@@ -149,6 +149,27 @@ pub(super) async fn configure(
     )
 }
 
+/// `PUT /app/api/firms/{id}/legal-plans/{plan_id}/claim-filing` — record
+/// where and how a plan takes its claims, which the claim packet reads.
+pub(super) async fn set_claim_filing(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path((firm, plan)): Path<(Uuid, Uuid)>,
+    Json(filing): Json<legal_plans::ClaimFiling>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &session, firm, FirmCapability::ManageLegalPlans).await?;
+    let pg = match plan_store().await {
+        Ok(pg) => pg,
+        Err(unavailable) => return Ok(unavailable),
+    };
+    Ok(
+        match legal_plans::set_claim_filing(&pg, firm, plan, &filing).await {
+            Ok(plan) => Json(plan).into_response(),
+            Err(e) => plan_error(&e),
+        },
+    )
+}
+
 /// The plan one Project is paid through: the Firm's plan row (portal,
 /// contact, service levels) beside the matter's own plan columns.
 #[derive(Debug, Serialize)]

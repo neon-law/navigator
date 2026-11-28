@@ -12,9 +12,8 @@
 //! schema: one pooled account per state, so a second Xero account claiming
 //! Nevada is a refused write ([`IoltaAccountError::JurisdictionTaken`])
 //! rather than a silent second master balance. The row's own record id is the
-//! Xero `AccountID`, the same choice [`crate::xero_invoices`] makes for the
-//! same reason — two nightly reads of one Xero account address one key rather
-//! than minting two rows the index would only notice afterwards.
+//! Xero `AccountID`, so two nightly reads of one Xero account address one key
+//! rather than minting two rows the index would only notice afterwards.
 //!
 //! # Which account a matter belongs to
 //!
@@ -45,7 +44,7 @@ use crate::postgres::accounting as authority;
 
 /// The prefix a Xero bank account's name carries to declare which state's
 /// IOLTA pool it is — the account-side twin of the `Matter <code>` reference
-/// invoices use ([`crate::xero_invoices::project_scope_from_reference`]).
+/// invoices use ([`crate::matter_invoices::project_scope_from_reference`]).
 ///
 /// The firm names the account `IOLTA NV — Trust` in Xero and Navigator reads
 /// the state code out of it. Xero has no field for "which US state's client

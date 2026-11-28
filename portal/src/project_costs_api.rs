@@ -266,7 +266,8 @@ pub(crate) async fn confirm(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InvoiceInput {
-    invoice_id: String,
+    /// The Matter Invoice on this Project that bills the cost.
+    matter_invoice_id: Uuid,
 }
 pub(crate) async fn link_invoice(
     State(state): State<ApiState>,
@@ -293,7 +294,7 @@ pub(crate) async fn link_invoice(
             &pg,
             cost_id,
             actor_id,
-            &input.invoice_id,
+            input.matter_invoice_id,
             false,
         )
         .await

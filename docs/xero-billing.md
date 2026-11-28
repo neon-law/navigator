@@ -1,10 +1,11 @@
-# Xero billing — setup, invoice flow, and production cutover
+# Xero and Stripe billing — setup, invoice flow, and production cutover
 
-**Xero holds the accounting ledger.** Lawyers agree a matter's price with the client. Navigator can issue a Xero invoice
-from approved billing work or prepare a Stripe draft for the Firm's configured payment destination. This page covers the
-**receivables** side — how a Xero invoice reaches the portal and how its paid-status is reconciled back — and how **one
-custom connection per organisation** keeps test activity off the live ledger. The **client-trust** side of the same
-integration, where Xero is equally the books, is [`trust-accounting.md`](trust-accounting.md).
+**Stripe issues every invoice; Xero holds the Firm's books.** Lawyers agree a matter's price with the client. Navigator
+drafts the matter's invoice in Stripe, from approved billing work or from the lines a lawyer writes, and the lawyer
+reviews and sends it. Each invoice lands on the matter's [Matter Invoice](glossary/matter-invoice.md) ledger. Xero keeps
+the accounting: the nightly mirror reads its IOLTA bank accounts and transactions, and the billing canary finds or
+creates a Xero contact. **One custom connection per organisation** keeps test activity off the live ledger. The
+client-trust side is [`trust-accounting.md`](trust-accounting.md).
 
 Local sandbox values use a gitignored `.env`; production values live in that deployment's `secrets.enc.yaml` per
 [`deployment-secrets.md`](deployment-secrets.md). The environment-variable convention is in
@@ -27,8 +28,11 @@ Each payment destination belongs to one Firm and one state. Before enabling coll
 ownership, and how the processor handles fees and chargebacks. Keep the bank verification in the private Firm record.
 Configure `NAVIGATOR_STRIPE_TRUST_ROUTES` in that deployment with a JSON array. Each entry has the Firm UUID in `firm`,
 the two-letter `state`, and the verified Stripe account ID in `account`. Account IDs must be distinct across
-destinations. Without a matching state route, Navigator prepares an unsent draft on the Firm's configured operating
-account for review. If neither destination is configured, the Xero receivable workflow remains available. A configured
+destinations. A Nevada route may list `fallback_states`: states whose matters collect into the Nevada IOLTA while they
+have no trust account of their own, listed only once the Firm has confirmed that state's rules allow it. A matter with
+no route is refused: a missing route never selects Operating. The matter's responsible lawyer may approve the Firm's
+Operating account for one invoice of earned work with a reason (`--account operating --reason`), never for an advance;
+the approval is retained as an [Invoice Destination Approval](glossary/invoice-destination-approval.md). A configured
 trust destination with an unavailable credential blocks the draft.
 
 Connected accounts use the Firm's platform credential (`STRIPE_OPERATING_APP_KEY`) with `STRIPE_DEFAULT` enabled. Every
@@ -43,9 +47,18 @@ contains the Firm and state destinations described above. Restart the web deploy
 Store each account's provider key through Firm integration secrets.
 
 Navigator creates an unsent draft on the authenticated Stripe account and reserves the underlying work for review. The
-billing batch retains the account and invoice identity so a retry cannot silently move to a different account. A Stripe
-draft does not create a Xero receivable or settle time and expenses. The Stripe path does not collect payments or
-calculate a card surcharge.
+draft retains the account and invoice identity so a retry cannot silently move to a different account. The billed
+Person's Stripe Customer is saved per account and reused. The lawyer reviews the draft and runs `navigator project
+invoice send <id>`; a zero-balance invoice is finalized as a record and never sent. `void` and `uncollectible` take a
+reason, and `payment` records a full or partial payment received outside Stripe. Navigator does not calculate a card
+surcharge.
+
+```bash
+navigator project invoice create --line "Retainer=1,500" --advance --terms net-15
+navigator project invoice create --line "Consultation=500" --write-off 1:Courtesy --credit 100 --credit-reason "Deposit received"
+navigator project invoice send <id>
+navigator project invoice record --method check --external-id 1001 --amount 250 --issued-on 2026-11-27 --paid
+```
 
 Recurring Offerings use a separate hosted Checkout path with renewal consent and online cancellation. Its activation,
 fee-handling prerequisites, and verification are in [privacy and recurring purchases](privacy-and-purchases.md).
@@ -71,104 +84,52 @@ The demo company is the one free, non-binding target: invoices and contacts crea
 are self-cleaning (the demo org resets periodically). That is why dev, CI, and the live grounding test all point at the
 demo company — a leaked sandbox secret cannot raise a real invoice against a real client.
 
-## Who raises Xero invoices
+## Money collected outside Stripe
 
-Lawyers agree the price with the client and can raise an **`ACCREC`** (accounts-receivable) invoice in Xero directly or
-generate it from the Project's Finances tab. Navigator composes the invoice from the agreed fee or recorded billable
-work and confirmed costs.
-
-What Navigator does hold is a **read-only mirror**: the `xero_invoice` table carries the Xero `InvoiceID`, reference,
-amount, dates, and paid-status for **every** invoice tagged to a matter. The row is keyed on the Xero invoice id;
-several invoices may share one `project_id`. Lawyers set Xero `Reference` to `Matter <project uuid>` or `Matter <project
-code>`. The nightly ingest lists `ACCREC` invoices, upserts each that resolves to a live Project, and skips DRAFT,
-DELETED, and any invoice whose reference does not match a Project (counted as unscoped — no row). That mirror backs the
-per-project invoice list in the portal and the Firm trailing-30-day graphs, so nobody has to open Xero to see whether a
-matter is paid. Navigator **never holds client funds, card data, or bank credentials** — Xero reconciles against the
-firm's bank itself. The integration boundary is the Xero Accounting API and nothing beyond it.
+A check, a wire, or cash is recorded on the same ledger with `navigator project invoice record`, naming its method and
+its check number, wire reference, or receipt number. Invoices Xero issued before it was retired are kept on the ledger
+as history with source `xero`; a document pointer names its invoice by `stripe_invoice_id`, or by `source` and
+`external_id`.
 
 **A trust receipt is not an invoice.** A client's deposit into the firm's IOLTA account is a bank transaction on a
-pooled trust account, not an `ACCREC` invoice, and the ingest never writes one into `xero_invoice`. What connects the
-two is the **withdrawal**: when the firm draws earned fees out of trust, its allocation lines name the invoices it
-settles, and each matter's share posts against that matter's trust ledger. See
-[`trust-accounting.md`](trust-accounting.md).
+pooled trust account. What connects the two is the **withdrawal**: when the firm draws earned fees out of trust, its
+allocation lines name the Matter Invoices it settles, and each matter's share posts against that matter's trust ledger.
+See [`trust-accounting.md`](trust-accounting.md).
 
-## The one exception: a Client's self-serve Purchase
+## A Client's self-serve Purchase is collected through Stripe
 
 A signed-in Client may buy an [Offering](glossary/offering.md) at its published price from `/purchases`: a consultation,
-or a Delete Your Data plan billed monthly or yearly. That [Purchase](glossary/purchase.md) belongs to no matter, so it
-is not mirrored into `xero_invoice`; it lives in the PostgreSQL `purchase` table.
+or a Delete Your Data plan billed monthly or yearly. That [Purchase](glossary/purchase.md) belongs to no matter and
+never reaches Xero; it lives in the PostgreSQL `purchase` table and collects into the Firm's Stripe Operating account
+(`STRIPE_DEFAULT` and the Firm's Operating key). Whether Purchases stay outside trust-first collection is open in
+LAW-362.
 
-1. `portal::purchases::buy` records the Purchase, finds or creates the Xero contact by email, and raises an `ACCREC`,
-   `AUTHORISED` invoice due in 14 days with the Purchase id as the `Idempotency-Key`. It reads the invoice's
-   `OnlineInvoice` URL and sends the Client there to pay.
-2. Xero emails the invoice and collects payment.
-3. Once `GET /Invoices/{id}` reports `PAID`, `portal::purchases::activate_if_paid` turns the Purchase active. A monthly
-   or yearly Purchase then gets a Xero `RepeatingInvoice` (keyed on the Purchase id, `ApprovedForSending`) starting one
-   period later, so Xero raises and emails every renewal itself.
+1. `portal::purchases::buy` reserves the Purchase on the Firm's Stripe account, then creates, finalizes, and sends a
+   Stripe invoice due in 14 days. Every write carries the Purchase id as its `Idempotency-Key`; an interrupted attempt
+   older than Stripe's 24-hour key window needs reconciliation instead of a second invoice. The Client pays on the
+   hosted invoice page.
+2. `portal::purchases::activate_if_paid` turns the Purchase active once Stripe reports the invoice `paid` in full.
+3. A monthly or yearly plan uses Stripe Checkout and a Stripe subscription; see [privacy and recurring
+   purchases](privacy-and-purchases.md).
 
-The DBOS `PurchaseActivation` schedule runs step 3 every five minutes; the purchase page also runs it for the viewer's
-open invoices. The page refuses to sell without `XERO_TENANT_ID`, because the in-process stub must never stand in for a
-real invoice. Creating repeating invoices needs the connection's invoice-write scope; check that the custom connection's
-granted scopes cover `RepeatingInvoices` before enabling the schedule in production.
+The DBOS `PurchaseActivation` schedule runs step 2 every five minutes; the purchase page also runs it for the viewer's
+open invoices. The page refuses to sell a consultation unless the deployment enables the Operating Stripe route.
+
+The monthly Legal Sandbox reset bills each subscriber's closed-month overage the same way: one sent Stripe invoice on
+the account and Customer of their Stripe subscription. A subscriber whose plan predates Stripe has no Stripe account to
+bill and is reported as skipped.
+
+A Purchase Xero invoiced before Stripe keeps its Xero invoice and repeating-invoice ids as read-only history. An unpaid
+or unanswered Xero Purchase is expired; a plan that renews through a Xero repeating invoice is cancelled by the Firm in
+Xero, not online.
 
 ## Where the price comes from: the matter, agreed per client
 
-There is no catalog and no published price. Every engagement is bespoke: lawyers agree the figure with the client for
-that matter and raise the invoice in Xero directly. What was actually billed is the Xero invoice, mirrored read-only
-into `xero_invoice` — nothing in Navigator computes, quotes, or anchors a price.
+There is no catalog and no published price for matters. Every engagement is bespoke: lawyers agree the figure with the
+client for that matter, and the invoice Navigator drafts is what was billed. The pooled IOLTA account a matter's client
+funds sit in is derived from the matter's jurisdiction, as described in [`trust-accounting.md`](trust-accounting.md).
 
-An invoice line carries the firm-wide default account code. Tagging invoices to a project is the `Reference` convention
-above; the pooled IOLTA account a matter's client funds sit in is derived from the matter's jurisdiction instead, and is
-described in [`trust-accounting.md`](trust-accounting.md).
-
-## Authentication: client-credentials grant (preferred)
-
-A custom connection authenticates with the OAuth 2.0 **client-credentials** grant — no user, no redirect, no consent
-ceremony. [`XeroClientCredentials`](../billing/src/xero_auth.rs) mints a short-lived Accounting API token and refreshes
-it itself, so there is no 30-minute token to rotate by hand. Set the client-credentials pair to activate it:
-
-- `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET` — the custom connection's credentials (the secret is shown **once** at
-  creation).
-- `XERO_TENANT_ID` — the connected org's GUID (`Xero-Tenant-Id` header). Optional for the live test, which can
-  auto-discover it from the `/connections` endpoint since a custom connection binds to one org.
-- `XERO_SCOPE` — optional; defaults to `accounting.contacts accounting.invoices accounting.settings.read
-  accounting.transactions.read`. The two `.read` scopes are what the IOLTA mirror needs to read the pooled trust bank
-  accounts and the transactions that move through them — and no more, so a leaked token cannot move client funds.
-
-A static `XERO_ACCESS_TOKEN` is accepted as a fallback for a quick local smoke test, but Xero expires it in ~30 minutes
-and it is ignored when the client-credentials pair is set. The real provider activates when `XERO_TENANT_ID` is present
-together with **either** the client-credentials pair **or** a static access token; otherwise `web` uses the stub.
-
-## Sandbox setup (one-time) — sign up and create the custom connection
-
-1. **Create a Xero developer account.** Sign up free at [developer.xero.com](https://developer.xero.com/) and sign in to
-   **My Apps**.
-2. **Have a demo company.** From your Xero account, enable the **Demo Company** (My Xero → "Try the demo company"). It
-   is free, pre-populated, and resets periodically — the right target for dev and CI.
-3. **Create a custom connection.** In My Apps → **New app** → choose **Custom connection** (the machine-to-machine,
-   client-credentials app type). Name it (e.g. `Neon Law Navigator (demo)`), and add the **integrator** email that will
-   authorise it.
-4. **Select scopes.** Grant exactly `accounting.contacts`, `accounting.invoices`, `accounting.settings.read`, and
-   `accounting.transactions.read` — the last two for the IOLTA mirror, both read-only. A custom connection offers only
-   granular scopes — the legacy parent `accounting.transactions` is **not** offered, and requesting it fails token
-   minting with `invalid_scope`.
-5. **Authorise the connection against the demo company.** The integrator opens the authorisation link Xero generates and
-   connects it to the **demo company** org. This binds the connection to that one organisation.
-6. **Copy the credentials.** From the connection's Configuration, copy the **Client ID** → `XERO_CLIENT_ID` and generate
-   the **Client Secret** (shown once) → `XERO_CLIENT_SECRET`. Set `XERO_TENANT_ID` to the demo org's GUID (or leave it
-   unset locally and let the live test discover it).
-
-For production, repeat steps 3–6 with a **separate** custom connection authorised against the firm's **live**
-organisation (a paid $5/mo single-org app), and put those credentials in the production deployment's `secrets.enc.yaml`.
-
-## Running the live test (grounding)
-
-The live test in [`server/tests/xero_sandbox.rs`](../server/tests/xero_sandbox.rs) mints a real client-credentials token
-against the demo-company connection and drives `ensure_contact` twice with the same unique name — the first call
-**creates** the contact, the second must **find** it and return the *same* `ContactID`. This is the only test that
-catches a regression in our understanding of Xero's API (a wrong `where` predicate, a bad scope, a rejected payload). It
-self-skips green when no creds are present and runs only under the explicit `NAVIGATOR_RUN_LIVE_SANDBOX=1` opt-in, so it
-never fires on an ambient-credentials `cargo test`:
+The live sandbox test exercises the Xero connection against the demo company:
 
 ```bash
 set -a; source .env; set +a
@@ -180,17 +141,11 @@ it without separate sandbox vars.
 
 ## Nightly ingest and paid-status reconciliation
 
-The invoice is raised in Xero. The nightly `ReconcileInvoices` workflow (worker-side, in
-[`billing-workflows`](../billing-workflows/)) first **lists** `ACCREC` invoices and upserts each Project-scoped row into
-`xero_invoice`, folding `Status` and `AmountPaid` from that list so a first-night Paid invoice already shows Paid. It
-then calls `get_invoice` for each mirrored invoice still open (`AUTHORISED`, not `PAID`/`VOIDED`) and folds Xero's
-paid-status into the mirror. The portal never calls Xero live.
-
-The same nightly run then refreshes the IOLTA side: the pooled bank account mirrored for each state, the client deposits
-and refunds that moved through it, and any withdrawal that settles invoices. Its report counts what it posted and what
-it refused — an invoice with no matter reference, a deposit that does not sit on its matter's pool, a withdrawal whose
-lines do not add up. This workflow only ever *reads* from Xero. Like every workflow, it is hosted by `workflows-service`
-— no per-workflow worker pod.
+The nightly `ReconcileInvoices` workflow (worker-side, in [`billing-workflows`](../billing-workflows/)) refreshes the
+IOLTA side: the pooled bank account mirrored for each state, the client deposits and refunds that moved through it, and
+any withdrawal that settles invoices. Its report counts what it posted and what it refused — a deposit that does not sit
+on its matter's pool, a withdrawal whose lines do not add up. This workflow only ever *reads* from Xero. Like every
+workflow, it is hosted by `workflows-service` — no per-workflow worker pod.
 
 ### Slack reports the nightly run
 
@@ -204,10 +159,9 @@ deployment credential. New installations should use **Navigator** as the display
 display name before enabling live reports; changing it is an external Slack administration step, not a Navigator code
 change.
 
-The copy is firm-internal: invoice counts, trust counts, and one line per matter that moved, naming the **Project code**
-and the **cents**. Never a client's name, email address, or portal link. Invoices whose Xero `Reference` names no matter
-are a **count** — dumping the Xero contact names behind them would put client identities in a channel that has no need
-for them. A simulated-matters deployment folds in the staging disclosure, the same signal `#general` gets.
+The copy is firm-internal: trust counts and one line per matter that moved, naming the **Project code** and the
+**cents**. Never a client's name, email address, or portal link. A simulated-matters deployment folds in the staging
+disclosure, the same signal `#general` gets.
 
 ## Production cutover
 
@@ -215,9 +169,9 @@ for them. A simulated-matters deployment folds in the staging disclosure, the sa
 2. Put its `XERO_CLIENT_ID` / `XERO_CLIENT_SECRET` / `XERO_TENANT_ID` in the production deployment's
    `secrets.enc.yaml` (applied to Secret Manager and projected into the `navigator-web-secrets` Secret), never in
    plaintext source.
-3. Confirm the live org grants the same `accounting.contacts accounting.invoices` scopes.
-4. Verify with one real invoice raised in the live org, `Reference` set to `Matter <project code>`, that
-   `ReconcileInvoices` ingests it onto the portal list and mirrors its paid-status.
+3. Confirm the live org grants the same `accounting.contacts accounting.settings.read accounting.transactions.read`
+   scopes.
+4. Verify that `ReconcileInvoices` mirrors the live IOLTA bank accounts and reports to `#finance`.
 
 ## Related
 

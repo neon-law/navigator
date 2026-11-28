@@ -955,7 +955,6 @@ async fn dbos_schedules(
         Some(workflows::dbos_engine::purchase_activation::Context::new(
             Arc::new(crate::purchases::StoreActivationSource::new(
                 pg,
-                rt.state.billing_provider.clone(),
                 rt.state.application_store.clone(),
             )),
         ))

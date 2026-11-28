@@ -4,8 +4,9 @@
 //! On the first of each month it grants every Same Day Legal subscriber the
 //! glossary's fresh 500-cent credit ([`store::sandbox_usage::grant`], the
 //! ledger's own idempotent rollover primitive — this job never touches
-//! ledger rows directly), then converts the closed month's overage rows
-//! into à la carte invoice lines through the shared `billing` contract.
+//! ledger rows directly), then bills the closed month's overage as one sent
+//! Stripe invoice per subscriber, on the Stripe Operating account and
+//! Customer the subscription itself is bound to.
 //!
 //! Grant and invoice are separate journaled steps: a retry after the
 //! grants succeeded re-runs only the invoicing, and the grants' own
@@ -19,7 +20,8 @@
 //! Restate owns the retry schedule. Identical split to the billing canary
 //! and reconcile triggers.
 
-use billing::{BillingProvider, InvoiceLine, InvoiceRequest, XeroBillingProvider};
+use billing::stripe::{InvoiceCustomer, OneOffInvoice, StripeInvoiceClient};
+use store::firm_secrets::{IntegrationProvider, IntegrationSecretKind};
 
 use serde::{Deserialize, Serialize};
 use store::application_store::ApplicationStore;
@@ -44,9 +46,10 @@ pub struct SandboxResetReport {
     pub granted: usize,
     /// Closed-month overage rows invoiced à la carte this run.
     pub overage_invoiced: usize,
-    /// Closed-month overage rows that became no invoice: the subscriber's
-    /// Same Day Legal Purchase is gone, so there is no contact or account code to
-    /// bill. Reported, never silently dropped.
+    /// Closed-month overage rows that became no invoice: the subscriber has
+    /// no Stripe-bound Same Day Legal Purchase (it is gone, or predates
+    /// Stripe), so there is no account to bill. Reported, never silently
+    /// dropped.
     pub overage_skipped: usize,
     /// Invoices already raised for this closed period on an earlier run —
     /// the idempotency key matched. A retry's receipt, not new money.
@@ -86,16 +89,30 @@ fn subscriber_ids(purchases: &[store::purchases::Purchase]) -> Vec<uuid::Uuid> {
     people
 }
 
-/// The latest Same Day Legal Purchase of one person: the invoice's account code
-/// and the purchase the subscription billed through.
-fn latest_purchase(
+/// Where one subscriber's overage is billed: the Firm, Stripe account, and
+/// Customer of their latest Stripe-bound Same Day Legal subscription. A
+/// subscription bought before Stripe has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OverageTarget {
+    firm: uuid::Uuid,
+    account: String,
+    customer: Option<String>,
+}
+
+fn overage_target(
     purchases: &[store::purchases::Purchase],
     person_id: uuid::Uuid,
-) -> Option<&store::purchases::Purchase> {
+) -> Option<OverageTarget> {
     purchases
         .iter()
         .filter(|purchase| purchase.person_id == person_id)
-        .max_by_key(|purchase| (purchase.inserted_at, purchase.id))
+        .filter_map(|purchase| purchase.stripe.as_ref().map(|stripe| (purchase, stripe)))
+        .max_by_key(|(purchase, _)| (purchase.inserted_at, purchase.id))
+        .map(|(_, stripe)| OverageTarget {
+            firm: stripe.firm_id,
+            account: stripe.account_id.clone(),
+            customer: stripe.customer_id.clone(),
+        })
 }
 
 /// Outcome of one subscriber's closed billing period.
@@ -127,80 +144,66 @@ pub async fn closed_overage_roster(
         .collect())
 }
 
-/// Invoice one overage using the shared provider contract. The caller owns
-/// its timeout and replay admission before making the provider call.
+/// Invoice one overage as a sent Stripe invoice on the subscriber's own
+/// Stripe account. The caller owns its timeout and replay admission before
+/// making the provider call.
 pub async fn invoice_one_from_env(
     pg: &PostgresDb,
     application_store: &ApplicationStore,
     period: &str,
     overage: Overage,
 ) -> anyhow::Result<OverageOutcome> {
-    let mut billing =
-        XeroBillingProvider::from_env().ok_or_else(|| anyhow::anyhow!("Xero is not configured"))?;
-    let purchases = purchases::for_offerings(pg, &purchases::SAME_DAY_LEGAL_OFFERINGS).await?;
-    invoice_one(
-        &mut billing,
-        application_store,
-        &purchases,
-        overage.person_id,
-        period,
-        overage.cents,
-    )
-    .await
-}
-
-async fn invoice_one(
-    billing: &mut dyn BillingProvider,
-    application_store: &ApplicationStore,
-    purchases: &[store::purchases::Purchase],
-    person_id: uuid::Uuid,
-    closed_period: &str,
-    overage_cents: i64,
-) -> anyhow::Result<OverageOutcome> {
-    if overage_cents <= 0 {
+    if overage.cents <= 0 {
         return Ok(OverageOutcome::AlreadyBilled);
     }
-    let Some(purchase) = latest_purchase(purchases, person_id) else {
+    let purchases = purchases::for_offerings(pg, &purchases::SAME_DAY_LEGAL_OFFERINGS).await?;
+    let Some(target) = overage_target(&purchases, overage.person_id) else {
         return Ok(OverageOutcome::Skipped);
     };
-    let person = store::persons::find_by_id(application_store, person_id).await?;
-    let Some(person) = person else {
+    let Some(person) = store::persons::find_by_id(application_store, overage.person_id).await?
+    else {
         return Ok(OverageOutcome::Skipped);
     };
-
-    let contact = match &purchase.xero_contact_id {
-        Some(id) => billing::ContactId(id.clone()),
-        None => {
-            billing
-                .ensure_contact(&billing::ContactRequest {
-                    name: person.name.clone(),
-                    email: person.email.clone(),
-                })
-                .await?
-        }
+    let kms = cloud::runtime_kms_from_env().await;
+    let key = store::firm_secrets::resolve_firm_credential(
+        application_store,
+        target.firm,
+        IntegrationProvider::Stripe,
+        IntegrationSecretKind::StripeOperatingAppKey,
+        kms.as_ref(),
+    )
+    .await?;
+    let live = store::firm_secrets::stripe_mode()? == store::firm_secrets::Mode::Live;
+    let stripe = StripeInvoiceClient::new(key.expose_for_provider_call(), live)?;
+    if stripe.account_id().await? != target.account {
+        anyhow::bail!("the Firm's Stripe account no longer matches the subscription");
+    }
+    let customer = match target.customer.as_deref() {
+        Some(id) => InvoiceCustomer::Existing(id),
+        None => InvoiceCustomer::New {
+            name: &person.name,
+            email: &person.email,
+        },
     };
-    let key = overage_invoice_key(person_id, closed_period);
-    let request = InvoiceRequest {
-        contact_id: Some(contact),
-        contact_name: person.name.clone(),
-        contact_email: person.email.clone(),
-        reference: format!("Same Day Legal sandbox usage {closed_period}"),
-        line_items: vec![InvoiceLine {
-            description: format!(
-                "Legal Sandbox model usage beyond the included $5.00, {closed_period}"
-            ),
-            quantity: 1,
-            unit_amount_cents: overage_cents,
-            account_code: purchase.account_code.clone(),
-        }],
-        issued_date: None,
-        due_date: None,
-    };
-    // Keep the deterministic request key. Recovery after provider-key
-    // expiry still needs durable per-overage invoice state.
-    let receipt = billing.create_invoice(key, &request).await?;
-    Ok(OverageOutcome::Invoiced(receipt.0))
+    let description =
+        format!("Legal Sandbox model usage beyond the included $5.00, {period} (Same Day Legal)");
+    // Keep the deterministic request key. Recovery after Stripe's key
+    // retention still needs durable per-overage invoice state.
+    let sent = stripe
+        .send_one_off_invoice(&OneOffInvoice {
+            key: overage_invoice_key(overage.person_id, period),
+            customer,
+            description: &description,
+            amount_cents: overage.cents,
+            days_until_due: OVERAGE_DUE_DAYS,
+            metadata: ("navigator_sandbox_period", period.to_owned()),
+        })
+        .await?;
+    Ok(OverageOutcome::Invoiced(sent.id))
 }
+
+/// Days after it is sent that an overage invoice falls due.
+const OVERAGE_DUE_DAYS: u32 = 14;
 
 /// The deterministic overage-invoice key for one subscriber-month. `v5`
 /// over the ledger's own compound key, so every retry of the same
@@ -214,4 +217,72 @@ pub fn overage_invoice_key(person_id: uuid::Uuid, period: &str) -> uuid::Uuid {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use chrono::{TimeDelta, Utc};
+    use store::purchases::{Cadence, Purchase, PurchaseState, StripePurchase};
+
+    fn purchase(person: uuid::Uuid, account: Option<&str>, age_days: i64) -> Purchase {
+        let at = Utc::now() - TimeDelta::days(age_days);
+        Purchase {
+            id: uuid::Uuid::now_v7(),
+            person_id: person,
+            email: "subscriber@example.com".into(),
+            offering: "delete-your-data-monthly".into(),
+            offering_name: "Same Day Legal".into(),
+            cadence: Cadence::Month,
+            amount_cents: 2_900,
+            currency: "USD".into(),
+            account_code: "200".into(),
+            state: PurchaseState::Active,
+            invoice_url: None,
+            inserted_at: at,
+            updated_at: at,
+            activated_at: Some(at),
+            stripe: account.map(|account| StripePurchase {
+                firm_id: uuid::Uuid::nil(),
+                account_id: account.into(),
+                checkout_session_id: Some("cs_test_synthetic".into()),
+                customer_id: Some(format!("cus_{}", account.trim_start_matches("acct_"))),
+                subscription_id: Some("sub_synthetic".into()),
+                period_end: Some(at + TimeDelta::days(30)),
+                cancel_at_period_end: false,
+                renewal_terms: "Renews monthly.".into(),
+                consented_at: at,
+            }),
+            stripe_invoice: None,
+            renewal_cancelled_at: None,
+            access_ends_at: None,
+        }
+    }
+
+    #[test]
+    fn overage_bills_the_latest_stripe_subscription_and_skips_one_bought_before_stripe() {
+        let person = uuid::Uuid::now_v7();
+        let other = uuid::Uuid::now_v7();
+        let purchases = [
+            purchase(person, Some("acct_Older"), 90),
+            purchase(person, Some("acct_Newer"), 10),
+            purchase(person, None, 1),
+            purchase(other, None, 5),
+        ];
+        let target = overage_target(&purchases, person).unwrap();
+        assert_eq!(target.account, "acct_Newer");
+        assert_eq!(target.customer.as_deref(), Some("cus_Newer"));
+        assert_eq!(overage_target(&purchases, other), None);
+        assert_eq!(overage_target(&purchases, uuid::Uuid::now_v7()), None);
+    }
+
+    #[test]
+    fn each_subscriber_month_has_one_stable_invoice_key() {
+        let person = uuid::Uuid::now_v7();
+        assert_eq!(
+            overage_invoice_key(person, "2026-10"),
+            overage_invoice_key(person, "2026-10")
+        );
+        assert_ne!(
+            overage_invoice_key(person, "2026-10"),
+            overage_invoice_key(person, "2026-11")
+        );
+    }
+}

@@ -9,13 +9,12 @@
 //!   [`Project Cost`](crate::project_costs) amounts — the work performed on
 //!   the matter that no invoice has yet drawn.
 //! - **Outstanding Balance** (`outstanding_cents`): invoiced minus paid over
-//!   the matter's [`Xero Invoice`](crate::xero_invoices) mirror rows — what
-//!   the client still owes. Voided invoices are owed by nobody and are left
-//!   out.
+//!   the matter's [`Matter Invoice`](crate::matter_invoices) ledger — what
+//!   the client still owes. Drafts are not yet billed and void invoices are
+//!   owed by nobody, so both are left out.
 //!
-//! The module writes nothing: it reads the time-entry and project-cost tables
-//! in PostgreSQL and the invoice mirror, and derives the two sums. Xero is
-//! the books; the projection never touches it.
+//! The module writes nothing: it reads the time-entry, project-cost, and
+//! invoice tables in PostgreSQL and derives the two sums.
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
@@ -29,7 +28,7 @@ pub enum MatterFinancialsError {
     #[error("Project cost lookup failed")]
     Cost(#[from] crate::project_costs::ProjectCostError),
     #[error("invoice lookup failed")]
-    Invoice(#[from] Box<crate::xero_invoices::XeroInvoiceError>),
+    Invoice(#[from] Box<crate::matter_invoices::MatterInvoiceError>),
     #[error("billing batch lookup failed")]
     Database(#[from] sqlx::Error),
 }
@@ -42,7 +41,7 @@ pub struct MatterFinancials {
     /// Unbilled billable time at snapshot rates plus unbilled confirmed
     /// Project costs.
     pub wip_cents: i64,
-    /// Invoiced minus paid across the matter's non-voided mirrored invoices.
+    /// Invoiced minus paid across the matter's issued invoices.
     pub outstanding_cents: i64,
     /// The time part of the Work in Progress figure.
     pub unbilled_time_cents: i64,
@@ -57,7 +56,7 @@ impl MatterFinancials {
     pub fn from_parts(
         entries: &[crate::time_entries::TimeEntry],
         costs: &[crate::project_costs::ProjectCost],
-        invoices: &[crate::xero_invoices::XeroInvoice],
+        invoices: &[crate::matter_invoices::MatterInvoice],
     ) -> Self {
         let unbilled_time_cents = unbilled_time_cents(entries);
         let unbilled_costs_cents = unbilled_costs_cents(costs);
@@ -107,15 +106,21 @@ pub fn unbilled_costs_cents(costs: &[crate::project_costs::ProjectCost]) -> i64 
         .sum()
 }
 
-/// What the client still owes: the unpaid remainder of every mirrored
-/// invoice on the matter, voided ones excluded. An overpaid invoice
+/// What the client still owes: the unpaid remainder of every issued invoice
+/// on the matter. Drafts and void invoices are left out. An overpaid invoice
 /// contributes its negative remainder rather than being clamped — the sum
 /// stays honest about the matter's true position.
 #[must_use]
-pub fn outstanding_cents(invoices: &[crate::xero_invoices::XeroInvoice]) -> i64 {
+pub fn outstanding_cents(invoices: &[crate::matter_invoices::MatterInvoice]) -> i64 {
+    use crate::matter_invoices::Status;
     invoices
         .iter()
-        .filter(|invoice| invoice.status != "VOIDED")
+        .filter(|invoice| {
+            matches!(
+                invoice.status,
+                Status::Sent | Status::Paid | Status::Uncollectible
+            )
+        })
         .map(|invoice| invoice.amount_cents - invoice.amount_paid_cents)
         .sum()
 }
@@ -133,20 +138,20 @@ pub async fn for_project(
 ) -> Result<MatterFinancials, MatterFinancialsError> {
     let mut entries = crate::time_entries::wip_billable(pg, project_id).await?;
     let mut costs = crate::project_costs::list_for_project(pg, project_id).await?;
-    let invoices = crate::xero_invoices::for_projects(application_store, &[project_id])
+    let invoices = crate::matter_invoices::for_projects(application_store, &[project_id])
         .await
         .map_err(Box::new)?;
-    // A partially settled batch can already have a mirrored invoice while
-    // its work remains reserved. That invoice accounts for the work: keep
-    // it out of WIP without hiding reservations from refused creates.
+    // A partially settled batch can already have its invoice while its work
+    // remains reserved. That invoice accounts for the work: keep it out of
+    // WIP without hiding reservations from refused creates.
     let invoice_ids = invoices
         .iter()
-        .filter(|invoice| invoice.status != "VOIDED")
-        .map(|invoice| invoice.xero_invoice_id.as_str())
+        .filter(|invoice| invoice.status != crate::matter_invoices::Status::Void)
+        .map(|invoice| invoice.id)
         .collect::<Vec<_>>();
     let batches = sqlx::query(
         "SELECT entry_ids,cost_ids FROM matter_billing_batch \
-         WHERE project_id=$1 AND xero_invoice_id=ANY($2)",
+         WHERE project_id=$1 AND matter_invoice_id=ANY($2)",
     )
     .bind(project_id)
     .bind(&invoice_ids)
@@ -164,9 +169,9 @@ pub async fn for_project(
 #[cfg(test)]
 mod tests {
     use super::{outstanding_cents, unbilled_costs_cents, unbilled_time_cents, MatterFinancials};
+    use crate::matter_invoices::{MatterInvoice, Source, Status};
     use crate::project_costs::ProjectCost;
     use crate::time_entries::{BillingStatus, TimeEntry, TimeEntrySource};
-    use crate::xero_invoices::XeroInvoice;
     use chrono::{NaiveDate, Utc};
     use uuid::Uuid;
 
@@ -201,23 +206,31 @@ mod tests {
             billing_status: billing_status.into(),
             receipt_document_id: Uuid::new_v4(),
             source_reference: None,
-            xero_invoice_id: None,
+            matter_invoice_id: None,
             inserted_at: Utc::now(),
             updated_at: Utc::now(),
         }
     }
 
-    fn invoice(amount_cents: i64, amount_paid_cents: i64, status: &str) -> XeroInvoice {
-        XeroInvoice {
+    fn invoice(amount_cents: i64, amount_paid_cents: i64, status: Status) -> MatterInvoice {
+        MatterInvoice {
+            id: Uuid::new_v4(),
             project_id: Uuid::new_v4(),
-            xero_invoice_id: format!("inv-{}", Uuid::new_v4().simple()),
+            source: Source::Stripe,
+            external_id: Some(format!("in_{}", Uuid::new_v4().simple())),
             reference: "Matter 0000".into(),
-            status: status.into(),
+            status,
             amount_cents,
             amount_paid_cents,
             currency: "USD".into(),
-            issued_at: Utc::now(),
-            due_at: None,
+            issued_on: None,
+            due_on: None,
+            payer: None,
+            memo: None,
+            status_reason: None,
+            client_visible: true,
+            stripe_account_id: None,
+            destination: None,
             inserted_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -243,7 +256,7 @@ mod tests {
                 60,
                 true,
                 BillingStatus::Invoiced {
-                    xero_invoice_id: "inv-9".into(),
+                    invoice_id: Uuid::nil(),
                 },
             ),
         ];
@@ -283,7 +296,7 @@ mod tests {
                 60,
                 true,
                 BillingStatus::Invoiced {
-                    xero_invoice_id: "inv-1".into(),
+                    invoice_id: Uuid::nil(),
                 },
             ),
         ];
@@ -302,36 +315,36 @@ mod tests {
     #[test]
     fn outstanding_sums_invoiced_minus_paid_across_the_matter() {
         let invoices = [
-            invoice(100_000, 40_000, "AUTHORISED"),
-            invoice(50_000, 50_000, "PAID"),
-            invoice(30_000, 0, "DRAFT"),
+            invoice(100_000, 40_000, Status::Sent),
+            invoice(50_000, 50_000, Status::Paid),
+            invoice(30_000, 0, Status::Draft),
+            invoice(20_000, 0, Status::Uncollectible),
         ];
-        // Everything except the voided row counts, drafts included: the mirror
-        // row is the firm's own receivable, and the voided invoice is the one
-        // thing nobody owes. 60_000 + 0 + 30_000.
-        assert_eq!(outstanding_cents(&invoices), 90_000);
+        // A draft is not yet billed; an uncollectible invoice is still owed.
+        // 60_000 + 0 + 20_000.
+        assert_eq!(outstanding_cents(&invoices), 80_000);
     }
 
     #[test]
     fn outstanding_skips_voided_invoices() {
         let invoices = [
-            invoice(100_000, 0, "AUTHORISED"),
-            invoice(75_000, 0, "VOIDED"),
+            invoice(100_000, 0, Status::Sent),
+            invoice(75_000, 0, Status::Void),
         ];
         assert_eq!(outstanding_cents(&invoices), 100_000);
     }
 
     #[test]
     fn a_partially_paid_invoice_leaves_its_remainder_outstanding() {
-        let invoices = [invoice(421_000, 50_000, "PARTIALLYPAID")];
+        let invoices = [invoice(421_000, 50_000, Status::Sent)];
         assert_eq!(outstanding_cents(&invoices), 371_000);
     }
 
     #[test]
     fn an_overpaid_invoice_counts_its_credit_against_the_matter() {
         let invoices = [
-            invoice(50_000, 60_000, "PAID"),
-            invoice(10_000, 0, "AUTHORISED"),
+            invoice(50_000, 60_000, Status::Paid),
+            invoice(10_000, 0, Status::Sent),
         ];
         assert_eq!(outstanding_cents(&invoices), 0);
     }

@@ -8,7 +8,8 @@
 //! # Accounting
 //!
 //! [`firm_journal`] owns the Firm's authoritative, immutable journal.
-//! [`xero_invoices`] and the trust imports preserve external evidence and links.
+//! [`matter_invoices`] keeps each matter's invoices and payments; the trust
+//! imports preserve external evidence and links.
 //! Navigator also stores rate and quoted usage provenance for Notations.
 //! [`cap_table_holdings`] records a Project's current holdings; each cap-table
 //! ledger remains outside Navigator.
@@ -93,6 +94,7 @@ pub mod inbox;
 pub mod inbox_alerts;
 pub mod inbox_import;
 pub mod inbox_triage;
+pub mod invoice_destinations;
 pub mod iolta_accounts;
 pub mod iolta_withdrawals;
 pub mod jurisdictions;
@@ -104,6 +106,7 @@ pub mod mail_signatures;
 pub mod mailrooms;
 pub mod matter_captions;
 pub mod matter_financials;
+pub mod matter_invoices;
 pub mod matter_outcomes;
 pub mod matter_pages;
 pub mod matter_projections;
@@ -111,6 +114,7 @@ pub(crate) mod matter_record_links;
 pub use model::correspondence;
 pub use model::mail_attachments;
 pub use model::nef;
+pub mod claim_packets;
 pub mod court_date_forgejo;
 pub mod deadline_proposals;
 pub mod notarizations;
@@ -199,6 +203,7 @@ pub mod social_publications;
 pub mod source_pages;
 pub mod ssh_public_keys;
 pub mod statutory_deadlines;
+pub mod stripe_customers;
 pub mod summary_sender_approvals;
 pub mod synthetic_portfolio;
 pub mod task_handoffs;
@@ -207,11 +212,11 @@ pub mod template_source;
 pub mod templates;
 pub mod testimonials;
 pub mod time_entries;
+pub mod time_proposals;
 pub mod timers;
 #[path = "runtime/tls.rs"]
 pub mod tls;
 pub mod trust;
-pub mod xero_invoices;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;

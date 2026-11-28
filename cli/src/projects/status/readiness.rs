@@ -221,6 +221,7 @@ fn next_deadline(project: &Value) -> String {
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum BillingException {
     PendingTime(Uuid),
+    PendingProposals,
     UnallocatedWork,
     OutstandingClaim(Uuid),
 }
@@ -247,6 +248,14 @@ fn billing_exceptions(code: &str, billing: &Value, lines: &mut Vec<String>) {
             } => (
                 BillingException::PendingTime(annotation_id),
                 format!("Pending time · {performed_on} · {next_action}"),
+            ),
+            BillingAction::PendingProposals {
+                pending_proposals,
+                next_action,
+                ..
+            } => (
+                BillingException::PendingProposals,
+                format!("{pending_proposals} pending Time Entry Proposals · {next_action}"),
             ),
             BillingAction::UnallocatedWork { next_action, .. } => (
                 BillingException::UnallocatedWork,

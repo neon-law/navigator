@@ -1,12 +1,16 @@
 //! A Client's Purchase of an Offering.
 //!
 //! The catalog's name, price, and cadence are copied when a Purchase is
-//! reserved, before any provider write. Xero invoices consultations; Stripe
-//! hosts recurring Checkout and retains the accepted terms and provider
-//! account binding. Only verified payment activates access. Stripe access
-//! also ends at the last confirmed paid-through boundary. Stable Purchase
-//! keys make safe provider retries idempotent. Complimentary consultations
-//! never call a payment provider.
+//! reserved, before any provider write. Every paid Purchase collects through
+//! the Firm's Stripe Operating account: a one-time Purchase is a sent Stripe
+//! invoice, and a recurring one is hosted Checkout that retains the accepted
+//! terms. Each binds to the Firm and Stripe account it was reserved on. Only
+//! verified payment activates access, and Stripe access also ends at the last
+//! confirmed paid-through boundary. Stable Purchase keys make provider
+//! retries idempotent. Complimentary consultations never call a provider.
+//!
+//! A Purchase invoiced through Xero before Stripe keeps its Xero ids as
+//! read-only history in `legacy_xero_*`; nothing here reads or writes them.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -94,19 +98,29 @@ pub struct Purchase {
     pub cadence: Cadence,
     pub amount_cents: i64,
     pub currency: String,
-    /// The Xero chart-of-accounts code the revenue posts to.
+    /// The revenue account code the catalog names for the Offering.
     pub account_code: String,
     pub state: PurchaseState,
-    pub xero_contact_id: Option<String>,
-    pub xero_invoice_id: Option<String>,
+    /// Where the payer pays: a hosted Stripe invoice or Checkout page.
     pub invoice_url: Option<String>,
-    pub xero_repeating_invoice_id: Option<String>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub activated_at: Option<DateTime<Utc>>,
+    /// A recurring Purchase's hosted Checkout and subscription.
     pub stripe: Option<StripePurchase>,
+    /// A one-time Purchase's Stripe invoice.
+    pub stripe_invoice: Option<StripeInvoicePurchase>,
     pub renewal_cancelled_at: Option<DateTime<Utc>>,
     pub access_ends_at: Option<DateTime<Utc>>,
+}
+
+/// The Stripe invoice a one-time Purchase is paid through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StripeInvoicePurchase {
+    pub firm_id: Uuid,
+    pub account_id: String,
+    /// Absent until Stripe returns the sent invoice.
+    pub invoice_id: Option<String>,
 }
 
 /// Provider identities and the verified paid-through boundary of a Stripe Purchase.
@@ -166,7 +180,7 @@ impl From<sqlx::Error> for PurchaseError {
 }
 
 const COLUMNS: &str = "id, person_id, email, offering, offering_name, cadence, amount_cents, \
-     currency, account_code, state, xero_contact_id, xero_invoice_id, invoice_url, xero_repeating_invoice_id, \
+     currency, account_code, state, invoice_url, stripe_invoice_id, \
      inserted_at, updated_at, activated_at, stripe_firm_id, stripe_account_id, stripe_checkout_session_id, \
      stripe_customer_id, stripe_subscription_id, stripe_period_end, stripe_cancel_at_period_end, \
      renewal_terms, renewal_consented_at, renewal_cancelled_at, access_ends_at";
@@ -180,27 +194,38 @@ pub const SAME_DAY_LEGAL_OFFERINGS: [&str; 2] =
     ["delete-your-data-monthly", "delete-your-data-annual"];
 
 fn from_row(row: &sqlx::postgres::PgRow) -> Result<Purchase, PurchaseError> {
+    let cadence = Cadence::parse(row.try_get("cadence")?);
+    let account: Option<String> = row.try_get("stripe_account_id")?;
+    let (stripe_account, invoice_account) = match (account, cadence) {
+        (Some(account), Cadence::Once) => (None, Some(account)),
+        (account, _) => (account, None),
+    };
     Ok(Purchase {
         id: row.try_get("id")?,
         person_id: row.try_get("person_id")?,
         email: row.try_get("email")?,
         offering: row.try_get("offering")?,
         offering_name: row.try_get("offering_name")?,
-        cadence: Cadence::parse(row.try_get("cadence")?),
+        cadence,
         amount_cents: row.try_get("amount_cents")?,
         currency: row.try_get("currency")?,
         account_code: row.try_get("account_code")?,
         state: PurchaseState::parse(row.try_get("state")?)?,
-        xero_contact_id: row.try_get("xero_contact_id")?,
-        xero_invoice_id: row.try_get("xero_invoice_id")?,
         invoice_url: row.try_get("invoice_url")?,
-        xero_repeating_invoice_id: row.try_get("xero_repeating_invoice_id")?,
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
         activated_at: row.try_get("activated_at")?,
         renewal_cancelled_at: row.try_get("renewal_cancelled_at")?,
         access_ends_at: row.try_get("access_ends_at")?,
-        stripe: match row.try_get::<Option<String>, _>("stripe_account_id")? {
+        stripe_invoice: match invoice_account {
+            None => None,
+            Some(account_id) => Some(StripeInvoicePurchase {
+                firm_id: row.try_get("stripe_firm_id")?,
+                account_id,
+                invoice_id: row.try_get("stripe_invoice_id")?,
+            }),
+        },
+        stripe: match stripe_account {
             None => None,
             Some(account_id) => Some(StripePurchase {
                 firm_id: row.try_get("stripe_firm_id")?,
@@ -217,29 +242,59 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<Purchase, PurchaseError> {
     })
 }
 
-/// The Client's open (`invoicing` or `invoiced`) Purchase of `new.offering`,
-/// recording a new `invoicing` one when there is none.
+/// The Client's open (`invoicing` or `invoiced`) one-time Purchase of
+/// `new.offering`, bound to one Firm's Stripe account, recording a new
+/// `invoicing` one when there is none.
 ///
 /// Concurrent calls for the same Client and Offering converge on one row:
 /// the partial unique index admits one open Purchase, and the loser of the
 /// race reads the winner's.
 ///
 /// # Errors
-/// [`PurchaseError::InvalidAmount`] for a zero or negative price, or a
-/// database error.
-pub async fn open(
+/// [`PurchaseError::InvalidAmount`] for a zero or negative price or a
+/// recurring Offering; [`PurchaseError::Store`] when the open Purchase is
+/// bound to another account or price.
+pub async fn open_stripe_invoice(
     pg: &PostgresDb,
     new: &NewPurchase,
     now: DateTime<Utc>,
+    firm_id: Uuid,
+    account_id: &str,
 ) -> Result<Purchase, PurchaseError> {
-    open_inner(pg, new, now, None).await
+    if new.cadence != Cadence::Once {
+        return Err(PurchaseError::InvalidAmount);
+    }
+    let row = open_inner(
+        pg,
+        new,
+        now,
+        Some(StripeAdmission {
+            firm_id,
+            account_id,
+            terms: None,
+        }),
+    )
+    .await?;
+    if row.amount_cents != new.amount_cents
+        || row.offering_name != new.offering_name
+        || row
+            .stripe_invoice
+            .as_ref()
+            .is_none_or(|stripe| stripe.firm_id != firm_id || stripe.account_id != account_id)
+    {
+        return Err(PurchaseError::Store(
+            "an existing purchase requires reconciliation".into(),
+        ));
+    }
+    Ok(row)
 }
 
-/// Accepted, server-owned recurring terms bound to one Firm's Stripe account.
+/// The Firm and Stripe account a Purchase is reserved on, and for a
+/// recurring Purchase the accepted, server-owned renewal terms.
 pub struct StripeAdmission<'a> {
     pub firm_id: Uuid,
     pub account_id: &'a str,
-    pub terms: &'a str,
+    pub terms: Option<&'a str>,
 }
 
 /// Reserve a Stripe Purchase before the provider call; retries retain the original consent snapshot.
@@ -249,12 +304,15 @@ pub async fn open_stripe(
     now: DateTime<Utc>,
     admission: StripeAdmission<'_>,
 ) -> Result<Purchase, PurchaseError> {
-    if new.cadence == Cadence::Once || admission.terms.trim().is_empty() {
+    let Some(terms) = admission.terms.filter(|terms| !terms.trim().is_empty()) else {
+        return Err(PurchaseError::InvalidAmount);
+    };
+    if new.cadence == Cadence::Once {
         return Err(PurchaseError::InvalidAmount);
     }
     let firm_id = admission.firm_id;
     let account_id = admission.account_id.to_owned();
-    let terms = admission.terms.to_owned();
+    let terms = terms.to_owned();
     let row = open_inner(pg, new, now, Some(admission)).await?;
     if row.amount_cents != new.amount_cents
         || row.cadence != new.cadence
@@ -278,6 +336,9 @@ async fn open_inner(
     now: DateTime<Utc>,
     stripe: Option<StripeAdmission<'_>>,
 ) -> Result<Purchase, PurchaseError> {
+    // LAW-362 keeps open whether self-serve Purchases, which belong to no
+    // matter, are excluded from trust-first collection. Until it closes they
+    // collect into the Firm's Stripe Operating account, never trust.
     if new.amount_cents <= 0 {
         return Err(PurchaseError::InvalidAmount);
     }
@@ -286,7 +347,7 @@ async fn open_inner(
          amount_cents, currency, account_code, state, inserted_at, updated_at, \
          stripe_firm_id, stripe_account_id, renewal_terms, renewal_consented_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'invoicing', $10, $10, $11, $12, $13, \
-         CASE WHEN $12 IS NOT NULL THEN $10 ELSE NULL END) \
+         CASE WHEN $13 IS NOT NULL THEN $10 ELSE NULL END) \
          ON CONFLICT (person_id, offering) WHERE state IN ('invoicing', 'invoiced') DO NOTHING",
     )
     .bind(Uuid::new_v4())
@@ -301,7 +362,7 @@ async fn open_inner(
     .bind(now)
     .bind(stripe.as_ref().map(|s| s.firm_id))
     .bind(stripe.as_ref().map(|s| s.account_id))
-    .bind(stripe.as_ref().map(|s| s.terms))
+    .bind(stripe.as_ref().and_then(|s| s.terms))
     .execute(pg.pool())
     .await?;
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -343,28 +404,29 @@ pub async fn record_complimentary(
     from_row(&row)
 }
 
-/// Record the Xero invoice raised for an `invoicing` Purchase. A Purchase
-/// already `invoiced` keeps the invoice it has.
+/// Record the sent Stripe invoice for an `invoicing` one-time Purchase. A
+/// Purchase already `invoiced` keeps the invoice it has; a different
+/// invoice id needs reconciliation.
 ///
 /// # Errors
-/// [`PurchaseError::NotFound`] when no open Purchase has this id.
-pub async fn record_invoice(
+/// [`PurchaseError::NotFound`] when no open Stripe invoice Purchase has this
+/// id or it already holds another invoice.
+pub async fn record_stripe_invoice(
     pg: &PostgresDb,
     id: Uuid,
-    xero_contact_id: &str,
-    xero_invoice_id: &str,
+    invoice_id: &str,
     invoice_url: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<Purchase, PurchaseError> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "UPDATE purchase SET state = 'invoiced', xero_contact_id = COALESCE(xero_contact_id, $2), \
-         xero_invoice_id = COALESCE(xero_invoice_id, $3), \
-         invoice_url = COALESCE($4, invoice_url), updated_at = $5 \
-         WHERE id = $1 AND state IN ('invoicing', 'invoiced') RETURNING {COLUMNS}"
+        "UPDATE purchase SET state = 'invoiced', stripe_invoice_id = $2, \
+         invoice_url = COALESCE($3, invoice_url), updated_at = $4 \
+         WHERE id = $1 AND cadence = 'once' AND stripe_account_id IS NOT NULL \
+         AND state IN ('invoicing', 'invoiced') \
+         AND (stripe_invoice_id IS NULL OR stripe_invoice_id = $2) RETURNING {COLUMNS}"
     )))
     .bind(id)
-    .bind(xero_contact_id)
-    .bind(xero_invoice_id)
+    .bind(invoice_id)
     .bind(invoice_url)
     .bind(now)
     .fetch_optional(pg.pool())
@@ -373,27 +435,23 @@ pub async fn record_invoice(
     from_row(&row)
 }
 
-/// Turn an `invoiced` Purchase `active`, recording the repeating invoice that
-/// renews a subscription. Activating an already active Purchase is a no-op
-/// that returns it unchanged.
+/// Turn an `invoiced` one-time Purchase `active` once Stripe reports its
+/// invoice paid. Activating an already active Purchase returns it unchanged.
 ///
 /// # Errors
-/// [`PurchaseError::NotFound`] when the Purchase is neither invoiced nor
-/// active.
-pub async fn activate(
+/// [`PurchaseError::NotFound`] when the Purchase is neither an invoiced
+/// Stripe invoice nor active.
+pub async fn activate_stripe_invoice(
     pg: &PostgresDb,
     id: Uuid,
-    xero_repeating_invoice_id: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<Purchase, PurchaseError> {
     let updated = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "UPDATE purchase SET state = 'active', activated_at = $2, \
-         xero_repeating_invoice_id = $3, updated_at = $2 \
-         WHERE id = $1 AND state = 'invoiced' RETURNING {COLUMNS}"
+        "UPDATE purchase SET state = 'active', activated_at = $2, updated_at = $2 \
+         WHERE id = $1 AND state = 'invoiced' AND stripe_invoice_id IS NOT NULL RETURNING {COLUMNS}"
     )))
     .bind(id)
     .bind(now)
-    .bind(xero_repeating_invoice_id)
     .fetch_optional(pg.pool())
     .await?;
     match updated {
@@ -562,18 +620,6 @@ pub async fn payment_refresh_queue(
     .fetch_all(pg.pool())
     .await?;
     rows.iter().map(from_row).collect()
-}
-
-/// Stop a Xero renewal without taking away the period its schedule already covers.
-pub async fn record_xero_cancelled(
-    pg: &PostgresDb,
-    id: Uuid,
-    end: DateTime<Utc>,
-    now: DateTime<Utc>,
-) -> Result<(), PurchaseError> {
-    sqlx::query("UPDATE purchase SET renewal_cancelled_at = COALESCE(renewal_cancelled_at, $3), access_ends_at = COALESCE(access_ends_at, $2), updated_at = $3 WHERE id = $1 AND stripe_account_id IS NULL")
-        .bind(id).bind(end).bind(now).execute(pg.pool()).await?;
-    Ok(())
 }
 
 /// Release an unpaid reservation only after its bound provider session is confirmed expired.

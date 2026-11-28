@@ -64,7 +64,8 @@ async fn history(
         plan_claims::Event::WorkRecorded { work },
         plan_claims::Event::Prepared,
         plan_claims::Event::Submission {
-            provider_reference: "synthetic-claim-filing".into(),
+            provider_reference: Some("synthetic-claim-filing".into()),
+            sent_message_id: None,
             claimed_cents: Some(12_000),
         },
         plan_claims::Event::Approval {

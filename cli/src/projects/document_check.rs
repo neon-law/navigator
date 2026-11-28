@@ -256,6 +256,7 @@ impl<'a> LiveSession<'a> {
             total: None,
             next_offset: None,
             integrations: Vec::new(),
+            onboarding: None,
         };
         let mut offset = 0;
         loop {
@@ -440,6 +441,17 @@ pub async fn check_with(
                 message,
             });
         }
+    }
+    // LAW-586: an official onboarding's signed PDF and certificate, once each.
+    for message in integrity
+        .onboarding
+        .iter()
+        .flat_map(|evidence| evidence.missing.iter())
+    {
+        errors.push(CheckFailure {
+            location: "onboarding".into(),
+            message: message.clone(),
+        });
     }
     for finding in &integrity.integrations {
         errors.push(CheckFailure {
@@ -1000,23 +1012,26 @@ fn desired_pointer(
                 })?,
         )
     };
-    // ENG-859: `docusign_envelope_id` and `xero_invoice_id` are, like
+    // ENG-859: `docusign_envelope_id` and the invoice record keys are, like
     // `authority_id`, facts this offline reconciliation never resolves for
     // itself — it only carries a local value forward when the operative
-    // revision it names is unchanged. Live resolution against DocuSign/Xero
-    // (confirming the id it names still exists) is `project gate --check`'s
-    // separate live-check pass (ENG-863), not this function.
-    let (authority_id, canonical_url, checked_on, docusign_envelope_id, xero_invoice_id, evidence) =
+    // revision it names is unchanged. Live resolution against DocuSign is
+    // `project gate --check`'s separate live-check pass (ENG-863).
+    let (authority_id, canonical_url, checked_on, docusign_envelope_id, invoice, evidence) =
         match local {
             Some(pointer) if pointer.current_version.asset_id == operative.asset_id => (
                 pointer.authority_id,
                 pointer.current_version.canonical_url.clone(),
                 pointer.current_version.checked_on.clone(),
                 pointer.docusign_envelope_id,
-                pointer.xero_invoice_id,
+                (
+                    pointer.stripe_invoice_id.clone(),
+                    pointer.source,
+                    pointer.external_id.clone(),
+                ),
                 pointer.evidence.clone(),
             ),
-            _ => (None, None, None, None, None, None),
+            _ => (None, None, None, None, (None, None, None), None),
         };
     let pointer = DocumentPointer {
         receipt: local
@@ -1041,7 +1056,9 @@ fn desired_pointer(
         previous_version,
         authority_id,
         docusign_envelope_id,
-        xero_invoice_id,
+        stripe_invoice_id: invoice.0,
+        source: invoice.1,
+        external_id: invoice.2,
         // The live revision's record wins; a block recorded by hand on the
         // committed pointer is kept while it still names this revision and
         // the live row has none.
@@ -2712,6 +2729,38 @@ mod tests {
 
         assert!(!outcome.rejects(false), "{outcome:?}");
         assert!(outcome.fixes.is_empty(), "{:?}", outcome.fixes);
+    }
+
+    /// LAW-586: the gate fails while an official onboarding's signed record
+    /// is missing, naming what to file.
+    #[tokio::test]
+    async fn an_official_onboarding_without_its_signed_record_fails_the_check() {
+        let (server, project_id, _) = server().await;
+        let dir = tempfile::tempdir().unwrap();
+        gitignore(dir.path());
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({
+                "assets": [],
+                "onboarding": {
+                    "official": true, "signed_pdf": null, "certificate": null,
+                    "missing": ["The onboarding is signed but no signed engagement letter PDF is filed"],
+                },
+            }),
+        )
+        .await;
+
+        let outcome = check(dir.path(), &client(&server, project_id), true, false)
+            .await
+            .unwrap();
+
+        assert!(outcome.rejects(false), "{outcome:?}");
+        assert_eq!(outcome.errors.len(), 1);
+        assert_eq!(outcome.errors[0].location, "onboarding");
+        assert!(outcome.errors[0]
+            .message
+            .contains("signed engagement letter PDF"));
     }
 
     /// LAW-81: a bare legacy slug and its extension-carrying twin both

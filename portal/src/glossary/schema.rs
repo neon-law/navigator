@@ -8,6 +8,10 @@ pub(super) fn table_sql(schema: &str) -> BTreeMap<String, String> {
     for line in schema.lines() {
         // These declarations have a controlled format in schema.sql. Function
         // bodies and data migrations are deliberately outside this display.
+        if let Some(dropped) = line.strip_prefix("DROP TABLE ") {
+            tables.remove(dropped.trim_end_matches(';').trim().trim_matches('"'));
+            continue;
+        }
         if statement.is_empty()
             && ![
                 "CREATE TABLE ",
@@ -74,8 +78,14 @@ mod tests {
             "CREATE UNIQUE INDEX holding_owner\n    ON holding (owner_id);\n",
             "ALTER TABLE holding ADD CONSTRAINT positive CHECK (shares > 0);\n",
             "ALTER TABLE holding DROP CONSTRAINT positive;\n",
+            "CREATE TABLE retired (\n    id UUID PRIMARY KEY\n);\n",
+            "DROP TABLE retired;\n",
         );
         let tables = table_sql(schema);
+        assert!(
+            !tables.contains_key("retired"),
+            "a dropped table is not shown"
+        );
         let holding = &tables["holding"];
         assert!(holding.contains("shares BIGINT NOT NULL CHECK (shares >= 0)"));
         assert!(holding.contains("owner_id UUID REFERENCES person(id)"));

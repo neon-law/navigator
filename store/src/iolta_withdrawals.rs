@@ -73,9 +73,9 @@ pub struct IoltaWithdrawal {
 pub struct IoltaAllocation {
     /// The withdrawal this line belongs to.
     pub withdrawal_id: String,
-    /// The Xero invoice it settles. Internal — never rendered to a client.
-    pub xero_invoice_id: String,
-    /// The matter billed by that invoice, copied from the invoice mirror so
+    /// The Matter Invoice it settles. Internal — never rendered to a client.
+    pub matter_invoice_id: Uuid,
+    /// The matter billed by that invoice, copied from the ledger so
     /// a line cannot name a matter its invoice does not bill.
     pub project_id: Uuid,
     /// The invoice's human reference, which is what a client is shown.
@@ -118,7 +118,7 @@ impl From<PgWithdrawalRow> for IoltaWithdrawal {
 #[derive(serde::Deserialize)]
 struct PgAllocationRow {
     withdrawal_id: String,
-    xero_invoice_id: String,
+    matter_invoice_id: Uuid,
     project_id: Uuid,
     invoice_reference: String,
     amount_cents: i64,
@@ -131,7 +131,7 @@ impl From<PgAllocationRow> for IoltaAllocation {
     fn from(row: PgAllocationRow) -> Self {
         IoltaAllocation {
             withdrawal_id: row.withdrawal_id,
-            xero_invoice_id: row.xero_invoice_id,
+            matter_invoice_id: row.matter_invoice_id,
             project_id: row.project_id,
             invoice_reference: row.invoice_reference,
             amount_cents: row.amount_cents,
@@ -150,7 +150,7 @@ pub enum IoltaWithdrawalError {
     /// in this enum, and every function here returns it — an unboxed variant
     /// would widen every `Ok` on the happy path too.
     #[error(transparent)]
-    Invoices(Box<crate::xero_invoices::XeroInvoiceError>),
+    Invoices(Box<crate::matter_invoices::MatterInvoiceError>),
     #[error(transparent)]
     Accounts(Box<crate::iolta_accounts::IoltaAccountError>),
     /// The transfer left a pool no mirrored account matches.
@@ -171,7 +171,7 @@ pub enum IoltaWithdrawalError {
     },
     /// A line names an invoice the mirror does not carry, so which matter it
     /// settles is unknown.
-    #[error("withdrawal {transaction_id} allocates to unmirrored invoice {invoice_reference}")]
+    #[error("withdrawal {transaction_id} allocates to unknown invoice {invoice_reference}")]
     UnknownInvoice {
         transaction_id: String,
         invoice_reference: String,
@@ -209,8 +209,8 @@ pub enum IoltaWithdrawalError {
     WriteReturnedNothing,
 }
 
-impl From<crate::xero_invoices::XeroInvoiceError> for IoltaWithdrawalError {
-    fn from(error: crate::xero_invoices::XeroInvoiceError) -> Self {
+impl From<crate::matter_invoices::MatterInvoiceError> for IoltaWithdrawalError {
+    fn from(error: crate::matter_invoices::MatterInvoiceError) -> Self {
         Self::Invoices(Box::new(error))
     }
 }
@@ -226,7 +226,7 @@ impl From<crate::iolta_accounts::IoltaAccountError> for IoltaWithdrawalError {
 #[derive(Clone, Debug)]
 pub struct AllocationInput {
     /// The invoice reference carried on the Xero line
-    /// (`store::xero_invoices::XeroInvoice::reference`, or the Xero invoice
+    /// (the Matter Invoice's reference, its issuer id, or its ledger
     /// id itself).
     pub invoice_reference: String,
     pub amount_cents: i64,
@@ -297,7 +297,7 @@ pub async fn apply(
     // itself, so a line cannot claim an invoice belongs to another matter.
     let mut resolved = Vec::with_capacity(input.lines.len());
     for line in &input.lines {
-        let invoice = crate::xero_invoices::find_for_allocation(db, &line.invoice_reference)
+        let invoice = crate::matter_invoices::find_for_allocation(db, &line.invoice_reference)
             .await?
             .ok_or_else(|| IoltaWithdrawalError::UnknownInvoice {
                 transaction_id: input.xero_transaction_id.clone(),
@@ -386,17 +386,17 @@ pub(crate) async fn write_withdrawal(
 pub(crate) async fn write_allocation(
     _db: &ApplicationStore,
     input: &WithdrawalInput,
-    invoice: &crate::xero_invoices::XeroInvoice,
+    invoice: &crate::matter_invoices::MatterInvoice,
     amount_cents: i64,
 ) -> Result<(), IoltaWithdrawalError> {
     // The record id is the (withdrawal, invoice) pair, so a re-read of one
     // transfer refreshes its lines instead of doubling a matter's drawn
     // total — the same primary-key discipline the invoice mirror uses.
-    let line_id = format!("{}--{}", input.xero_transaction_id, invoice.xero_invoice_id);
+    let line_id = format!("{}--{}", input.xero_transaction_id, invoice.id);
     let pg = authority::authority().await?;
     let row = serde_json::json!({
         "id": line_id, "withdrawal_id": input.xero_transaction_id,
-        "xero_invoice_id": invoice.xero_invoice_id,
+        "matter_invoice_id": invoice.id,
         "project_id": invoice.project_id,
         "invoice_reference": invoice.reference,
         "amount_cents": amount_cents, "occurred_at": input.occurred_at,

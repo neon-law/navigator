@@ -25,6 +25,14 @@ struct StripeObject {
 }
 
 #[derive(Deserialize)]
+struct Customer {
+    id: String,
+    livemode: bool,
+    #[serde(default)]
+    deleted: bool,
+}
+
+#[derive(Deserialize)]
 struct Invoice {
     id: String,
     livemode: bool,
@@ -32,10 +40,40 @@ struct Invoice {
     status: String,
     currency: String,
     total: i64,
+    #[serde(default)]
+    subtotal: i64,
+}
+
+/// A lawyer-composed invoice for [`StripeInvoiceClient::create_composed_draft`].
+pub struct ComposedDraft<'a> {
+    pub request: &'a InvoiceRequest,
+    pub customer: &'a str,
+    pub promotion_code: Option<&'a str>,
+    pub memo: Option<&'a str>,
 }
 
 fn provider_error(message: &str) -> BillingError {
     BillingError::Provider(message.to_owned())
+}
+
+/// A sandbox client may talk to a local Stripe stand-in (an end-to-end test
+/// or `stripe-mock`). Live keys always reach Stripe itself, and the override
+/// names only a loopback host, so a key is never sent elsewhere.
+const API_BASE_VAR: &str = "NAVIGATOR_STRIPE_API_BASE";
+
+fn api_base(live: bool, local: Option<&str>) -> Result<Url, BillingError> {
+    let invalid = || provider_error("Stripe API configuration invalid");
+    match local.filter(|_| !live) {
+        Some(local) => {
+            let url = Url::parse(local).map_err(|_| invalid())?;
+            let loopback = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+            if !loopback || url.scheme() != "http" {
+                return Err(invalid());
+            }
+            url.join("v1/").map_err(|_| invalid())
+        }
+        None => Url::parse("https://api.stripe.com/v1/").map_err(|_| invalid()),
+    }
 }
 
 impl<'a> StripeInvoiceClient<'a> {
@@ -57,8 +95,7 @@ impl<'a> StripeInvoiceClient<'a> {
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
                 .map_err(|_| provider_error("Stripe client unavailable"))?,
-            base: Url::parse("https://api.stripe.com/v1/")
-                .map_err(|_| provider_error("Stripe API configuration invalid"))?,
+            base: api_base(live, std::env::var(API_BASE_VAR).ok().as_deref())?,
             key,
             connected_trust: None,
         })
@@ -88,39 +125,184 @@ impl<'a> StripeInvoiceClient<'a> {
         Ok(account.id)
     }
 
-    /// Create and confirm an unsent draft. All writes use the batch's stable
-    /// key and explicitly attach items to the invoice they belong to.
-    pub async fn create_trust_draft(
+    /// The billed party's Stripe Customer on this account: the saved one when
+    /// it still exists, else a new one created under `key`'s idempotency.
+    pub async fn ensure_customer(
         &self,
-        batch: Uuid,
-        request: &InvoiceRequest,
-    ) -> Result<InvoiceId, BillingError> {
-        let due = request
-            .due_date
-            .ok_or_else(|| provider_error("invoice due date missing"))?;
-        let due = due
-            .and_hms_opt(23, 59, 59)
-            .ok_or_else(|| provider_error("invoice due date invalid"))?
-            .and_utc()
-            .timestamp()
-            .to_string();
+        saved: Option<&str>,
+        key: Uuid,
+        name: &str,
+        email: &str,
+    ) -> Result<String, BillingError> {
         let live = self.live_mode();
+        if let Some(saved) = saved.filter(|id| stripe_identifier(id, "cus_")) {
+            let customer: Customer = self
+                .call(Method::GET, &format!("customers/{saved}"), None, &[])
+                .await?;
+            if customer.id == saved && customer.livemode == live && !customer.deleted {
+                return Ok(customer.id);
+            }
+        }
         let customer: StripeObject = self
             .call(
                 Method::POST,
                 "customers",
-                Some(&format!("{batch}/customer")),
-                &[
-                    ("name", &request.contact_name),
-                    ("email", &request.contact_email),
-                ],
+                Some(&format!("{key}/customer")),
+                &[("name", name), ("email", email)],
             )
             .await?;
         if customer.livemode != live || !customer.id.starts_with("cus_") {
             return Err(provider_error("Stripe returned an invalid customer"));
         }
-        self.create_draft_for_customer(batch, request, &customer.id, &due)
+        Ok(customer.id)
+    }
+
+    /// Create and confirm an unsent draft for a known customer. All writes
+    /// use the batch's stable key and attach items to their invoice.
+    pub async fn create_draft(
+        &self,
+        batch: Uuid,
+        request: &InvoiceRequest,
+        customer: &str,
+    ) -> Result<InvoiceId, BillingError> {
+        let due = request
+            .due_date
+            .ok_or_else(|| provider_error("invoice due date missing"))?
+            .and_hms_opt(23, 59, 59)
+            .ok_or_else(|| provider_error("invoice due date invalid"))?
+            .and_utc()
+            .timestamp()
+            .to_string();
+        self.create_draft_for_customer(batch, request, customer, &due)
             .await
+    }
+
+    /// A lawyer-composed draft (LAW-506): its lines (a negative line is a
+    /// discount, write-off, or credit with its reason), an optional
+    /// promotion code, and the memo the client sees. Nothing is sent.
+    pub async fn create_composed_draft(
+        &self,
+        key: Uuid,
+        draft: &ComposedDraft<'_>,
+    ) -> Result<InvoiceId, BillingError> {
+        let promotion = match draft.promotion_code {
+            Some(code) => Some(self.promotion_code(code).await?),
+            None => None,
+        };
+        let due = draft
+            .request
+            .due_date
+            .ok_or_else(|| provider_error("invoice due date missing"))?
+            .and_hms_opt(23, 59, 59)
+            .ok_or_else(|| provider_error("invoice due date invalid"))?
+            .and_utc()
+            .timestamp()
+            .to_string();
+        let mut extra = vec![("metadata[navigator_invoice_id]", key.to_string())];
+        if let Some(memo) = draft.memo {
+            extra.push(("description", memo.to_owned()));
+        }
+        if let Some(promotion) = promotion {
+            extra.push(("discounts[0][promotion_code]", promotion));
+        }
+        self.draft_with(key, draft.request, draft.customer, &due, &extra)
+            .await
+    }
+
+    /// The active promotion code's id for a code the client was given.
+    async fn promotion_code(&self, code: &str) -> Result<String, BillingError> {
+        #[derive(Deserialize)]
+        struct Codes {
+            data: Vec<StripeObject>,
+        }
+        if code.is_empty()
+            || code.len() > 64
+            || !code
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(provider_error("coupon code invalid"));
+        }
+        let codes: Codes = self
+            .call(
+                Method::GET,
+                &format!("promotion_codes?code={code}&active=true&limit=1"),
+                None,
+                &[],
+            )
+            .await?;
+        codes
+            .data
+            .into_iter()
+            .find(|found| {
+                found.livemode == self.live_mode() && stripe_identifier(&found.id, "promo_")
+            })
+            .map(|found| found.id)
+            .ok_or_else(|| provider_error("no active coupon has that code"))
+    }
+
+    /// Finalize a reviewed draft and send it. A zero-balance invoice is
+    /// finalized as a record (Stripe marks it paid) and never sent.
+    pub async fn finalize_and_send(
+        &self,
+        key: Uuid,
+        id: &str,
+    ) -> Result<SentInvoice, BillingError> {
+        if !stripe_identifier(id, "in_") {
+            return Err(provider_error("invalid invoice identity"));
+        }
+        let finalized: SentInvoice = self
+            .call(
+                Method::POST,
+                &format!("invoices/{id}/finalize"),
+                Some(&format!("{key}/finalize")),
+                &[("auto_advance", "false")],
+            )
+            .await?;
+        let sent = if finalized.total == 0 {
+            finalized
+        } else {
+            self.call(
+                Method::POST,
+                &format!("invoices/{id}/send"),
+                Some(&format!("{key}/send")),
+                &[],
+            )
+            .await?
+        };
+        if sent.id != id || sent.livemode != self.live_mode() || sent.status == "draft" {
+            return Err(provider_error("Stripe invoice does not match the request"));
+        }
+        Ok(sent)
+    }
+
+    /// Void a sent invoice, or mark it uncollectible, under `key`.
+    pub async fn close_invoice(
+        &self,
+        key: Uuid,
+        id: &str,
+        uncollectible: bool,
+    ) -> Result<(), BillingError> {
+        if !stripe_identifier(id, "in_") {
+            return Err(provider_error("invalid invoice identity"));
+        }
+        let (verb, expected) = if uncollectible {
+            ("mark_uncollectible", "uncollectible")
+        } else {
+            ("void", "void")
+        };
+        let closed: SentInvoice = self
+            .call(
+                Method::POST,
+                &format!("invoices/{id}/{verb}"),
+                Some(&format!("{key}/{verb}")),
+                &[],
+            )
+            .await?;
+        if closed.id != id || closed.status != expected {
+            return Err(provider_error("Stripe invoice does not match the request"));
+        }
+        Ok(())
     }
 
     async fn create_draft_for_customer(
@@ -130,20 +312,36 @@ impl<'a> StripeInvoiceClient<'a> {
         customer: &str,
         due: &str,
     ) -> Result<InvoiceId, BillingError> {
+        let extra = [
+            ("description", request.reference.clone()),
+            ("metadata[navigator_batch_id]", batch.to_string()),
+        ];
+        self.draft_with(batch, request, customer, due, &extra).await
+    }
+
+    async fn draft_with(
+        &self,
+        batch: Uuid,
+        request: &InvoiceRequest,
+        customer: &str,
+        due: &str,
+        extra: &[(&str, String)],
+    ) -> Result<InvoiceId, BillingError> {
+        let mut fields = vec![
+            ("customer", customer),
+            ("auto_advance", "false"),
+            ("collection_method", "send_invoice"),
+            ("due_date", due),
+            ("pending_invoice_items_behavior", "exclude"),
+        ];
+        fields.extend(extra.iter().map(|(name, value)| (*name, value.as_str())));
+        let discounted = extra.iter().any(|(name, _)| name.starts_with("discounts["));
         let invoice: StripeObject = self
             .call(
                 Method::POST,
                 "invoices",
                 Some(&format!("{batch}/invoice")),
-                &[
-                    ("customer", customer),
-                    ("auto_advance", "false"),
-                    ("collection_method", "send_invoice"),
-                    ("due_date", due),
-                    ("description", &request.reference),
-                    ("pending_invoice_items_behavior", "exclude"),
-                    ("metadata[navigator_batch_id]", &batch.to_string()),
-                ],
+                &fields,
             )
             .await?;
         if invoice.livemode != self.live_mode() || !invoice.id.starts_with("in_") {
@@ -181,7 +379,11 @@ impl<'a> StripeInvoiceClient<'a> {
             || draft.status != "draft"
             || draft.auto_advance
             || draft.currency != "usd"
-            || draft.total != total
+            || (if discounted {
+                draft.subtotal
+            } else {
+                draft.total
+            }) != total
         {
             return Err(provider_error(
                 "Stripe draft does not match the reserved invoice",
@@ -233,6 +435,19 @@ mod tests {
     #[test]
     fn a_key_for_the_other_mode_cannot_create_invoices() {
         assert!(StripeInvoiceClient::new("", false).is_err());
+        assert_eq!(
+            api_base(false, Some("http://127.0.0.1:4010"))
+                .unwrap()
+                .as_str(),
+            "http://127.0.0.1:4010/v1/"
+        );
+        assert_eq!(
+            api_base(true, Some("http://127.0.0.1:4010"))
+                .unwrap()
+                .as_str(),
+            "https://api.stripe.com/v1/"
+        );
+        assert!(api_base(false, Some("https://stripe.example/")).is_err());
         assert!(StripeInvoiceClient::new("sk_live_synthetic", false).is_err());
         assert!(StripeInvoiceClient::new("rk_test_synthetic", true).is_err());
     }
@@ -298,8 +513,12 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+        let customer = client
+            .ensure_customer(None, batch, "Synthetic Client", "synthetic@example.test")
+            .await
+            .unwrap();
         let draft = client
-            .create_trust_draft(
+            .create_draft(
                 batch,
                 &InvoiceRequest {
                     contact_id: None,
@@ -315,6 +534,7 @@ mod tests {
                     issued_date: None,
                     due_date: chrono::NaiveDate::from_ymd_opt(2026, 11, 30),
                 },
+                &customer,
             )
             .await
             .unwrap();
@@ -533,6 +753,179 @@ impl StripeInvoiceClient<'_> {
     }
 }
 
+/// Who a one-off invoice bills: a Customer Stripe already holds, or a new
+/// one created under the invoice's idempotency key.
+pub enum InvoiceCustomer<'a> {
+    Existing(&'a str),
+    New { name: &'a str, email: &'a str },
+}
+
+/// A one-off invoice the payer asked for or owes outright: a self-serve
+/// Purchase or a month's Legal Sandbox overage.
+pub struct OneOffInvoice<'a> {
+    /// The stable key every write uses, so a retry finds the same objects.
+    pub key: Uuid,
+    pub customer: InvoiceCustomer<'a>,
+    pub description: &'a str,
+    pub amount_cents: i64,
+    pub days_until_due: u32,
+    /// `metadata[<name>]` naming the Navigator record the invoice answers for.
+    pub metadata: (&'a str, String),
+}
+
+/// A finalized, sent invoice and what Stripe reports about its payment.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SentInvoice {
+    pub id: String,
+    pub livemode: bool,
+    pub status: String,
+    pub currency: String,
+    pub total: i64,
+    #[serde(default)]
+    pub amount_paid: i64,
+    #[serde(default)]
+    pub hosted_invoice_url: Option<String>,
+}
+
+impl SentInvoice {
+    /// Paid in full in USD: the only state that turns a Purchase on.
+    #[must_use]
+    pub fn paid(&self, amount_cents: i64) -> bool {
+        self.status == "paid"
+            && self.currency == "usd"
+            && self.total == amount_cents
+            && self.amount_paid == amount_cents
+    }
+}
+
+impl StripeInvoiceClient<'_> {
+    /// Create, finalize, and send one invoice. The hosted invoice page is the
+    /// payer's pay link. Every write carries `key`, so a retry within Stripe's
+    /// idempotency window converges on the same invoice.
+    pub async fn send_one_off_invoice(
+        &self,
+        invoice: &OneOffInvoice<'_>,
+    ) -> Result<SentInvoice, BillingError> {
+        if invoice.amount_cents <= 0 || invoice.description.trim().is_empty() {
+            return Err(provider_error("invoice amount or description missing"));
+        }
+        let key = invoice.key;
+        let customer = match invoice.customer {
+            InvoiceCustomer::Existing(id) => {
+                if !stripe_identifier(id, "cus_") {
+                    return Err(provider_error("invalid customer identity"));
+                }
+                id.to_owned()
+            }
+            InvoiceCustomer::New { name, email } => {
+                let customer: StripeObject = self
+                    .call(
+                        Method::POST,
+                        "customers",
+                        Some(&format!("{key}/customer")),
+                        &[("name", name), ("email", email)],
+                    )
+                    .await?;
+                if customer.livemode != self.live_mode() || !stripe_identifier(&customer.id, "cus_")
+                {
+                    return Err(provider_error("Stripe returned an invalid customer"));
+                }
+                customer.id
+            }
+        };
+        let (metadata_name, metadata_value) = &invoice.metadata;
+        let metadata_field = format!("metadata[{metadata_name}]");
+        let days = invoice.days_until_due.to_string();
+        let draft: StripeObject = self
+            .call(
+                Method::POST,
+                "invoices",
+                Some(&format!("{key}/invoice")),
+                &[
+                    ("customer", &customer),
+                    ("auto_advance", "false"),
+                    ("collection_method", "send_invoice"),
+                    ("days_until_due", &days),
+                    ("description", invoice.description),
+                    ("pending_invoice_items_behavior", "exclude"),
+                    (&metadata_field, metadata_value),
+                ],
+            )
+            .await?;
+        if draft.livemode != self.live_mode() || !stripe_identifier(&draft.id, "in_") {
+            return Err(provider_error("Stripe returned an invalid invoice"));
+        }
+        let amount = invoice.amount_cents.to_string();
+        let _: StripeObject = self
+            .call(
+                Method::POST,
+                "invoiceitems",
+                Some(&format!("{key}/item/0")),
+                &[
+                    ("customer", &customer),
+                    ("invoice", &draft.id),
+                    ("currency", "usd"),
+                    ("amount", &amount),
+                    ("description", invoice.description),
+                ],
+            )
+            .await?;
+        let _: SentInvoice = self
+            .call(
+                Method::POST,
+                &format!("invoices/{}/finalize", draft.id),
+                Some(&format!("{key}/finalize")),
+                &[("auto_advance", "false")],
+            )
+            .await?;
+        let sent: SentInvoice = self
+            .call(
+                Method::POST,
+                &format!("invoices/{}/send", draft.id),
+                Some(&format!("{key}/send")),
+                &[],
+            )
+            .await?;
+        self.check_sent(&draft.id, invoice.amount_cents, sent)
+    }
+
+    /// Read one invoice back, for its payment status.
+    pub async fn invoice_state(
+        &self,
+        id: &str,
+        amount_cents: i64,
+    ) -> Result<SentInvoice, BillingError> {
+        if !stripe_identifier(id, "in_") {
+            return Err(provider_error("invalid invoice identity"));
+        }
+        let invoice: SentInvoice = self
+            .call(Method::GET, &format!("invoices/{id}"), None, &[])
+            .await?;
+        self.check_sent(id, amount_cents, invoice)
+    }
+
+    fn check_sent(
+        &self,
+        id: &str,
+        amount_cents: i64,
+        invoice: SentInvoice,
+    ) -> Result<SentInvoice, BillingError> {
+        if invoice.id != id
+            || invoice.livemode != self.live_mode()
+            || invoice.currency != "usd"
+            || invoice.total != amount_cents
+            || invoice.status == "draft"
+            || invoice
+                .hosted_invoice_url
+                .as_deref()
+                .is_some_and(|url| !trusted_stripe_url(url, "invoice.stripe.com"))
+        {
+            return Err(provider_error("Stripe invoice does not match the request"));
+        }
+        Ok(invoice)
+    }
+}
+
 fn stripe_identifier(value: &str, prefix: &str) -> bool {
     value.starts_with(prefix)
         && value.len() > prefix.len()
@@ -732,3 +1125,125 @@ mod subscription_tests {
 #[cfg(test)]
 #[path = "stripe_sandbox.rs"]
 mod sandbox;
+
+#[cfg(test)]
+mod one_off_tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+    fn sent(status: &str, paid: i64) -> serde_json::Value {
+        json!({"id":"in_synthetic", "livemode":false, "status":status, "currency":"usd",
+            "total":10000, "amount_paid":paid,
+            "hosted_invoice_url":"https://invoice.stripe.com/i/synthetic"})
+    }
+
+    fn client(server: &MockServer) -> StripeInvoiceClient<'static> {
+        let mut client = StripeInvoiceClient::new("sk_test_synthetic", false).unwrap();
+        client.base = Url::parse(&format!("{}/v1/", server.uri())).unwrap();
+        client
+    }
+
+    #[tokio::test]
+    async fn a_one_off_invoice_is_created_finalized_and_sent_under_one_stable_key() {
+        let server = MockServer::start().await;
+        let key = Uuid::nil();
+        for (route, step, body) in [
+            (
+                "/v1/customers",
+                "customer",
+                json!({"id":"cus_synthetic","livemode":false}),
+            ),
+            (
+                "/v1/invoices",
+                "invoice",
+                json!({"id":"in_synthetic","livemode":false}),
+            ),
+            (
+                "/v1/invoiceitems",
+                "item/0",
+                json!({"id":"ii_synthetic","livemode":false}),
+            ),
+            (
+                "/v1/invoices/in_synthetic/finalize",
+                "finalize",
+                sent("open", 0),
+            ),
+            ("/v1/invoices/in_synthetic/send", "send", sent("open", 0)),
+        ] {
+            let mut mock = Mock::given(matchers::method("POST"))
+                .and(matchers::path(route))
+                .and(matchers::header("Idempotency-Key", format!("{key}/{step}")));
+            if step == "invoice" {
+                mock = mock
+                    .and(matchers::body_string_contains(
+                        "collection_method=send_invoice",
+                    ))
+                    .and(matchers::body_string_contains("days_until_due=14"))
+                    .and(matchers::body_string_contains("navigator_purchase_id"));
+            }
+            if step == "item/0" {
+                mock = mock.and(matchers::body_string_contains("amount=10000"));
+            }
+            mock.respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let invoice = client(&server)
+            .send_one_off_invoice(&OneOffInvoice {
+                key,
+                customer: InvoiceCustomer::New {
+                    name: "Synthetic Client",
+                    email: "client@example.com",
+                },
+                description: "Consultation",
+                amount_cents: 10_000,
+                days_until_due: 14,
+                metadata: ("navigator_purchase_id", key.to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            invoice.hosted_invoice_url.as_deref(),
+            Some("https://invoice.stripe.com/i/synthetic")
+        );
+        assert!(!invoice.paid(10_000));
+    }
+
+    #[tokio::test]
+    async fn only_a_full_usd_payment_of_the_requested_total_reads_as_paid() {
+        let server = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/v1/invoices/in_synthetic"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(sent("paid", 10_000)))
+            .mount(&server)
+            .await;
+        let stripe = client(&server);
+        assert!(stripe
+            .invoice_state("in_synthetic", 10_000)
+            .await
+            .unwrap()
+            .paid(10_000));
+        assert!(stripe.invoice_state("in_synthetic", 9_000).await.is_err());
+        assert!(stripe
+            .invoice_state("not_an_invoice", 10_000)
+            .await
+            .is_err());
+        let mut partial: SentInvoice = serde_json::from_value(sent("open", 5_000)).unwrap();
+        assert!(!partial.paid(10_000));
+        partial.status = "paid".into();
+        assert!(!partial.paid(10_000), "a short payment never activates");
+        let foreign = MockServer::start().await;
+        Mock::given(matchers::method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id":"in_other", "livemode":false, "status":"paid", "currency":"usd",
+                "total":10000, "amount_paid":10000, "hosted_invoice_url":"https://evil.example/i"})))
+            .mount(&foreign)
+            .await;
+        assert!(client(&foreign)
+            .invoice_state("in_other", 10_000)
+            .await
+            .is_err());
+    }
+}

@@ -1154,6 +1154,7 @@ fn empty_integrity_response() -> IntegrityResponse {
         total: None,
         next_offset: None,
         integrations: Vec::new(),
+        onboarding: None,
     }
 }
 
@@ -1167,6 +1168,9 @@ pub fn integrity_advance(
     merged.total = page.total;
     merged.assets.extend(page.assets);
     merged.integrations.extend(page.integrations);
+    if merged.onboarding.is_none() {
+        merged.onboarding = page.onboarding;
+    }
     match page.next_offset {
         None => Ok(None),
         Some(next) if next > offset => Ok(Some(next)),
@@ -1236,6 +1240,18 @@ pub struct IntegrityResponse {
     pub next_offset: Option<usize>,
     #[serde(default)]
     pub integrations: Vec<IntegrationFinding>,
+    /// Whether an official onboarding's signed record is filed once.
+    /// Absent from a server that does not report it.
+    #[serde(default)]
+    pub onboarding: Option<OnboardingEvidence>,
+}
+
+/// The server's onboarding evidence check: what an official onboarding
+/// still lacks, or copies filed twice.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OnboardingEvidence {
+    #[serde(default)]
+    pub missing: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -8796,7 +8812,9 @@ mod tests {
             previous_version: None,
             authority_id: None,
             docusign_envelope_id: None,
-            xero_invoice_id: None,
+            stripe_invoice_id: None,
+            source: None,
+            external_id: None,
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),

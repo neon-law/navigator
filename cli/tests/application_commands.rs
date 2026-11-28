@@ -2,16 +2,26 @@ use clap::error::ErrorKind;
 
 #[path = "application_commands/billing.rs"]
 mod billing;
+#[path = "application_commands/claims.rs"]
+mod claims;
 #[path = "application_commands/documents.rs"]
 mod documents;
 #[path = "application_commands/firm.rs"]
 mod firm;
+#[path = "application_commands/invoices.rs"]
+mod invoices;
+#[path = "application_commands/live.rs"]
+mod live;
+#[path = "application_commands/onboarding.rs"]
+mod onboarding;
 #[path = "application_commands/relationship.rs"]
 mod relationship;
 #[path = "application_commands/setup.rs"]
 mod setup;
 #[path = "application_commands/site.rs"]
 mod site;
+#[path = "application_commands/time.rs"]
+mod time;
 
 #[test]
 fn application_commands_are_in_navigator_without_operator_access() {

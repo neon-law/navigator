@@ -15,7 +15,7 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
     let (_, project) = firm_for_notation(&pg, notation).await;
     let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
     let batch = synthetic_batch(actor, project, now);
-    let stored = batches::insert_with_reservations(&pg, &batch, Some(0))
+    let stored = batches::insert_with_reservations(&pg, &batch, Some(0), None)
         .await
         .unwrap();
     assert_eq!(stored.line_items, batch.line_items);
@@ -34,7 +34,8 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
                 id: Uuid::new_v4(),
                 ..batch.clone()
             },
-            Some(0)
+            Some(0),
+            None
         )
         .await,
         Err(BillingBatchError::PendingExists)
@@ -45,17 +46,28 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
         .await
         .unwrap();
     assert_eq!(retry.first_attempted_at, first.first_attempted_at);
-    batches::attach_invoice(&pg, batch.id, "synthetic-invoice")
-        .await
-        .unwrap();
-    batches::attach_invoice(&pg, batch.id, "synthetic-invoice")
-        .await
-        .unwrap();
+    let ledger = |external: &'static str| {
+        let pg = pg.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO matter_invoice (id,project_id,source,external_id,reference,status,amount_cents,currency)
+                 VALUES ($1,$2,'stripe',$3,'Synthetic','draft',100,'USD') RETURNING id",
+            )
+            .bind(Uuid::new_v4())
+            .bind(project)
+            .bind(external)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap()
+        }
+    };
+    let (invoice, other) = (ledger("in_settled").await, ledger("in_other").await);
+    batches::settle(&pg, batch.id, invoice).await.unwrap();
+    batches::settle(&pg, batch.id, invoice).await.unwrap();
     assert!(matches!(
-        batches::attach_invoice(&pg, batch.id, "different-invoice").await,
+        batches::settle(&pg, batch.id, other).await,
         Err(BillingBatchError::NotFound)
     ));
-    batches::complete(&pg, batch.id).await.unwrap();
     assert_eq!(
         batches::flat_fee_billed_cents(&pg, project).await.unwrap(),
         100
@@ -71,7 +83,8 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
                 id: Uuid::new_v4(),
                 ..batch.clone()
             },
-            Some(0)
+            Some(0),
+            None
         )
         .await,
         Err(BillingBatchError::FlatFeeAlreadyBilled)
@@ -96,8 +109,8 @@ fn synthetic_batch(
         reference: "Synthetic".into(),
         contact_name: "Synthetic".into(),
         contact_email: "synthetic@example.invalid".into(),
-        xero_contact_id: Some("synthetic-contact".into()),
-        stripe_account_id: None,
+        billed_person_id: None,
+        stripe_account_id: Some("acct_synthetic".into()),
         trust_state: None,
         stripe_iolta: false,
         stripe_invoice_id: None,
@@ -108,7 +121,8 @@ fn synthetic_batch(
         currency: "USD".into(),
         entry_ids: vec![],
         cost_ids: vec![],
-        xero_invoice_id: None,
+        matter_invoice_id: None,
+        destination_approval_id: None,
         flat_fee_cents: Some(100),
         actor_id: actor,
         inserted_at: now,
@@ -140,7 +154,6 @@ async fn assert_stripe_draft_identity(pg: &super::PostgresDb, batch: MatterBilli
     let project = batch.project_id;
     let stripe = MatterBillingBatch {
         id: Uuid::new_v4(),
-        xero_contact_id: None,
         stripe_account_id: Some("acct_synthetic".into()),
         flat_fee_cents: None,
         ..batch
@@ -165,4 +178,59 @@ async fn assert_stripe_draft_identity(pg: &super::PostgresDb, batch: MatterBilli
             .as_deref(),
         Some("in_synthetic")
     );
+}
+
+#[tokio::test]
+async fn an_operating_batch_commits_with_its_retained_approval() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let (actor, notation, _) = workflow_fixture(&pg).await;
+    let (firm, project) = firm_for_notation(&pg, notation).await;
+    let mut batch = synthetic_batch(actor, project, chrono::Utc::now());
+    batch.flat_fee_cents = None;
+    let stored = batches::insert_with_reservations(
+        &pg,
+        &batch,
+        None,
+        Some(&batches::OperatingApproval {
+            firm_id: firm,
+            reason: "Earned fees for completed work",
+            preview_digest: "synthetic-digest",
+        }),
+    )
+    .await
+    .unwrap();
+    let approval = stored.destination_approval_id.expect("approval linked");
+    let recorded = crate::invoice_destinations::find(&pg, firm, project, approval)
+        .await
+        .unwrap()
+        .expect("approval retained");
+    assert_eq!(
+        (
+            recorded.approved_by,
+            recorded.reason.as_str(),
+            recorded.preview_digest.as_str()
+        ),
+        (actor, "Earned fees for completed work", "synthetic-digest")
+    );
+    assert!(
+        crate::invoice_destinations::find(&pg, uuid::Uuid::new_v4(), project, approval)
+            .await
+            .unwrap()
+            .is_none(),
+        "another Firm reads nothing"
+    );
+    for statement in [
+        "UPDATE invoice_destination_approval SET reason='changed' WHERE id=$1",
+        "DELETE FROM invoice_destination_approval WHERE id=$1",
+    ] {
+        assert!(sqlx::query(statement)
+            .bind(approval)
+            .execute(pg.pool())
+            .await
+            .is_err());
+    }
+    pg.pool().close().await;
 }

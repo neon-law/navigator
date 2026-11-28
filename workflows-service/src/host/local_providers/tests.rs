@@ -119,7 +119,7 @@ fn explicit_delivery_configuration_is_never_silently_replaced() {
     );
 }
 
-async fn seed_invoice(source: &ApplicationStore, providers: &LocalProviders) -> String {
+async fn seed_matter(source: &ApplicationStore) -> String {
     let (matter, admin) = native_project::matter(source).await;
     let firm = matter
         .firm_id
@@ -135,34 +135,7 @@ async fn seed_invoice(source: &ApplicationStore, providers: &LocalProviders) -> 
         .await
         .unwrap()
         .is_some());
-    let invoice = format!("synthetic-invoice-{}", uuid::Uuid::new_v4());
-    store::xero_invoices::upsert(
-        source,
-        &store::xero_invoices::UpsertXeroInvoice {
-            project_id: matter.id,
-            xero_invoice_id: invoice.clone(),
-            reference: format!("Matter {}", matter.id),
-            status: "AUTHORISED".into(),
-            amount_cents: 1200,
-            currency: "USD".into(),
-            issued_at: Utc::now(),
-            due_at: None,
-        },
-    )
-    .await
-    .unwrap();
-    providers.billing.set_invoice_status(
-        &invoice,
-        billing::InvoiceStatus {
-            status: "PAID".into(),
-            amount_paid_cents: 1200,
-            amount_cents: Some(1200),
-            currency: Some("USD".into()),
-            issued_at: Some(Utc::now()),
-            due_at: None,
-        },
-    );
-    invoice
+    format!("Matter {}", matter.id)
 }
 
 #[tokio::test]
@@ -171,7 +144,7 @@ async fn detached_native_handlers_use_captured_effects_and_the_owned_postgres_st
         let pg = PostgresDb::application().await.unwrap();
         let providers = local();
         let source = ApplicationStore::uninitialized();
-        let invoice = seed_invoice(&source, &providers).await;
+        let _matter_reference = seed_matter(&source).await;
         let nag = providers.general_nag(source.clone(), pg.clone());
         assert_eq!(
             nag.counts
@@ -225,7 +198,6 @@ async fn detached_native_handlers_use_captured_effects_and_the_owned_postgres_st
                     .result(),
             )
             .await;
-            assert_eq!((report.checked, report.updated), (1, 1));
             let replay = result(
                 crate::dbos_reconcile::fire(&reconcile, slot)
                     .await
@@ -234,13 +206,6 @@ async fn detached_native_handlers_use_captured_effects_and_the_owned_postgres_st
             )
             .await;
             assert_eq!(replay, report);
-            let paid: (String, i64) =
-                sqlx::query_as("SELECT status,amount_paid_cents FROM xero_invoice WHERE id=$1")
-                    .bind(invoice)
-                    .fetch_one(pg.pool())
-                    .await
-                    .unwrap();
-            assert_eq!(paid, ("PAID".into(), 1200));
             assert_eq!(providers.billing.contact_calls().len(), 2);
             assert_eq!(providers.email.captured().len(), 1);
             assert_eq!(providers.notifier.captured().len(), 1);

@@ -946,7 +946,7 @@ fn gate_accepts_a_complete_document_pointer_and_rejects_chain_mismatches() {
 
 /// ENG-859: `onboarding/`/`offboarding/` require a matching `_signed.pdf`
 /// name and `docusign_envelope_id` together, and every `invoices/` pointer
-/// requires `xero_invoice_id`.
+/// names its invoice record (LAW-507); a retired `xero_invoice_id` is refused.
 #[test]
 fn gate_enforces_the_onboarding_offboarding_and_invoice_pointer_keys() {
     let dir = TempDir::new().unwrap();
@@ -1000,7 +1000,7 @@ fn gate_enforces_the_onboarding_offboarding_and_invoice_pointer_keys() {
         .stdout(str::contains("Y003"))
         .stdout(str::contains("_signed.pdf"));
 
-    // An invoice pointer with no xero_invoice_id is rejected.
+    // An invoice pointer naming no invoice record is rejected.
     std::fs::remove_file(dir.path().join("blobs/onboarding/retainer.pdf.yaml")).unwrap();
     write(
         dir.path(),
@@ -1012,15 +1012,27 @@ fn gate_enforces_the_onboarding_offboarding_and_invoice_pointer_keys() {
         .failure()
         .code(1)
         .stdout(str::contains("Y003"))
-        .stdout(str::contains("xero_invoice_id"));
+        .stdout(str::contains("stripe_invoice_id"));
 
-    // Adding the invoice id makes it pass.
+    // A retired Xero id is refused with the fix.
     write(
         dir.path(),
         "blobs/invoices/INV-1.pdf.yaml",
         &format!(
             "kind: invoice\nvisibility: internal\n{common}xero_invoice_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d42\n"
         ),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("xero_invoice_id is retired"));
+
+    // Naming the Stripe invoice makes it pass.
+    write(
+        dir.path(),
+        "blobs/invoices/INV-1.pdf.yaml",
+        &format!("kind: invoice\nvisibility: internal\n{common}stripe_invoice_id: in_1Synthetic\n"),
     );
     gate(dir.path())
         .assert()

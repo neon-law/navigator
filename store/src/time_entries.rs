@@ -70,8 +70,9 @@ pub enum BillingStatus {
     /// free to write off — the batch's provider call bills it or the batch
     /// releases it back here.
     Reserved,
+    /// Billed on the Matter Invoice with this ledger id.
     Invoiced {
-        xero_invoice_id: String,
+        invoice_id: Uuid,
     },
     WrittenOff {
         reason: String,
@@ -156,7 +157,7 @@ fn parse_source(raw: &str) -> Result<TimeEntrySource, TimeEntryError> {
 
 fn parse_billing_status(
     status: &str,
-    xero_invoice_id: Option<String>,
+    invoice_id: Option<Uuid>,
     written_off_reason: Option<String>,
 ) -> Result<BillingStatus, TimeEntryError> {
     match status {
@@ -164,13 +165,13 @@ fn parse_billing_status(
         "reserved" => {
             // Reserved rows carry no Xero id and no write-off reason — the
             // status-evidence constraint holds the same line.
-            if xero_invoice_id.is_some() || written_off_reason.is_some() {
+            if invoice_id.is_some() || written_off_reason.is_some() {
                 return Err(TimeEntryError::Invalid("billing status"));
             }
             Ok(BillingStatus::Reserved)
         }
-        "invoiced" => xero_invoice_id
-            .map(|xero_invoice_id| BillingStatus::Invoiced { xero_invoice_id })
+        "invoiced" => invoice_id
+            .map(|invoice_id| BillingStatus::Invoiced { invoice_id })
             .ok_or(TimeEntryError::Invalid("billing status")),
         "written_off" => written_off_reason
             .map(|reason| BillingStatus::WrittenOff { reason })
@@ -181,7 +182,7 @@ fn parse_billing_status(
 
 fn from_row(row: &sqlx::postgres::PgRow) -> Result<TimeEntry, TimeEntryError> {
     let status: String = row.try_get("billing_status")?;
-    let xero_invoice_id: Option<String> = row.try_get("xero_invoice_id")?;
+    let invoice_id: Option<Uuid> = row.try_get("matter_invoice_id")?;
     let written_off_reason: Option<String> = row.try_get("written_off_reason")?;
     Ok(TimeEntry {
         id: row.try_get("id")?,
@@ -193,7 +194,7 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<TimeEntry, TimeEntryError> {
         billable: row.try_get("billable")?,
         rate_cents_per_hour: row.try_get("rate_cents_per_hour")?,
         source: parse_source(&row.try_get::<String, _>("source")?)?,
-        billing_status: parse_billing_status(&status, xero_invoice_id, written_off_reason)?,
+        billing_status: parse_billing_status(&status, invoice_id, written_off_reason)?,
         stage: row.try_get("stage")?,
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -302,7 +303,7 @@ pub async fn create(
     fetch(pg, id).await
 }
 
-/// Flip unbilled entries to `invoiced` under one Xero invoice id. Replaying
+/// Flip unbilled entries to `invoiced` under one Matter Invoice. Replaying
 /// the same call is a no-op — an entry already invoiced under the same id is
 /// left alone — so a retried generation cannot double-mark; the same entries
 /// under a different invoice id is a `Conflict`. Returns every entry named,
@@ -311,19 +312,27 @@ pub async fn mark_invoiced(
     pg: &PostgresDb,
     entry_ids: &[Uuid],
     actor_id: Uuid,
-    xero_invoice_id: &str,
+    invoice_id: Uuid,
     allow_reserved: bool,
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     if entry_ids.is_empty() {
         return Err(TimeEntryError::Invalid("entries"));
     }
-    if xero_invoice_id.trim().is_empty() || xero_invoice_id.len() > 100 {
-        return Err(TimeEntryError::Invalid("invoice id"));
-    }
     let mut tx = pg.0.begin().await?;
+    let invoice: Option<(Uuid, String)> =
+        sqlx::query_as("SELECT project_id,status FROM matter_invoice WHERE id=$1 FOR SHARE")
+            .bind(invoice_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some((invoice_project, invoice_status)) = invoice else {
+        return Err(TimeEntryError::Invalid("no such Matter Invoice"));
+    };
+    if invoice_status == "void" {
+        return Err(TimeEntryError::Invalid("the invoice is void"));
+    }
     let before = sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         rate_cents_per_hour,source,billing_status,matter_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE id = ANY($1) \
          ORDER BY performed_on, id FOR UPDATE",
     )
@@ -335,6 +344,11 @@ pub async fn mark_invoiced(
     }
     refuse_claim_time(&mut tx, entry_ids).await?;
     let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
+    if rows.iter().any(|entry| entry.project_id != invoice_project) {
+        return Err(TimeEntryError::Invalid(
+            "invoice belongs to another Project",
+        ));
+    }
     for entry in &rows {
         match &entry.billing_status {
             // Unbilled: nothing to check yet.
@@ -348,9 +362,7 @@ pub async fn mark_invoiced(
                 }
             }
             // Already invoiced under the same invoice id: the replay no-op.
-            BillingStatus::Invoiced {
-                xero_invoice_id: id,
-            } if id.as_str() == xero_invoice_id => {}
+            BillingStatus::Invoiced { invoice_id: id } if *id == invoice_id => {}
             // Invoiced under a different invoice, or written off: the caller
             // is composing a different batch than the one that marked these.
             BillingStatus::Invoiced { .. } => return Err(TimeEntryError::Conflict),
@@ -371,11 +383,11 @@ pub async fn mark_invoiced(
     if markable > 0 {
         set_audit_context(&mut tx, actor_id, "invoiced").await?;
         sqlx::query(
-            "UPDATE time_entry SET billing_status='invoiced',xero_invoice_id=$2,updated_at=$3 \
+            "UPDATE time_entry SET billing_status='invoiced',matter_invoice_id=$2,updated_at=$3 \
              WHERE id = ANY($1) AND billing_status IN ('unbilled','reserved')",
         )
         .bind(entry_ids)
-        .bind(xero_invoice_id)
+        .bind(invoice_id)
         .bind(Utc::now())
         .execute(&mut *tx)
         .await?;
@@ -448,7 +460,7 @@ pub(crate) async fn reserve_in_tx(
 ) -> Result<(), TimeEntryError> {
     let before = sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         rate_cents_per_hour,source,billing_status,matter_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE id = ANY($1) \
          ORDER BY performed_on, id FOR UPDATE",
     )
@@ -536,7 +548,7 @@ pub async fn wip_billable(
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         rate_cents_per_hour,source,billing_status,matter_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry t \
          WHERE project_id=$1 AND billable AND billing_status IN ('unbilled','reserved') \
          AND NOT EXISTS (SELECT 1 FROM legal_plan_claim c WHERE c.project_id=t.project_id \
@@ -557,7 +569,7 @@ pub async fn unbilled_billable(
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         rate_cents_per_hour,source,billing_status,matter_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry t \
          WHERE project_id=$1 AND billable AND billing_status='unbilled' \
          AND NOT EXISTS (SELECT 1 FROM legal_plan_claim c WHERE c.project_id=t.project_id \
@@ -579,7 +591,7 @@ pub async fn list_for_project(
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         rate_cents_per_hour,source,billing_status,matter_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE project_id=$1 \
          ORDER BY performed_on DESC, id",
     )
@@ -616,7 +628,7 @@ pub async fn for_project_day(
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         rate_cents_per_hour,source,billing_status,matter_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE project_id = ANY($1) AND performed_on=$2 \
          ORDER BY inserted_at, id",
     )
@@ -637,7 +649,7 @@ pub(crate) async fn for_billing(
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         rate_cents_per_hour,source,billing_status,matter_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry
          WHERE project_id=$1 AND ($2::uuid IS NULL OR attorney_id=$2)
          AND performed_on<=$3 ORDER BY performed_on DESC,id",
@@ -740,7 +752,7 @@ async fn fetch_for_update(
 ) -> Result<TimeEntry, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         rate_cents_per_hour,source,billing_status,matter_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE id=$1 FOR UPDATE",
     )
     .bind(id)
@@ -755,7 +767,7 @@ async fn fetch_for_update(
 async fn fetch(pg: &PostgresDb, id: Uuid) -> Result<TimeEntry, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
+         rate_cents_per_hour,source,billing_status,matter_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE id=$1",
     )
     .bind(id)
@@ -1145,7 +1157,8 @@ mod tests {
                 .await
                 .unwrap();
 
-            mark_invoiced(&pg, &[invoiced.id], actor, "inv-1", false)
+            let invoice_1 = ledger_invoice(&pg, seed.project_id).await;
+            mark_invoiced(&pg, &[invoiced.id], actor, invoice_1, false)
                 .await
                 .unwrap();
             write_off(&pg, written_off.id, actor, "Included in the flat fee")
@@ -1162,8 +1175,22 @@ mod tests {
             assert_eq!(outstanding[0].id, kept.id);
         }
 
+        /// A Matter Invoice on `project` to bill work under.
+        async fn ledger_invoice(pg: &PostgresDb, project: Uuid) -> Uuid {
+            sqlx::query_scalar(
+                "INSERT INTO matter_invoice (id,project_id,source,external_id,reference,status,amount_cents,currency)
+                 VALUES ($1,$2,'stripe',$3,'Matter synthetic','sent',1000,'USD') RETURNING id",
+            )
+            .bind(Uuid::new_v4())
+            .bind(project)
+            .bind(format!("in_{}", Uuid::new_v4().simple()))
+            .fetch_one(pg.pool())
+            .await
+            .unwrap()
+        }
+
         #[tokio::test]
-        async fn invoicing_flips_with_the_xero_id_and_replays_cleanly() {
+        async fn invoicing_flips_with_the_ledger_invoice_and_replays_cleanly() {
             let Some((options, database)) = fresh_schema().await else {
                 return;
             };
@@ -1177,7 +1204,8 @@ mod tests {
                 .await
                 .unwrap();
 
-            let marked = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42", false)
+            let invoice_42 = ledger_invoice(&pg, seed.project_id).await;
+            let marked = mark_invoiced(&pg, &[first.id, second.id], actor, invoice_42, false)
                 .await
                 .unwrap();
             assert_eq!(marked.len(), 2);
@@ -1185,14 +1213,14 @@ mod tests {
                 assert_eq!(
                     entry.billing_status,
                     BillingStatus::Invoiced {
-                        xero_invoice_id: "inv-42".into()
+                        invoice_id: invoice_42
                     }
                 );
             }
 
             // A replay under the same invoice id changes nothing.
             let events_after_first_pass = list_events(&pg, first.id).await.unwrap().len();
-            let replayed = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42", false)
+            let replayed = mark_invoiced(&pg, &[first.id, second.id], actor, invoice_42, false)
                 .await
                 .unwrap();
             assert_eq!(replayed.len(), 2);
@@ -1203,14 +1231,16 @@ mod tests {
             );
 
             // The same entries under a different invoice id are a conflict.
+            let invoice_43 = ledger_invoice(&pg, seed.project_id).await;
             assert!(matches!(
-                mark_invoiced(&pg, &[first.id], actor, "inv-43", false).await,
+                mark_invoiced(&pg, &[first.id], actor, invoice_43, false).await,
                 Err(TimeEntryError::Conflict)
             ));
 
             // An unknown entry id is not found.
+            let invoice_44 = ledger_invoice(&pg, seed.project_id).await;
             assert!(matches!(
-                mark_invoiced(&pg, &[Uuid::new_v4()], actor, "inv-44", false).await,
+                mark_invoiced(&pg, &[Uuid::new_v4()], actor, invoice_44, false).await,
                 Err(TimeEntryError::NotFound)
             ));
         }
@@ -1241,8 +1271,9 @@ mod tests {
                 write_off(&pg, created.id, actor, "Again").await,
                 Err(TimeEntryError::Invalid("entry is already resolved"))
             ));
+            let invoice_7 = ledger_invoice(&pg, seed.project_id).await;
             assert!(matches!(
-                mark_invoiced(&pg, &[created.id], actor, "inv-7", false).await,
+                mark_invoiced(&pg, &[created.id], actor, invoice_7, false).await,
                 Err(TimeEntryError::Invalid("entry is already resolved"))
             ));
         }
@@ -1258,7 +1289,8 @@ mod tests {
             let created = create(&pg, seed.project_id, actor, &entry(seed.attorney, 60, true))
                 .await
                 .unwrap();
-            mark_invoiced(&pg, &[created.id], actor, "inv-9", false)
+            let invoice_9 = ledger_invoice(&pg, seed.project_id).await;
+            mark_invoiced(&pg, &[created.id], actor, invoice_9, false)
                 .await
                 .unwrap();
 
@@ -1277,8 +1309,8 @@ mod tests {
                 "every event names its actor"
             );
             assert_eq!(
-                events[1].after_state["xero_invoice_id"],
-                serde_json::json!("inv-9")
+                events[1].after_state["matter_invoice_id"],
+                serde_json::json!(invoice_9)
             );
 
             // The database itself refuses a mutation that carries no audit

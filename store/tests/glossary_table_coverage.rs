@@ -1,17 +1,20 @@
 //! Every stored record has one discoverable definition, including internal plumbing.
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The tables the schema creates and does not later drop.
 fn tables(schema: &str) -> BTreeSet<&str> {
-    schema
-        .lines()
-        .filter_map(|line| {
-            let rest = line.trim().strip_prefix("CREATE TABLE ")?;
+    let mut tables = BTreeSet::new();
+    for line in schema.lines().map(str::trim) {
+        if let Some(dropped) = line.strip_prefix("DROP TABLE ") {
+            tables.remove(dropped.trim_end_matches(';').trim().trim_matches('"'));
+        } else if let Some(rest) = line.strip_prefix("CREATE TABLE ") {
             let rest = rest.strip_prefix("IF NOT EXISTS ").unwrap_or(rest);
-            rest.split_whitespace()
-                .next()
-                .map(|name| name.trim_matches('"'))
-        })
-        .collect()
+            if let Some(name) = rest.split_whitespace().next() {
+                tables.insert(name.trim_matches('"'));
+            }
+        }
+    }
+    tables
 }
 
 fn coverage_errors(schema: &str, entries: &[(&str, &str)]) -> Vec<String> {

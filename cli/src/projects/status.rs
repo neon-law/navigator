@@ -166,6 +166,28 @@ fn integrations_line(value: &serde_json::Value) -> String {
     )
 }
 
+fn print_onboarding(onboarding: &serde_json::Value) {
+    println!("onboarding filed: {}", onboarding["filed"]);
+    println!(
+        "onboarding status: {}",
+        onboarding["status"].as_str().unwrap_or("unknown")
+    );
+    for (label, key) in [("signed PDF", "signed_pdf"), ("certificate", "certificate")] {
+        if let Some(name) = onboarding[key].as_str() {
+            println!("onboarding {label}: {name}");
+        }
+    }
+    if let Some(documents) = onboarding["documents"].as_array() {
+        for doc in documents {
+            println!(
+                "  {} (visibility: {})",
+                doc["id"],
+                doc["visibility"].as_str().unwrap_or("unknown")
+            );
+        }
+    }
+}
+
 fn print_status(value: &serde_json::Value) {
     for field in [
         "code",
@@ -197,21 +219,7 @@ fn print_status(value: &serde_json::Value) {
             );
         }
     }
-    let onboarding = &value["onboarding"];
-    println!("onboarding filed: {}", onboarding["filed"]);
-    println!(
-        "onboarding status: {}",
-        onboarding["status"].as_str().unwrap_or("unknown")
-    );
-    if let Some(documents) = onboarding["documents"].as_array() {
-        for doc in documents {
-            println!(
-                "  {} (visibility: {})",
-                doc["id"],
-                doc["visibility"].as_str().unwrap_or("unknown")
-            );
-        }
-    }
+    print_onboarding(&value["onboarding"]);
     if let Some(adoptions) = value["envelopes"]
         .as_array()
         .or_else(|| value["adopted_envelopes"].as_array())

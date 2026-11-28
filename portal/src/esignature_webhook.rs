@@ -937,10 +937,7 @@ pub(crate) async fn file_completed_documents(
         .map_err(|e| SignatureError::Provider(e.to_string()))?
         .and_then(|template| template.kind)
         .unwrap_or_else(|| "unclassified".to_string());
-    let filename_stem = filename_suffix.map_or_else(
-        || template_kind.clone(),
-        |suffix| format!("{template_kind}_{suffix}"),
-    );
+    let filename_stem = completed_filename_stem(&template_kind, signed_on, filename_suffix);
     // The executed instrument is the client's own document; the certificate
     // of completion is the ESIGN record the firm keeps.
     file_signed_copy_back(
@@ -978,6 +975,29 @@ pub(crate) async fn file_completed_documents(
         "esignature webhook: filed signed document + certificate to the matter"
     );
     Ok(())
+}
+
+/// The stem a completed envelope's two copies are filed under. An engagement
+/// or closing letter takes one canonical, dated name however its completion
+/// arrived (webhook, adoption, or a re-delivery), so the same envelope never
+/// files twice under different names (LAW-586):
+/// `YYYY.MM.DD_engagement-letter_signed.pdf` and `..._certificate.pdf`.
+fn completed_filename_stem(
+    template_kind: &str,
+    signed_on: chrono::NaiveDate,
+    suffix: Option<&str>,
+) -> String {
+    let letter = match template_kind {
+        "onboarding" => "engagement-letter",
+        "offboarding" => "closing-letter",
+        _ => {
+            return suffix.map_or_else(
+                || template_kind.to_owned(),
+                |suffix| format!("{template_kind}_{suffix}"),
+            )
+        }
+    };
+    format!("{}_{letter}", signed_on.format("%Y.%m.%d"))
 }
 
 /// File a completed envelope without assigning it to an unrelated Notation.
@@ -1076,6 +1096,29 @@ async fn file_signed_copy_back(
 #[cfg(test)]
 mod tests {
     use super::ConnectPayload;
+
+    #[test]
+    fn letters_take_one_canonical_dated_name_however_they_complete() {
+        let on = chrono::NaiveDate::from_ymd_opt(2026, 11, 2).unwrap();
+        for suffix in [None, Some("4f1c2a00-0000-4000-8000-000000000001")] {
+            assert_eq!(
+                super::completed_filename_stem("onboarding", on, suffix),
+                "2026.11.02_engagement-letter"
+            );
+            assert_eq!(
+                super::completed_filename_stem("offboarding", on, suffix),
+                "2026.11.02_closing-letter"
+            );
+        }
+        assert_eq!(
+            super::completed_filename_stem("agreement", on, None),
+            "agreement"
+        );
+        assert_eq!(
+            super::completed_filename_stem("agreement", on, Some("env")),
+            "agreement_env"
+        );
+    }
 
     fn parse(json: serde_json::Value) -> ConnectPayload {
         serde_json::from_value(json).expect("connect payload parses")
@@ -1196,3 +1239,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "esignature_webhook/filing_tests.rs"]
+mod filing_tests;

@@ -2,9 +2,9 @@
 //!
 //! Every five minutes this schedule refreshes pending payments and Stripe
 //! renewals, least recently checked first. Each provider read and resulting
-//! store write runs inside the existing durable step. Xero invoices activate
-//! after payment; Stripe subscriptions also require a verified paid-through
-//! boundary. The queue survives pod loss. Journals carry Purchase identifiers
+//! store write runs inside the existing durable step. A one-time Purchase
+//! activates once its Stripe invoice is paid in full; a Stripe subscription
+//! also requires a verified paid-through boundary. The queue survives pod loss. Journals carry Purchase identifiers
 //! and reasons, never client content.
 
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const WORKFLOW: &str = "PurchaseActivation";
-/// Independent opt-in: hosting DBOS alone never calls Xero.
+/// Independent opt-in: hosting DBOS alone never calls Stripe.
 pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_PURCHASE_ACTIVATION_ENABLED";
 /// How many invoiced Purchases one slot checks.
 pub const BATCH: i64 = 25;
@@ -172,17 +172,17 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn a_slot_files_each_purchase_by_what_xero_reported() {
+    fn a_slot_files_each_purchase_by_what_stripe_reported() {
         let (paid, unpaid, broken) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
         let mut report = ActivationReport::default();
         report.record(paid, Ok(true));
         report.record(unpaid, Ok(false));
-        report.record(broken, Err("xero responded 503".to_string()));
+        report.record(broken, Err("stripe responded 503".to_string()));
         assert_eq!(report.activated, vec![paid]);
         assert_eq!(report.unpaid, vec![unpaid]);
         assert_eq!(
             report.stopped,
-            vec![(broken, "xero responded 503".to_string())]
+            vec![(broken, "stripe responded 503".to_string())]
         );
     }
 

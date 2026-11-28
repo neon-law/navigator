@@ -1706,6 +1706,11 @@ pub enum WorkflowDriveError {
     },
     #[error("the approval run failed. Recover the original workflow before dispatch.")]
     ApprovalRunFailed,
+    /// The approved document did not render. The notation never parks at
+    /// the render step without a PDF (LAW-586); the lawyer corrects the
+    /// template or answers and approves again.
+    #[error("the document did not render: {0}")]
+    RenderFailed(String),
     #[error("the workflow advanced without a recorded envelope. Check DocuSign before attempting recovery.")]
     DispatchNeedsReconciliation,
 
@@ -2075,7 +2080,13 @@ pub(crate) async fn render_and_park(
         None => return Err(workflows::WorkflowRuntimeError::UnknownNotation(notation_id).into()),
     };
     if current_state.prefix() != "lawyer_review" {
-        let document_ready = document_pdf_ready(deps.storage.as_ref(), notation_id).await?;
+        let mut document_ready = document_pdf_ready(deps.storage.as_ref(), notation_id).await?;
+        if current_state.prefix() == "generate_pdf" && !document_ready {
+            // A run parked at the render step with no PDF behind it: render
+            // the approved document now, or fail with the render's reason.
+            rerender(deps, &notation_row).await?;
+            document_ready = true;
+        }
         if current_state.prefix() == "generate_pdf" || document_ready {
             if notation_row.state == "lawyer_review" && document_ready {
                 store::notations::reconcile_state(
@@ -2121,6 +2132,27 @@ pub(crate) async fn render_and_park(
     } else {
         Ok(current_state)
     }
+}
+
+/// Render and file the approved document for a notation already at its
+/// render step, the way the worker's `generate_pdf__*` dispatch does.
+async fn rerender(
+    deps: &RenderDeps<'_>,
+    notation: &store::notations::Notation,
+) -> Result<(), WorkflowDriveError> {
+    let payload = approval_document_payload(deps, notation).await?;
+    let payload: workflows::DocumentPayload =
+        serde_json::from_str(&payload).map_err(WorkflowDriveError::Payload)?;
+    workflows::dispatch_generate_pdf(
+        deps.storage,
+        Some(deps.application_store),
+        notation.id,
+        &payload,
+    )
+    .await
+    .map_err(|error| WorkflowDriveError::RenderFailed(error.to_string()))?;
+    tracing::info!(notation_id = %notation.id, "re-rendered a document parked without its PDF");
+    Ok(())
 }
 
 async fn approval_document_payload(
@@ -2289,7 +2321,8 @@ pub async fn approve_send_post(
         }
         Err(
             e @ (WorkflowDriveError::ApprovalNotReady { .. }
-            | WorkflowDriveError::ApprovalRunFailed),
+            | WorkflowDriveError::ApprovalRunFailed
+            | WorkflowDriveError::RenderFailed(_)),
         ) => (StatusCode::CONFLICT, e.to_string()).into_response(),
         Err(e) => {
             tracing::error!(error = %e, %notation_id, "approve_send: render_and_park failed");

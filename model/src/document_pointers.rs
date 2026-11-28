@@ -78,12 +78,19 @@ pub struct DocumentPointer {
     /// `DocuSign` and confirms the envelope is complete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docusign_envelope_id: Option<Uuid>,
-    /// The Xero invoice this pointer's bytes were downloaded from (ENG-859).
-    /// Required by `project gate` on every `blobs/invoices/**` pointer.
-    /// Validated here only as a well-formed UUID — `project gate --check`
-    /// (ENG-863) resolves it against the Firm's Xero org.
+    /// The Stripe invoice (`in_…`) this pointer's bytes are (LAW-507). A
+    /// `blobs/invoices/**` pointer names it, or the `source` and
+    /// `external_id` of money collected outside Stripe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub xero_invoice_id: Option<Uuid>,
+    pub stripe_invoice_id: Option<String>,
+    /// Where money collected outside Stripe arrived: `in_person`, `check`,
+    /// `wire`, or `other`. Paired with [`Self::external_id`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CollectionSource>,
+    /// The check number, wire reference, or receipt number for
+    /// [`Self::source`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
     /// How this executed document was signed: `{ method: wet_ink | docusign | dropbox_sign,
     /// signed_on: YYYY-MM-DD }`. Optional on every pointer, including a
     /// `_signed` one; no gate requires it.
@@ -112,6 +119,16 @@ pub struct DocumentPointer {
     /// Expense details supported by a receipt Document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt: Option<crate::documents::ReceiptMetadata>,
+}
+
+/// Where an invoice's money arrived outside Stripe (LAW-507).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectionSource {
+    InPerson,
+    Check,
+    Wire,
+    Other,
 }
 
 /// One of the lawyer-facing folders a Project checkout's `documents/`
@@ -404,6 +421,13 @@ pub fn documents_path(slug: &str, folder: MatterFolder) -> String {
 }
 
 impl DocumentPointer {
+    /// Whether the pointer names its invoice record: Stripe's, or money
+    /// collected outside it.
+    #[must_use]
+    pub const fn names_invoice_record(&self) -> bool {
+        self.stripe_invoice_id.is_some() || self.external_id.is_some()
+    }
+
     /// The folder this document's bytes belong in: `folder:` when the
     /// pointer names one, else the one its `kind` maps to.
     #[must_use]
@@ -456,6 +480,12 @@ pub struct PointerVersion {
 pub enum PointerError {
     #[error("checkout_path must be a safe relative file path")]
     CheckoutPath,
+    /// An invoice names Stripe or money collected outside it, never both,
+    /// and a `source` always has its `external_id`.
+    #[error(
+        "an invoice pointer names its stripe_invoice_id (in_…), or a source with its external_id"
+    )]
+    InvoiceRecord,
     #[error("kind `{0}` is not an accepted document kind")]
     Kind(String),
     /// An Authority-backed pointer (`authority_id` set) is never a Project
@@ -512,6 +542,15 @@ impl DocumentPointer {
     /// # Errors
     /// A YAML shape error or a semantic [`PointerError`].
     pub fn from_yaml(raw: &str) -> anyhow::Result<Self> {
+        if raw
+            .lines()
+            .any(|line| line.trim_start().starts_with("xero_invoice_id:"))
+        {
+            anyhow::bail!(
+                "xero_invoice_id is retired: Stripe issues invoices. Name the invoice's \
+                 stripe_invoice_id, or the source and external_id of money collected outside Stripe"
+            );
+        }
         let pointer: Self = serde_yaml::from_str(raw)?;
         pointer.validate()?;
         Ok(pointer)
@@ -542,6 +581,21 @@ impl DocumentPointer {
                 })
         }) {
             return Err(PointerError::CheckoutPath);
+        }
+        let label = |value: &str| {
+            !value.trim().is_empty() && value.len() <= 200 && !value.chars().any(char::is_control)
+        };
+        let stripe_ok = self.stripe_invoice_id.as_deref().is_none_or(|id| {
+            id.strip_prefix("in_").is_some_and(|rest| {
+                !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
+        });
+        if !stripe_ok
+            || self.source.is_some() != self.external_id.is_some()
+            || (self.stripe_invoice_id.is_some() && self.source.is_some())
+            || self.external_id.as_deref().is_some_and(|id| !label(id))
+        {
+            return Err(PointerError::InvoiceRecord);
         }
 
         if self.authority_id.is_some() {
@@ -625,7 +679,9 @@ mod tests {
             previous_version: None,
             authority_id: None,
             docusign_envelope_id: None,
-            xero_invoice_id: None,
+            stripe_invoice_id: None,
+            source: None,
+            external_id: None,
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
@@ -719,28 +775,63 @@ mod tests {
         );
     }
 
-    /// `docusign_envelope_id` and `xero_invoice_id` (ENG-859) are additive
-    /// and optional like `authority_id`: absent by default, round-trip when
-    /// set, and `deny_unknown_fields` still catches a typo of either key.
+    /// `docusign_envelope_id` and the invoice record keys are additive and
+    /// optional: absent by default, round-trip when set, and a retired
+    /// `xero_invoice_id` is refused with the fix.
     #[test]
-    fn docusign_and_xero_ids_are_optional_and_round_trip() {
+    fn envelope_and_invoice_record_keys_are_optional_and_round_trip() {
         let mut plain = pointer();
         let plain_yaml = plain.to_yaml().unwrap();
         assert!(!plain_yaml.contains("docusign_envelope_id"));
-        assert!(!plain_yaml.contains("xero_invoice_id"));
+        assert!(!plain_yaml.contains("stripe_invoice_id"));
         assert!(DocumentPointer::from_yaml(&plain_yaml)
             .unwrap()
             .validate()
             .is_ok());
 
-        plain.kind = "onboarding".into();
-        plain.docusign_envelope_id = Some(Uuid::now_v7());
-        plain.xero_invoice_id = Some(Uuid::now_v7());
-        assert!(plain.validate().is_ok());
+        plain.kind = "invoice".into();
+        plain.stripe_invoice_id = Some("in_1Synthetic".into());
         let yaml = plain.to_yaml().unwrap();
-        assert!(yaml.contains("docusign_envelope_id"));
-        assert!(yaml.contains("xero_invoice_id"));
+        assert!(yaml.contains("stripe_invoice_id: in_1Synthetic"));
         assert_eq!(DocumentPointer::from_yaml(&yaml).unwrap(), plain);
+
+        let mut check = pointer();
+        check.kind = "invoice".into();
+        check.source = Some(CollectionSource::Check);
+        check.external_id = Some("1001".into());
+        let yaml = check.to_yaml().unwrap();
+        assert!(
+            yaml.contains("source: check") && yaml.contains("external_id: '1001'"),
+            "{yaml}"
+        );
+        assert_eq!(DocumentPointer::from_yaml(&yaml).unwrap(), check);
+
+        for broken in [
+            DocumentPointer {
+                stripe_invoice_id: Some("inv-1".into()),
+                ..pointer()
+            },
+            DocumentPointer {
+                source: Some(CollectionSource::Wire),
+                ..pointer()
+            },
+            DocumentPointer {
+                stripe_invoice_id: Some("in_1".into()),
+                source: Some(CollectionSource::Other),
+                external_id: Some("x".into()),
+                ..pointer()
+            },
+        ] {
+            assert_eq!(broken.validate(), Err(PointerError::InvoiceRecord));
+        }
+        let retired = format!(
+            "{}xero_invoice_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d42\n",
+            pointer().to_yaml().unwrap()
+        );
+        let error = DocumentPointer::from_yaml(&retired)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("xero_invoice_id is retired"), "{error}");
     }
 
     /// LAW-189: `folder:` is optional, absent from a pointer that names

@@ -712,7 +712,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                 // workbench keeps showing them (and their payment state) even in
                 // a deployment that has not configured the time and expense
                 // store. Only the PostgreSQL-only reads degrade to empty.
-                crate::project_billing::mirrored_invoice_rows(&application_store, id).await?,
+                crate::project_billing::ledger_invoice_rows(&application_store, id).await?,
                 Vec::new(),
             ),
             _ => Default::default(),

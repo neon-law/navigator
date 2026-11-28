@@ -6,7 +6,7 @@
 //!
 //! **Privacy.** Every label this module renders is a brand's display name, a
 //! lawyer DRI's display name, or the literal `"Unassigned"` —
-//! [`store::xero_invoices::firm_thirty_day_rollup`] is the one place that
+//! [`store::matter_invoices::firm_thirty_day_rollup`] is the one place that
 //! builds those labels, and it never carries a Project code, matter name,
 //! client name, or Xero invoice id into them. This module has no other
 //! field to leak one through.
@@ -38,9 +38,9 @@ pub struct FirmInvoiceGraphsView {
 }
 
 #[cfg(feature = "server")]
-impl From<store::xero_invoices::FirmInvoiceRollup> for FirmInvoiceGraphsView {
-    fn from(rollup: store::xero_invoices::FirmInvoiceRollup) -> Self {
-        fn bars(groups: Vec<store::xero_invoices::InvoiceGroupTotal>) -> Vec<InvoiceBarView> {
+impl From<store::matter_invoices::FirmInvoiceRollup> for FirmInvoiceGraphsView {
+    fn from(rollup: store::matter_invoices::FirmInvoiceRollup) -> Self {
+        fn bars(groups: Vec<store::matter_invoices::InvoiceGroupTotal>) -> Vec<InvoiceBarView> {
             groups
                 .into_iter()
                 .map(|group| InvoiceBarView {

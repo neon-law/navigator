@@ -761,10 +761,8 @@ mod tests {
             currency: "USD".into(),
             account_code: "200".into(),
             state,
-            xero_contact_id: None,
-            xero_invoice_id: None,
             invoice_url: None,
-            xero_repeating_invoice_id: None,
+            stripe_invoice: None,
             inserted_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             stripe: None,
@@ -794,7 +792,7 @@ mod tests {
 
     #[test]
     fn an_unpaid_subscription_previews() {
-        // Invoicing and invoiced both precede Xero's PAID report.
+        // Invoicing and invoiced both precede Stripe's confirmed payment.
         let invoicing = purchase("delete-your-data-monthly", PurchaseState::Invoicing);
         let invoiced = purchase("delete-your-data-annual", PurchaseState::Invoiced);
         assert_eq!(access_for(&[invoicing, invoiced]), SandboxAccess::Preview);

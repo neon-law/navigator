@@ -326,6 +326,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             put(legal_plans_api::configure),
         ),
         (
+            "PUT",
+            "/app/api/firms/{id}/legal-plans/{plan_id}/claim-filing",
+            put(legal_plans_api::set_claim_filing),
+        ),
+        (
             "GET",
             "/app/api/projects/{id}/legal-plan",
             get(legal_plans_api::project),
@@ -350,6 +355,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "POST",
             "/app/api/projects/{id}/legal-plan-claims",
             post(plan_claims_api::record),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/legal-plan-claims/{claim_id}/packet",
+            post(plan_claims_api::packet),
         ),
         (
             "GET",
@@ -751,6 +761,36 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "GET",
+            "/app/api/projects/{id}/invoices",
+            get(crate::matter_invoice_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/drafts",
+            post(crate::matter_invoice_api::create),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/records",
+            post(crate::matter_invoice_api::record),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/{invoice_id}/send",
+            post(crate::matter_invoice_api::send),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/{invoice_id}/payments",
+            post(crate::matter_invoice_api::payment),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/{invoice_id}/{verb}",
+            post(crate::matter_invoice_api::close),
+        ),
+        (
+            "GET",
             "/app/api/projects/{id}/tasks",
             get(crate::project_tasks_api::list),
         ),
@@ -770,6 +810,36 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             post(crate::project_tasks_api::transition),
         ),
         ("POST", "/app/api/projects/{id}/billing-annotations", post(crate::time_tracking_api::stage_annotation)),
+        (
+            "GET",
+            "/app/api/projects/{id}/time-entry-proposals",
+            get(crate::time_proposals_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entry-proposals",
+            post(crate::time_proposals_api::add),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entry-proposals/backfill",
+            post(crate::time_proposals_api::backfill),
+        ),
+        (
+            "PATCH",
+            "/app/api/projects/{id}/time-entry-proposals/{proposal_id}",
+            patch(crate::time_proposals_api::edit),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entry-proposals/{proposal_id}/approve",
+            post(crate::time_proposals_api::approve),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entry-proposals/{proposal_id}/discard",
+            post(crate::time_proposals_api::discard),
+        ),
         (
             "GET",
             "/app/api/projects/{id}/time-entries",
@@ -2971,6 +3041,18 @@ fn deadline_project_in_dashboard_scope(
 /// Live lifecycle evidence for a firm-side participant. Filing establishes
 /// onboarding presence; `onboarding.status` carries the execution reading —
 /// `official` once the onboarding envelope is verified as completed.
+/// Whether the onboarding's signed record is filed once (LAW-586).
+async fn onboarding_evidence(
+    project: Uuid,
+) -> Result<store::onboarding::OnboardingEvidence, ApiError> {
+    let pg = store::postgres::PostgresDb::application()
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    store::onboarding::evidence(&pg, project)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))
+}
+
 async fn project_status_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -3017,6 +3099,8 @@ async fn project_status_door(
     } else {
         Vec::new()
     };
+    let evidence = onboarding_evidence(id).await?;
+    missing.extend(evidence.missing.iter().cloned());
     let integrations = firm_integrations(project.firm_id).await?;
     let drive_folder_id = linked_drive_folder(&project);
     if project.status == "open" && integrations.drive && drive_folder_id.is_none() {
@@ -3042,7 +3126,9 @@ async fn project_status_door(
             "filed": opening.contains(&id),
             "status": onboarding_status.label(),
             "documents": documents,
-            "execution_verified": onboarding_status == store::projects::OnboardingStatus::Official
+            "execution_verified": onboarding_status == store::projects::OnboardingStatus::Official,
+            "signed_pdf": evidence.signed_pdf,
+            "certificate": evidence.certificate,
         },
         "repository_remotes": remotes,
         "envelopes": envelopes,
@@ -8463,7 +8549,9 @@ async fn document_pointer(
         docusign_envelope_id: store::document_pointers::envelope_id_from_asset_metadata(
             current.metadata.as_ref(),
         ),
-        xero_invoice_id: None,
+        stripe_invoice_id: None,
+        source: None,
+        external_id: None,
         signing: current.signing,
         notarization: current.notarization.clone(),
         // The evidence block rides with the current revision, so a pointer
@@ -9631,6 +9719,10 @@ struct DocumentIntegrityResponse {
     /// Server-side external-id checks. Empty while a pointer carries no
     /// external id.
     integrations: Vec<crate::document_integrations::Finding>,
+    /// Whether an official onboarding's signed record is filed once. Lawyer
+    /// and CI document lenses only; on the first page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    onboarding: Option<store::onboarding::OnboardingEvidence>,
 }
 
 /// `GET /app/api/projects/{id}/documents/integrity` — every asset row the
@@ -9727,6 +9819,11 @@ async fn document_integrity_door(
             "document integrity page"
         );
     }
+    let onboarding = if start == 0 && matches!(lens, store::access::ProjectLens::Lawyer) {
+        Some(onboarding_evidence(id).await?)
+    } else {
+        None
+    };
     Ok((
         StatusCode::OK,
         Json(DocumentIntegrityResponse {
@@ -9734,6 +9831,7 @@ async fn document_integrity_door(
             total,
             next_offset,
             integrations,
+            onboarding,
         }),
     )
         .into_response())
@@ -11346,38 +11444,24 @@ fn workflow_drive_error(e: crate::retainer_walk::WorkflowDriveError) -> Response
     use crate::retainer_walk::WorkflowDriveError as E;
     match e {
         E::Signature(error) => signature_workflow_response(&error),
-        e @ E::ApprovalNotReady { .. } => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "approval_not_ready",
-                "reason": e.to_string(),
-            })),
-        )
-            .into_response(),
-        e @ E::SignatureStepRequired { .. } => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "signature_step_required",
-                "reason": e.to_string(),
-            })),
-        )
-            .into_response(),
-        e @ E::ApprovalRunFailed => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "approval_run_failed",
-                "reason": e.to_string(),
-            })),
-        )
-            .into_response(),
-        e @ E::DispatchNeedsReconciliation => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "dispatch_needs_reconciliation",
-                "reason": e.to_string(),
-            })),
-        )
-            .into_response(),
+        e @ (E::ApprovalNotReady { .. }
+        | E::SignatureStepRequired { .. }
+        | E::ApprovalRunFailed
+        | E::RenderFailed(_)
+        | E::DispatchNeedsReconciliation) => {
+            let code = match &e {
+                E::ApprovalNotReady { .. } => "approval_not_ready",
+                E::SignatureStepRequired { .. } => "signature_step_required",
+                E::ApprovalRunFailed => "approval_run_failed",
+                E::RenderFailed(_) => "render_failed",
+                _ => "dispatch_needs_reconciliation",
+            };
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": code, "reason": e.to_string() })),
+            )
+                .into_response()
+        }
         // The worker has not rendered + persisted the PDF yet — not a fault,
         // a "retry in a moment" the caller resolves by re-polling and retrying.
         E::DocumentNotReady(_) => (

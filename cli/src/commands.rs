@@ -1047,6 +1047,34 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: Option<crate::billing::ProjectBillingCmd>,
     },
+    /// Record, edit, approve, and backfill the Project's time, past dates included.
+    Time {
+        /// Project code or UUID. Defaults to the checkout.
+        #[arg(long, global = true)]
+        project: Option<String>,
+        /// Navigator site. Defaults to the active session or checkout.
+        #[arg(long, global = true)]
+        host: Option<String>,
+        /// Print the site's JSON.
+        #[arg(long, global = true)]
+        json: bool,
+        #[command(subcommand)]
+        action: projects::time::TimeCmd,
+    },
+    /// Draft, send, and record the matter's invoices. Drafts are never sent until `send`.
+    Invoice {
+        /// Project code or UUID. Defaults to the checkout.
+        #[arg(long, global = true)]
+        project: Option<String>,
+        /// Navigator site. Defaults to the active session or checkout.
+        #[arg(long, global = true)]
+        host: Option<String>,
+        /// Print the site's JSON.
+        #[arg(long, global = true)]
+        json: bool,
+        #[command(subcommand)]
+        action: projects::invoice::InvoiceCmd,
+    },
     /// Read or set the Legal Plan this Project is paid through.
     #[command(hide = true)]
     LegalPlan {
@@ -3363,6 +3391,18 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             json,
             action,
         } => crate::billing::project(host.as_deref(), project.as_deref(), json, action).await,
+        ProjectsCmd::Time {
+            host,
+            project,
+            json,
+            action,
+        } => projects::time::run(host.as_deref(), project.as_deref(), json, action).await,
+        ProjectsCmd::Invoice {
+            host,
+            project,
+            json,
+            action,
+        } => projects::invoice::run(host.as_deref(), project.as_deref(), json, action).await,
         ProjectsCmd::LegalPlan { action } => match action {
             LegalPlanCmd::Claim {
                 project,

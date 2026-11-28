@@ -32,19 +32,20 @@ use crate::sections::page::MatterTab;
 #[derive(Clone, Default)]
 pub struct PendingClientIntake(pub Option<String>);
 
-/// One of the matter's invoices, read from the local Xero mirror. The Xero
-/// invoice id is deliberately not carried — only client-facing fields.
+/// One of the matter's invoices the lawyer made client-visible, from the
+/// Matter Invoice ledger. Issuer ids are deliberately not carried — only
+/// client-facing fields.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct InvoiceView {
     /// The invoice-level reference (`Matter <project_id>`).
     pub reference: String,
     /// Formatted total, e.g. `$3,333.00`.
     pub amount: String,
-    /// Provider status mirror (`AUTHORISED`, `PAID`, …).
+    /// `Due`, `Paid`, `Void`, or `Unpaid`.
     pub status: String,
-    /// `true` once reconcile has seen the invoice paid in full.
+    /// `true` once its payments settle it.
     pub paid: bool,
-    /// The date Xero raised the invoice, `YYYY-MM-DD`.
+    /// The date the invoice was issued, `YYYY-MM-DD`.
     pub issued_on: String,
 }
 
@@ -557,18 +558,32 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
         })
         .collect();
 
-    // Every invoice from the local mirror, newest first; only client-facing
-    // fields reach the client (never the Xero invoice id).
-    let invoices = store::xero_invoices::for_projects(&application_store, &[id])
+    // Every issued invoice the lawyer made client-visible, newest first;
+    // only client-facing fields reach the client (never an issuer id).
+    let invoices = store::matter_invoices::for_projects(&application_store, &[id])
         .await
         .map_err(server_error)?
         .into_iter()
-        .map(|r| InvoiceView {
-            reference: r.reference,
-            amount: format_usd(r.amount_cents),
-            paid: r.amount_cents > 0 && r.amount_paid_cents >= r.amount_cents,
-            status: r.status,
-            issued_on: r.issued_at.format("%Y-%m-%d").to_string(),
+        .filter(|r| r.client_visible)
+        .filter_map(|r| {
+            use store::matter_invoices::Status;
+            let status = match r.status {
+                Status::Sent => "Due",
+                Status::Paid => "Paid",
+                Status::Void => "Void",
+                Status::Uncollectible => "Unpaid",
+                Status::Pending | Status::Draft => return None,
+            };
+            Some(InvoiceView {
+                reference: r.reference,
+                amount: format_usd(r.amount_cents),
+                paid: r.status == Status::Paid,
+                status: status.to_owned(),
+                issued_on: r
+                    .issued_on
+                    .map(|on| on.format("%Y-%m-%d").to_string())
+                    .unwrap_or_default(),
+            })
         })
         .collect();
 

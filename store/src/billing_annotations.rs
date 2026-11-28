@@ -101,7 +101,7 @@ pub(crate) async fn pending_for_billing(
     .await
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
     Bill,
@@ -132,6 +132,109 @@ pub async fn review_with_claim(
     note: &str,
     claim_id: Option<Uuid>,
 ) -> Result<(), TimeEntryError> {
+    review_annotation(pg, project, actor, id, decision, note, claim_id, None).await
+}
+
+/// Whether `id` names staged time still awaiting review on `project`.
+pub(crate) async fn is_pending(
+    pg: &PostgresDb,
+    project: Uuid,
+    id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM billing_annotation WHERE project_id=$1 AND id=$2 AND reviewed_at IS NULL)",
+    )
+    .bind(project)
+    .bind(id)
+    .fetch_one(&pg.0)
+    .await
+}
+
+/// The hourly rate billable work on `date` is priced at: the contingency
+/// agreement's hourly fee, else the attorney's Fee Structure.
+pub(crate) async fn billable_rate(
+    pg: &PostgresDb,
+    project: Uuid,
+    attorney: Uuid,
+    date: NaiveDate,
+) -> Result<i32, TimeEntryError> {
+    match crate::contingency_terms::resolve_unchecked(pg, project, date)
+        .await
+        .map_err(|_| TimeEntryError::Invalid("contingency terms unavailable"))?
+    {
+        Some(term) => term.rate_cents_per_hour.ok_or(TimeEntryError::Invalid(
+            "contingency agreement has no hourly fee",
+        )),
+        None => crate::attorney_rates::resolve_hourly_rate_cents(pg, attorney, project, date)
+            .await
+            .map_err(|_| TimeEntryError::Invalid("hourly rate unavailable"))?
+            .ok_or(TimeEntryError::Invalid("missing hourly rate")),
+    }
+}
+
+/// Price and record one block of reviewed work inside the caller's
+/// transaction: billable at the resolved rate, no charge at zero, or linked
+/// to a Legal Plan Claim at the claim's verified rate.
+#[allow(clippy::too_many_arguments)] // One reviewed block of work and its decision.
+pub(crate) async fn record_reviewed_time(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    project: Uuid,
+    actor: Uuid,
+    attorney: Uuid,
+    date: NaiveDate,
+    minutes: i32,
+    note: &str,
+    decision: Decision,
+    rate: i32,
+    claim_id: Option<Uuid>,
+    source: TimeEntrySource,
+) -> Result<Option<Uuid>, TimeEntryError> {
+    let mut rate = rate;
+    let claim = if matches!(decision, Decision::PlanClaim) {
+        let claim_id = claim_id.ok_or(TimeEntryError::Invalid("select a legal plan claim"))?;
+        let (claim, claim_rate) =
+            crate::plan_claims::for_annotation(tx, project, claim_id, date, minutes).await?;
+        rate = claim_rate;
+        Some(claim)
+    } else {
+        None
+    };
+    if matches!(decision, Decision::Deny) {
+        return Ok(None);
+    }
+    let entry = time_entries::create_in_transaction(
+        tx,
+        project,
+        actor,
+        &NewTimeEntry {
+            attorney_id: attorney,
+            performed_on: date,
+            minutes,
+            description: note.to_owned(),
+            billable: matches!(decision, Decision::Bill),
+            rate_cents_per_hour: rate,
+            source,
+        },
+    )
+    .await?;
+    if let Some(claim) = claim {
+        crate::plan_claims::link_annotation(tx, claim, actor, entry, minutes).await?;
+    }
+    Ok(Some(entry))
+}
+
+/// Review staged time. `minutes` may lower the attested time, never raise it.
+#[allow(clippy::too_many_arguments)] // The staged row, its decision, and the reviewer's corrections.
+pub(crate) async fn review_annotation(
+    pg: &PostgresDb,
+    project: Uuid,
+    actor: Uuid,
+    id: Uuid,
+    decision: Decision,
+    note: &str,
+    claim_id: Option<Uuid>,
+    minutes: Option<i32>,
+) -> Result<(), TimeEntryError> {
     let note = note.trim();
     if note.is_empty() || note.len() > 2000 {
         return Err(TimeEntryError::Invalid("review note"));
@@ -140,19 +243,18 @@ pub async fn review_with_claim(
         .bind(project).bind(id).fetch_optional(&pg.0).await?.ok_or(TimeEntryError::Conflict)?;
     let attorney = source.get("attorney_id");
     let date = source.get("performed_on");
-    let mut rate = if matches!(decision, Decision::Bill) {
-        match crate::contingency_terms::resolve_unchecked(pg, project, date)
-            .await
-            .map_err(|_| TimeEntryError::Invalid("contingency terms unavailable"))?
-        {
-            Some(term) => term.rate_cents_per_hour.ok_or(TimeEntryError::Invalid(
-                "contingency agreement has no hourly fee",
-            ))?,
-            None => crate::attorney_rates::resolve_hourly_rate_cents(pg, attorney, project, date)
-                .await
-                .map_err(|_| TimeEntryError::Invalid("hourly rate unavailable"))?
-                .ok_or(TimeEntryError::Invalid("missing hourly rate"))?,
+    let attested = source.get::<i32, _>("tenths") * 6;
+    let minutes = match minutes {
+        None => attested,
+        Some(minutes) if (1..=attested).contains(&minutes) => minutes,
+        Some(_) => {
+            return Err(TimeEntryError::Invalid(
+                "reviewed minutes must be between 1 and the staged time",
+            ))
         }
+    };
+    let rate = if matches!(decision, Decision::Bill) {
+        billable_rate(pg, project, attorney, date).await?
     } else {
         0
     };
@@ -162,40 +264,20 @@ pub async fn review_with_claim(
     if claimed.is_none() {
         return Err(TimeEntryError::Conflict);
     }
-    let minutes = source.get::<i32, _>("tenths") * 6;
-    let claim = if matches!(decision, Decision::PlanClaim) {
-        let claim_id = claim_id.ok_or(TimeEntryError::Invalid("select a legal plan claim"))?;
-        let (claim, claim_rate) =
-            crate::plan_claims::for_annotation(&mut tx, project, claim_id, date, minutes).await?;
-        rate = claim_rate;
-        Some(claim)
-    } else {
-        None
-    };
-    let entry = if matches!(decision, Decision::Deny) {
-        None
-    } else {
-        Some(
-            time_entries::create_in_transaction(
-                &mut tx,
-                project,
-                actor,
-                &NewTimeEntry {
-                    attorney_id: attorney,
-                    performed_on: date,
-                    minutes,
-                    description: note.to_owned(),
-                    billable: matches!(decision, Decision::Bill),
-                    rate_cents_per_hour: rate,
-                    source: TimeEntrySource::Jujutsu,
-                },
-            )
-            .await?,
-        )
-    };
-    if let (Some(claim), Some(entry)) = (claim, entry) {
-        crate::plan_claims::link_annotation(&mut tx, claim, actor, entry, minutes).await?;
-    }
+    let entry = record_reviewed_time(
+        &mut tx,
+        project,
+        actor,
+        attorney,
+        date,
+        minutes,
+        note,
+        decision,
+        rate,
+        claim_id,
+        TimeEntrySource::Jujutsu,
+    )
+    .await?;
     sqlx::query("UPDATE billing_annotation SET reviewed_by=$1,reviewed_at=now(),review_note=$2,entry_id=$3 WHERE project_id=$4 AND id=$5")
         .bind(actor).bind(note).bind(entry).bind(project).bind(id).execute(&mut *tx).await?;
     tx.commit().await?;

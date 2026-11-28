@@ -3,7 +3,7 @@
 //!
 //! The dashboard's read seam for the time-tracking and billing stores
 //! (`store::time_entries`, `store::timers`, `store::attorney_rates`,
-//! `store::xero_invoices`, `store::project_costs`), beside the write doors in
+//! `store::matter_invoices`, `store::project_costs`), beside the write doors in
 //! the portal's time-tracking JSON API and the tab's native form handlers.
 //! Reached only through `store::access::matter_viewer` — a participation row
 //! is required of every tier (ENG-81), and Billing is a firm-side surface, so
@@ -12,7 +12,7 @@
 //!
 //! Rows are plain scalars — no `store` type crosses to the wasm build — and
 //! money renders server-formatted from integer cents, never floats. The
-//! invoice list reads the local Xero mirror, never Xero live.
+//! invoice list reads the Matter Invoice ledger.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -147,22 +147,26 @@ pub struct AnnotationRow {
     pub minutes: i32,
 }
 
-/// One of the matter's invoices, read from the local Xero mirror — the same
-/// rows the client page's client-safe `InvoiceView` renders. The reference links to the invoice on the lawyer's Billing tab. The status is the mirror's
-/// own word (`AUTHORISED`, `PAID`, …).
+/// One of the matter's invoices from the Matter Invoice ledger — the same
+/// rows the client page's client-safe `InvoiceView` renders. A Stripe
+/// invoice links to the Stripe dashboard.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct InvoiceRow {
+    /// The Stripe dashboard link for a Stripe invoice.
     #[serde(default)]
-    pub xero_invoice_id: String,
+    pub stripe_url: Option<String>,
+    /// Where the invoice came from: `stripe`, `check`, `in_person`, …
+    #[serde(default)]
+    pub source: String,
     pub reference: String,
     pub status: String,
     /// Formatted total, e.g. `$3,333.00`.
     pub amount: String,
     /// Formatted paid-to-date, e.g. `$1,000.00`.
     pub paid: String,
-    /// The date Xero raised the invoice, `yyyy-mm-dd`.
+    /// The date the invoice was issued, `yyyy-mm-dd`.
     pub issued_on: String,
-    /// `true` once reconcile has seen the invoice paid in full.
+    /// `true` once its payments settle it.
     pub settled: bool,
 }
 
@@ -436,12 +440,12 @@ pub fn MatterTimer(code: String, csrf: String, timer: TimerView) -> Element {
 
 /// The Billing tab: the matter's money, as `MyCase` and Clio render it —
 /// time on the matter (with its durable timer), the fee structures that
-/// price new work, the invoices Xero holds, the receipt-backed expenses,
+/// price new work, the matter's invoices, the receipt-backed expenses,
 /// and the client-trust position.
 ///
 /// Every write is a native-form POST to the matter's time-tracking handlers,
 /// which re-ask the same authorization this page was rendered under. The
-/// invoice list reads the local Xero mirror, never Xero live.
+/// invoice list reads the Matter Invoice ledger.
 #[component]
 pub fn BillingTab(
     code: String,
@@ -753,13 +757,8 @@ pub fn BillingTab(
                     }
                 } else if generate.ready {
                     p { class: "nav-muted",
-                        if generate.stripe_iolta.is_some() {
-                            "Review the unbilled work before creating a Stripe draft."
-                        } else {
-                            "Compose this matter's unbilled work into one invoice and raise it in \
-                             Xero. Raising is externally visible — the client's books change — so \
-                             the compose is shown before anything is raised."
-                        }
+                        "Review the unbilled work before creating a Stripe draft. Nothing reaches \
+                         the client until you send the draft."
                     }
                     form {
                         class: "lawyer-detail__inline-form",
@@ -791,8 +790,8 @@ pub fn BillingTab(
                     Empty {
                         title: "Nothing billed yet".to_string(),
                         description: Some(
-                            "Invoices raised in Xero for this matter are mirrored here, with their \
-                             payment state from the nightly reconcile.".to_string(),
+                            "Stripe drafts and invoices for this matter appear here, with money \
+                             recorded as collected outside Stripe.".to_string(),
                         ),
                     }
                 } else {
@@ -812,15 +811,15 @@ pub fn BillingTab(
                                     tr {
                                         td { "{row.issued_on}" }
                                         td {
-                                            if row.xero_invoice_id.is_empty() {
-                                                "{row.reference}"
-                                            } else {
+                                            if let Some(url) = &row.stripe_url {
                                                 a {
-                                                    href: "https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID={row.xero_invoice_id}",
+                                                    href: "{url}",
                                                     target: "_blank", rel: "noopener noreferrer",
-                                                    title: "Open invoice in Xero",
+                                                    title: "Open invoice in Stripe",
                                                     "{row.reference}"
                                                 }
+                                            } else {
+                                                "{row.reference}"
                                             }
                                         }
                                         td {
@@ -908,7 +907,7 @@ pub fn BillingTab(
                     h3 { "Client trust" }
                     p { class: "nav-muted",
                         "Held for this Project in the firm's pooled client trust account, mirrored \
-                         from Xero. Before transferring earned fees to operating, check the invoice, the cleared matter balance and any disputed or reserved funds."
+                         from the trust books. Before transferring earned fees to operating, check the invoice, the cleared matter balance and any disputed or reserved funds."
                     }
                     ul {
                         li { "Held: {trust.held}" }
@@ -937,15 +936,14 @@ pub fn BillingTab(
 
 /// The confirm step: the composed lines and total, then the one button that
 /// writes across the provider boundary — and the way back that doesn't. The
-/// raise is externally visible (Xero is the books), so this step says what
-/// is about to happen before it happens.
+/// draft is unsent, but this step says where the money will land before it
+/// is created.
 fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Element {
     rsx! {
         p { class: "nav-muted",
             {match generate.stripe_iolta {
-                Some(true) => "This creates an unsent Stripe draft. Before sending it, verify that the payment belongs in the selected trust account. Review earned fees and reimbursement of costs the Firm already paid separately.",
-                Some(false) => "This creates an unsent draft in the Firm’s operating account for earned fees or reimbursable costs. Review the destination before collection.",
-                None => "This records a receivable in Xero. Confirm the proper destination before requesting payment.",
+                Some(true) => "This creates an unsent Stripe draft collected into the trust account below. Before sending it, verify the payment belongs there.",
+                _ => "No trust account receives this matter's payments. Link the state's IOLTA, or, as the responsible lawyer, approve the Firm's Operating account for this invoice of earned work with a reason.",
             }}
         }
         if let Some(state)=&generate.trust_state { p { strong { "Trust destination: {state}" } } }
@@ -981,10 +979,22 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
             // command re-verifies it before raising, so work logged or edited
             // since this page rendered re-opens the review.
             input { r#type: "hidden", name: "digest", value: "{generate.digest}" }
+            if !generate.flat_fee {
+                label { class: "matter-billing-operating",
+                    "Collect into Operating instead (earned work only) — reason"
+                    textarea {
+                        class: "nav-input",
+                        name: "operating_reason",
+                        rows: "2",
+                        maxlength: "1000",
+                        required: generate.stripe_iolta != Some(true),
+                    }
+                }
+            }
             button {
                 class: "nav-btn matter-billing-raise-button",
                 r#type: "submit",
-                if generate.stripe_iolta.is_some() { "Create Stripe draft" } else { "Raise in Xero" }
+                "Create Stripe draft"
             }
         }
         a { class: "nav-link", href: "/app/projects/{code}/finances", "Not now" }
@@ -1070,7 +1080,7 @@ pub(crate) async fn read_billing(
         })
         .collect();
 
-    let invoice_rows = mirrored_invoice_rows(application_store, project_id).await?;
+    let invoice_rows = ledger_invoice_rows(application_store, project_id).await?;
 
     let costs = store::project_costs::for_expense_review(pg, &[project_id], false)
         .await
@@ -1180,29 +1190,35 @@ fn commit_url(repository: &str, commit_id: &str) -> Option<String> {
     Some(url.to_string())
 }
 
-/// The matter's invoices as the tab renders them, mapped straight from the
-/// Surreal `xero_invoice` mirror — Xero is never read live. Shared by the
-/// full billing read and by deployments without PostgreSQL, where the
-/// workbench still shows the mirror's rows even though the time and expense
-/// store is not configured.
+/// The matter's invoices as the tab renders them, from the Matter Invoice
+/// ledger.
 #[cfg(feature = "server")]
-pub(crate) async fn mirrored_invoice_rows(
+pub(crate) async fn ledger_invoice_rows(
     application_store: &store::application_store::ApplicationStore,
     project_id: uuid::Uuid,
 ) -> Result<Vec<InvoiceRow>, ServerFnError> {
-    let mirror_invoices = store::xero_invoices::for_projects(application_store, &[project_id])
+    use store::matter_invoices::{Source, Status};
+    let invoices = store::matter_invoices::for_projects(application_store, &[project_id])
         .await
         .map_err(crate::lawyer_project_detail::server_error)?;
-    Ok(mirror_invoices
+    Ok(invoices
         .iter()
         .map(|row| InvoiceRow {
-            xero_invoice_id: row.xero_invoice_id.clone(),
+            stripe_url: row
+                .external_id
+                .as_ref()
+                .filter(|_| row.source == Source::Stripe)
+                .map(|id| format!("https://dashboard.stripe.com/invoices/{id}")),
+            source: row.source.as_str().to_owned(),
             reference: row.reference.clone(),
-            status: row.status.clone(),
+            status: row.status.as_str().to_owned(),
             amount: crate::portal_project_detail::format_usd(row.amount_cents),
             paid: crate::portal_project_detail::format_usd(row.amount_paid_cents),
-            issued_on: row.issued_at.format("%Y-%m-%d").to_string(),
-            settled: row.amount_paid_cents >= row.amount_cents && row.amount_cents > 0,
+            issued_on: row
+                .issued_on
+                .map(|on| on.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            settled: row.status == Status::Paid,
         })
         .collect())
 }
@@ -1275,21 +1291,23 @@ pub(crate) async fn read_generate(
     use crate::lawyer_project_detail::server_error;
     use store::firm_secrets;
     let project_id = project.id;
+    let Some(firm) = project.firm_id else {
+        return Ok(GenerateInvoiceView {
+            note: Some("Stripe billing needs the matter's Firm.".into()),
+            ..Default::default()
+        });
+    };
     let pending = store::billing_batches::pending_for_project(pg, project_id)
         .await
         .map_err(server_error)?;
-    let stripe_pending = pending.as_ref().filter(|b| b.stripe_account_id.is_some());
-    let use_stripe = pending.is_none() || stripe_pending.is_some();
-    let route = if use_stripe {
-        firm_secrets::stripe_trust_route(application_store, project)
-            .await
-            .map_err(server_error)?
-    } else {
-        None
-    };
-    if stripe_pending
-        .is_some_and(|batch| !firm_secrets::stripe_batch_matches_route(batch, route.as_ref()))
-    {
+    let route = firm_secrets::stripe_trust_route(application_store, project)
+        .await
+        .map_err(server_error)?;
+    if pending.as_ref().is_some_and(|batch| {
+        batch.stripe_account_id.is_none()
+            || (batch.destination_approval_id.is_none()
+                && !firm_secrets::stripe_batch_matches_route(batch, route.as_ref()))
+    }) {
         return Ok(GenerateInvoiceView {
             note: Some(
                 "Review the existing draft and its payment destination before collection.".into(),
@@ -1297,23 +1315,27 @@ pub(crate) async fn read_generate(
             ..Default::default()
         });
     }
-    let kind = route.as_ref().map_or(
+    let operating = pending
+        .as_ref()
+        .is_some_and(|batch| batch.destination_approval_id.is_some());
+    let kind = route.as_ref().filter(|_| !operating).map_or(
         firm_secrets::IntegrationSecretKind::StripeOperatingAppKey,
         firm_secrets::TrustRoute::credential_kind,
     );
-    let available = match project.firm_id.filter(|_| use_stripe) {
-        Some(firm) => firm_secrets::stripe_credential_configured(application_store, firm, kind)
-            .await
-            .map_err(server_error)?,
-        None => false,
-    };
-    if !available && (route.is_some() || stripe_pending.is_some()) {
+    if !firm_secrets::stripe_credential_configured(application_store, firm, kind)
+        .await
+        .map_err(server_error)?
+    {
         return Ok(GenerateInvoiceView {
             note: Some("Configure the Firm credential for the selected Stripe account before creating a draft.".into()),
             ..Default::default()
         });
     }
-    let stripe_iolta = available.then_some(route.is_some());
+    let stripe_iolta = Some(
+        pending
+            .as_ref()
+            .map_or(route.is_some(), |batch| batch.stripe_iolta),
+    );
     if pending
         .as_ref()
         .is_some_and(|batch| batch.stripe_invoice_id.is_some())
@@ -1431,8 +1453,8 @@ pub(crate) async fn read_generate(
     }
     let digest = store::billing_batches::invoice_destination_digest(
         store::billing_batches::preview_digest(&entries, &unbilled_costs, flat_fee_cents),
-        stripe_iolta,
-        project.firm_id,
+        Some(route.is_some()),
+        Some(firm),
     );
     let digest = match &route {
         Some(route) => route.bind_preview(&digest),
@@ -1768,19 +1790,28 @@ mod tests {
     }
 
     #[test]
-    fn each_invoice_links_its_reference_to_its_xero_record() {
-        let invoices = vec![InvoiceRow {
-            reference: "INV-123".into(),
-            xero_invoice_id: "test-invoice".into(),
-            amount: "$400.00".into(),
-            status: "AUTHORISED".into(),
-            ..Default::default()
-        }];
+    fn a_stripe_invoice_links_to_stripe_and_a_check_does_not() {
+        let invoices = vec![
+            InvoiceRow {
+                reference: "INV-123".into(),
+                stripe_url: Some("https://dashboard.stripe.com/invoices/in_test".into()),
+                source: "stripe".into(),
+                amount: "$400.00".into(),
+                status: "sent".into(),
+                ..Default::default()
+            },
+            InvoiceRow {
+                reference: "Check 1001".into(),
+                source: "check".into(),
+                amount: "$50.00".into(),
+                status: "paid".into(),
+                ..Default::default()
+            },
+        ];
         let html = ssr_billing(Vec::new(), invoices);
         assert!(html.contains("$400.00"), "missing [$400.00]");
-        assert!(html.contains("AUTHORISED"), "missing [AUTHORISED]");
-        assert!(html
-            .contains("https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID=test-invoice"));
+        assert!(html.contains("https://dashboard.stripe.com/invoices/in_test"));
+        assert!(html.contains("Check 1001") && !html.contains("go.xero.com"));
         assert_eq!(html.matches("INV-123").count(), 1);
     }
 
@@ -1940,10 +1971,10 @@ mod tests {
             html.contains("Generate invoice"),
             "missing [Generate invoice]"
         );
-        // The compose-before-raise promise is on the action's face.
+        // The draft-before-send promise is on the action's face.
         assert!(
-            html.contains("the compose is shown before anything is raised"),
-            "missing [the compose is shown before anything is raised]"
+            html.contains("Nothing reaches the client until you send the draft."),
+            "missing [Nothing reaches the client until you send the draft.]"
         );
     }
 
@@ -2027,7 +2058,10 @@ mod tests {
             html.contains("matter-billing-raise-button"),
             "missing [matter-billing-raise-button]"
         );
-        assert!(html.contains("Raise in Xero"), "missing [Raise in Xero]");
+        assert!(
+            html.contains("Create Stripe draft"),
+            "missing [Create Stripe draft]"
+        );
         assert!(
             html.contains("name=\"confirm\" value=\"on\""),
             "missing [name=\"confirm\" value=\"on\"]"
@@ -2040,7 +2074,13 @@ mod tests {
             "missing [name=\"digest\" value=\"digest-of-the-reviewed-compose\"]"
         );
         assert!(html.contains(r#"href="/app/projects/acme/finances""#));
-        assert!(html.contains("records a receivable in Xero"));
+        // No trust route: the draft needs an Operating approval with a reason.
+        assert!(
+            html.contains("No trust account receives this matter"),
+            "{html}"
+        );
+        assert!(html.contains("name=\"operating_reason\""), "{html}");
+        assert!(html.contains("required"), "{html}");
     }
 
     // ---- the server-side reads, against PostgreSQL ----

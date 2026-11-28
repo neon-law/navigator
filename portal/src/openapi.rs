@@ -1566,7 +1566,9 @@ fn canonical_document(base: &str) -> Value {
                 "event_id": { "type": "string", "format": "uuid" },
                 "occurred_on": { "type": "string", "format": "date" },
                 "event": { "type": "object", "required": ["type"], "properties": {
-                  "type": { "type": "string", "enum": ["work_recorded", "authorization_confirmed", "prepared", "submission", "approval", "denial", "correction", "payment", "reversal"] }
+                  "type": { "type": "string", "enum": ["work_recorded", "authorization_confirmed", "prepared", "submission", "provider_reference", "approval", "denial", "correction", "payment", "reversal"] },
+                  "provider_reference": { "type": "string" },
+                  "sent_message_id": { "type": "string", "description": "A submission filed by email: the sent message's id, in place of a provider reference" }
                 } }
               }
             } } } },
@@ -1580,6 +1582,20 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/legal-plan-claims/{claim_id}/packet": {
+          "post": {
+            "summary": "File a Legal Plan claim packet",
+            "description": "Renders the plan's claim form, an itemized invoice with the covered amount and member share, and the proof the plan's filing rules ask for as one PDF. Files it on the Project as an internal invoice document and links it to the claim. Filing the same packet again changes nothing.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "claim_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "200": { "description": "The claim, the filed document, the filing destination, any missing proof, and the PDF as base64", "content": { "application/json": { "schema": { "type": "object", "properties": { "asset_id": { "type": "string", "format": "uuid" }, "filename": { "type": "string" }, "sha256": { "type": "string" }, "file_with": { "type": ["string", "null"] }, "filer": { "type": ["string", "null"] }, "subject": { "type": ["string", "null"] }, "missing_proof": { "type": "array", "items": { "type": "string", "enum": ["engagement_letter", "filed_document"] } }, "pdf_base64": { "type": "string" } } } } } },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "The session lacks lawyer-tier access, or acts under impersonation" },
+              "404": { "description": "Claim or Project outside the caller's scope" },
+              "422": { "description": "The claim is decided, or a proof document or the render failed" }
+            }
+          }
+        },
         "/app/api/firms/{id}/legal-plan-collections": {
           "get": {
             "summary": "Review plan claims and confirmed net collections",
@@ -1588,6 +1604,15 @@ fn canonical_document(base: &str) -> Value {
               { "name": "totals_only", "in": "query", "description": "Firm aggregate without Project details, with Firm plan-metrics access", "schema": { "type": "boolean", "default": false } }
             ],
             "responses": { "200": { "description": "Plan worklist or Firm aggregates" }, "404": { "description": "Firm outside the caller's scope" } }
+          }
+        },
+        "/app/api/firms/{id}/legal-plans/{plan_id}/claim-filing": {
+          "put": {
+            "summary": "Record where and how a plan takes its claims",
+            "description": "Firm data the claim packet reads: the claims address or portal, the email subject (`{case_number}` is replaced), a separate invoice address, the plan's claim form title, and the proof to include. Requires plan-management capability on the Firm; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "plan_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["file_with"], "properties": { "file_with": { "type": "string" }, "subject": { "type": "string" }, "invoice_to": { "type": "string" }, "form_title": { "type": "string" }, "proof": { "type": "array", "items": { "type": "string", "enum": ["engagement_letter", "filed_document"] } } } } } } },
+            "responses": { "200": { "description": "The plan with its filing rules" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "Plan or Firm outside the caller's capability" }, "422": { "description": "Invalid filing rules" } }
           }
         },
         "/app/api/projects/{id}/legal-plan": {
@@ -3183,7 +3208,7 @@ fn canonical_document(base: &str) -> Value {
           "post": { "summary": "Confirm an estimated Project cost", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "cost_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["amount_cents"], "properties": { "amount_cents": { "type": "integer", "minimum": 1 } } } } } }, "responses": { "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "No such cost or the caller does not participate" }, "200": { "description": "Confirmed cost; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } } } }
         },
         "/app/api/projects/{id}/costs/{cost_id}/invoice": {
-          "post": { "summary": "Link a later Xero invoice", "description": "Links the cost to an existing Xero invoice for the same Project issued on or after the cost date. This operation does not modify the invoice.", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "cost_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["invoice_id"], "properties": { "invoice_id": { "type": "string" } } } } } }, "responses": { "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "No such cost or the caller does not participate" }, "200": { "description": "Cost linked; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } } } }
+          "post": { "summary": "Link a later Matter Invoice", "description": "Links the cost to a Matter Invoice on the same Project issued on or after the cost date. This operation does not modify the invoice.", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "cost_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["matter_invoice_id"], "properties": { "matter_invoice_id": { "type": "string", "format": "uuid" } } } } } }, "responses": { "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "No such cost or the caller does not participate" }, "200": { "description": "Cost linked; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } } } }
         },
         "/app/api/projects/{id}/costs/{cost_id}/resolve": {
           "post": { "summary": "Resolve an unbilled Project cost", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "cost_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["reason"], "properties": { "reason": { "type": "string" } } } } } }, "responses": { "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "No such cost or the caller does not participate" }, "200": { "description": "Cost resolved; reason is recorded in its audit event", "content": { "application/json": { "schema": { "type": "object" } } } } } }
@@ -3193,10 +3218,61 @@ fn canonical_document(base: &str) -> Value {
         },
         "/app/api/projects/{id}/invoices": {
           "post": {
-            "summary": "Generate the matter's invoice from unbilled work",
-            "description": "Composes the matter's unbilled billable time entries at their snapshotted rates and its unbilled confirmed Project costs into one invoice. Xero invoices are mirrored and mark their work invoiced. Stripe creates an unsent draft on the Firm's configured account and keeps work reserved for reconciliation. When the matter carries an agreed flat fee, its remaining unbilled amount is one line covering the entries instead. Each persisted billing batch uses its own idempotency key and reserves its work before invoice creation. Retries resume the frozen batch and any saved provider invoice. Xero retains idempotency keys for six minutes. Creates stop four minutes after the persisted first attempt, with a 60-second request budget; expired uncertain attempts require manual reconciliation. A provider refusal leaves work reserved for retry, with no invoice mirror. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "summary": "Draft the matter's invoice in Stripe from unbilled work",
+            "description": "Composes the matter's unbilled billable time entries at their snapshotted rates and its unbilled confirmed Project costs into one unsent Stripe draft, or the remaining agreed flat fee as one line covering the entries. The draft collects into the matter's state IOLTA, else the Firm's Nevada IOLTA where permitted. A missing trust route never selects Operating: the matter's responsible lawyer may send `operating_reason` to collect one invoice of earned work into the Firm's Operating account, and the approval is retained as an audit record. Each billing batch reserves its work before any Stripe call and keys every Stripe write `{batch}/{step}`; a retry within 23 hours resumes the same draft, pinned to its destination. The draft becomes a Matter Invoice and its work moves to invoiced under it. The draft is never sent. Authorization: lawyer tier and a participation row; otherwise 404.",
             "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
-            "responses": { "200": { "description": "The provider invoice receipt, including work consumed for a raised Xero invoice", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "409": { "description": "Nothing is unbilled on the matter, or unbilled work moved under a racing invoice" }, "422": { "description": "The matter names no client to bill, or an unbilled cost is in another currency" }, "502": { "description": "The billing provider refused or is unreachable; nothing was marked" }, "503": { "description": "PostgreSQL is unavailable" } }
+            "requestBody": { "required": false, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "preview_digest": { "type": "string" }, "operating_reason": { "type": "string" } } } } } },
+            "responses": { "200": { "description": "The Stripe draft, its Matter Invoice, its destination, and the work consumed", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, a write under impersonation, or an Operating approval by someone other than the responsible lawyer" }, "404": { "description": "No such Project, or the caller does not participate" }, "409": { "description": "Nothing is unbilled, the compose changed since review, or a pending draft needs reconciliation" }, "422": { "description": "No trust route and no Operating approval, unearned fees sent to Operating, no client to bill, or an unbilled cost in another currency" }, "502": { "description": "Stripe refused; the work stays reserved for retry" }, "503": { "description": "PostgreSQL or the Firm's Stripe credential is unavailable" } }
+          },
+          "get": {
+            "summary": "List a matter's invoices",
+            "description": "Every Matter Invoice on the Project, newest first, with its source, status, destination, and amount paid. Authorization: lawyer tier and firm-side participation; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The matter's invoices", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project or invoice, or the caller has no firm-side participation" }, "503": { "description": "The invoice ledger is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/invoices/drafts": {
+          "post": {
+            "summary": "Compose a draft Stripe invoice",
+            "description": "Creates one unsent Stripe draft from lines, each optionally discounted or written off to $0 with a reason, an invoice discount, a credit for a payment already received, and a Stripe promotion code. The balance may be $0 but never below. The client DRI is billed and their Stripe Customer is reused. The draft collects into the matter's trust account; `account: operating` with `operating_reason` collects into the Firm's Operating account only for the responsible lawyer and never for an `advance`, and the approval is retained as an audit record. Replaying `request_id` returns the first draft, pinned to its destination. Nothing is sent.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["request_id", "lines"], "properties": { "request_id": { "type": "string", "format": "uuid" }, "lines": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "type": "object", "additionalProperties": false, "required": ["description", "unit_amount_cents"], "properties": { "description": { "type": "string" }, "quantity": { "type": "integer", "minimum": 1, "default": 1 }, "unit_amount_cents": { "type": "integer", "minimum": 1 }, "discount": { "type": "object", "additionalProperties": false, "required": ["reason"], "properties": { "percent_bps": { "type": "integer", "minimum": 1, "maximum": 10000 }, "amount_cents": { "type": "integer", "minimum": 1 }, "reason": { "type": "string" } } } } } }, "terms": { "type": "string", "enum": ["on_receipt", "net_15", "net_30"], "default": "on_receipt" }, "due_on": { "type": "string", "format": "date" }, "memo": { "type": "string" }, "discount": { "type": "object", "additionalProperties": false, "required": ["reason"], "properties": { "percent_bps": { "type": "integer", "minimum": 1, "maximum": 10000 }, "amount_cents": { "type": "integer", "minimum": 1 }, "reason": { "type": "string" } } }, "coupon": { "type": "string" }, "credit": { "type": "object", "additionalProperties": false, "required": ["amount_cents", "reason"], "properties": { "amount_cents": { "type": "integer", "minimum": 1 }, "reason": { "type": "string" } } }, "advance": { "type": "boolean", "default": false }, "account": { "type": "string", "enum": ["trust", "operating"], "default": "trust" }, "operating_reason": { "type": "string" } } } } } },
+            "responses": { "201": { "description": "The draft Matter Invoice and its Stripe lines", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project or invoice, or the caller has no firm-side participation" }, "409": { "description": "The request id names other terms, or the trust account changed since the draft was frozen" }, "422": { "description": "Invalid lines, discount, credit, or terms; no trust route and no Operating approval; unearned money sent to Operating; or no client to bill" }, "502": { "description": "Stripe refused; a retry with the same request id resumes the draft" }, "503": { "description": "The invoice ledger or the Firm's Stripe credential is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/invoices/records": {
+          "post": {
+            "summary": "Record an invoice collected outside Stripe",
+            "description": "Records a Matter Invoice paid or issued in person, by check, by wire, or otherwise. Replaying the same source and external id with the same amount returns the first row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["source", "external_id", "amount_cents", "status"], "properties": { "source": { "type": "string", "enum": ["in_person", "check", "wire", "other", "stripe"] }, "external_id": { "type": "string" }, "amount_cents": { "type": "integer" }, "currency": { "type": "string", "default": "USD" }, "status": { "type": "string", "enum": ["draft", "sent", "paid", "void", "uncollectible"] }, "reference": { "type": "string" }, "issued_on": { "type": "string", "format": "date" }, "due_on": { "type": "string", "format": "date" }, "payer": { "type": "string" }, "memo": { "type": "string" }, "client_visible": { "type": "boolean" }, "receipt_document_id": { "type": "string", "format": "uuid" } } } } } },
+            "responses": { "201": { "description": "The recorded Matter Invoice", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project or invoice, or the caller has no firm-side participation" }, "409": { "description": "That external id is recorded with other details" }, "422": { "description": "Invalid record" } }
+          }
+        },
+        "/app/api/projects/{id}/invoices/{invoice_id}/send": {
+          "post": {
+            "summary": "Send a reviewed draft",
+            "description": "Finalizes the Stripe draft and sends it with the Firm's Stripe payment methods and reminders. A zero-balance invoice is finalized as a paid record and not sent. Sending a sent invoice changes nothing.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "invoice_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The sent or paid Matter Invoice", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project or invoice, or the caller has no firm-side participation" }, "409": { "description": "The trust account changed since the draft was frozen" }, "422": { "description": "Not a Stripe invoice" }, "502": { "description": "Stripe refused" } }
+          }
+        },
+        "/app/api/projects/{id}/invoices/{invoice_id}/payments": {
+          "post": {
+            "summary": "Record a payment received outside Stripe",
+            "description": "Records a full or partial payment with its reason. The invoice is paid once payments cover it.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "invoice_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["amount_cents", "received_on", "source", "reason"], "properties": { "amount_cents": { "type": "integer", "minimum": 1 }, "received_on": { "type": "string", "format": "date" }, "source": { "type": "string", "enum": ["in_person", "check", "wire", "other"] }, "external_id": { "type": "string" }, "payer": { "type": "string" }, "reason": { "type": "string" } } } } } },
+            "responses": { "201": { "description": "The invoice and the recorded payment", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project or invoice, or the caller has no firm-side participation" }, "409": { "description": "That payment is recorded with another amount" }, "422": { "description": "Invalid payment, or a void or uncreated invoice" } }
+          }
+        },
+        "/app/api/projects/{id}/invoices/{invoice_id}/{verb}": {
+          "post": {
+            "summary": "Void an invoice or mark it uncollectible",
+            "description": "`verb` is `void` or `uncollectible`. A Stripe invoice must be sent and is closed in Stripe first. The reason is kept on the invoice.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "invoice_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "verb", "in": "path", "required": true, "schema": { "type": "string", "enum": ["void", "uncollectible"] } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["reason"], "properties": { "reason": { "type": "string" } } } } } },
+            "responses": { "200": { "description": "The closed Matter Invoice", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project or invoice, or the caller has no firm-side participation" }, "422": { "description": "No reason, or an invoice that cannot close from its status" }, "502": { "description": "Stripe refused" } }
           }
         },
         "/app/api/projects/{id}/tasks": {
@@ -3248,6 +3324,55 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/time-entry-proposals": {
+          "get": {
+            "summary": "List a matter's time for review",
+            "description": "Time Entry Proposals and staged Jujutsu time awaiting review, discarded proposals, and approved Time Entries, oldest work first. A backfilled row was recorded after the day of the work. Authorization: lawyer tier and firm-side participation; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["pending_review", "approved", "unbilled", "billed", "discarded"] } }],
+            "responses": { "200": { "description": "The review list", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          },
+          "post": {
+            "summary": "Record time for lawyer review",
+            "description": "Creates one pending Time Entry Proposal. A past date is allowed and marks it backfilled. Replaying `request_id` returns the first row. The timekeeper, a Person UUID or email, defaults to the caller and must be firm-side on the Project.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["request_id", "performed_on", "minutes", "narrative"], "properties": { "request_id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer", "minimum": 1, "maximum": 1440 }, "narrative": { "type": "string" }, "timekeeper": { "type": "string" } } } } } },
+            "responses": { "201": { "description": "The proposal, or the first one for a replayed request", "content": { "application/json": { "schema": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } }, "409": { "description": "The request id was used for other time" }, "422": { "description": "Invalid minutes, narrative, or future date, or the timekeeper is not firm-side" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/time-entry-proposals/backfill": {
+          "post": {
+            "summary": "Propose Time Entries from a matter's dated record",
+            "description": "Proposes one pending entry per Communication, filed document, completed Deadline, and e-filing not yet proposed, with minutes from the published default table. A dry run writes nothing. Nothing is approved.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "since": { "type": "string", "format": "date" }, "dry_run": { "type": "boolean", "default": false } } } } } },
+            "responses": { "200": { "description": "The default minutes table and the proposals written or previewed", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The caller is not firm-side on the Project" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/time-entry-proposals/{proposal_id}": {
+          "patch": {
+            "summary": "Edit a pending Time Entry Proposal",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "proposal_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer", "minimum": 1, "maximum": 1440 }, "narrative": { "type": "string" } } } } } },
+            "responses": { "200": { "description": "The edited proposal", "content": { "application/json": { "schema": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } }, "409": { "description": "The proposal is approved or discarded, or the id names staged Jujutsu time" }, "422": { "description": "Invalid minutes, narrative, or date" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/time-entry-proposals/{proposal_id}/approve": {
+          "post": {
+            "summary": "Approve reviewed time as a Time Entry",
+            "description": "Prices the proposal or staged Jujutsu time and creates its Time Entry in one transaction: billable at the resolved rate, no charge, or linked to a Legal Plan Claim. Approving an approved proposal returns it unchanged. Staged Jujutsu time needs a narrative and may lower its minutes.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "proposal_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "decision": { "type": "string", "enum": ["bill", "no_charge", "plan_claim"], "default": "bill" }, "claim_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "minutes": { "type": "integer" } } } } } },
+            "responses": { "200": { "description": "The approved row and its Time Entry", "content": { "application/json": { "schema": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } }, "409": { "description": "The proposal was discarded" }, "422": { "description": "No rate, an unmatched claim, or minutes above the staged time" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
+        "/app/api/projects/{id}/time-entry-proposals/{proposal_id}/discard": {
+          "post": {
+            "summary": "Discard a pending proposal or deny staged time",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "proposal_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "properties": { "reason": { "type": "string" } } } } } },
+            "responses": { "200": { "description": "The discarded row", "content": { "application/json": { "schema": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "timekeeper_id": { "type": "string", "format": "uuid" }, "narrative": { "type": "string" }, "status": { "type": "string" }, "backfilled": { "type": "boolean" }, "source": { "type": "string" }, "source_id": { "type": "string", "format": "uuid" }, "entry_id": { "type": "string", "format": "uuid" } } } } } }, "409": { "description": "The proposal was approved" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required, or a write under impersonation" }, "404": { "description": "No such Project, proposal, or claim, or the caller has no firm-side participation" }, "503": { "description": "Time storage is unavailable" } }
+          }
+        },
         "/app/api/projects/{id}/time-entries": {
           "get": {
             "summary": "List a matter's time entries",
@@ -3266,9 +3391,9 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/time-entries/{entry_id}/invoice": {
           "post": {
             "summary": "Mark a time entry invoiced",
-            "description": "Marks one unbilled entry `invoiced` under the Xero invoice that carries it, appending an audit event. Replaying the same call is a no-op; the same entry under a different invoice id is a conflict. Authorization: lawyer tier and a participation row.",
+            "description": "Marks one unbilled entry `invoiced` under the Matter Invoice that carries it, appending an audit event. Replaying the same call is a no-op; the same entry under a different invoice id is a conflict. Authorization: lawyer tier and a participation row.",
             "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "entry_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
-            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["xero_invoice_id"], "properties": { "xero_invoice_id": { "type": "string" } } } } } },
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["matter_invoice_id"], "properties": { "matter_invoice_id": { "type": "string", "format": "uuid" } } } } } },
             "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such entry on this Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The updated entry; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } }, "409": { "description": "The entry is already invoiced under a different Xero invoice", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "422": { "description": "The entry is not unbilled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
           }
         },

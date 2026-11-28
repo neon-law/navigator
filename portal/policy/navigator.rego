@@ -438,18 +438,42 @@ route_allow if {
     is_lawyer(input.session)
 }
 
-# Matter invoice generation: POST /app/api/projects/{id}/invoices — the
-# command that raises one Xero invoice across the billing provider seam from
-# the matter's unbilled work. Lawyer tier, the same gate the `LawyerSession`
-# extractor applies; the handler resolves `store::access::matter_viewer` and
-# answers 404 for a caller with no firm-side participation row, Owner and
-# Admin included.
+# Matter invoices (ENG-1342, LAW-506): POST /app/api/projects/{id}/invoices
+# drafts one Stripe invoice from the matter's unbilled work, and GET lists
+# the matter's invoices; POST .../invoices/{drafts,records} composes a draft
+# or records money collected outside Stripe; POST .../invoices/{invoice}/
+# {send,payments,void,uncollectible} acts on one. Lawyer tier, the same gate
+# the `LawyerSession` extractor applies; the handler resolves
+# `store::access::matter_viewer` and answers 404 for a caller with no
+# firm-side participation row, Owner and Admin included.
 route_allow if {
     input.path[0] == "app"
     input.path[1] == "api"
     input.path[2] == "projects"
     input.path[4] == "invoices"
     count(input.path) == 5
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "invoices"
+    input.path[5] in {"drafts", "records"}
+    count(input.path) == 6
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "invoices"
+    input.path[6] in {"send", "payments", "void", "uncollectible"}
+    count(input.path) == 7
     input.method == "POST"
     is_lawyer(input.session)
 }
@@ -512,6 +536,51 @@ route_allow if {
     input.path[4] in {"time-entries", "timer", "flat-fee"}
     count(input.path) == 5
     input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+# Time Entry Proposals: `navigator project time`. GET/POST the review list and
+# new time, POST .../backfill, PATCH one pending proposal, and POST
+# .../{approve,discard}. Lawyer tier; the handler answers 404 without
+# firm-side participation.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "time-entry-proposals"
+    count(input.path) == 5
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "time-entry-proposals"
+    count(input.path) == 6
+    time_proposal_item_method(input.path[5], input.method)
+    is_lawyer(input.session)
+}
+
+time_proposal_item_method(segment, method) if {
+    segment == "backfill"
+    method == "POST"
+}
+
+time_proposal_item_method(segment, method) if {
+    segment != "backfill"
+    method == "PATCH"
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "time-entry-proposals"
+    input.path[6] in {"approve", "discard"}
+    count(input.path) == 7
+    input.method == "POST"
     is_lawyer(input.session)
 }
 
@@ -2435,6 +2504,30 @@ project_claims_path if {
     count(input.path) == 5
     array.slice(input.path, 0, 3) == ["app", "api", "projects"]
     input.path[4] == "legal-plan-claims"
+}
+
+project_claim_packet_path if {
+    count(input.path) == 7
+    array.slice(input.path, 0, 3) == ["app", "api", "projects"]
+    input.path[4] == "legal-plan-claims"
+    input.path[6] == "packet"
+}
+
+route_allow if {
+    project_claim_packet_path
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+# A plan's claim-filing rules: Firm data, behind the handler's
+# plan-management capability.
+route_allow if {
+    count(input.path) == 7
+    array.slice(input.path, 0, 3) == ["app", "api", "firms"]
+    input.path[4] == "legal-plans"
+    input.path[6] == "claim-filing"
+    input.method == "PUT"
+    is_lawyer(input.session)
 }
 
 firm_collections_path if {

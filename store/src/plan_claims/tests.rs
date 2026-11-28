@@ -66,7 +66,8 @@ fn approved_outstanding_uses_net_cash_and_denial_preserves_the_partial_payment()
         .apply(
             now,
             &Event::Submission {
-                provider_reference: "sample-claim".into(),
+                provider_reference: Some("sample-claim".into()),
+                sent_message_id: None,
                 claimed_cents: None,
             },
         )
@@ -169,7 +170,8 @@ fn a_receipt_establishes_submission_without_pricing_missing_coverage() {
         .apply(
             on,
             &Event::Submission {
-                provider_reference: "sample-claim".into(),
+                provider_reference: Some("sample-claim".into()),
+                sent_message_id: None,
                 claimed_cents: None,
             },
         )
@@ -326,4 +328,90 @@ fn manual_service_requires_a_configured_benefit_without_overriding_named_carrier
     assert!(work.validate("ARAG", today, true).is_err());
     work.service = Service::AragRepresentation;
     assert!(work.validate("Example Plan", today, true).is_err());
+}
+
+#[test]
+fn an_email_filed_claim_is_submitted_by_its_sent_message_and_takes_a_reference_later() {
+    let mut state = ClaimState::new(claim(
+        Service::LegalEaseLegalGuard,
+        Some(Authorization::FixedFee {
+            reference: "sample-benefit".into(),
+            cents: 12_000,
+        }),
+    ));
+    let on = date("2026-11-21");
+    state.apply(on, &Event::Prepared).unwrap();
+    let packet = Event::PacketFiled {
+        asset_id: Uuid::nil(),
+        sha256: "0".repeat(64),
+    };
+    state.apply(on, &packet).unwrap();
+    assert_eq!(state.packet_asset_id, Some(Uuid::nil()));
+    assert!(matches!(
+        Event::Submission {
+            provider_reference: None,
+            sent_message_id: None,
+            claimed_cents: None,
+        }
+        .reference(),
+        Err(ClaimError::Invalid(_))
+    ));
+    let emailed = Event::Submission {
+        provider_reference: None,
+        sent_message_id: Some("18c0ffee".into()),
+        claimed_cents: Some(12_000),
+    };
+    assert_eq!(
+        emailed.reference().unwrap(),
+        Some(("claim", "message:18c0ffee".to_owned()))
+    );
+    state.apply(on, &emailed).unwrap();
+    let billing = state.billing(Uuid::nil(), "synthetic").unwrap();
+    assert_eq!(billing.status, "submitted");
+    assert_eq!(
+        billing.next_action.as_deref(),
+        Some("Check provider decision or payment")
+    );
+    assert_eq!(state.provider_reference, None);
+    assert_eq!(state.sent_message_id.as_deref(), Some("18c0ffee"));
+    let reference = Event::ProviderReference {
+        provider_reference: "sample-claim".into(),
+    };
+    state.apply(on, &reference).unwrap();
+    assert_eq!(state.provider_reference.as_deref(), Some("sample-claim"));
+    assert!(
+        state.apply(on, &reference).is_err(),
+        "one reference per claim"
+    );
+    state
+        .apply(
+            on,
+            &Event::Denial {
+                reference: "sample-denial".into(),
+            },
+        )
+        .unwrap();
+    assert!(
+        state.apply(on, &packet).is_err(),
+        "no packet after a denial"
+    );
+    // Older rows without the new fields still read.
+    let stored: ClaimState = serde_json::from_value(serde_json::json!({
+        "work": serde_json::to_value(&state.work).unwrap(), "stage": "submitted",
+        "provider_reference": "older", "submitted_on": "2026-11-21", "claimed_cents": null,
+        "approved_cents": null, "net_cents": 0,
+    }))
+    .unwrap();
+    assert_eq!(stored.sent_message_id, None);
+    let older: Event = serde_json::from_value(serde_json::json!({
+        "type": "submission", "provider_reference": "older", "claimed_cents": null,
+    }))
+    .unwrap();
+    assert!(matches!(
+        older,
+        Event::Submission {
+            provider_reference: Some(_),
+            ..
+        }
+    ));
 }

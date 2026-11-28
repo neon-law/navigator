@@ -36,16 +36,16 @@
 //! [`crate::projects::find_or_create_by_code`] on `code`,
 //! [`crate::projects::add_participation`] on `(person, project)`,
 //! [`crate::assets::find_filed_copy`]/[`crate::documents::ingest_bytes_exactly_once`]
-//! on `(project, filename, sha256)`, [`crate::xero_invoices::upsert`] and
-//! [`crate::iolta_accounts::upsert`] on the provider id as the row's own
-//! record id, [`crate::trust::record_project_movement`] on `external_ref`,
+//! on `(project, filename, sha256)`, [`crate::matter_invoices::record`] on
+//! `(project, source, external id)`, [`crate::iolta_accounts::upsert`] on the
+//! provider id as the row's own record id, [`crate::trust::record_project_movement`] on `external_ref`,
 //! and [`crate::iolta_withdrawals::apply`] on the transaction id. A repeat
 //! `apply` therefore inserts nothing new; this module adds no additional
 //! locking or dedup of its own.
 //!
 //! # No live provider
 //!
-//! Every provider-shaped id below (`xero_invoice_id`, IOLTA `xero_account_id`,
+//! Every provider-shaped id below (an invoice's external id, IOLTA `xero_account_id`,
 //! `xero_transaction_id`) is a literal constant. Nothing here calls Xero, a
 //! bank, Drive, GitHub, or any other live provider; every write lands in the
 //! local store or the configured [`cloud::StorageService`] mirror/stub.
@@ -1315,22 +1315,16 @@ fn usd_amount_string(cents: i64) -> String {
     format!("{}.{:02}", cents / 100, cents % 100)
 }
 
-/// Plan (and in [`Mode::Apply`] write) one Xero invoice mirror row.
-///
-/// Only the first apply ever calls [`crate::xero_invoices::upsert`] for a
-/// given `xero_invoice_id` — once mirrored, this fixture leaves the row's
-/// metadata alone, the same way it leaves a matter's transitioned status
-/// alone (see [`plan_project`]). A later [`plan_invoice_reconcile`] call is
-/// what is allowed to move a mirrored invoice from unpaid toward paid; an
-/// unconditional re-upsert here would otherwise clobber that reconciled
-/// state back to this call's own `status` on every subsequent apply.
+/// Plan (and in [`Mode::Apply`] write) one Matter Invoice, recorded by hand
+/// under the synthetic issuer id. Only the first apply records it; a later
+/// [`plan_invoice_reconcile`] call moves it toward paid.
 #[allow(clippy::too_many_arguments)]
 async fn plan_invoice(
     application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
     project_id: Uuid,
-    xero_invoice_id: &str,
+    external_id: &str,
     reference: &str,
     status: &str,
     amount_cents: i64,
@@ -1339,20 +1333,29 @@ async fn plan_invoice(
     due_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> anyhow::Result<()> {
     let existing =
-        crate::xero_invoices::find_for_allocation(application_store, xero_invoice_id).await?;
-    plan.record("invoice", xero_invoice_id, action_for(existing.is_some()));
+        crate::matter_invoices::find_for_allocation(application_store, external_id).await?;
+    plan.record("invoice", external_id, action_for(existing.is_some()));
     if mode.is_apply() && existing.is_none() {
-        crate::xero_invoices::upsert(
-            application_store,
-            &crate::xero_invoices::UpsertXeroInvoice {
-                project_id,
-                xero_invoice_id: xero_invoice_id.to_string(),
-                reference: reference.to_string(),
-                status: status.to_string(),
+        crate::matter_invoices::record(
+            project_id,
+            None,
+            &crate::matter_invoices::NewRecord {
+                source: crate::matter_invoices::Source::Other,
+                external_id: external_id.to_string(),
                 amount_cents,
                 currency: currency.to_string(),
-                issued_at,
-                due_at,
+                status: match status {
+                    "DRAFT" => crate::matter_invoices::Status::Draft,
+                    "VOIDED" => crate::matter_invoices::Status::Void,
+                    _ => crate::matter_invoices::Status::Sent,
+                },
+                reference: Some(reference.to_string()),
+                issued_on: Some(issued_at.date_naive()),
+                due_on: due_at.map(|due| due.date_naive()),
+                payer: None,
+                memo: None,
+                client_visible: true,
+                receipt_document_id: None,
             },
         )
         .await?;
@@ -1360,42 +1363,48 @@ async fn plan_invoice(
     Ok(())
 }
 
-/// Plan (and in [`Mode::Apply`] write) one reconcile fold onto an
-/// already-mirrored invoice — [`crate::xero_invoices::record_reconcile`],
-/// the same seam the nightly reconcile workflow uses.
-///
-/// Idempotent on the target `(status, amount_paid_cents)`: a repeat apply
-/// that finds the mirror row already reconciled to those exact values skips
-/// the write rather than reissuing a no-op `UPDATE`.
+/// Plan (and in [`Mode::Apply`] write) the payment that brings an invoice to
+/// `amount_paid_cents`. Idempotent: a repeat apply that finds the invoice
+/// already paid to that amount writes nothing.
 async fn plan_invoice_reconcile(
     application_store: &ApplicationStore,
     plan: &mut PortfolioPlan,
     mode: Mode,
-    xero_invoice_id: &str,
+    external_id: &str,
     status: &str,
     amount_paid_cents: i64,
 ) -> anyhow::Result<()> {
     let existing =
-        crate::xero_invoices::find_for_allocation(application_store, xero_invoice_id).await?;
-    let already_reconciled = existing.as_ref().is_some_and(|invoice| {
-        invoice.status == status && invoice.amount_paid_cents == amount_paid_cents
-    });
+        crate::matter_invoices::find_for_allocation(application_store, external_id).await?;
+    let already_reconciled = existing
+        .as_ref()
+        .is_some_and(|invoice| invoice.amount_paid_cents == amount_paid_cents);
     plan.record(
         "invoice_reconcile",
-        format!("{xero_invoice_id}:{status}:{amount_paid_cents}"),
+        format!("{external_id}:{status}:{amount_paid_cents}"),
         action_for(already_reconciled),
     );
     if mode.is_apply() && !already_reconciled {
-        crate::xero_invoices::record_reconcile(
-            application_store,
-            xero_invoice_id,
-            status,
-            amount_paid_cents,
-        )
-        .await?
-        .ok_or_else(|| {
-            anyhow!("synthetic portfolio: reconcile found no mirrored invoice {xero_invoice_id}")
+        let invoice = existing.ok_or_else(|| {
+            anyhow!("synthetic portfolio: reconcile found no invoice {external_id}")
         })?;
+        crate::matter_invoices::record_payment(
+            invoice.project_id,
+            invoice.id,
+            None,
+            &crate::matter_invoices::NewPayment {
+                amount_cents: amount_paid_cents - invoice.amount_paid_cents,
+                received_on: invoice
+                    .issued_on
+                    .unwrap_or_else(|| chrono::Utc::now().date_naive()),
+                source: crate::matter_invoices::Source::Other,
+                external_id: Some(format!("{external_id}:paid:{amount_paid_cents}")),
+                payer: None,
+                memo: None,
+                client_visible: true,
+            },
+        )
+        .await?;
     }
     Ok(())
 }
@@ -2308,12 +2317,13 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
-            assert!(
-                crate::xero_invoices::find_for_allocation(&application_store, XERO_INVOICE_ID)
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(crate::matter_invoices::find_for_allocation(
+                &application_store,
+                XERO_INVOICE_ID
+            )
+            .await
+            .unwrap()
+            .is_none());
             assert!(
                 crate::iolta_withdrawals::find(&application_store, IOLTA_XERO_TRANSACTION_ID)
                     .await
@@ -2444,7 +2454,7 @@ mod tests {
                 1
             );
             assert_eq!(
-                crate::xero_invoices::for_projects(&application_store, &[project.id])
+                crate::matter_invoices::for_projects(&application_store, &[project.id])
                     .await
                     .unwrap()
                     .len(),
@@ -2877,7 +2887,7 @@ mod tests {
                     .unwrap()
                     .expect("invoice matrix project exists");
             let invoices =
-                crate::xero_invoices::for_projects(&application_store, &[matrix_project.id])
+                crate::matter_invoices::for_projects(&application_store, &[matrix_project.id])
                     .await
                     .unwrap();
             assert_eq!(invoices.len(), 4, "unpaid, overdue, partial, and paid");
@@ -2888,46 +2898,61 @@ mod tests {
 
             let unpaid = invoices
                 .iter()
-                .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_UNPAID_ID)
+                .find(|invoice| invoice.external_id.as_deref() == Some(INVOICE_MATRIX_UNPAID_ID))
                 .expect("unpaid invoice");
-            assert_eq!(unpaid.status, "AUTHORISED");
+            assert_eq!(unpaid.status, crate::matter_invoices::Status::Sent);
             assert_eq!(unpaid.amount_paid_cents, 0);
             assert_eq!(unpaid.amount_cents, INVOICE_MATRIX_UNPAID_CENTS);
             assert_eq!(unpaid.currency, "USD");
-            assert_eq!(unpaid.issued_at, fixed_date(PERIOD_TWO_ISSUED));
-            assert_eq!(unpaid.due_at, Some(fixed_date(PERIOD_TWO_DUE)));
+            assert_eq!(
+                unpaid.issued_on,
+                Some(fixed_date(PERIOD_TWO_ISSUED).date_naive())
+            );
+            assert_eq!(unpaid.due_on, Some(fixed_date(PERIOD_TWO_DUE).date_naive()));
 
             let overdue = invoices
                 .iter()
-                .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_OVERDUE_ID)
+                .find(|invoice| invoice.external_id.as_deref() == Some(INVOICE_MATRIX_OVERDUE_ID))
                 .expect("overdue invoice");
-            assert_eq!(overdue.status, "AUTHORISED");
+            assert_eq!(overdue.status, crate::matter_invoices::Status::Sent);
             assert_eq!(overdue.amount_paid_cents, 0);
             assert_eq!(overdue.currency, "USD");
-            assert_eq!(overdue.issued_at, fixed_date(PERIOD_ONE_ISSUED));
-            assert_eq!(overdue.due_at, Some(fixed_date(PERIOD_ONE_DUE)));
+            assert_eq!(
+                overdue.issued_on,
+                Some(fixed_date(PERIOD_ONE_ISSUED).date_naive())
+            );
+            assert_eq!(
+                overdue.due_on,
+                Some(fixed_date(PERIOD_ONE_DUE).date_naive())
+            );
             assert!(
-                overdue.due_at.unwrap() < unpaid.issued_at,
+                overdue.due_on.unwrap() < unpaid.issued_on.unwrap(),
                 "the overdue invoice's due date falls in the earlier reporting period, the unpaid \
              invoice's issue date in the later one"
             );
 
             let partial = invoices
                 .iter()
-                .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_PARTIAL_ID)
+                .find(|invoice| invoice.external_id.as_deref() == Some(INVOICE_MATRIX_PARTIAL_ID))
                 .expect("partial invoice");
-            assert_eq!(partial.status, "AUTHORISED");
+            assert_eq!(partial.status, crate::matter_invoices::Status::Sent);
             assert_eq!(partial.amount_paid_cents, INVOICE_MATRIX_PARTIAL_PAID_CENTS);
             assert!(partial.amount_paid_cents < partial.amount_cents);
             assert_eq!(partial.currency, "USD");
-            assert_eq!(partial.issued_at, fixed_date(PERIOD_ONE_ISSUED));
-            assert_eq!(partial.due_at, Some(fixed_date(PERIOD_TWO_DUE)));
+            assert_eq!(
+                partial.issued_on,
+                Some(fixed_date(PERIOD_ONE_ISSUED).date_naive())
+            );
+            assert_eq!(
+                partial.due_on,
+                Some(fixed_date(PERIOD_TWO_DUE).date_naive())
+            );
 
             let paid = invoices
                 .iter()
-                .find(|invoice| invoice.xero_invoice_id == INVOICE_MATRIX_PAID_ID)
+                .find(|invoice| invoice.external_id.as_deref() == Some(INVOICE_MATRIX_PAID_ID))
                 .expect("paid invoice");
-            assert_eq!(paid.status, "PAID");
+            assert_eq!(paid.status, crate::matter_invoices::Status::Paid);
             assert_eq!(paid.amount_paid_cents, paid.amount_cents);
             assert_eq!(paid.currency, "USD");
 
@@ -2937,7 +2962,7 @@ mod tests {
                     .unwrap()
                     .expect("eur group project exists");
             let eur_invoices =
-                crate::xero_invoices::for_projects(&application_store, &[eur_project.id])
+                crate::matter_invoices::for_projects(&application_store, &[eur_project.id])
                     .await
                     .unwrap();
             assert_eq!(eur_invoices.len(), 2);
@@ -2945,7 +2970,7 @@ mod tests {
 
             // Reading both Projects together must never mix the two currencies
             // into one total.
-            let combined = crate::xero_invoices::for_projects(
+            let combined = crate::matter_invoices::for_projects(
                 &application_store,
                 &[matrix_project.id, eur_project.id],
             )
@@ -3194,7 +3219,7 @@ mod tests {
                     .unwrap()
                     .expect("pool matter A exists");
             let before_invoices =
-                crate::xero_invoices::for_projects(&application_store, &[matrix_project.id])
+                crate::matter_invoices::for_projects(&application_store, &[matrix_project.id])
                     .await
                     .unwrap();
             let before_position = crate::trust::position_for_project(&application_store, pool_a.id)
@@ -3224,7 +3249,7 @@ mod tests {
             );
 
             let after_invoices =
-                crate::xero_invoices::for_projects(&application_store, &[matrix_project.id])
+                crate::matter_invoices::for_projects(&application_store, &[matrix_project.id])
                     .await
                     .unwrap();
             assert_eq!(before_invoices, after_invoices);

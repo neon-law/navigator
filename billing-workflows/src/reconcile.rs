@@ -1,13 +1,9 @@
-//! The `ReconcileInvoices` Restate workflow — the nightly job that
-//! discovers Xero accounts-receivable invoices onto the local
-//! `xero_invoice` mirror, then folds paid-status onto rows still open.
-//!
-//! The portal reads the mirror, never Xero live. Lawyers raise invoices in
-//! Xero tagged `Matter <project uuid or code>`. This workflow lists those
-//! invoices, upserts each that resolves to a live Project, skips DRAFT and
-//! DELETED, and counts unscoped references (no matching Project) without
-//! writing a row. It then re-checks every mirror row not yet in a terminal
-//! state (`PAID` / `VOIDED`) via `get_invoice`.
+//! The nightly trust mirror, run under the `ReconcileInvoices` workflow id.
+//! It reads the Firm's pooled IOLTA accounts and their deposits, refunds,
+//! and withdrawals from the books and posts them onto each matter's trust
+//! ledger. Invoices are not mirrored: Stripe issues them, and the Matter
+//! Invoice ledger (`store::matter_invoices`) records them. A withdrawal line
+//! settles a ledger invoice.
 //!
 //! The `billing-reconcile-trigger` `CronJob` starts one invocation per day
 //! (keyed on the UTC date, so a same-day re-fire is a no-op); Restate owns
@@ -33,16 +29,6 @@ pub struct ReconcileRequest {}
 /// What a reconcile run touched, surfaced as the invocation output.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ReconcileReport {
-    /// Listed invoices whose `Reference` resolved to a Project and were
-    /// upserted (including a metadata update of an existing row).
-    pub ingested: usize,
-    /// Listed invoices that were not DRAFT/DELETED and whose `Reference`
-    /// did not resolve to a live Project. No row is written.
-    pub unscoped: usize,
-    /// Mirror rows that were still open and got re-checked against Xero.
-    pub checked: usize,
-    /// How many of those actually changed (status or amount paid).
-    pub updated: usize,
     /// Xero bank accounts whose name declared a state (`IOLTA NV …`) and
     /// whose pooled balance was mirrored onto `iolta_account`.
     pub iolta_accounts: usize,
@@ -86,9 +72,8 @@ pub struct TrustLine {
     pub cents: i64,
 }
 
-/// List provider invoices onto the mirror, then re-check every open mirror
-/// row. Provider-agnostic; unit-tested against the stub + an in-memory
-/// `SurrealDB`.
+/// Mirror the pooled trust accounts and their movements. Provider-agnostic;
+/// unit-tested against the stub.
 ///
 /// # Errors
 ///
@@ -97,30 +82,10 @@ pub async fn reconcile_once(
     provider: &dyn BillingProvider,
     application_store: &ApplicationStore,
 ) -> anyhow::Result<ReconcileReport> {
-    let (ingested, unscoped) = ingest_listed(provider, application_store).await?;
-    let rows = store::xero_invoices::needing_reconcile(application_store).await?;
-    let mut updated = 0;
-    for row in &rows {
-        let latest = provider.get_invoice(&row.xero_invoice_id).await?;
-        if latest.status != row.status || latest.amount_paid_cents != row.amount_paid_cents {
-            updated += 1;
-        }
-        store::xero_invoices::record_reconcile(
-            application_store,
-            &row.xero_invoice_id,
-            &latest.status,
-            latest.amount_paid_cents,
-        )
-        .await?;
-    }
     let (iolta_accounts, iolta_unscoped) =
         mirror_iolta_accounts(provider, application_store).await?;
     let trust = mirror_trust_movements(provider, application_store).await?;
     Ok(ReconcileReport {
-        ingested,
-        unscoped,
-        checked: rows.len(),
-        updated,
         iolta_accounts,
         iolta_unscoped,
         trust_deposits: trust.deposits,
@@ -255,9 +220,11 @@ async fn mirror_trust_movements(
             }
             continue;
         }
-        let Some(project_id) =
-            store::xero_invoices::resolve_project_scope(application_store, &transaction.reference)
-                .await?
+        let Some(project_id) = store::matter_invoices::resolve_project_scope(
+            application_store,
+            &transaction.reference,
+        )
+        .await?
         else {
             tally.unscoped += 1;
             continue;
@@ -424,22 +391,15 @@ pub async fn post_finance_notice(
 ///
 /// Firm-internal by construction: it names **Project codes** and **cents**,
 /// which the owner allowed for this channel, and nothing else about a
-/// client. No client name, no email address, no portal link. Invoices whose
-/// Xero `Reference` names no matter are a **count** — dumping the Xero
-/// contact names behind them would put client identities in a channel that
-/// has no need for them.
+/// client. No client name, no email address, no portal link. Unscoped trust
+/// movements are a **count**, never the names behind them.
 ///
 /// Staging disclosure is the Slack adapter's last-line `from Staging` mark,
 /// not a rewrite of this body. `simulated` is accepted so callers share one
 /// flag with the rest of the reconcile path.
 #[must_use]
 pub fn finance_message(report: &ReconcileReport, _simulated: bool) -> String {
-    let mut body = String::from("Xero mirror, nightly run.");
-    let _ = write!(
-        body,
-        "\nInvoices: {} ingested, {} unscoped, {} updated of {} re-checked.",
-        report.ingested, report.unscoped, report.updated, report.checked
-    );
+    let mut body = String::from("Trust mirror, nightly run.");
     let _ = write!(
         body,
         "\nTrust: {} deposit(s), {} refund(s), {} withdrawal(s) across {} pooled account(s).",
@@ -488,54 +448,6 @@ fn format_usd(cents: i64) -> String {
     format!("{sign}${grouped}.{:02}", abs % 100)
 }
 
-fn skip_listed_status(status: &str) -> bool {
-    matches!(status.to_ascii_uppercase().as_str(), "DRAFT" | "DELETED")
-}
-
-async fn ingest_listed(
-    provider: &dyn BillingProvider,
-    application_store: &ApplicationStore,
-) -> anyhow::Result<(usize, usize)> {
-    let listed = provider.list_receivable_invoices().await?;
-    let mut ingested = 0;
-    let mut unscoped = 0;
-    for invoice in listed {
-        if skip_listed_status(&invoice.status) {
-            continue;
-        }
-        let Some(project_id) =
-            store::xero_invoices::resolve_project_scope(application_store, &invoice.reference)
-                .await?
-        else {
-            unscoped += 1;
-            continue;
-        };
-        store::xero_invoices::upsert(
-            application_store,
-            &store::xero_invoices::UpsertXeroInvoice {
-                project_id,
-                xero_invoice_id: invoice.invoice_id.clone(),
-                reference: invoice.reference.clone(),
-                status: invoice.status.clone(),
-                amount_cents: invoice.amount_cents,
-                currency: invoice.currency.clone(),
-                issued_at: invoice.issued_at,
-                due_at: invoice.due_at,
-            },
-        )
-        .await?;
-        store::xero_invoices::record_reconcile(
-            application_store,
-            &invoice.invoice_id,
-            &invoice.status,
-            invoice.amount_paid_cents,
-        )
-        .await?;
-        ingested += 1;
-    }
-    Ok((ingested, unscoped))
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -543,10 +455,6 @@ mod tests {
     /// fields a given assertion cares about set.
     fn report() -> super::ReconcileReport {
         super::ReconcileReport {
-            ingested: 3,
-            unscoped: 1,
-            checked: 5,
-            updated: 2,
             iolta_accounts: 2,
             iolta_unscoped: 0,
             trust_deposits: 1,
@@ -575,27 +483,20 @@ mod tests {
     fn the_finance_notice_names_codes_and_cents_and_nothing_client_facing() {
         let body = super::finance_message(&report(), false);
 
-        assert!(
-            body.contains("3 ingested, 1 unscoped, 2 updated of 5 re-checked"),
-            "{body}"
-        );
-        assert!(
-            body.contains("1 deposit(s), 0 refund(s), 1 withdrawal(s)"),
-            "{body}"
-        );
-        assert!(body.contains("acme-formation deposit $5,000.00"), "{body}");
-        assert!(body.contains("libra-estate draw $1,234.56"), "{body}");
+        assert!(!body.contains("Invoices"), "invoices are not mirrored");
+        assert!(body.contains("1 deposit(s), 0 refund(s), 1 withdrawal(s)"),);
+        assert!(body.contains("acme-formation deposit $5,000.00"));
+        assert!(body.contains("libra-estate draw $1,234.56"));
 
         for forbidden in ["@", "linear.app", "http", "/app/projects"] {
             assert!(
                 !body.contains(forbidden),
-                "the #finance notice must not carry {forbidden:?}: {body}"
+                "the #finance notice must not carry {forbidden:?}"
             );
         }
     }
 
-    /// An unscoped invoice is a count. Dumping the Xero contact names behind
-    /// those invoices would put client identities in the channel.
+    /// Unscoped and refused trust work is a count, never the names behind it.
     #[test]
     fn unscoped_and_refused_work_is_reported_as_counts() {
         let mut report = report();
@@ -604,20 +505,17 @@ mod tests {
         report.iolta_unscoped = 3;
 
         let body = super::finance_message(&report, false);
-        assert!(
-            body.contains(
-                "2 trust movement(s) unscoped, 1 withdrawal(s) refused, 3 bank account(s) unscoped"
-            ),
-            "{body}"
-        );
+        assert!(body.contains(
+            "2 trust movement(s) unscoped, 1 withdrawal(s) refused, 3 bank account(s) unscoped"
+        ),);
     }
 
     /// A quiet night still says so, without a "needs a look" line.
     #[test]
     fn a_quiet_night_reports_zeroes_and_flags_nothing() {
         let body = super::finance_message(&super::ReconcileReport::default(), false);
-        assert!(body.contains("0 ingested"), "{body}");
-        assert!(!body.contains("Needs a look"), "{body}");
+        assert!(body.contains("0 deposit(s)"));
+        assert!(!body.contains("Needs a look"));
     }
 
     /// The notice lands in `#finance` and nowhere else — one post, to the
@@ -633,7 +531,7 @@ mod tests {
         assert_eq!(posted.len(), 1, "one post per run: {posted:?}");
         assert_eq!(posted[0].0, "C012FINANCE");
         assert!(
-            posted[0].1.contains("Xero mirror, nightly run."),
+            posted[0].1.contains("Trust mirror, nightly run."),
             "{posted:?}"
         );
         assert!(

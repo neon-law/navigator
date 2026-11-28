@@ -54,8 +54,8 @@ pub struct MatterBillingBatch {
     /// Frozen debtor details keep retries independent of later participation edits.
     pub contact_name: String,
     pub contact_email: String,
-    /// Resolved once before reservation; retries keep this exact debtor identity.
-    pub xero_contact_id: Option<String>,
+    /// The Person billed, whose Stripe Customer the draft reuses.
+    pub billed_person_id: Option<Uuid>,
     pub stripe_account_id: Option<String>,
     pub stripe_iolta: bool,
     pub trust_state: Option<String>,
@@ -71,10 +71,11 @@ pub struct MatterBillingBatch {
     pub currency: String,
     pub entry_ids: Vec<Uuid>,
     pub cost_ids: Vec<Uuid>,
-    /// The provider's invoice id, saved the moment a raise returns — a
-    /// resume reuses it instead of re-raising under the provider's own
-    /// (finite) idempotency window.
-    pub xero_invoice_id: Option<String>,
+    /// The Matter Invoice the batch's draft became.
+    pub matter_invoice_id: Option<Uuid>,
+    /// A lawyer's recorded approval to collect into Operating (ENG-1343);
+    /// absent for a trust draft.
+    pub destination_approval_id: Option<Uuid>,
     /// The portion of the matter's agreed flat fee charged by this batch.
     pub flat_fee_cents: Option<i64>,
     pub actor_id: Uuid,
@@ -90,7 +91,7 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<MatterBillingBatch, sqlx::Err
         reference: row.try_get("reference")?,
         contact_name: row.try_get("contact_name")?,
         contact_email: row.try_get("contact_email")?,
-        xero_contact_id: row.try_get("xero_contact_id")?,
+        billed_person_id: row.try_get("billed_person_id")?,
         stripe_account_id: row.try_get("stripe_account_id")?,
         stripe_iolta: row.try_get("stripe_iolta")?,
         trust_state: row.try_get("trust_state")?,
@@ -102,7 +103,8 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<MatterBillingBatch, sqlx::Err
         currency: row.try_get("currency")?,
         entry_ids: row.try_get("entry_ids")?,
         cost_ids: row.try_get("cost_ids")?,
-        xero_invoice_id: row.try_get("xero_invoice_id")?,
+        matter_invoice_id: row.try_get("matter_invoice_id")?,
+        destination_approval_id: row.try_get("destination_approval_id")?,
         flat_fee_cents: row.try_get("flat_fee_cents")?,
         actor_id: row.try_get("actor_id")?,
         inserted_at: row.try_get("inserted_at")?,
@@ -134,8 +136,8 @@ async fn insert_in_tx(
     batch: &MatterBillingBatch,
 ) -> Result<MatterBillingBatch, BillingBatchError> {
     let row = sqlx::query(
-        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,xero_invoice_id,flat_fee_cents,actor_id,inserted_at,updated_at,contact_name,contact_email,first_attempted_at,xero_contact_id,due_date,stripe_account_id,stripe_iolta,stripe_invoice_id,trust_state) \
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *",
+        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,matter_invoice_id,flat_fee_cents,actor_id,inserted_at,updated_at,contact_name,contact_email,first_attempted_at,billed_person_id,due_date,stripe_account_id,stripe_iolta,stripe_invoice_id,trust_state,destination_approval_id) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING *",
     )
     .bind(batch.id)
     .bind(batch.project_id)
@@ -146,7 +148,7 @@ async fn insert_in_tx(
     .bind(&batch.currency)
     .bind(&batch.entry_ids)
     .bind(&batch.cost_ids)
-    .bind(&batch.xero_invoice_id)
+    .bind(batch.matter_invoice_id)
     .bind(batch.flat_fee_cents)
     .bind(batch.actor_id)
     .bind(batch.inserted_at)
@@ -154,12 +156,13 @@ async fn insert_in_tx(
     .bind(&batch.contact_name)
     .bind(&batch.contact_email)
     .bind(batch.first_attempted_at)
-    .bind(&batch.xero_contact_id)
+    .bind(batch.billed_person_id)
     .bind(batch.due_date)
     .bind(&batch.stripe_account_id)
     .bind(batch.stripe_iolta)
     .bind(&batch.stripe_invoice_id)
     .bind(&batch.trust_state)
+    .bind(batch.destination_approval_id)
     .fetch_one(&mut **tx)
     .await
     .map_err(|error| {
@@ -183,33 +186,11 @@ pub async fn start_attempt(
 ) -> Result<MatterBillingBatch, BillingBatchError> {
     let row = sqlx::query(
         "UPDATE matter_billing_batch SET \
-         first_attempted_at=CASE WHEN xero_invoice_id IS NULL THEN COALESCE(first_attempted_at,$2) ELSE first_attempted_at END, \
-         updated_at=CASE WHEN xero_invoice_id IS NULL AND first_attempted_at IS NULL THEN $2 ELSE updated_at END \
+         first_attempted_at=CASE WHEN stripe_invoice_id IS NULL THEN COALESCE(first_attempted_at,$2) ELSE first_attempted_at END, \
+         updated_at=CASE WHEN stripe_invoice_id IS NULL AND first_attempted_at IS NULL THEN $2 ELSE updated_at END \
          WHERE id=$1 RETURNING *",
     )
     .bind(id).bind(now).fetch_optional(&pg.0).await?
-    .ok_or(BillingBatchError::NotFound)?;
-    from_row(&row).map_err(BillingBatchError::Database)
-}
-
-/// Save the provider's invoice id the moment the raise returns — before any
-/// local flip — so a resumed batch reuses the exact invoice instead of
-/// re-raising and relying on the provider's own idempotency window.
-pub async fn attach_invoice(
-    pg: &PostgresDb,
-    id: Uuid,
-    xero_invoice_id: &str,
-) -> Result<MatterBillingBatch, BillingBatchError> {
-    let row = sqlx::query(
-        "UPDATE matter_billing_batch SET xero_invoice_id=$2, \
-         updated_at=CASE WHEN xero_invoice_id IS NULL THEN $3 ELSE updated_at END \
-         WHERE id=$1 AND (xero_invoice_id IS NULL OR xero_invoice_id=$2) RETURNING *",
-    )
-    .bind(id)
-    .bind(xero_invoice_id)
-    .bind(chrono::Utc::now())
-    .fetch_optional(&pg.0)
-    .await?
     .ok_or(BillingBatchError::NotFound)?;
     from_row(&row).map_err(BillingBatchError::Database)
 }
@@ -244,6 +225,7 @@ pub async fn insert_with_reservations(
     pg: &PostgresDb,
     batch: &MatterBillingBatch,
     expected_billed_fee_cents: Option<i64>,
+    operating: Option<&OperatingApproval<'_>>,
 ) -> Result<MatterBillingBatch, BillingBatchError> {
     if batch.total_cents <= 0 {
         return Err(BillingBatchError::Invalid("total"));
@@ -278,9 +260,60 @@ pub async fn insert_with_reservations(
             .await
             .map_err(BillingBatchError::from)?;
     }
-    let batch = insert_in_tx(&mut tx, batch).await?;
+    let mut batch = batch.clone();
+    if let Some(approval) = operating {
+        // The approval and the batch it is for commit together (ENG-1343).
+        let recorded = crate::invoice_destinations::record_in_tx(
+            &mut tx,
+            approval.firm_id,
+            batch.project_id,
+            batch.actor_id,
+            approval.reason,
+            approval.preview_digest,
+        )
+        .await
+        .map_err(|error| match error {
+            crate::invoice_destinations::DestinationError::Database(error) => {
+                BillingBatchError::Database(error)
+            }
+            _ => BillingBatchError::Invalid("operating approval"),
+        })?;
+        batch.destination_approval_id = Some(recorded.id);
+    }
+    let batch = insert_in_tx(&mut tx, &batch).await?;
     tx.commit().await?;
     Ok(batch)
+}
+
+/// A lawyer's approval to collect one batch into Operating, recorded with
+/// the batch it is for.
+pub struct OperatingApproval<'a> {
+    pub firm_id: Uuid,
+    pub reason: &'a str,
+    pub preview_digest: &'a str,
+}
+
+/// Link a batch to the Matter Invoice its draft became and complete it.
+///
+/// # Errors
+/// [`BillingBatchError::NotFound`] for an unknown batch.
+pub async fn settle(
+    pg: &PostgresDb,
+    id: Uuid,
+    invoice: Uuid,
+) -> Result<MatterBillingBatch, BillingBatchError> {
+    let result = sqlx::query(
+        "UPDATE matter_billing_batch SET matter_invoice_id=$2, updated_at=now()
+         WHERE id=$1 AND (matter_invoice_id IS NULL OR matter_invoice_id=$2)",
+    )
+    .bind(id)
+    .bind(invoice)
+    .execute(&pg.0)
+    .await?;
+    if result.rows_affected() != 1 {
+        return Err(BillingBatchError::NotFound);
+    }
+    complete(pg, id).await
 }
 
 const BILLED_FLAT_FEE_SQL: &str =
@@ -314,8 +347,9 @@ pub async fn pending_for_project(
     Ok(row.as_ref().map(from_row).transpose()?)
 }
 
-/// Complete a batch: its invoice exists in Xero, its mirror row is written,
-/// and its rows are invoiced. The next generation composes a new batch.
+/// Complete a batch: its Stripe draft exists, its Matter Invoice is
+/// recorded, and its rows are invoiced. The next generation composes a new
+/// batch.
 pub async fn complete(pg: &PostgresDb, id: Uuid) -> Result<MatterBillingBatch, BillingBatchError> {
     let mut tx = pg.0.begin().await?;
     // Completion releases the pending unique index, so it participates in
@@ -452,7 +486,7 @@ mod tests {
             billing_status: "unbilled".to_string(),
             receipt_document_id: uuid::Uuid::nil(),
             source_reference: None,
-            xero_invoice_id: None,
+            matter_invoice_id: None,
             inserted_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

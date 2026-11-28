@@ -6058,3 +6058,338 @@ CREATE UNIQUE INDEX efiling_fee_receipt_once ON efiling_transactions (fee_receip
 CREATE UNIQUE INDEX efiling_fee_cost_once ON efiling_transactions (fee_cost_id) WHERE fee_cost_id IS NOT NULL;
 CREATE UNIQUE INDEX efiling_fee_source_once ON efiling_transactions (fee_source_reference) WHERE fee_source_reference IS NOT NULL;
 CREATE INDEX project_costs_source_lookup ON project_costs (source_reference) WHERE source_reference IS NOT NULL;
+
+-- Migration: 20261128050000_time_entry_proposal.sql
+-- Time a lawyer has not yet approved (LAW-583, LAW-584). A Time Entry
+-- Proposal is recorded from the CLI or proposed from a Project's dated record
+-- (a Communication, a filed document, a completed Deadline, an e-filing). It
+-- prices nothing: approval creates the Time Entry and freezes its rate.
+-- See docs/glossary/time-entry-proposal.md.
+CREATE TABLE time_entry_proposal (
+    id UUID PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES project(id),
+    timekeeper_id UUID NOT NULL,
+    performed_on DATE NOT NULL,
+    minutes INTEGER NOT NULL CHECK (minutes BETWEEN 1 AND 1440),
+    narrative TEXT NOT NULL CHECK (length(btrim(narrative)) BETWEEN 1 AND 2000),
+    -- `lawyer` is time a lawyer recorded by hand; every other kind names the
+    -- dated record the proposal was drawn from.
+    source_kind TEXT NOT NULL CHECK (source_kind IN ('lawyer', 'communication', 'document', 'deadline', 'efiling')),
+    source_id UUID,
+    -- The caller's retry key: replaying an add returns the first row.
+    request_id UUID NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending_review', 'approved', 'discarded')),
+    created_by UUID NOT NULL REFERENCES person(id),
+    reviewed_by UUID REFERENCES person(id),
+    reviewed_at TIMESTAMPTZ,
+    entry_id UUID UNIQUE REFERENCES time_entry(id),
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Work dated before the day it was recorded is backfilled.
+    backfilled BOOLEAN GENERATED ALWAYS AS (performed_on < (timezone('UTC', inserted_at))::date) STORED,
+    UNIQUE (project_id, request_id),
+    FOREIGN KEY (project_id, timekeeper_id) REFERENCES person_project_role (project_id, person_id),
+    CONSTRAINT time_entry_proposal_source CHECK ((source_kind = 'lawyer') = (source_id IS NULL)),
+    CONSTRAINT time_entry_proposal_review_evidence CHECK (
+        (status = 'pending_review' AND reviewed_by IS NULL AND reviewed_at IS NULL AND entry_id IS NULL)
+        OR (status = 'discarded' AND reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL AND entry_id IS NULL)
+        OR (status = 'approved' AND reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL AND entry_id IS NOT NULL)
+    )
+);
+-- One proposal per source record, so a repeated backfill adds nothing.
+CREATE UNIQUE INDEX time_entry_proposal_source_record
+    ON time_entry_proposal (project_id, source_kind, source_id) WHERE source_id IS NOT NULL;
+CREATE INDEX time_entry_proposal_project ON time_entry_proposal (project_id, status, performed_on, id);
+
+-- Proposals are retained. Only a pending proposal changes, and only its
+-- performed date, minutes, narrative, and review decision.
+CREATE FUNCTION protect_time_entry_proposal() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Time Entry Proposals are retained; discard one instead';
+    END IF;
+    IF OLD.status <> 'pending_review' THEN
+        RAISE EXCEPTION 'A reviewed Time Entry Proposal keeps its decision';
+    END IF;
+    IF (to_jsonb(OLD) - ARRAY['performed_on','minutes','narrative','status','reviewed_by','reviewed_at','entry_id','updated_at','backfilled']) IS DISTINCT FROM
+       (to_jsonb(NEW) - ARRAY['performed_on','minutes','narrative','status','reviewed_by','reviewed_at','entry_id','updated_at','backfilled']) THEN
+        RAISE EXCEPTION 'A Time Entry Proposal keeps its Project, timekeeper, and source';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER time_entry_proposal_retained BEFORE UPDATE OR DELETE ON time_entry_proposal
+    FOR EACH ROW EXECUTE FUNCTION protect_time_entry_proposal();
+
+-- Migration: 20261128050100_legal_plan_claim_filing.sql
+-- Where and how a Legal Plan takes its claims (LAW-585, part of LAW-535):
+-- the claims address or portal, the email subject, a separate invoice
+-- address, and the proof the plan asks for. Firm data, set with
+-- `navigator legal-plans claim-filing`; the claim packet reads it rather
+-- than hard-coding any plan. See docs/legal-plans.md.
+ALTER TABLE legal_plan ADD COLUMN claim_filing JSONB;
+
+-- Migration: 20261128050200_invoice_destination_approval.sql
+-- A lawyer's approval to collect one invoice into the Firm's Stripe
+-- Operating account instead of trust (ENG-1343). A missing trust route never
+-- selects Operating on its own; this row is the audit record of the
+-- exception: who approved, when, why, the destination, and — through the
+-- invoice or Matter Billing Batch that references it — what for.
+CREATE TABLE invoice_destination_approval (
+    id UUID PRIMARY KEY,
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    project_id UUID NOT NULL REFERENCES project(id),
+    destination TEXT NOT NULL CHECK (destination = 'operating'),
+    reason TEXT NOT NULL CHECK (length(btrim(reason)) BETWEEN 1 AND 1000),
+    -- The reviewed invoice digest the approval was given for.
+    preview_digest TEXT NOT NULL CHECK (length(preview_digest) > 0),
+    approved_by UUID NOT NULL REFERENCES person(id),
+    approved_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX invoice_destination_approval_project ON invoice_destination_approval (project_id, approved_at);
+
+CREATE FUNCTION protect_invoice_destination_approval() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'An invoice destination approval is a retained audit record';
+END;
+$$;
+CREATE TRIGGER invoice_destination_approval_retained BEFORE UPDATE OR DELETE ON invoice_destination_approval
+    FOR EACH ROW EXECUTE FUNCTION protect_invoice_destination_approval();
+
+-- An Operating batch names the one approval it collects under; a retry
+-- stays pinned to it.
+ALTER TABLE matter_billing_batch ADD COLUMN destination_approval_id UUID UNIQUE REFERENCES invoice_destination_approval(id);
+ALTER TABLE matter_billing_batch ADD CONSTRAINT matter_billing_batch_operating_approved CHECK (destination_approval_id IS NULL OR (stripe_account_id IS NOT NULL AND NOT stripe_iolta));
+
+-- Migration: 20261128050300_stripe_customer.sql
+-- One Stripe Customer per billed Person in each of the Firm's Stripe
+-- accounts (ENG-1342, LAW-571). A draft reuses it rather than creating a
+-- Customer per invoice. Stripe ids are not secrets; keys never land here.
+CREATE TABLE stripe_customer (
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    stripe_account_id TEXT NOT NULL CHECK (stripe_account_id ~ '^acct_[A-Za-z0-9]+$'),
+    person_id UUID NOT NULL REFERENCES person(id),
+    customer_id TEXT NOT NULL CHECK (customer_id ~ '^cus_[A-Za-z0-9]+$'),
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (stripe_account_id, person_id)
+);
+CREATE INDEX stripe_customer_firm ON stripe_customer (firm_id);
+
+-- The Person a batch bills, so its draft finds that Person's Customer.
+ALTER TABLE matter_billing_batch ADD COLUMN billed_person_id UUID REFERENCES person(id);
+
+-- Migration: 20261128050400_matter_invoice_ledger.sql
+-- The Matter Invoice ledger (LAW-507). Stripe is the only invoice issuer;
+-- money collected outside Stripe (in person, by check or wire) is recorded by
+-- hand. Each invoice has its payments as separate rows, so the balance due is
+-- the invoice less its payments. Xero no longer issues or mirrors invoices:
+-- every `xero_invoice` row becomes a ledger row with `source = 'xero'` and its
+-- Xero id kept as `external_id`, and the work, costs, batches and trust
+-- allocations that named a Xero invoice now name its ledger row. Nothing is
+-- deleted from object storage.
+CREATE TABLE matter_invoice (
+    id UUID PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES project(id),
+    source TEXT NOT NULL CHECK (source IN ('stripe', 'in_person', 'check', 'wire', 'other', 'xero')),
+    -- The issuer's id: a Stripe invoice id, a check number, a Xero id kept as
+    -- history. Absent only on a Stripe draft not yet created.
+    external_id TEXT CHECK (external_id IS NULL OR length(btrim(external_id)) BETWEEN 1 AND 200),
+    -- What the client sees naming the invoice.
+    reference TEXT NOT NULL CHECK (length(btrim(reference)) BETWEEN 1 AND 200),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'draft', 'sent', 'paid', 'void', 'uncollectible')),
+    amount_cents BIGINT NOT NULL CHECK (amount_cents >= 0),
+    currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    issued_on DATE,
+    due_on DATE,
+    payer TEXT CHECK (payer IS NULL OR length(btrim(payer)) BETWEEN 1 AND 300),
+    memo TEXT CHECK (memo IS NULL OR length(btrim(memo)) BETWEEN 1 AND 2000),
+    -- Why a void or uncollectible invoice ended that way.
+    status_reason TEXT CHECK (status_reason IS NULL OR length(btrim(status_reason)) BETWEEN 1 AND 1000),
+    client_visible BOOLEAN NOT NULL DEFAULT false,
+    receipt_document_id UUID REFERENCES asset(id),
+    -- A Navigator-composed Stripe invoice: its retry key, frozen lines and
+    -- terms, where it collects, and the billed Person.
+    request_id UUID,
+    composition JSONB,
+    destination TEXT CHECK (destination IN ('trust', 'operating')),
+    trust_state TEXT CHECK (trust_state IS NULL OR trust_state ~ '^[A-Z]{2}$'),
+    stripe_account_id TEXT CHECK (stripe_account_id IS NULL OR stripe_account_id ~ '^acct_[A-Za-z0-9]+$'),
+    destination_approval_id UUID UNIQUE REFERENCES invoice_destination_approval(id),
+    billed_person_id UUID REFERENCES person(id),
+    first_attempted_at TIMESTAMPTZ,
+    created_by UUID REFERENCES person(id),
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (project_id, source, external_id),
+    UNIQUE (project_id, request_id),
+    CONSTRAINT matter_invoice_issued CHECK (status = 'pending' OR external_id IS NOT NULL OR source <> 'stripe'),
+    CONSTRAINT matter_invoice_destination CHECK (
+        (destination IS NULL AND destination_approval_id IS NULL)
+        OR (destination = 'trust' AND destination_approval_id IS NULL AND stripe_account_id IS NOT NULL)
+        OR (destination = 'operating' AND destination_approval_id IS NOT NULL AND stripe_account_id IS NOT NULL AND trust_state IS NULL)
+    )
+);
+CREATE INDEX matter_invoice_project ON matter_invoice (project_id, issued_on, id);
+CREATE INDEX matter_invoice_external ON matter_invoice (external_id) WHERE external_id IS NOT NULL;
+
+CREATE TABLE matter_invoice_payment (
+    id UUID PRIMARY KEY,
+    invoice_id UUID NOT NULL REFERENCES matter_invoice(id),
+    amount_cents BIGINT NOT NULL CHECK (amount_cents > 0),
+    received_on DATE NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('stripe', 'in_person', 'check', 'wire', 'other', 'xero')),
+    external_id TEXT CHECK (external_id IS NULL OR length(btrim(external_id)) BETWEEN 1 AND 200),
+    payer TEXT CHECK (payer IS NULL OR length(btrim(payer)) BETWEEN 1 AND 300),
+    memo TEXT CHECK (memo IS NULL OR length(btrim(memo)) BETWEEN 1 AND 2000),
+    client_visible BOOLEAN NOT NULL DEFAULT false,
+    recorded_by UUID REFERENCES person(id),
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (invoice_id, source, external_id)
+);
+CREATE INDEX matter_invoice_payment_invoice ON matter_invoice_payment (invoice_id, received_on, id);
+
+-- Payments are evidence: corrected by a new row, never edited or deleted.
+CREATE FUNCTION protect_matter_invoice_payment() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'A Matter Invoice payment is retained; record a correction instead';
+END;
+$$;
+CREATE TRIGGER matter_invoice_payment_retained BEFORE UPDATE OR DELETE ON matter_invoice_payment
+    FOR EACH ROW EXECUTE FUNCTION protect_matter_invoice_payment();
+
+-- Work, costs, batches and trust lines name their invoice by ledger row.
+ALTER TABLE time_entry ADD COLUMN matter_invoice_id UUID REFERENCES matter_invoice(id);
+ALTER TABLE project_costs ADD COLUMN matter_invoice_id UUID REFERENCES matter_invoice(id);
+ALTER TABLE matter_billing_batch ADD COLUMN matter_invoice_id UUID UNIQUE REFERENCES matter_invoice(id);
+ALTER TABLE iolta_allocation ADD COLUMN matter_invoice_id UUID REFERENCES matter_invoice(id);
+
+-- Carry every Xero invoice into the ledger as history, then relink. Clients
+-- saw these on the matter, so they stay client-visible. A Xero id work was
+-- marked under without a mirrored invoice keeps a ledger row too, so no link
+-- is lost. The audit triggers refuse unattributed updates; this relink
+-- changes no billing state, so they are off only for it.
+DO $$
+BEGIN
+INSERT INTO matter_invoice (id, project_id, source, external_id, reference, status, amount_cents, currency, issued_on, due_on, client_visible, inserted_at, updated_at)
+SELECT gen_random_uuid(), x.project_id, 'xero', x.xero_invoice_id, x.reference,
+    CASE upper(x.status)
+        WHEN 'DRAFT' THEN 'draft' WHEN 'SUBMITTED' THEN 'draft'
+        WHEN 'PAID' THEN 'paid' WHEN 'VOIDED' THEN 'void' WHEN 'DELETED' THEN 'void'
+        ELSE 'sent' END,
+    x.amount_cents, x.currency, (x.issued_at AT TIME ZONE 'UTC')::date,
+    (x.due_at AT TIME ZONE 'UTC')::date, true, x.inserted_at, x.updated_at
+FROM xero_invoice x JOIN project p ON p.id = x.project_id;
+
+INSERT INTO matter_invoice_payment (id, invoice_id, amount_cents, received_on, source, external_id, memo, client_visible, inserted_at)
+SELECT gen_random_uuid(), m.id, x.amount_paid_cents, (x.updated_at AT TIME ZONE 'UTC')::date, 'xero',
+    x.xero_invoice_id || ':paid', 'Paid to date when Xero invoicing was retired', true, x.updated_at
+FROM xero_invoice x JOIN matter_invoice m ON m.source = 'xero' AND m.external_id = x.xero_invoice_id
+    AND m.project_id = x.project_id
+WHERE x.amount_paid_cents > 0;
+
+INSERT INTO matter_invoice (id, project_id, source, external_id, reference, status, amount_cents, currency, memo)
+SELECT gen_random_uuid(), marked.project_id, 'xero', marked.xero_invoice_id,
+    'Xero invoice ' || marked.xero_invoice_id, 'sent', 0, 'USD',
+    'Recorded when Xero invoicing was retired; the Xero invoice was never mirrored'
+FROM (
+    SELECT project_id, xero_invoice_id FROM time_entry WHERE xero_invoice_id IS NOT NULL
+    UNION SELECT project_id, xero_invoice_id FROM project_costs WHERE xero_invoice_id IS NOT NULL
+    UNION SELECT project_id, xero_invoice_id FROM matter_billing_batch WHERE xero_invoice_id IS NOT NULL
+    UNION SELECT project_id, xero_invoice_id FROM iolta_allocation WHERE xero_invoice_id IS NOT NULL
+) marked
+WHERE NOT EXISTS (SELECT 1 FROM matter_invoice m WHERE m.source = 'xero'
+    AND m.external_id = marked.xero_invoice_id AND m.project_id = marked.project_id);
+
+ALTER TABLE time_entry DISABLE TRIGGER time_entry_audit_update;
+ALTER TABLE time_entry DISABLE TRIGGER time_entry_stage_firm;
+UPDATE time_entry t SET matter_invoice_id = m.id FROM matter_invoice m
+WHERE t.xero_invoice_id IS NOT NULL AND m.source = 'xero' AND m.external_id = t.xero_invoice_id
+    AND m.project_id = t.project_id;
+ALTER TABLE time_entry ENABLE TRIGGER time_entry_audit_update;
+ALTER TABLE time_entry ENABLE TRIGGER time_entry_stage_firm;
+
+ALTER TABLE project_costs DISABLE TRIGGER project_costs_audit_update;
+UPDATE project_costs c SET matter_invoice_id = m.id FROM matter_invoice m
+WHERE c.xero_invoice_id IS NOT NULL AND m.source = 'xero' AND m.external_id = c.xero_invoice_id
+    AND m.project_id = c.project_id;
+ALTER TABLE project_costs ENABLE TRIGGER project_costs_audit_update;
+
+UPDATE matter_billing_batch b SET matter_invoice_id = m.id FROM matter_invoice m
+WHERE b.xero_invoice_id IS NOT NULL AND m.source = 'xero' AND m.external_id = b.xero_invoice_id
+    AND m.project_id = b.project_id;
+
+UPDATE iolta_allocation a SET matter_invoice_id = m.id FROM matter_invoice m
+WHERE m.source = 'xero' AND m.external_id = a.xero_invoice_id AND m.project_id = a.project_id;
+END $$;
+
+ALTER TABLE time_entry DROP CONSTRAINT time_entry_status_evidence;
+ALTER TABLE time_entry DROP COLUMN xero_invoice_id;
+ALTER TABLE time_entry ADD CONSTRAINT time_entry_status_evidence CHECK ((billing_status IN ('unbilled', 'reserved') AND matter_invoice_id IS NULL AND written_off_reason IS NULL) OR (billing_status = 'invoiced' AND matter_invoice_id IS NOT NULL AND written_off_reason IS NULL) OR (billing_status = 'written_off' AND matter_invoice_id IS NULL AND written_off_reason IS NOT NULL));
+CREATE INDEX time_entry_matter_invoice ON time_entry (matter_invoice_id) WHERE matter_invoice_id IS NOT NULL;
+
+ALTER TABLE project_costs DROP CONSTRAINT project_costs_check;
+ALTER TABLE project_costs DROP COLUMN xero_invoice_id;
+ALTER TABLE project_costs ADD CONSTRAINT project_costs_invoiced_evidence CHECK ((billing_status = 'invoiced') = (matter_invoice_id IS NOT NULL));
+
+-- A Matter Billing Batch collects through Stripe; a completed Xero batch
+-- keeps its invoice as a ledger row.
+ALTER TABLE matter_billing_batch DROP CONSTRAINT matter_billing_batch_issuer;
+ALTER TABLE matter_billing_batch DROP COLUMN xero_invoice_id;
+ALTER TABLE matter_billing_batch DROP COLUMN xero_contact_id;
+ALTER TABLE matter_billing_batch ADD CONSTRAINT matter_billing_batch_issuer CHECK ((stripe_account_id IS NOT NULL) OR (NOT stripe_iolta AND stripe_invoice_id IS NULL));
+
+-- A trust withdrawal line settles a ledger invoice.
+DROP INDEX iolta_allocation_withdrawal_invoice_key;
+ALTER TABLE iolta_allocation DROP COLUMN xero_invoice_id;
+ALTER TABLE iolta_allocation ALTER COLUMN matter_invoice_id SET NOT NULL;
+CREATE UNIQUE INDEX iolta_allocation_withdrawal_invoice_key ON iolta_allocation (withdrawal_id, matter_invoice_id);
+
+DROP TABLE xero_invoice;
+
+-- Migration: 20261128050500_purchase_stripe_only.sql
+-- Purchases collect through Stripe only (LAW-507). A one-time Purchase is a
+-- sent Stripe invoice on the Firm's Operating account; a recurring one stays
+-- hosted Stripe Checkout. Xero no longer raises, reads, or cancels a
+-- Purchase invoice.
+--
+-- History: a Purchase Xero already invoiced keeps that invoice id, and a
+-- legacy Xero subscription keeps its repeating-invoice id, both read-only in
+-- `legacy_xero_*`, so the Firm can reconcile them in Xero. The Xero contact
+-- id is dropped. A reservation Xero never answered, or an unpaid Xero
+-- invoice Navigator can no longer check, is expired: it stops blocking a new
+-- Purchase, and any payment it received is reconciled by hand.
+ALTER TABLE purchase DROP CONSTRAINT purchase_provider_receipt;
+ALTER TABLE purchase DROP CONSTRAINT purchase_stripe_admission;
+ALTER TABLE purchase DROP CONSTRAINT purchase_stripe_activation;
+ALTER TABLE purchase ADD COLUMN legacy_xero_invoice_id TEXT;
+ALTER TABLE purchase ADD COLUMN legacy_xero_repeating_invoice_id TEXT;
+ALTER TABLE purchase ADD COLUMN stripe_invoice_id TEXT UNIQUE CHECK (stripe_invoice_id IS NULL OR stripe_invoice_id ~ '^in_[A-Za-z0-9]+$');
+
+DO $$
+BEGIN
+    UPDATE purchase SET legacy_xero_invoice_id = xero_invoice_id,
+        legacy_xero_repeating_invoice_id = xero_repeating_invoice_id;
+    UPDATE purchase SET state = 'expired', updated_at = now()
+        WHERE stripe_account_id IS NULL AND state IN ('invoicing', 'invoiced');
+    -- A one-time Purchase never competes with a subscription; the index is
+    -- recreated below with that filter.
+    DROP INDEX purchase_one_stripe_subscription;
+END $$;
+
+ALTER TABLE purchase DROP COLUMN xero_invoice_id;
+ALTER TABLE purchase DROP COLUMN xero_repeating_invoice_id;
+ALTER TABLE purchase DROP COLUMN xero_contact_id;
+
+-- Every unpaid, invoiced, or active Purchase is bound to Stripe, or is Xero history.
+ALTER TABLE purchase ADD CONSTRAINT purchase_provider CHECK (state IN ('complimentary', 'expired') OR stripe_account_id IS NOT NULL OR legacy_xero_invoice_id IS NOT NULL);
+-- An invoiced or active Purchase names exactly one provider receipt.
+ALTER TABLE purchase ADD CONSTRAINT purchase_provider_receipt CHECK (state NOT IN ('invoiced', 'active') OR num_nonnulls(legacy_xero_invoice_id, stripe_checkout_session_id, stripe_invoice_id) = 1);
+-- A one-time Stripe Purchase is an invoice with no renewal terms; a recurring one is hosted Checkout with accepted terms.
+ALTER TABLE purchase ADD CONSTRAINT purchase_stripe_admission CHECK ((stripe_account_id IS NULL AND stripe_firm_id IS NULL AND stripe_invoice_id IS NULL) OR (stripe_account_id IS NOT NULL AND stripe_firm_id IS NOT NULL AND legacy_xero_invoice_id IS NULL AND ((cadence = 'once' AND renewal_terms IS NULL AND stripe_checkout_session_id IS NULL) OR (cadence <> 'once' AND renewal_terms IS NOT NULL AND btrim(renewal_terms) <> '' AND renewal_consented_at IS NOT NULL AND stripe_invoice_id IS NULL))));
+-- Activation needs the paid invoice, or the paid subscription and its period.
+ALTER TABLE purchase ADD CONSTRAINT purchase_stripe_activation CHECK (stripe_account_id IS NULL OR state <> 'active' OR (cadence = 'once' AND stripe_invoice_id IS NOT NULL) OR (cadence <> 'once' AND stripe_customer_id IS NOT NULL AND stripe_subscription_id IS NOT NULL AND stripe_period_end IS NOT NULL));
+
+-- A Client cannot open monthly and yearly Stripe checkout concurrently.
+CREATE UNIQUE INDEX purchase_one_stripe_subscription ON purchase (person_id)
+    WHERE stripe_account_id IS NOT NULL AND cadence <> 'once' AND renewal_cancelled_at IS NULL AND state <> 'expired';

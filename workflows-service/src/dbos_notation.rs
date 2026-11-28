@@ -664,6 +664,11 @@ async fn start_machine(
 /// journal append, then the funnel/notification/close effects. The
 /// questionnaire never dispatches: its answer payload rides the journal row
 /// directly, exactly as its handler does.
+///
+/// A `generate_pdf__*` step renders before the state moves (LAW-586): a
+/// document that cannot render fails the run at the state it came from,
+/// with the render's reason, instead of parking at the render step with no
+/// PDF behind it.
 #[allow(clippy::too_many_lines)]
 async fn signal(
     context: &Context,
@@ -684,14 +689,17 @@ async fn signal(
         .map_err(NotationTransitionError::from_logic)
         .map_err(dbos::Error::Application)?;
 
-    apply_transition_step(
-        context,
-        notation_id,
-        token,
-        &machine.current_state,
-        next.as_str(),
-    )
-    .await?;
+    let render_first = kind == MachineKind::Workflow && next.prefix() == "generate_pdf";
+    if !render_first {
+        apply_transition_step(
+            context,
+            notation_id,
+            token,
+            &machine.current_state,
+            next.as_str(),
+        )
+        .await?;
+    }
 
     // Step-kind side effects run BEFORE the journal append so the artifact
     // they produce can ride the journal row's payload — the workflow
@@ -733,6 +741,16 @@ async fn signal(
     } else {
         None
     };
+    if render_first {
+        apply_transition_step(
+            context,
+            notation_id,
+            token,
+            &machine.current_state,
+            next.as_str(),
+        )
+        .await?;
+    }
 
     // The journal append — skipped for ephemeral machines, which have no
     // `notations` row for `append_event`'s read-back. A questionnaire signal
