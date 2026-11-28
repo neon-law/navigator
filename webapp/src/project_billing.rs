@@ -983,6 +983,7 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
                 label { class: "matter-billing-operating",
                     "Collect into Operating instead (earned work only) — reason"
                     textarea {
+                        class: "nav-input",
                         name: "operating_reason",
                         rows: "2",
                         maxlength: "1000",
@@ -1970,10 +1971,10 @@ mod tests {
             html.contains("Generate invoice"),
             "missing [Generate invoice]"
         );
-        // The compose-before-raise promise is on the action's face.
+        // The draft-before-send promise is on the action's face.
         assert!(
-            html.contains("the compose is shown before anything is raised"),
-            "missing [the compose is shown before anything is raised]"
+            html.contains("Nothing reaches the client until you send the draft."),
+            "missing [Nothing reaches the client until you send the draft.]"
         );
     }
 

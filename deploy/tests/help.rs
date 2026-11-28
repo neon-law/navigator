@@ -251,6 +251,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "gate",
             "import-source",
             "invite",
+            "invoice",
             "labels",
             "lifecycle",
             "migrate-letter",
@@ -274,6 +275,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "status",
             "surfaces",
             "sync",
+            "time",
             "watch",
             "help"
         ]
