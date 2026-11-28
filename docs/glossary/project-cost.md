@@ -13,4 +13,9 @@ Confirmed, unbilled costs pass through to a matter invoice at their recorded amo
 separate from the legal-services fee, including when an agreed flat fee covers the work. The invoice review binds the
 cost's amount, description, payee, and date; changing those inputs requires a fresh review before generation.
 
+Project Finances shows the [Expense Category](expense-category.md) from the receipt and links to the receipt while it is
+available. Costs with legacy documents that carry no category appear under Other expense. Project Finances totals
+confirmed, unbilled costs by category and currency. Firm Finances shows the same costs across the viewer's participating
+matters. A retained cost whose receipt is unavailable is marked Receipt missing.
+
 The table is `project_costs`.

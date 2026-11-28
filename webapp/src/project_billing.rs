@@ -174,8 +174,16 @@ pub struct ExpenseRow {
     pub occurred_on: String,
     pub payee: String,
     pub description: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub receipt_id: Option<uuid::Uuid>,
     /// Formatted amount, e.g. `$421.00`.
     pub amount: String,
+    #[serde(default)]
+    pub amount_cents: i64,
+    #[serde(default)]
+    pub currency: String,
     /// The stored words for the two statuses, presentation-cased —
     /// `Estimated`/`Confirmed` and `Unbilled`/`Reserved`/`Invoiced`/`Resolved`.
     pub amount_status: String,
@@ -844,6 +852,7 @@ pub fn BillingTab(
                         ),
                     }
                 } else {
+                    {unbilled_expense_summary(&expenses)}
                     div { class: "nav-table-wrap",
                         table { class: "nav-table matter-billing-expense-table",
                             thead {
@@ -851,9 +860,11 @@ pub fn BillingTab(
                                     th { scope: "col", "Date" }
                                     th { scope: "col", "Payee" }
                                     th { scope: "col", "Description" }
+                                    th { scope: "col", "Category" }
                                     th { scope: "col", "Amount" }
                                     th { scope: "col", "Amount status" }
                                     th { scope: "col", "Billing" }
+                                    th { scope: "col", "Receipt" }
                                 }
                             }
                             tbody {
@@ -862,6 +873,7 @@ pub fn BillingTab(
                                         td { "{row.occurred_on}" }
                                         td { "{row.payee}" }
                                         td { "{row.description}" }
+                                        td { "{row.category}" }
                                         td { "{row.amount}" }
                                         td {
                                             Badge {
@@ -873,6 +885,14 @@ pub fn BillingTab(
                                             Badge {
                                                 tone: expense_billing_tone(&row.billing_status),
                                                 "{expense_billing_label(&row.billing_status)}"
+                                            }
+                                        }
+                                        td {
+                                            if let Some(id) = row.receipt_id {
+                                                a { class: "nav-link", href: "/app/projects/{code}/documents/{id}",
+                                                    aria_label: "View receipt for {row.description}", "View receipt" }
+                                            } else {
+                                                "Receipt missing"
                                             }
                                         }
                                     }
@@ -971,6 +991,30 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
     }
 }
 
+fn unbilled_expense_summary(expenses: &[ExpenseRow]) -> Element {
+    let mut groups = std::collections::BTreeMap::new();
+    for row in expenses
+        .iter()
+        .filter(|row| row.amount_status == "confirmed" && row.billing_status == "unbilled")
+    {
+        *groups
+            .entry((&row.category, &row.currency))
+            .or_insert(0i128) += i128::from(row.amount_cents);
+    }
+    if groups.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        h4 { "Confirmed, unbilled expenses" }
+        dl {
+            for ((category, currency), total) in groups {
+                dt { "{category}" }
+                dd { {crate::firm_expenses::format_expense(total, currency)} }
+            }
+        }
+    }
+}
+
 /// The tab's rows, read once for the dashboard's server fn. The caller's
 /// authorization seam has already run by the time this is called — every
 /// read here is the matter's own.
@@ -1028,7 +1072,7 @@ pub(crate) async fn read_billing(
 
     let invoice_rows = mirrored_invoice_rows(application_store, project_id).await?;
 
-    let costs = store::project_costs::list_for_project(pg, project_id)
+    let costs = store::project_costs::for_expense_review(pg, &[project_id], false)
         .await
         .map_err(crate::lawyer_project_detail::server_error)?;
     let expense_rows = costs
@@ -1037,7 +1081,14 @@ pub(crate) async fn read_billing(
             occurred_on: row.occurred_on.to_string(),
             payee: row.payee.clone(),
             description: row.description.clone(),
-            amount: crate::portal_project_detail::format_usd(row.amount_cents),
+            category: row.category.label().into(),
+            receipt_id: row.receipt_id,
+            amount_cents: row.amount_cents,
+            currency: row.currency.clone(),
+            amount: crate::firm_expenses::format_expense(
+                i128::from(row.amount_cents),
+                &row.currency,
+            ),
             amount_status: row.amount_status.clone(),
             billing_status: row.billing_status.clone(),
         })
@@ -1430,6 +1481,28 @@ pub(crate) async fn read_generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matter_expense_summary_totals_only_confirmed_unbilled_costs() {
+        let expenses = [
+            ("confirmed", "unbilled", 1200),
+            ("confirmed", "unbilled", 150),
+            ("estimated", "unbilled", 5000),
+            ("confirmed", "reserved", 7000),
+        ]
+        .map(|(amount_status, billing_status, amount_cents)| ExpenseRow {
+            category: "Court filing fee".into(),
+            currency: "USD".into(),
+            amount_status: amount_status.into(),
+            billing_status: billing_status.into(),
+            amount_cents,
+            ..ExpenseRow::default()
+        });
+        let html = dioxus_ssr::render_element(unbilled_expense_summary(&expenses));
+        assert!(html.contains("Court filing fee"));
+        assert!(html.contains("$13.50"));
+        assert!(!html.contains("$63.50"));
+    }
 
     #[test]
     fn elapsed_renders_as_a_stopwatch() {
