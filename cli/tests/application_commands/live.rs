@@ -6,6 +6,9 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use uuid::Uuid;
 
+/// The runtime KMS key version every live site seals Firm credentials with.
+pub const LIVE_KMS: &str = "live-site-kms";
+
 pub struct LiveSite {
     pub host: String,
     pub project: store::projects::Project,
@@ -78,6 +81,10 @@ impl LiveSite {
                 canonical_base_url: None,
                 jev: None,
             })
+            .layer(axum::Extension(
+                std::sync::Arc::new(cloud::FakeKms::new(LIVE_KMS))
+                    as std::sync::Arc<dyn cloud::RuntimeKms>,
+            ))
             .layer(axum::middleware::from_fn(
                 move |request, next: axum::middleware::Next| {
                     store::postgres::PostgresDb::with_test_db(request_pg.clone(), next.run(request))
@@ -117,13 +124,18 @@ impl LiveSite {
 
     /// `navigator project <args> --project <code> --host <site>`.
     pub fn navigator(&self, args: &[&str]) -> Command {
+        self.navigator_on(&self.project.code, args)
+    }
+
+    /// The same signed-in lawyer, aimed at another Project's code.
+    pub fn navigator_on(&self, code: &str, args: &[&str]) -> Command {
         let mut command = Command::cargo_bin("navigator").unwrap();
         command
             .current_dir(self.root.path())
             .env("NAVIGATOR_CREDENTIALS_FILE", &self.credentials)
             .arg("project")
             .args(args)
-            .args(["--project", &self.project.code, "--host", &self.host]);
+            .args(["--project", code, "--host", &self.host]);
         command
     }
 
@@ -131,7 +143,7 @@ impl LiveSite {
     /// and the billing report print JSON with `--json`; claim verbs always do.
     pub fn json(&self, args: &[&str]) -> Value {
         let mut command = self.navigator(args);
-        if args.first() == Some(&"time") || args == ["billing"] {
+        if matches!(args.first(), Some(&"time" | &"invoice")) || args == ["billing"] {
             command.arg("--json");
         }
         let output = command.assert().success();

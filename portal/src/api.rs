@@ -761,6 +761,36 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "GET",
+            "/app/api/projects/{id}/invoices",
+            get(crate::matter_invoice_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/drafts",
+            post(crate::matter_invoice_api::create),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/records",
+            post(crate::matter_invoice_api::record),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/{invoice_id}/send",
+            post(crate::matter_invoice_api::send),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/{invoice_id}/payments",
+            post(crate::matter_invoice_api::payment),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices/{invoice_id}/{verb}",
+            post(crate::matter_invoice_api::close),
+        ),
+        (
+            "GET",
             "/app/api/projects/{id}/tasks",
             get(crate::project_tasks_api::list),
         ),
@@ -8519,7 +8549,9 @@ async fn document_pointer(
         docusign_envelope_id: store::document_pointers::envelope_id_from_asset_metadata(
             current.metadata.as_ref(),
         ),
-        xero_invoice_id: None,
+        stripe_invoice_id: None,
+        source: None,
+        external_id: None,
         signing: current.signing,
         notarization: current.notarization.clone(),
         // The evidence block rides with the current revision, so a pointer

@@ -3645,6 +3645,27 @@ test_time_entry_proposals_require_lawyer_tier if {
     not authz.allow with input as {"path": array.concat(base, ["proposal", "invoice"]), "method": "POST", "session": lawyer_session}
 }
 
+test_matter_invoice_verbs_require_lawyer_tier if {
+    base := ["app", "api", "projects", "sample", "invoices"]
+    writes := [
+        {"path": base, "method": "POST"},
+        {"path": array.concat(base, ["drafts"]), "method": "POST"},
+        {"path": array.concat(base, ["records"]), "method": "POST"},
+        {"path": array.concat(base, ["invoice", "send"]), "method": "POST"},
+        {"path": array.concat(base, ["invoice", "payments"]), "method": "POST"},
+        {"path": array.concat(base, ["invoice", "void"]), "method": "POST"},
+        {"path": array.concat(base, ["invoice", "uncollectible"]), "method": "POST"},
+    ]
+    authz.allow with input as {"path": base, "method": "GET", "session": lawyer_session}
+    every request in writes {
+        authz.allow with input as {"path": request.path, "method": request.method, "session": lawyer_session}
+        not authz.allow with input as {"path": request.path, "method": request.method, "session": client_session}
+        not authz.allow with input as {"path": request.path, "method": request.method, "session": clerk_session}
+    }
+    not authz.allow with input as {"path": array.concat(base, ["invoice", "delete"]), "method": "POST", "session": lawyer_session}
+    not authz.allow with input as {"path": array.concat(base, ["invoice"]), "method": "DELETE", "session": lawyer_session}
+}
+
 test_claim_packet_and_filing_rules_require_lawyer_tier if {
     packet := ["app", "api", "projects", "sample", "legal-plan-claims", "claim", "packet"]
     filing := ["app", "api", "firms", "sample", "legal-plans", "plan", "claim-filing"]

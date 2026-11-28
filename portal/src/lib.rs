@@ -109,6 +109,7 @@ pub(crate) mod handoffs_api;
 pub(crate) mod inbox_import_api;
 pub(crate) mod lawyer_mailbox;
 pub(crate) mod matter_caption_api;
+pub(crate) mod matter_invoice_api;
 pub(crate) mod module_records_api;
 pub(crate) mod pages_api;
 mod private_chart;

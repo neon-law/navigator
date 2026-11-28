@@ -438,18 +438,42 @@ route_allow if {
     is_lawyer(input.session)
 }
 
-# Matter invoice generation: POST /app/api/projects/{id}/invoices — the
-# command that raises one Xero invoice across the billing provider seam from
-# the matter's unbilled work. Lawyer tier, the same gate the `LawyerSession`
-# extractor applies; the handler resolves `store::access::matter_viewer` and
-# answers 404 for a caller with no firm-side participation row, Owner and
-# Admin included.
+# Matter invoices (ENG-1342, LAW-506): POST /app/api/projects/{id}/invoices
+# drafts one Stripe invoice from the matter's unbilled work, and GET lists
+# the matter's invoices; POST .../invoices/{drafts,records} composes a draft
+# or records money collected outside Stripe; POST .../invoices/{invoice}/
+# {send,payments,void,uncollectible} acts on one. Lawyer tier, the same gate
+# the `LawyerSession` extractor applies; the handler resolves
+# `store::access::matter_viewer` and answers 404 for a caller with no
+# firm-side participation row, Owner and Admin included.
 route_allow if {
     input.path[0] == "app"
     input.path[1] == "api"
     input.path[2] == "projects"
     input.path[4] == "invoices"
     count(input.path) == 5
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "invoices"
+    input.path[5] in {"drafts", "records"}
+    count(input.path) == 6
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "invoices"
+    input.path[6] in {"send", "payments", "void", "uncollectible"}
+    count(input.path) == 7
     input.method == "POST"
     is_lawyer(input.session)
 }

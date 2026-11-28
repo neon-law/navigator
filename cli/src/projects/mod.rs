@@ -35,6 +35,7 @@ pub mod forge_github;
 pub mod gate;
 pub mod ics;
 pub mod invite;
+pub mod invoice;
 pub mod jj;
 pub mod jj_billing;
 pub mod jj_commands;

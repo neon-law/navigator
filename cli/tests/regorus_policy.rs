@@ -540,9 +540,11 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // Receipt-backed cost posting admits lawyers and denies clients, clerks, and anonymous callers.
     // Imported Dropbox Sign retainer verification admits lawyers and denies clerks, clients, and anonymous callers.
     // Filing-fee settlement admits Lawyer and denies Client and Clerk. The handler checks Project and Firm scope.
+    // Time Entry Proposals, the claim packet and filing rules, and matter invoice verbs admit Lawyer and deny
+    // Client and Clerk: 730 + 3 = 733.
     assert_eq!(
         test_names.len(),
-        730,
+        733,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

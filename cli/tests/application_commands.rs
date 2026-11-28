@@ -8,6 +8,8 @@ mod claims;
 mod documents;
 #[path = "application_commands/firm.rs"]
 mod firm;
+#[path = "application_commands/invoices.rs"]
+mod invoices;
 #[path = "application_commands/live.rs"]
 mod live;
 #[path = "application_commands/onboarding.rs"]
