@@ -15,7 +15,7 @@ visibility, or signing-method declaration alone provides no execution evidence.
 The matter page, `navigator project status`, `navigator project lifecycle`, and batched lifecycle reads use the same
 execution evidence.
 
-DocuSign upload verification is server-stamped in Asset metadata. Verification of a Dropbox Sign import is recorded in
-`onboarding_signature_evidence` against the Firm, Project, and exact document revision.
+DocuSign upload verification is server-stamped in Asset metadata. Verification of a Dropbox Sign import is recorded as
+[Onboarding Signature Evidence](onboarding-signature-evidence.md) against the Firm, Project, and document revision.
 
 [import]: ../project-repositories.md#import-a-completed-clio-or-dropbox-sign-retainer

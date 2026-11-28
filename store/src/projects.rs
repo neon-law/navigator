@@ -3601,7 +3601,7 @@ impl MatterLifecycle {
         match self {
             MatterLifecycle::OnboardingOptional => "Onboarding is optional for this Project.",
             MatterLifecycle::NeedsOnboarding => "Onboarding is awaiting verified execution.",
-            MatterLifecycle::OnboardingOnFile => "Onboarding execution is verified.",
+            MatterLifecycle::OnboardingOnFile => "Onboarding is verified as completed.",
             MatterLifecycle::Closed => "This matter is closed.",
         }
     }

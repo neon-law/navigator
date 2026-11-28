@@ -1477,6 +1477,17 @@ erDiagram
         json result
         boolean started
     }
+    onboarding_signature_evidence {
+        string asset_id
+        string firm_id
+        string project_id
+        string provider
+        string provider_account_email
+        string provider_request_id
+        string signed_on
+        string verified_at
+        string verified_by
+    }
     outcome_estimate {
         uuid author_person_id
         datetime expected_resolution_on
@@ -2502,6 +2513,10 @@ erDiagram
     project }o--|| notation_project_transfer : references
     communication }o--|| notation_source : references
     notation }o--|| notation_source : references
+    asset }o--|| onboarding_signature_evidence : references
+    firm }o--|| onboarding_signature_evidence : references
+    person }o--|| onboarding_signature_evidence : references
+    project }o--|| onboarding_signature_evidence : references
     person }o--|| outcome_estimate : references
     project }o--|| outcome_estimate : references
     person }o--|| person_calendar : references
