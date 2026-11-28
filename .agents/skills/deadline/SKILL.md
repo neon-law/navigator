@@ -128,28 +128,22 @@ keeps it complete.
 Open `/app/projects/<code>` and confirm the Deadlines panel lists the row with the right date, role, and overdue state.
 A client sees only rows that carry a client lead time.
 
-## 5. Remind the channel
+## 5. Verify Slack reminders
 
-Post reminders in the Project's **private** Slack channel, named by `private_slack_channel` in `navigator.yaml`. Never
-post a deadline in a channel shared with the client, and never in a channel you have not confirmed is that one.
+When the Firm has connected Slack, the worker sends reminders to the Project's recorded private channel. It checks the
+current open, confirmed Deadline before each post. The reminder tags the Lawyer DRIs and the firm-side deadline owner
+whose Slack accounts resolve. It includes what is due, the governing date or cutoff, the authority, the matter page, and
+the Deadline ID. For timed deadlines, Slack also displays the cutoff in the reader's local time.
 
-Each reminder carries:
+Reminders go out from 8 a.m. in the governing time zone on the internal lead date, the previous weekday, and the due
+date. Earlier cutoffs move the due-day reminder earlier. Overlapping reminders produce one post. An open Deadline gets
+one overdue escalation within 24 hours of the cutoff. Completing or cancelling the Deadline stops future reminders.
 
-- the action required, in one line;
-- the due instant in the court's time zone and in the lawyer DRI's local time;
-- the authority (`court_order`, rule, or citation);
-- a mention of the owner, when one is recorded;
-- the link to `/app/projects/<code>`;
-- the Deadline id, so a later run can find the reminders that belong to it.
+When completing or cancelling a Deadline, post a status note with its ID if Slack is connected. Use the
+`private_slack_channel` listed in `navigator.yaml` for that manual note.
 
-Schedule them with the Slack connector's scheduled message: one at the internal lead, one the business day before, and
-one on the morning of the due date. When a Deadline is completed or cancelled, post a short note in the same channel
-saying so and naming the id. The connector cannot delete a scheduled message, so tell the lawyer DRI which scheduled
-reminders to remove.
-
-Escalate an open Deadline that is past due: post again, mention the owner and the lawyer DRI, and say it is overdue.
-
-Keep client identities and matter facts out of every reminder beyond what the private channel already holds.
+Use the channel's actual message when verifying delivery. Keep client identities and matter facts out of any manual
+follow-up beyond what the private channel already holds.
 
 ## 6. Calendar mirror (optional)
 
@@ -165,6 +159,6 @@ to the lawyer DRI.
 
 ## 8. Report what succeeded
 
-End with what actually happened on each surface: the Deadline row (id and read-back), the matter page, each Slack
-message or scheduled reminder, and any calendar event. If a surface failed or is unsupported, say so plainly. Do not
-report a reminder as set when it was not.
+Report the Deadline ID and read-back, the matter page, any verified Slack delivery, and any calendar event. Report
+future Slack reminders as pending while they await their delivery time. Report any surface that failed or was
+unavailable.
