@@ -993,7 +993,10 @@ async fn report_forgejo_branches(
         let review = if origin_head.is_some() {
             BranchReview::DifferentGitHubHead
         } else if let Some(github) = github {
-            match github.merged_review_for_head(branch, forgejo_head).await {
+            match github
+                .merged_review_for_head(branch, "main", forgejo_head)
+                .await
+            {
                 Ok(Some(number)) => BranchReview::MergedGitHubReview { number },
                 Ok(None) => BranchReview::NoMatchingReview,
                 Err(_) => BranchReview::ReviewUnavailable,

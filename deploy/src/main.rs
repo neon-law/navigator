@@ -2273,7 +2273,7 @@ enum ForgejoPolicyCmd {
     RunnerOnce(ForgejoRunnerArgs),
     /// Start a disposable runner for every queued Actions job, forever. Runs in-cluster.
     #[command(
-        after_help = "FORGEJO_TOKEN holds the environment's operator token; it never enters a job pod. \
+        after_help = "FORGEJO_TOKEN authorizes the selected Forgejo scope and never enters a job pod. \
 Each runner is the same isolated, repository-scoped one-job Job `runner-once` starts. \
 See docs/forgejo-deployment.md."
     )]

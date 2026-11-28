@@ -115,19 +115,18 @@ impl Forgejo {
     }
 
     /// Repository id → count of jobs waiting for a `self-hosted` runner.
-    async fn waiting(&self, repository_id: Option<u64>) -> Result<BTreeMap<u64, usize>> {
-        let jobs: Vec<WaitingJob> = serde_json::from_value(
-            self.get(&format!(
-                "/admin/actions/runners/jobs?labels={RUNNER_LABEL}"
-            ))
+    async fn waiting(&self, scope: Option<&(u64, String)>) -> Result<BTreeMap<u64, usize>> {
+        let runners = runner_path(scope.map(|(_, repository)| repository.as_str()));
+        let listed = self
+            .get(&format!("{runners}/jobs?labels={RUNNER_LABEL}"))
             .await?
-            .unwrap_or(Value::Array(Vec::new())),
-        )
-        .context("read waiting Actions jobs")?;
+            .context("Forgejo runner queue endpoint is unavailable")?;
+        let jobs: Option<Vec<WaitingJob>> =
+            serde_json::from_value(listed).context("read waiting Actions jobs")?;
         let mut waiting = BTreeMap::new();
-        for job in jobs.into_iter().filter(|job| {
+        for job in jobs.into_iter().flatten().filter(|job| {
             (job.status.is_empty() || job.status == "waiting")
-                && repository_id.is_none_or(|id| job.repo_id == id)
+                && scope.is_none_or(|(id, _)| job.repo_id == *id)
         }) {
             *waiting.entry(job.repo_id).or_default() += 1;
         }
@@ -212,18 +211,19 @@ impl Forgejo {
             .map(str::to_owned))
     }
 
-    async fn runner_registrations(&self) -> Result<Vec<AdminRunner>> {
-        Ok(serde_json::from_value(
-            self.get("/admin/actions/runners?limit=50")
-                .await?
-                .unwrap_or(Value::Array(Vec::new())),
-        )?)
+    async fn runner_registrations(&self, repository: Option<&str>) -> Result<Vec<AdminRunner>> {
+        let runners = runner_path(repository);
+        let listed = self.get(&format!("{runners}?limit=50")).await?;
+        let registrations: Option<Vec<AdminRunner>> =
+            serde_json::from_value(listed.unwrap_or(Value::Null))?;
+        Ok(registrations.unwrap_or_default())
     }
 
-    async fn remove_registration(&self, id: u64) -> Result<()> {
+    async fn remove_registration(&self, repository: Option<&str>, id: u64) -> Result<()> {
+        let runners = runner_path(repository);
         let response = self
             .client
-            .delete(format!("{}/api/v1/admin/actions/runners/{id}", self.origin))
+            .delete(format!("{}/api/v1{runners}/{id}", self.origin))
             .bearer_auth(&self.token)
             .send()
             .await?;
@@ -236,6 +236,13 @@ impl Forgejo {
             response.status()
         );
         Ok(())
+    }
+}
+
+fn runner_path(repository: Option<&str>) -> String {
+    match repository {
+        Some(repository) => format!("/repos/{repository}/actions/runners"),
+        None => "/admin/actions/runners".to_owned(),
     }
 }
 
@@ -493,7 +500,13 @@ impl Controller {
         // A registration without a Job: the launch stopped between
         // registering and creating its Job. Seen twice, so a launch in
         // progress elsewhere is never raced.
-        let registrations = self.runtime.block_on(self.forgejo.runner_registrations())?;
+        let repository = self
+            .repository_scope
+            .as_ref()
+            .map(|(_, name)| name.as_str());
+        let registrations = self
+            .runtime
+            .block_on(self.forgejo.runner_registrations(repository))?;
         let mut unowned = BTreeSet::new();
         for registration in registrations {
             if is_runner_job_name(&registration.name)
@@ -505,8 +518,10 @@ impl Controller {
                 && !owned.contains(&registration.name)
             {
                 if self.unowned_registrations.contains(&registration.id) {
-                    self.runtime
-                        .block_on(self.forgejo.remove_registration(registration.id))?;
+                    self.runtime.block_on(
+                        self.forgejo
+                            .remove_registration(repository, registration.id),
+                    )?;
                     tracing::warn!(target: "forgejo", event = "forgejo.runner.orphan_cleaned", registration = registration.id, "removed a runner registration with no Job");
                     removed += 1;
                 } else {
@@ -725,9 +740,7 @@ impl Controller {
             0
         });
         let scope = self.repository_scope.as_ref();
-        let by_id = self
-            .runtime
-            .block_on(self.forgejo.waiting(scope.map(|(id, _)| *id)))?;
+        let by_id = self.runtime.block_on(self.forgejo.waiting(scope))?;
         let mut waiting = BTreeMap::new();
         for (id, count) in by_id {
             let repository = if let Some((_, name)) = scope {
@@ -859,7 +872,7 @@ pub(in crate::devx) fn run(options: &Options) -> Result<()> {
         "name the Forgejo and Navigator hosts with --egress-host"
     );
     let token = std::env::var("FORGEJO_TOKEN")
-        .context("FORGEJO_TOKEN must hold the environment's Forgejo operator token")?;
+        .context("FORGEJO_TOKEN must authorize the selected Forgejo runner scope")?;
     let cluster: Arc<dyn Cluster> = if let Some(context) = &options.context {
         runner::validate_namespace(context, &options.runner_namespace)?;
         Arc::new(super::cluster::Kube::selected(
@@ -1569,10 +1582,11 @@ mod tests {
             let server = MockServer::start().await;
             for (url, body) in [
                 ("/api/v1/repos/o/canary", json!({"id": 7, "private": true, "full_name": "o/canary"})),
-                ("/api/v1/admin/actions/runners/jobs", json!([{"repo_id": 8, "status": "waiting"}])),
-                ("/api/v1/admin/actions/runners", json!([
+                ("/api/v1/repos/o/canary/actions/runners/jobs", json!([{"repo_id": 8, "status": "waiting"}])),
+                ("/api/v1/repos/o/canary/actions/runners", json!([
                     {"id": 11, "name": "forgejo-job-0123456789abcdef0123456789abcdef", "repo_id": 8},
-                    {"id": 12, "name": "forgejo-job-abcdef0123456789abcdef0123456789"}
+                    {"id": 12, "name": "forgejo-job-abcdef0123456789abcdef0123456789"},
+                    {"id": 13, "name": "forgejo-job-fedcba9876543210fedcba9876543210", "repo_id": 7}
                 ])),
                 ("/api/v1/repos/o/canary/actions/runs", json!({"workflow_runs": []})),
             ] {
@@ -1582,16 +1596,25 @@ mod tests {
                     .mount(&server)
                     .await;
             }
-            for url in ["/api/v1/repositories/8", "/api/v1/repos/search"] {
+            for url in [
+                "/api/v1/repositories/8",
+                "/api/v1/repos/search",
+                "/api/v1/admin/actions/runners/jobs",
+                "/api/v1/admin/actions/runners",
+                "/api/v1/admin/actions/runners/13",
+                "/api/v1/repos/o/canary/actions/runners/11",
+                "/api/v1/repos/o/canary/actions/runners/12",
+            ] {
                 Mock::given(path(url))
-                    .respond_with(ResponseTemplate::new(500))
+                    .respond_with(ResponseTemplate::new(403))
                     .expect(0)
                     .mount(&server)
                     .await;
             }
             Mock::given(method("DELETE"))
+                .and(path("/api/v1/repos/o/canary/actions/runners/13"))
                 .respond_with(ResponseTemplate::new(204))
-                .expect(0)
+                .expect(1)
                 .mount(&server)
                 .await;
             server
@@ -1600,7 +1623,14 @@ mod tests {
         controller.repository_scope = Some((7, "o/canary".into()));
         controller.observer.watched.insert("o/canary".into());
         assert_eq!(controller.tick().unwrap(), TickReport::default());
-        assert_eq!(controller.tick().unwrap(), TickReport::default());
+        assert_eq!(controller.unowned_registrations, BTreeSet::from([13]));
+        assert_eq!(
+            controller.tick().unwrap(),
+            TickReport {
+                orphans_cleaned: 1,
+                ..TickReport::default()
+            }
+        );
         assert!(controller.unowned_registrations.is_empty());
     }
 
@@ -1616,7 +1646,7 @@ mod tests {
             let empty = MockServer::start().await;
             Mock::given(method("GET"))
                 .and(path("/api/v1/admin/actions/runners/jobs"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .respond_with(ResponseTemplate::new(200).set_body_json(Value::Null))
                 .expect(1)
                 .mount(&empty)
                 .await;

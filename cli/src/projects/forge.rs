@@ -99,8 +99,13 @@ pub trait Forge: Send + Sync {
     /// second request for the same change.
     async fn open_review(&self, request: ReviewRequest) -> Result<ReviewRef>;
 
-    /// Find a previously merged request for this exact topic head into main.
-    async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>>;
+    /// Find a previously merged request for this exact topic head into the requested base.
+    async fn find_merged_review(
+        &self,
+        branch: &str,
+        base: &str,
+        sha: &str,
+    ) -> Result<Option<ReviewRef>>;
 
     /// Arm merge-when-green and read the arm back.
     async fn arm_merge(&self, review: &ReviewRef) -> Result<ArmOutcome>;

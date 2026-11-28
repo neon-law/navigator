@@ -473,7 +473,9 @@ async fn review(
     );
     git_text(dir, &["verify-commit", &head]).context("verify the signed release topic")?;
     let merged = if land {
-        forge.find_merged_review(&branch, &head).await?
+        forge
+            .find_merged_review(&branch, &source.default_branch, &head)
+            .await?
     } else {
         None
     };

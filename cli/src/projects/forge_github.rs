@@ -193,6 +193,7 @@ impl GitHubForge {
     pub(super) async fn merged_review_for_head(
         &self,
         branch: &str,
+        base: &str,
         sha: &str,
     ) -> Result<Option<u64>> {
         #[derive(Deserialize)]
@@ -222,7 +223,7 @@ impl GitHubForge {
         loop {
             let query = url::form_urlencoded::Serializer::new(String::new())
                 .append_pair("state", "closed")
-                .append_pair("base", "main")
+                .append_pair("base", base)
                 .append_pair("head", &head)
                 .append_pair("per_page", "100")
                 .append_pair("page", &page.to_string())
@@ -232,7 +233,7 @@ impl GitHubForge {
                 .await?;
             if let Some(pull) = pulls.iter().find(|pull| {
                 pull.merged_at.is_some()
-                    && pull.base.git_ref == "main"
+                    && pull.base.git_ref == base
                     && pull.head.sha == sha
                     && pull.head.git_ref == branch
                     && pull
@@ -650,15 +651,20 @@ impl Forge for GitHubForge {
         self.open(request, false).await.map(|(review, _)| review)
     }
 
-    async fn find_merged_review(&self, branch: &str, sha: &str) -> Result<Option<ReviewRef>> {
-        let Some(number) = self.merged_review_for_head(branch, sha).await? else {
+    async fn find_merged_review(
+        &self,
+        branch: &str,
+        base: &str,
+        sha: &str,
+    ) -> Result<Option<ReviewRef>> {
+        let Some(number) = self.merged_review_for_head(branch, base, sha).await? else {
             return Ok(None);
         };
         let pull: Pull = self
             .get_json(&self.repo_path(&format!("pulls/{number}")))
             .await?;
         anyhow::ensure!(
-            pull.merged && pull.base.git_ref == "main" && pull.head.sha == sha,
+            pull.merged && pull.base.git_ref == base && pull.head.sha == sha,
             "the merged review no longer matches the selected change"
         );
         Ok(Some(ReviewRef {
@@ -865,14 +871,14 @@ mod tests {
         let github = GitHubForge::new(&server.uri(), "acme", "nav", "test").unwrap();
         assert_eq!(
             github
-                .find_merged_review("push/change", "current")
+                .find_merged_review("push/change", "main", "current")
                 .await
                 .unwrap(),
             Some(review(4, "current"))
         );
         assert_eq!(
             github
-                .merged_review_for_head("push/change", "unknown")
+                .merged_review_for_head("push/change", "main", "unknown")
                 .await
                 .unwrap(),
             None
