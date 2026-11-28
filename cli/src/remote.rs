@@ -3200,6 +3200,34 @@ pub async fn document_reclassify(
     .await
 }
 
+/// Record a lawyer's review of a manually exported Dropbox Sign retainer.
+pub async fn document_verify_dropbox_sign(
+    host: Option<&str>,
+    project_code: &str,
+    asset_id: Uuid,
+    file: &Path,
+    review: &crate::matter_site::DropboxSignReview,
+) -> ExitCode {
+    run(async {
+        let bytes = tokio::fs::read(file)
+            .await
+            .context("read the signed export")?;
+        anyhow::ensure!(
+            bytes.starts_with(b"%PDF-"),
+            "the signed export must be a PDF"
+        );
+        let mut body = serde_json::to_value(review)?;
+        body["sha256"] = serde_json::json!(model::documents::sha256_hex(&bytes));
+        let client = DocumentClient::connect(host, project_code).await?;
+        let result = client
+            .document_command(asset_id, "verify-dropbox-sign", Some(body))
+            .await?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        Ok(())
+    })
+    .await
+}
+
 /// An upload that matches the live revision's bytes files nothing, so the
 /// row keeps the visibility it already had. Say so rather than print a pointer
 /// that quietly disagrees with `--visibility` (LAW-102).

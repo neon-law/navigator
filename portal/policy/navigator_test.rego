@@ -1545,6 +1545,14 @@ test_anonymous_denied_reclassify_a_document if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "documents", "a1", "reclassify"], "method": "POST", "session": null}
 }
 
+test_only_lawyer_tier_can_verify_an_imported_retainer if {
+    path := ["app", "api", "projects", "p1", "documents", "a1", "verify-dropbox-sign"]
+    authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": clerk_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": client_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": null}
+}
+
 # ---------- Deadline writes under /app/api/projects/{id}/deadlines (lawyer tier, LAW-126) ----------
 
 test_lawyer_can_create_a_deadline if {

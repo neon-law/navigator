@@ -1231,6 +1231,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "onboarding_signature_evidence",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "outcome_estimate",
         "kind": "table",
         "accessible": true

@@ -75,6 +75,135 @@ async fn adoption_links_an_existing_upload_and_reuses_the_filing_on_retry() {
     pg.pool().close().await;
 }
 
+#[tokio::test]
+async fn imported_dropbox_sign_retainer_requires_verification_of_the_current_revision() {
+    let Some((pg, project, firm, client_id, client_email)) = dropbox_sign_project().await else {
+        return;
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let storage: Arc<dyn StorageService> =
+        Arc::new(cloud::FsStorage::new(root.path()).await.unwrap());
+    let upload = IngestArgs {
+        project_id: project,
+        source: "upload",
+        filename: "signed.pdf",
+        kind: "onboarding",
+        content_type: "application/pdf",
+        description: None,
+        secondary_storage_key: None,
+        visibility: "internal",
+    };
+    let identity = DocumentIdentity::default();
+    file_document(&pg, &storage, &upload, &identity, None, b"signed retainer")
+        .await
+        .unwrap();
+    let rows = revisions(&pg, project, upload.filename).await.unwrap();
+    let asset = &rows[0];
+    let evidence = VerifiedDocument {
+        asset_id: asset.id,
+        project_id: project,
+        firm_id: firm,
+        client_id,
+        client_email: &client_email,
+        sha256: &asset.sha256_hex,
+        request_id: "0123456789abcdef0123456789abcdef01234567",
+        account_email: "signer@example.test",
+        signed_on: chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(),
+        actor: client_id,
+    };
+    for bad in [
+        VerifiedDocument {
+            sha256: "wrong",
+            ..evidence
+        },
+        VerifiedDocument {
+            client_email: "wrong@example.test",
+            ..evidence
+        },
+        VerifiedDocument {
+            firm_id: Uuid::nil(),
+            ..evidence
+        },
+    ] {
+        assert!(!record_verified_document(&pg, &bad, false).await.unwrap());
+    }
+    assert!(record_verified_document(&pg, &evidence, true)
+        .await
+        .unwrap());
+    assert!(official_projects(&pg, &[project]).await.unwrap().is_empty());
+
+    assert!(record_verified_document(&pg, &evidence, false)
+        .await
+        .unwrap());
+    assert!(record_verified_document(&pg, &evidence, false)
+        .await
+        .unwrap());
+    assert_eq!(
+        official_projects(&pg, &[project]).await.unwrap(),
+        HashSet::from([project])
+    );
+    assert_eq!(
+        verified_providers(&pg, &[project]).await.unwrap()[&project],
+        BTreeSet::from([SigningMethod::DropboxSign])
+    );
+    assert_eq!(
+        revisions(&pg, project, upload.filename)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    file_document(
+        &pg,
+        &storage,
+        &upload,
+        &identity,
+        None,
+        b"different retainer",
+    )
+    .await
+    .unwrap();
+    let current = revisions(&pg, project, upload.filename).await.unwrap();
+    let changed = VerifiedDocument {
+        asset_id: current[0].id,
+        sha256: &current[0].sha256_hex,
+        ..evidence
+    };
+    assert!(!record_verified_document(&pg, &evidence, false)
+        .await
+        .unwrap());
+    assert!(!record_verified_document(&pg, &changed, false)
+        .await
+        .unwrap());
+    assert!(official_projects(&pg, &[project]).await.unwrap().is_empty());
+    pg.pool().close().await;
+}
+
+async fn dropbox_sign_project() -> Option<(PostgresDb, Uuid, Uuid, Uuid, String)> {
+    let (pg, project, notation) = native_notation_fixture().await?;
+    let (firm, _) = crate::postgres::fixtures::firm_for_notation(&pg, notation).await;
+    let (client_id, client_email): (Uuid, String) = sqlx::query_as(
+        "SELECT p.id,p.email FROM person p JOIN notation n ON n.person_id=p.id WHERE n.id=$1",
+    )
+    .bind(notation)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO person_project_role (project_id,person_id,participation,is_client_dri)
+        VALUES ($1,$2,'client',true)",
+    )
+    .bind(project)
+    .bind(client_id)
+    .execute(pg.pool())
+    .await
+    .unwrap();
+
+    Some((pg, project, firm, client_id, client_email))
+}
+
 async fn native_notation_fixture() -> Option<(PostgresDb, Uuid, Uuid)> {
     let (options, database) = fresh_schema().await?;
     let pg = connect(&options, &database).await;
@@ -261,7 +390,10 @@ async fn recorded_retainer_methods_use_scoped_onboarding_evidence() {
         return;
     };
     let signatures = crate::signatures::SignatureProvider::ALL;
-    let ids = [Uuid::new_v4().to_string(), "synthetic-request".to_string()];
+    let ids = [
+        Uuid::new_v4().to_string(),
+        "0123456789abcdef0123456789abcdef01234567".to_string(),
+    ];
     for (provider, id) in signatures.iter().zip(&ids) {
         sqlx::query(
             "INSERT INTO signature(id,notation_id,provider,provider_id,state,inserted_at,updated_at)
@@ -285,8 +417,8 @@ async fn recorded_retainer_methods_use_scoped_onboarding_evidence() {
         .await
         .unwrap();
     assert_eq!(
-        verified_providers(&pg, &[project]).await.unwrap()[&project].len(),
-        2
+        verified_providers(&pg, &[project]).await.unwrap()[&project],
+        BTreeSet::from([SigningMethod::Docusign])
     );
     let mut asset_ids = Vec::new();
     for (kind, method) in [

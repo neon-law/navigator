@@ -1,19 +1,21 @@
 ---
 title: "Official"
 description: >-
-  Official means Navigator holds the onboarding letter's DocuSign envelope UUID and verified its completion.
+  Official means Navigator holds verified evidence that the Onboarding letter was executed.
 ---
 
-A [Project](project.md) is official when its [Onboarding](onboarding.md) letter was executed through the owning Firm's
-DocuSign account and Navigator holds that envelope's UUID. Navigator verifies that the envelope is completed. The
-envelope may originate in Navigator or be adopted from the Firm's DocuSign web application.
+A [Project](project.md) is official when Navigator holds verified execution of its [Onboarding](onboarding.md) letter.
+Navigator checks the completed DocuSign envelope through the owning Firm's account. For a manually exported Dropbox Sign
+retainer, the lawyer verifies the request and audit trail against the current filed revision and records that
+verification in Navigator. See the [import steps][import].
 
 An open official Project reads `active`. Until execution is verified, it reads [Pitch](pitch.md). A filed PDF, client
 visibility, or signing-method declaration alone provides no execution evidence.
 
-The reading surfaces on the matter page, through `navigator project status` and `navigator project lifecycle`, and in
-batched lifecycle reads.
+The matter page, `navigator project status`, `navigator project lifecycle`, and batched lifecycle reads use the same
+execution evidence.
 
-For an uploaded onboarding document, the server stamps `verified_onboarding_envelope_id` in Asset metadata after
-checking completion, alongside `docusign_envelope_id`. Upload callers cannot set either evidence key through free-form
-metadata. The pointer carries `docusign_envelope_id`; editing that pointer alone supplies no provider verification.
+DocuSign upload verification is server-stamped in Asset metadata. Verification of a Dropbox Sign import is recorded as
+[Onboarding Signature Evidence](onboarding-signature-evidence.md) against the Firm, Project, and document revision.
+
+[import]: ../project-repositories.md#import-a-completed-clio-or-dropbox-sign-retainer

@@ -135,12 +135,21 @@ impl Fixture {
     }
 
     async fn upload(&self, body: serde_json::Value) -> Response {
+        self.post(
+            &format!("/app/api/projects/{}/documents", self.project),
+            self.lawyer,
+            body,
+        )
+        .await
+    }
+
+    async fn post(&self, path: &str, lawyer: Uuid, body: serde_json::Value) -> Response {
         let mut session = portal::session::SessionData::fresh("synthetic", Role::Lawyer);
-        session.person_id = Some(self.lawyer);
+        session.person_id = Some(lawyer);
         let token = SessionStore::new(portal::test_support::TEST_SESSION_KEY).encode(&session);
         let request = Request::builder()
             .method("POST")
-            .uri(format!("/app/api/projects/{}/documents", self.project))
+            .uri(path)
             .header("authorization", format!("Bearer {token}"))
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
@@ -277,6 +286,95 @@ async fn postgres_status_requires_participation_and_verified_execution() {
 }
 
 #[tokio::test]
+async fn lawyer_verifies_the_exported_dropbox_retainer_on_its_project() {
+    let Some(fx) = Fixture::new(None).await else {
+        return;
+    };
+    fx.participate().await;
+    let firm = Uuid::now_v7();
+    let client = Uuid::now_v7();
+    sqlx::query("INSERT INTO firm(id,name,status,slug) VALUES ($1,'Synthetic Firm','active','synthetic-firm')")
+        .bind(firm).execute(fx.pg.pool()).await.unwrap();
+    sqlx::query("UPDATE project SET firm_id=$2 WHERE id=$1")
+        .bind(fx.project)
+        .bind(firm)
+        .execute(fx.pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO person(id,name,email,role) VALUES ($1,'Synthetic Client','client@example.test','client')")
+        .bind(client).execute(fx.pg.pool()).await.unwrap();
+    sqlx::query(
+        "INSERT INTO person_project_role(person_id,project_id,participation,is_client_dri)
+        VALUES ($1,$2,'client',true)",
+    )
+    .bind(client)
+    .bind(fx.project)
+    .execute(fx.pg.pool())
+    .await
+    .unwrap();
+
+    let response = fx
+        .upload(serde_json::json!({
+            "filename": "signed.pdf", "kind": "onboarding", "content_base64": "JVBERi0xLjA=",
+            "content_type": "application/pdf",
+            "signing": {"method": "dropbox_sign", "signed_on": "2026-11-17"},
+        }))
+        .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let asset = json(response).await;
+    let revision = &asset["current_version"];
+    let asset_id = revision["asset_id"].as_str().unwrap();
+    let path = format!(
+        "/app/api/projects/{}/documents/{asset_id}/verify-dropbox-sign",
+        fx.project
+    );
+    let mut body = serde_json::json!({
+        "request_id": "0123456789abcdef0123456789abcdef01234567",
+        "account_email": "lawyer@example.test",
+        "client_email": "client@example.test",
+        "signed_on": "2026-11-17",
+        "sha256": revision["sha256"],
+    });
+
+    assert_eq!(
+        fx.post(&path, Uuid::now_v7(), body.clone()).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let mut wrong_client = body.clone();
+    wrong_client["client_email"] = serde_json::json!("wrong@example.test");
+    assert_eq!(
+        fx.post(&path, fx.lawyer, wrong_client).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut wrong_bytes = body.clone();
+    wrong_bytes["sha256"] = serde_json::json!("different");
+    assert_eq!(
+        fx.post(&path, fx.lawyer, wrong_bytes).await.status(),
+        StatusCode::CONFLICT
+    );
+
+    let response = fx.post(&path, fx.lawyer, body.clone()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["applied"], false);
+    assert_eq!(fx.status().await["status"], "pitch");
+
+    body["apply"] = serde_json::json!(true);
+    let response = fx.post(&path, fx.lawyer, body).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["applied"], true);
+    let status = fx.status().await;
+    assert_eq!(status["status"], "active");
+    assert_eq!(status["onboarding"]["status"], "official");
+    assert_eq!(status["onboarding"]["execution_verified"], true);
+    let rows = json(
+        fx.get("/app/api/project-lifecycle", Some(Role::Admin), None)
+            .await,
+    )
+    .await;
+    assert_eq!(rows[0]["lifecycle"], "active");
+}
+
+#[tokio::test]
 async fn status_reports_the_projects_own_firm_integrations() {
     let Some(fx) = Fixture::new(None).await else {
         return;
@@ -387,6 +485,28 @@ async fn docusign_upload_files_and_activates_only_in_postgres() {
             )
             .mount(&server)
             .await;
+        if status == "completed" {
+            let template = Uuid::now_v7();
+            let notation = Uuid::now_v7();
+            sqlx::query("INSERT INTO template(id,code,title,respondent_type,is_current,kind,inserted_at,updated_at)
+                VALUES ($1,'synthetic-other','Synthetic Other','person',true,'letter',now(),now())")
+                .bind(template).execute(fx.pg.pool()).await.unwrap();
+            sqlx::query("INSERT INTO notation(id,template_id,person_id,project_id,state) VALUES ($1,$2,$3,$4,'END')")
+                .bind(notation).bind(template).bind(fx.lawyer).bind(fx.project).execute(fx.pg.pool()).await.unwrap();
+            sqlx::query("INSERT INTO signature(id,provider,provider_id,notation_id,state,inserted_at,updated_at)
+                VALUES ($1,'docusign',$2,$3,'requested',now(),now())")
+                .bind(Uuid::now_v7()).bind(envelope.to_string()).bind(notation).execute(fx.pg.pool()).await.unwrap();
+            assert_eq!(
+                fx.upload(body.clone()).await.status(),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+            assert_eq!(fx.status().await["status"], "pitch");
+            sqlx::query("DELETE FROM signature WHERE notation_id=$1")
+                .bind(notation)
+                .execute(fx.pg.pool())
+                .await
+                .unwrap();
+        }
         let response = fx.upload(body.clone()).await;
         if status == "completed" {
             assert_eq!(response.status(), StatusCode::CREATED);

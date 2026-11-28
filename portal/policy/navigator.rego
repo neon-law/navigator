@@ -373,17 +373,15 @@ route_allow if {
     is_lawyer(input.session)
 }
 
-# Change a document chain from one accepted kind to another: POST
-# /app/api/projects/{id}/documents/{asset_id}/reclassify. Lawyer tier, the
-# same gate as the PATCH asset command above; the handler repeats the
-# matter-scope check and collapses an out-of-scope asset to 404. Its own
-# literal seventh segment keeps it apart from the admin-only `storage` door.
+# Reclassify a document chain or record review of an imported retainer.
+# Their handlers enforce both Project and Asset scope after the lawyer tier
+# check. The listed commands leave the storage repair admission separate.
 route_allow if {
     input.path[0] == "app"
     input.path[1] == "api"
     input.path[2] == "projects"
     input.path[4] == "documents"
-    input.path[6] == "reclassify"
+    input.path[6] in {"reclassify", "verify-dropbox-sign"}
     count(input.path) == 7
     input.method == "POST"
     is_lawyer(input.session)

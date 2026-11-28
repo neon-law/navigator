@@ -110,6 +110,26 @@ impl ExecutionArgs {
     }
 }
 
+#[derive(clap::Args, serde::Serialize)]
+pub struct DropboxSignReview {
+    /// Dropbox Sign document ID on the completed audit trail.
+    #[arg(long)]
+    request_id: String,
+    /// The requesting Firm account email on the audit trail.
+    #[arg(long)]
+    account_email: String,
+    /// The Project client's signer email on the audit trail.
+    #[arg(long)]
+    client_email: String,
+    /// Completion date on the audit trail, YYYY-MM-DD.
+    #[arg(long, value_parser = parse_calendar_date)]
+    signed_on: chrono::NaiveDate,
+    /// Record the lawyer's verification of the account, retainer and required signatures.
+    /// With this flag omitted Navigator checks the import without recording verification.
+    #[arg(long)]
+    apply: bool,
+}
+
 /// A matter document is only ever reached through a Project on a site, so
 /// every verb here is either a write against a named `--project` on a
 /// `--host` brand deployment (`upload`), or a read that resolves both from
@@ -259,6 +279,21 @@ pub enum DocumentAction {
         /// Validate and print the result. The row is left unchanged.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Verify a manually exported Dropbox Sign retainer against a filed Onboarding PDF.
+    VerifyDropboxSign {
+        #[command(flatten)]
+        host: HostOpt,
+        /// Matter code.
+        #[arg(long)]
+        project: String,
+        /// Asset ID of the current revision filed as Onboarding.
+        asset_id: uuid::Uuid,
+        /// Original signed PDF export, including its Dropbox Sign audit trail.
+        #[arg(long)]
+        file: PathBuf,
+        #[command(flatten)]
+        review: DropboxSignReview,
     },
     /// Change a filed document's visibility
     /// (`PATCH /app/api/projects/{id}/documents/{asset_id}`).
@@ -800,6 +835,22 @@ pub async fn run_document(action: DocumentAction) -> ExitCode {
         } => {
             remote::document_reclassify(host.host.as_deref(), &project, asset_id, &kind, dry_run)
                 .await
+        }
+        DocumentAction::VerifyDropboxSign {
+            host,
+            project,
+            asset_id,
+            file,
+            review,
+        } => {
+            remote::document_verify_dropbox_sign(
+                host.host.as_deref(),
+                &project,
+                asset_id,
+                &file,
+                &review,
+            )
+            .await
         }
         DocumentAction::Visibility {
             host,
