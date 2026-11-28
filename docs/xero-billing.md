@@ -74,8 +74,8 @@ demo company — a leaked sandbox secret cannot raise a real invoice against a r
 ## Who raises Xero invoices
 
 Lawyers agree the price with the client and can raise an **`ACCREC`** (accounts-receivable) invoice in Xero directly or
-generate it from the Project's Billing tab. Navigator composes the invoice from the agreed fee or recorded billable work
-and confirmed costs.
+generate it from the Project's Finances tab. Navigator composes the invoice from the agreed fee or recorded billable
+work and confirmed costs.
 
 What Navigator does hold is a **read-only mirror**: the `xero_invoice` table carries the Xero `InvoiceID`, reference,
 amount, dates, and paid-status for **every** invoice tagged to a matter. The row is keyed on the Xero invoice id;
@@ -244,9 +244,9 @@ must match your Navigator sign-in email. The checkout's `navigator.yaml` identif
 block retains its original change ID and UUID through a rebase. A retry with changed hours, date, timekeeper, or change
 identity requires review.
 
-On the Project's Billing tab, review the time against the engagement and check for overlap with manual or timer entries.
-Enter the client-facing description and approve the time, record it at no charge, or deny it with an internal reason. An
-active contingency term permits hourly approval only at its agreed hybrid rate. Record eligible court fees as
+On the Project's Finances tab, review the time against the engagement and check for overlap with manual or timer
+entries. Enter the client-facing description and approve the time, record it at no charge, or deny it with an internal
+reason. An active contingency term permits hourly approval only at its agreed hybrid rate. Record eligible court fees as
 receipt-backed Project Costs. Review the signed agreement for when each reimbursement is due.
 
 The invoice preview contains approved billable work and confirmed costs. A lawyer reviews its lines and destination

@@ -48,7 +48,7 @@ pub const SHOW_PAGE_TITLE: &str = "Overview";
 pub const BUILTIN_TAB_TITLES: &[&str] = &[
     "Onboarding",
     "Deadlines",
-    "Billing",
+    "Finances",
     "Tasks",
     "Communications",
     "Documents",
@@ -68,6 +68,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "deadlines",
     "documents",
     "edit",
+    "finances",
     "graph",
     "inbox",
     "intake",
@@ -677,7 +678,7 @@ lenses:\n      lawyer: [whatsapp_timeline, boundary_note, provenance_statement]\
 
     #[test]
     fn a_built_in_tab_title_is_refused() {
-        let yaml = VALID.replace("title: Engagement", "title: billing");
+        let yaml = VALID.replace("title: Engagement", "title: finances");
         let problems = shape_problems(&yaml);
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].1.contains("built-in tab"), "{}", problems[0].1);

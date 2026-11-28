@@ -310,6 +310,57 @@ pub async fn resolve_theme_brand_mark(
     }
 }
 
+/// The public website of a Firm-owned Brand, preferring the configured URL.
+#[cfg(feature = "server")]
+pub(crate) fn brand_website_url(brand: &store::brands::Brand) -> Option<String> {
+    brand.website_url.clone().or_else(|| {
+        let key = views::brand::BrandKey::parse(&brand.key)?;
+        key.is_live().then(|| key.public_home_href_for(None))
+    })
+}
+
+/// Use one owned Brand for the Firm website link and the settings presentation.
+#[cfg(feature = "server")]
+pub(crate) async fn firm_settings_brand(
+    application_store: &store::application_store::ApplicationStore,
+    firm: &store::firms::Firm,
+) -> Option<(String, AppBrandMark)> {
+    let brands = store::brands::for_firm(application_store, firm.id)
+        .await
+        .ok()?;
+    let brand = firm
+        .portal_theme_brand_key
+        .as_ref()
+        .and_then(|key| brands.iter().find(|brand| &brand.key == key))
+        .filter(|brand| brand_website_url(brand).is_some())
+        .or_else(|| {
+            brands
+                .iter()
+                .find(|brand| brand_website_url(brand).is_some())
+        })?;
+    let href = brand_website_url(brand)?;
+    let key = views::brand::BrandKey::parse(&brand.key);
+    let compiled = key.map(|key| &key.resolve_branding(&views::brand::DEFAULT_BRANDING).firm);
+    let src = brand
+        .logo_object_key
+        .as_ref()
+        .map(|object_key| format!("/assets/{object_key}"))
+        .or_else(|| {
+            key.zip(compiled)
+                .map(|(key, firm)| compiled_app_mark_src(key, firm.logo_href).to_string())
+        });
+    let mark = AppBrandMark {
+        logo: src.filter(|src| !src.is_empty()).map(|src| AppLogo {
+            src,
+            href: href.clone(),
+            brand_name: brand.name.clone(),
+        }),
+        firm_name: firm.name.clone(),
+        tokens_href: crate::brand_style::brand_tokens_href(&brand.key),
+    };
+    Some((href, mark))
+}
+
 /// Resolve the navbar's brand mark for the current request.
 ///
 /// Prefers the mark the portal pre-layer (`inject_app_brand_mark`) resolved on

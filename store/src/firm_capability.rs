@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 /// One Firm-scoped capability an actor may exercise against a target Firm.
 ///
-/// Both variants back a live command in `store` today: [`Self::ViewDirectory`]
+/// [`Self::ViewDirectory`]
 /// gates [`crate::firms::visible_person_ids`] and
 /// [`crate::projects::matter_directory_for`]; [`Self::ManageMembership`]
 /// gates [`crate::firms::add_membership`] and
@@ -51,6 +51,8 @@ pub enum FirmCapability {
     ManageJournal,
     /// Add or change a person's membership at the Firm.
     ManageMembership,
+    /// Remove another administrator’s Firm membership or admin privileges.
+    RemoveAdmin,
     /// Appoint or transfer the Firm's Admin DRI designation.
     ManageAdminDri,
     /// Create, replace, or revoke a typed integration secret. Only the
@@ -138,7 +140,8 @@ impl FirmCapability {
             | Self::ManageFirmAssumptions
             | Self::ManageLegalPlans
             | Self::ManageBrand => membership == FirmMembership::Admin,
-            Self::ManageBrandContent
+            Self::RemoveAdmin
+            | Self::ManageBrandContent
             | Self::ManageSummaryApprovals
             | Self::ManageAdminDri
             | Self::MoveBrand
@@ -156,6 +159,7 @@ impl FirmCapability {
             Self::AccessRelationshipObservations => "access_relationship_observations",
             Self::ManageJournal => "manage_journal",
             Self::ManageMembership => "manage_membership",
+            Self::RemoveAdmin => "remove_admin",
             Self::ManageAdminDri => "manage_admin_dri",
             Self::ManageIntegrationSecrets => "manage_integration_secrets",
             Self::ViewIntegrationSecretMetadata => "view_integration_secret_metadata",
@@ -179,6 +183,7 @@ impl FirmCapability {
         matches!(
             self,
             Self::ManageIntegrationSecrets
+                | Self::RemoveAdmin
                 | Self::ViewIntegrationSecretMetadata
                 | Self::ManageBrand
                 | Self::ManageBrandContent
@@ -228,8 +233,8 @@ impl FirmCapabilityDecision {
 
 /// Resolve whether `actor` may exercise `capability` against `target_firm_id`.
 ///
-/// Side-effect-free: reads only, never writes. Owner is allowed every
-/// capability on every Firm without a membership row. Client is refused
+/// Side-effect-free: reads only, never writes. Owner holds deployment-wide
+/// capabilities without a membership row. Client is refused
 /// every capability. Admin, Lawyer, and Clerk need a `person_firm_role` row
 /// on `target_firm_id` whose membership tier [`FirmCapability::admits`]s the
 /// requested capability.
@@ -281,7 +286,10 @@ async fn resolve_inner(
         return Ok((FirmCapabilityDecision::FirmNotFound, "firm_not_found"));
     }
     if actor_role == Role::Owner && capability != FirmCapability::AccessRelationshipObservations {
-        if capability != FirmCapability::ManageIntegrationSecrets {
+        if !matches!(
+            capability,
+            FirmCapability::ManageIntegrationSecrets | FirmCapability::RemoveAdmin
+        ) {
             return Ok((FirmCapabilityDecision::Allowed, "owner_bypass"));
         }
         let is_dri = match actor_person_id {
@@ -294,6 +302,8 @@ async fn resolve_inner(
         };
         return Ok(if is_dri {
             (FirmCapabilityDecision::Allowed, "owner_is_admin_dri")
+        } else if capability == FirmCapability::RemoveAdmin {
+            (FirmCapabilityDecision::Forbidden, "owner_not_admin_dri")
         } else {
             (FirmCapabilityDecision::Forbidden, "owner_not_secret_writer")
         });
@@ -323,6 +333,12 @@ async fn resolve_inner(
             "assumptions_requires_admin",
         ));
     }
+    if capability == FirmCapability::RemoveAdmin && !actor_role.is_admin_tier() {
+        return Ok((
+            FirmCapabilityDecision::Forbidden,
+            "remove_admin_requires_admin",
+        ));
+    }
     if actor_role == Role::Client {
         return Ok((
             FirmCapabilityDecision::Forbidden,
@@ -334,16 +350,7 @@ async fn resolve_inner(
     };
     let member = firms::membership_for_person(application_store, person_id, target_firm_id).await?;
     Ok(match member {
-        Some(row)
-            if matches!(
-                capability,
-                FirmCapability::ManageIntegrationSecrets
-                    | FirmCapability::ViewIntegrationSecretMetadata
-                    | FirmCapability::ManageBrand
-                    | FirmCapability::ManageBrandContent
-                    | FirmCapability::ManageSummaryApprovals
-            ) =>
-        {
+        Some(row) if capability.requires_admin_dri() => {
             if row.membership == FirmMembership::Admin && row.is_dri {
                 (
                     FirmCapabilityDecision::Allowed,
@@ -366,7 +373,7 @@ async fn resolve_inner(
 /// The batch counterpart to [`resolve`], for a directory listing that scopes
 /// itself to every Firm the caller may act on rather than asking about one.
 /// Owner holds deployment-wide capabilities on every existing Firm. Integration
-/// secrets and Relationship Log observations require Firm membership.
+/// secrets, admin removal, and Relationship Log observations require Firm membership.
 pub async fn allowed_firm_ids(
     application_store: &ApplicationStore,
     actor_role: Role,
@@ -377,6 +384,7 @@ pub async fn allowed_firm_ids(
         && !matches!(
             capability,
             FirmCapability::ManageIntegrationSecrets
+                | FirmCapability::RemoveAdmin
                 | FirmCapability::AccessRelationshipObservations
         )
     {
@@ -394,6 +402,9 @@ pub async fn allowed_firm_ids(
         return Ok(Vec::new());
     }
     if capability == FirmCapability::ManageFirmAssumptions && actor_role != Role::Admin {
+        return Ok(Vec::new());
+    }
+    if capability == FirmCapability::RemoveAdmin && !actor_role.is_admin_tier() {
         return Ok(Vec::new());
     }
     if actor_role == Role::Client {

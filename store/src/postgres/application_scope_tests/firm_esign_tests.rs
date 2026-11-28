@@ -97,3 +97,54 @@ async fn only_an_owner_or_the_firms_own_admin_chooses_its_provider() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn changing_office_suite_pauses_google_and_preserves_saved_settings() {
+    use crate::firms::{
+        calendar_owner, google_drive, set_calendar_owner, set_google_drive, set_workspace_provider,
+        workspace_provider,
+    };
+
+    crate::test_support::with_required_postgres(async {
+        let pg = PostgresDb::application().await.unwrap();
+        let (ours, theirs) = (firm(&pg).await, firm(&pg).await);
+        let store = crate::application_store::ApplicationStore::from(pg);
+        let mailbox = "calendar@example.test";
+
+        set_calendar_owner(&store, Role::Owner, None, ours, mailbox)
+            .await
+            .unwrap();
+        set_google_drive(&store, Role::Owner, None, ours, true)
+            .await
+            .unwrap();
+        assert_eq!(workspace_provider(ours).await.unwrap(), "google_workspace");
+        assert!(matches!(
+            set_workspace_provider(&store, Role::Admin, None, ours, "microsoft_365").await,
+            Err(FirmError::NotAuthorized)
+        ));
+        assert!(matches!(
+            set_workspace_provider(&store, Role::Owner, None, ours, "unknown").await,
+            Err(FirmError::InvalidWorkspaceProvider)
+        ));
+        set_workspace_provider(&store, Role::Owner, None, ours, "microsoft_365")
+            .await
+            .unwrap();
+        assert_eq!(workspace_provider(ours).await.unwrap(), "microsoft_365");
+        assert_eq!(
+            workspace_provider(theirs).await.unwrap(),
+            "google_workspace"
+        );
+        assert!(calendar_owner(ours).await.unwrap().is_none());
+        assert!(!google_drive(ours).await.unwrap());
+
+        set_workspace_provider(&store, Role::Owner, None, ours, "google_workspace")
+            .await
+            .unwrap();
+        assert_eq!(
+            calendar_owner(ours).await.unwrap().as_deref(),
+            Some(mailbox)
+        );
+        assert!(google_drive(ours).await.unwrap());
+    })
+    .await;
+}

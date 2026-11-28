@@ -711,6 +711,10 @@ fn register_firm_matter_routes(r: Router<AdminState>, prefix: &str) -> Router<Ad
 fn register_firm_admin_routes(r: Router<AdminState>, prefix: &str) -> Router<AdminState> {
     r.route(&format!("{prefix}/firms/{{id}}/edit"), post(firms_update))
         .route(
+            &format!("{prefix}/firms/{{id}}/integrations"),
+            post(firm_select_integration),
+        )
+        .route(
             &format!("{prefix}/firms/{{id}}/members/remove-admin"),
             post(firm_member_remove_admin),
         )
@@ -3016,9 +3020,6 @@ struct FirmUpdateInput {
     /// `on` or `off` from the Google Drive card.
     #[serde(default)]
     google_drive: Option<String>,
-    /// The e-signature provider key; present only on the provider card's form.
-    #[serde(default)]
-    esign_provider: Option<String>,
 }
 
 /// Redirect after a single Firm setting save: back to the form, with the refusal named.
@@ -3055,26 +3056,6 @@ async fn firms_update(
     let Some(Extension(session_data)) = session else {
         return not_found_response();
     };
-    if let Some(provider) = input.esign_provider.as_deref() {
-        return match store::firm_esign::set_for_firm(
-            session_data.role,
-            session_data.person_id,
-            id,
-            provider,
-        )
-        .await
-        {
-            Ok(_) => Redirect::to(&format!("/app/admin/firms/{id}/edit")).into_response(),
-            Err(
-                store::firms::FirmError::NotAuthorized | store::firms::FirmError::NoSuchFirm(_),
-            ) => not_found_response(),
-            Err(error) => {
-                let mut query = String::new();
-                push_query(&mut query, "error", &error.user_message());
-                Redirect::to(&format!("/app/admin/firms/{id}/edit?{query}")).into_response()
-            }
-        };
-    }
     if let Some(enabled) = input.google_drive.as_deref() {
         return firm_setting_saved(
             id,
@@ -3429,15 +3410,67 @@ fn parse_secret_kind(
 }
 
 #[derive(Deserialize)]
+struct FirmIntegrationInput {
+    integration: FirmIntegration,
+    provider: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FirmIntegration {
+    Workspace,
+    Esign,
+}
+
+async fn firm_select_integration(
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<FirmIntegrationInput>,
+) -> Response {
+    let Some(Extension(actor)) = session else {
+        return not_found_response();
+    };
+    let result = match input.integration {
+        FirmIntegration::Workspace => {
+            store::firms::set_workspace_provider(
+                &state.application_store,
+                actor.role,
+                actor.person_id,
+                id,
+                &input.provider,
+            )
+            .await
+        }
+        FirmIntegration::Esign => {
+            store::firm_esign::set_for_firm(actor.role, actor.person_id, id, &input.provider)
+                .await
+                .map(|_| ())
+        }
+    };
+    match result {
+        Ok(()) => Redirect::to(&format!("/app/admin/firms/{id}#firm-integrations")).into_response(),
+        Err(store::firms::FirmError::NotAuthorized | store::firms::FirmError::NoSuchFirm(_)) => {
+            not_found_response()
+        }
+        Err(error) => {
+            let mut query = String::new();
+            push_query(&mut query, "integration_error", &error.user_message());
+            Redirect::to(&format!("/app/admin/firms/{id}?{query}#firm-integrations"))
+                .into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
 pub(crate) struct FirmMemberInput {
     person_id: Uuid,
 }
 
 /// `POST /app/admin/firms/{id}/members/remove-admin` — demote a Firm's admin
-/// to lawyer through `store::firms::update_membership`, which authorizes
-/// Owner or the Firm's own Admin and refuses to orphan the Admin DRI.
+/// to lawyer through `store::firms::demote_admin`, which authorizes
+/// the Firm’s Admin DRI and preserves the current designation.
 pub(crate) async fn firm_member_remove_admin(
-    State(state): State<AdminState>,
     Path(id): Path<Uuid>,
     session: Option<Extension<SessionData>>,
     Form(input): Form<FirmMemberInput>,
@@ -3445,13 +3478,11 @@ pub(crate) async fn firm_member_remove_admin(
     let Some(Extension(session_data)) = session else {
         return not_found_response();
     };
-    match store::firms::update_membership(
-        &state.application_store,
+    match store::firms::demote_admin(
         session_data.role,
         session_data.person_id,
         input.person_id,
         id,
-        store::firms::FirmMembership::Lawyer,
     )
     .await
     {

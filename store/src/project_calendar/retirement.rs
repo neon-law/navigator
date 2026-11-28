@@ -113,6 +113,7 @@ pub(super) async fn retire(
     let ready = sqlx::query_scalar::<_, String>("SELECT p.code FROM project p JOIN firm f ON f.id=p.firm_id
         JOIN project_calendar_retirement r ON (r.project_id,r.firm_id,r.calendar_id)=(p.id,p.firm_id,p.calendar_id)
         WHERE p.id=$1 AND p.firm_id=$2 AND p.calendar_id=$3 AND p.status IN ('closed','archived')
+          AND f.workspace_provider='google_workspace'
           AND r.owner_mailbox=$4 AND r.content_sha256=$5 AND r.archive_generation IS NOT NULL AND r.deleted_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM project other WHERE other.id<>p.id AND other.calendar_id=p.calendar_id)
         FOR UPDATE OF p,f")

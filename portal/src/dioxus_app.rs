@@ -1557,7 +1557,9 @@ pub fn project_detail_router(
     // The show page and each built-in section, one path apiece. A literal
     // segment wins over the declared-page parameter, and `Y021` reserves
     // every one, so no page is shadowed.
-    let mut router = Router::<FullstackState>::new().route(PROJECT_DETAIL_PATH, show_page());
+    let mut router = Router::<FullstackState>::new()
+        .route(PROJECT_DETAIL_PATH, show_page())
+        .route(&format!("{PROJECT_DETAIL_PATH}/billing"), show_page());
     for path in project_tab_paths() {
         router = router.route(&path, show_page());
     }
@@ -5291,16 +5293,15 @@ pub fn firm_show_router(
         Box::new(application_store.clone()) as Box<dyn std::any::Any>
     })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
+    let page = get(render_handler)
+        .layer(from_fn(dioxus_document_head))
+        .layer(from_fn(inject_csrf_token))
+        .layer(from_fn(inject_viewer_role))
+        .layer(from_fn(inject_person_id))
+        .layer(from_fn(inject_app_brand_mark));
     Router::<FullstackState>::new()
-        .route(
-            FIRM_SHOW_PATH,
-            get(render_handler)
-                .layer(from_fn(dioxus_document_head))
-                .layer(from_fn(inject_csrf_token))
-                .layer(from_fn(inject_viewer_role))
-                .layer(from_fn(inject_person_id))
-                .layer(from_fn(inject_app_brand_mark)),
-        )
+        .route(FIRM_SHOW_PATH, page.clone())
+        .route("/app/admin/firms/{id}/finances", page)
         .with_state(fullstack_state(cfg, webapp::firm_show::FirmShow))
         .route_layer(from_fn_with_state(
             (sessions, policy),

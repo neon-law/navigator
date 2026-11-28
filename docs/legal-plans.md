@@ -104,7 +104,7 @@ directory. A Firm member without directory access can run `list` with the UUID.
 ## Claims and collections
 
 Start with `navigator billing`. **Needs my action** lists your staged Jujutsu time awaiting review and claims on matters
-where you are the responsible lawyer. Review staged time on the Project's Billing tab. **My time** shows your time
+where you are the responsible lawyer. Review staged time on the Project's Finances tab. **My time** shows your time
 across matters. Run `navigator project billing` from the checkout for the matter view, or pass `--project
 <code-or-uuid>`. The matter view shows the team's time and keeps review actions for staged time specific to the
 signed-in timekeeper. Add `--json` for structured output.

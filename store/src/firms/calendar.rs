@@ -28,6 +28,7 @@ pub(super) fn calendar_owners_with_bootstrap(
     let mut query = sqlx::QueryBuilder::new(
         "WITH calendar_owners AS (
             SELECT f.id AS firm_id, CASE
+                WHEN f.workspace_provider <> 'google_workspace' THEN NULL
                 WHEN s.firm_id IS NOT NULL THEN s.google_workspace_owner
                 WHEN e.firm_anchor_key = ",
     );

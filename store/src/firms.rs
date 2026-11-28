@@ -202,6 +202,8 @@ pub enum FirmError {
     GmailCalendarOwner,
     #[error("Choose DocuSign or Dropbox Sign.")]
     InvalidEsignProvider,
+    #[error("Choose Google Workspace or Microsoft 365.")]
+    InvalidWorkspaceProvider,
     #[error("no person {0}")]
     NoSuchPerson(Uuid),
     #[error("person {0} is a client and cannot hold a firm membership")]
@@ -330,7 +332,8 @@ impl FirmError {
             | Self::InvalidDeadlineEffortDefaults
             | Self::InvalidCalendarOwner
             | Self::GmailCalendarOwner
-            | Self::InvalidEsignProvider => self.to_string(),
+            | Self::InvalidEsignProvider
+            | Self::InvalidWorkspaceProvider => self.to_string(),
             Self::Postgres(_)
             | Self::PostgresSql(_)
             | Self::Person(_)
@@ -423,6 +426,40 @@ async fn authorize_manage_firm(
         FirmCapabilityDecision::FirmNotFound => Err(FirmError::NoSuchFirm(firm_id)),
         FirmCapabilityDecision::Forbidden => Err(FirmError::NotAuthorized),
     }
+}
+
+/// Read the Firm’s office suite choice.
+pub async fn workspace_provider(firm_id: Uuid) -> Result<String, FirmError> {
+    let pg = crate::postgres::tenancy::db().await?;
+    sqlx::query_scalar("SELECT workspace_provider FROM firm WHERE id=$1")
+        .bind(firm_id)
+        .fetch_optional(pg.pool())
+        .await?
+        .ok_or(FirmError::NoSuchFirm(firm_id))
+}
+
+/// Choose the Firm’s office suite. Google settings stay stored when Microsoft 365 is selected.
+pub async fn set_workspace_provider(
+    application_store: &ApplicationStore,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    firm_id: Uuid,
+    provider: &str,
+) -> Result<(), FirmError> {
+    authorize_manage_firm(application_store, actor_role, actor_person_id, firm_id).await?;
+    if !matches!(provider, "google_workspace" | "microsoft_365") {
+        return Err(FirmError::InvalidWorkspaceProvider);
+    }
+    let pg = crate::postgres::tenancy::db().await?;
+    let updated = sqlx::query("UPDATE firm SET workspace_provider=$2,updated_at=now() WHERE id=$1")
+        .bind(firm_id)
+        .bind(provider)
+        .execute(pg.pool())
+        .await?;
+    if updated.rows_affected() == 0 {
+        return Err(FirmError::NoSuchFirm(firm_id));
+    }
+    Ok(())
 }
 
 /// Whether `address` is a consumer Gmail address. Calendar runs on Google
@@ -635,7 +672,7 @@ pub async fn memberships_for_firm(
 /// membership form must never write that marker; only [`appoint_admin_dri`]
 /// does. Refused with [`FirmError::WouldLeaveFirmWithoutAdminDri`] when the
 /// person is the Firm's current sole Admin DRI and `membership` is not
-/// `admin` (ENG-499's guard, [`refuse_admin_dri_orphaning`]).
+/// `admin`. Removing another Admin’s privileges requires the Firm’s Admin DRI.
 pub async fn update_membership(
     _application_store: &ApplicationStore,
     actor_role: Role,
@@ -654,12 +691,28 @@ pub async fn update_membership(
     .await
 }
 
+/// Remove another administrator’s Firm privileges, leaving a Lawyer membership.
+pub async fn demote_admin(
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    person_id: Uuid,
+    firm_id: Uuid,
+) -> Result<PersonFirmRole, FirmError> {
+    Box::pin(crate::postgres::tenancy::demote_admin(
+        actor_role,
+        actor_person_id,
+        person_id,
+        firm_id,
+    ))
+    .await
+}
+
 /// Remove a person's membership at a Firm entirely. Owner, or that Firm's
 /// own Admin membership, only (`authorize_manage_firm`). Refused with
 /// [`FirmError::WouldLeaveFirmWithoutAdminDri`] when the person is the
 /// Firm's current sole Admin DRI (ENG-499's guard,
 /// [`refuse_admin_dri_orphaning`]) — transfer the designation first with
-/// [`appoint_admin_dri`].
+/// [`appoint_admin_dri`]. Removing another Admin requires the Firm’s Admin DRI.
 pub async fn remove_membership(
     application_store: &ApplicationStore,
     actor_role: Role,

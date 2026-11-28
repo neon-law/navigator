@@ -6006,3 +6006,6 @@ ALTER TABLE firm_calendar_settings ADD COLUMN deadline_effort_defaults JSONB NOT
 -- Migration: 20261127200000_index_inbox_message_order.sql
 CREATE INDEX message_conversation_occurred
     ON message (conversation_id, occurred_at DESC, id DESC);
+
+-- Migration: 20261127200500_firm_workspace_provider.sql
+ALTER TABLE firm ADD COLUMN workspace_provider TEXT NOT NULL DEFAULT 'google_workspace' CHECK (workspace_provider IN ('google_workspace', 'microsoft_365'));

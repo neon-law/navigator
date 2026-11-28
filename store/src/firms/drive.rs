@@ -13,13 +13,14 @@ pub async fn google_drive(firm_id: Uuid) -> Result<bool, FirmError> {
     let db = crate::postgres::PostgresDb::application()
         .await
         .map_err(|_| FirmError::DriveSettingsUnavailable)?;
-    Ok(
-        sqlx::query_scalar("SELECT google_drive FROM firm_drive_settings WHERE firm_id = $1")
-            .bind(firm_id)
-            .fetch_optional(db.pool())
-            .await?
-            .unwrap_or(false),
+    Ok(sqlx::query_scalar(
+        "SELECT s.google_drive FROM firm_drive_settings s JOIN firm f ON f.id=s.firm_id
+             WHERE s.firm_id=$1 AND f.workspace_provider='google_workspace'",
     )
+    .bind(firm_id)
+    .fetch_optional(db.pool())
+    .await?
+    .unwrap_or(false))
 }
 
 /// Save the Owner's Google Drive choice for the Firm.

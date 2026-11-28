@@ -1,17 +1,9 @@
-//! The Firm detail view (ENG-494) — the membership surface the Owner listing
-//! at `/app/owner` links into: one Firm's own fields, the brands it wears,
-//! its Admin-DRI standing (ENG-499), and every person who holds a
-//! `person_firm_role` on it.
-//!
-//! Read-only in this cut: it renders the same facts the write commands in
-//! `store::firms` already enforce (`update`, `update_membership`,
-//! `remove_membership`, `detach_brand`, `appoint_admin_dri`), so a Firm's
-//! standing is visible here even before this page grows its own forms.
+//! The Firm overview and its Finances dashboard.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Choice, Field, FormCard, Heading};
+use crate::components::{Choice, ChoiceGroup, ChoiceGroupOption, Field, FormCard, Heading};
 use crate::people::ViewerRole;
 
 /// The path segment base; `{id}` is appended by the route and by every link
@@ -43,6 +35,8 @@ pub struct FirmShowQuery {
     /// Why a Remove admin request was refused.
     #[serde(default)]
     pub member_error: Option<String>,
+    #[serde(default)]
+    pub integration_error: Option<String>,
 }
 
 /// One row of the Firm's integration-secret metadata (ENG-491) — the
@@ -107,6 +101,16 @@ pub struct FirmShowView {
     /// identically, so neither discloses which one it was
     /// (`docs/access-model.md`).
     pub fields: Option<FirmFields>,
+    #[serde(default)]
+    pub finances: Option<FirmFinances>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct FirmFinances {
+    pub name: String,
+    pub invoices: crate::firm_invoice_graphs::FirmInvoiceGraphsView,
+    pub projected_cash: crate::projected_cash::FirmProjectedCashView,
+    pub calibration: crate::outcome_calibration::OutcomeCalibrationView,
 }
 
 /// The Firm's own facts, present only when [`FirmShowView::fields`] is `Some`.
@@ -119,9 +123,12 @@ pub struct FirmFields {
     /// The linked Entity's employer identification number.
     #[serde(default)]
     pub ein: Option<String>,
-    /// The e-signature provider this Firm's brands sign through, as a label.
     #[serde(default)]
     pub esign_provider: String,
+    #[serde(default)]
+    pub workspace_provider: String,
+    #[serde(default)]
+    pub website_url: Option<String>,
     pub brand_keys: Vec<String>,
     /// The current Admin DRI's name and email, when exactly one eligible
     /// designation exists.
@@ -137,20 +144,8 @@ pub struct FirmFields {
     /// rendering it toward a refusal.
     #[serde(default)]
     pub can_edit: bool,
-    /// The trailing-30-day invoiced/paid graphs (ENG-591), grouped by brand
-    /// and by lawyer DRI. Nested here rather than a second top-level
-    /// `Option` on [`FirmShowView`]: it is only ever computed once
-    /// `ViewDirectory` has already gated `fields` to `Some`.
     #[serde(default)]
-    pub invoices: crate::firm_invoice_graphs::FirmInvoiceGraphsView,
-    /// Projected contingency cash by quarter, brand, and lead lawyer
-    /// (ENG-1250). Names no matter.
-    #[serde(default)]
-    pub projected_cash: crate::projected_cash::FirmProjectedCashView,
-    /// Resolved matters' Outcome Estimates against their Matter Outcomes
-    /// (ENG-1251). Names no matter.
-    #[serde(default)]
-    pub calibration: crate::outcome_calibration::OutcomeCalibrationView,
+    pub can_remove_admin: bool,
     /// The Firm's integration-secret metadata (ENG-491) — populated only when
     /// `FirmCapability::ViewIntegrationSecretMetadata` resolves `Allowed` for
     /// this caller (Owner, or the Firm's own Admin DRI). Empty for anyone
@@ -183,6 +178,8 @@ pub struct FirmFields {
     pub csrf_token: String,
     #[serde(default)]
     pub member_error: Option<String>,
+    #[serde(default)]
+    pub integration_error: Option<String>,
     #[serde(default)]
     pub secret_error: Option<String>,
     #[serde(default)]
@@ -275,6 +272,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         role,
         id: id.to_string(),
         fields: None,
+        finances: None,
     };
 
     if !decision.is_allowed() {
@@ -296,6 +294,45 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         return Ok(base);
     };
 
+    let mut base = base;
+    let website_url = crate::app_chrome::firm_settings_brand(&application_store, &firm)
+        .await
+        .map(|(url, mark)| {
+            base.logo = mark.logo;
+            base.tokens_href = mark.tokens_href;
+            base.firm_name = mark.firm_name;
+            url
+        });
+    let uri = dioxus_fullstack_core::FullstackContext::extract::<axum::http::Uri, _>().await?;
+    if uri.path().ends_with("/finances") {
+        let invoices = store::xero_invoices::firm_thirty_day_rollup(
+            &application_store,
+            firm.id,
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?
+        .into();
+        let projected_cash =
+            crate::projected_cash::derive::load_firm(&application_store, actor_person_id, firm.id)
+                .await;
+        let calibration = crate::outcome_calibration::derive::load_firm(
+            &application_store,
+            actor_person_id,
+            firm.id,
+        )
+        .await;
+        return Ok(FirmShowView {
+            finances: Some(FirmFinances {
+                name: firm.name,
+                invoices,
+                projected_cash,
+                calibration,
+            }),
+            ..base
+        });
+    }
+
     let entity = match firm.entity_id {
         Some(entity_id) => store::entities::find_by_id(&application_store, entity_id)
             .await
@@ -312,14 +349,14 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         .and_then(|metadata| metadata.get("ein"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
-    let esign_provider = match store::firm_esign::for_firm(firm.id)
+    let esign_provider = store::firm_esign::for_firm(firm.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
-    {
-        store::signatures::SignatureProvider::DocuSign => "DocuSign",
-        store::signatures::SignatureProvider::DropboxSign => "Dropbox Sign",
-    }
-    .to_string();
+        .as_str()
+        .to_string();
+    let workspace_provider = store::firms::workspace_provider(id)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?;
     let brand_keys = store::firms::brand_keys_for_firm(&application_store, firm.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -379,20 +416,11 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         store::firm_capability::FirmCapabilityDecision::Allowed
     );
 
-    let invoices = store::xero_invoices::firm_thirty_day_rollup(
-        &application_store,
-        firm.id,
-        chrono::Utc::now(),
-    )
-    .await
-    .map_err(|error| ServerFnError::new(error.to_string()))?
-    .into();
-    let projected_cash =
-        crate::projected_cash::derive::load_firm(&application_store, actor_person_id, firm.id)
-            .await;
-    let calibration =
-        crate::outcome_calibration::derive::load_firm(&application_store, actor_person_id, firm.id)
-            .await;
+    let can_remove_admin = store::firm_capability::FirmCapability::RemoveAdmin
+        .resolve(&application_store, store_role(role), actor_person_id, id)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?
+        .is_allowed();
 
     // Integration-secret metadata (ENG-491): a separate, stricter capability
     // than `ViewDirectory` above. Owner holds it (governance without
@@ -560,6 +588,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     .unwrap_or_default();
     let FirmShowQuery {
         member_error,
+        integration_error,
         secret_error,
         secret_saved,
         secret_revoked,
@@ -579,20 +608,21 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             entity_name,
             ein,
             esign_provider,
+            workspace_provider,
+            website_url,
             brand_keys,
             admin_dri,
             admin_dri_problem,
             members,
             can_edit,
-            invoices,
-            projected_cash,
-            calibration,
+            can_remove_admin,
             secrets,
             docusign_review,
             can_view_secrets,
             can_manage_secrets,
             csrf_token,
             member_error,
+            integration_error,
             secret_error,
             secret_saved,
             secret_revoked,
@@ -643,6 +673,10 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
         "/app/admin"
     };
 
+    if let Some(finances) = &view.finances {
+        return firm_finances_body(view, finances);
+    }
+
     let Some(fields) = view.fields.as_ref() else {
         return rsx! {
             document::Title { "{title} | Not found" }
@@ -681,10 +715,8 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                         span { style: "font-variant-numeric: tabular-nums; user-select: all;", "{ein}" }
                     }
                 }
-                if !fields.esign_provider.is_empty() {
-                    p { class: "firm-esign-provider",
-                        "E-signature provider: {fields.esign_provider}"
-                    }
+                if let Some(url) = &fields.website_url {
+                    p { a { class: "nav-link", href: "{url}", "{url}" } }
                 }
                 if fields.can_edit {
                     p {
@@ -699,11 +731,9 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                 // of this firm — a lawyer-tier view, independent of edit
                 // permission; the destination's policy rule gates it.
                 p {
-                    a {
-                        class: "nav-btn nav-btn--secondary",
-                        href: "/app/lawyer/firms/{view.id}/graph",
-                        "Relationship graph",
-                    }
+                    a { class: "nav-btn nav-btn--secondary", href: "/app/lawyer/firms/{view.id}/graph", "Relationship graph" }
+                    " "
+                    a { class: "nav-btn nav-btn--secondary", href: "{FIRM_SHOW_PATH}/{view.id}/finances", "Finances" }
                 }
             }
             section { id: "firm-brands",
@@ -724,6 +754,7 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                     },
                 }
             }
+            {firm_integrations(view, fields)}
             section { id: "firm-social",
                 h2 { "Social publishing" }
                 p { "Provider app keys are shared by the production publishing service. Each Brand connects its own accounts and keeps its own encrypted account tokens." }
@@ -890,7 +921,7 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                                     th { "Email" }
                                     th { "Membership" }
                                     th { "Admin DRI" }
-                                    if fields.can_edit {
+                                    if fields.can_remove_admin {
                                         th { "" }
                                     }
                                 }
@@ -902,7 +933,7 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                                         td { "{member.email}" }
                                         td { "{member.membership}" }
                                         td { if member.is_dri { "Yes" } else { "" } }
-                                        if fields.can_edit {
+                                        if fields.can_remove_admin {
                                             td {
                                                 if member.membership == "admin" && !member.is_dri {
                                                     form {
@@ -924,10 +955,123 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                     }
                 }
             }
-            crate::firm_invoice_graphs::FirmInvoiceGraphs { view: fields.invoices.clone() }
-            crate::projected_cash::FirmProjectedCash { view: fields.projected_cash.clone() }
-            crate::outcome_calibration::FirmOutcomeCalibration { view: fields.calibration.clone() }
             p { a { href: "{back_href}", "← Back" } }
+        }
+    }
+}
+
+fn firm_finances_body(view: &FirmShowView, finances: &FirmFinances) -> Element {
+    rsx! {
+        document::Title { "{finances.name} | Finances" }
+        document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
+        document::Stylesheet { href: "{view.tokens_href}" }
+        crate::components::AppNavbar {
+            destinations: crate::app_chrome::app_destinations(view.role),
+            logo: view.logo.clone(),
+        }
+        main { id: "firm-finances", class: "nav-theme",
+            header { class: "page-header",
+                p { a { class: "nav-link", href: "{FIRM_SHOW_PATH}/{view.id}", "{finances.name}" } }
+                h1 { "Finances" }
+            }
+            crate::firm_invoice_graphs::FirmInvoiceGraphs { view: finances.invoices.clone() }
+            crate::projected_cash::FirmProjectedCash { view: finances.projected_cash.clone() }
+            crate::outcome_calibration::FirmOutcomeCalibration { view: finances.calibration.clone() }
+        }
+    }
+}
+
+fn firm_integrations(view: &FirmShowView, fields: &FirmFields) -> Element {
+    let can_edit = fields.can_edit;
+    let status = |provider: &str| {
+        if !fields.can_view_secrets {
+            return "Ask the Firm’s Admin DRI about setup.";
+        }
+        if fields
+            .secrets
+            .iter()
+            .any(|row| row.provider == provider && row.status == "active")
+        {
+            "Credential stored"
+        } else {
+            "No credential stored"
+        }
+    };
+    rsx! {
+        section { id: "firm-integrations",
+            h2 { "Integrations" }
+            if let Some(error) = &fields.integration_error {
+                p { class: "nav-form-error", role: "alert", "{error}" }
+            }
+            ProviderChoice {
+                firm_id: view.id.clone(),
+                csrf_token: fields.csrf_token.clone(),
+                kind: "workspace",
+                label: "Office suite",
+                providers: [("google_workspace", "Google Workspace"), ("microsoft_365", "Microsoft 365")],
+                selected: fields.workspace_provider.clone(),
+                can_edit,
+            }
+            if fields.workspace_provider == "microsoft_365" {
+                p { class: "nav-muted", "Google Calendar and Drive are paused. Microsoft calendar and file sync are unavailable in Navigator." }
+            }
+            ProviderChoice {
+                firm_id: view.id.clone(),
+                csrf_token: fields.csrf_token.clone(),
+                kind: "esign",
+                label: "E-signature",
+                providers: [("docusign", "DocuSign"), ("dropbox_sign", "Dropbox Sign")],
+                selected: fields.esign_provider.clone(),
+                can_edit,
+            }
+            if fields.esign_provider == "dropbox_sign" {
+                p { class: "nav-muted", "Use Dropbox Sign to send envelopes and record the completed signature in Navigator." }
+            }
+            div { class: "nav-choice-group--cols-2",
+                div { class: "nav-choice-group__options",
+                    for (label, provider) in [("Notion", "notion"), ("Slack", "slack")] {
+                        article { class: "nav-card", key: "{provider}",
+                            div { class: "nav-card__body",
+                                h3 { "{label}" }
+                                p { "{status(provider)}" }
+                                if fields.can_manage_secrets {
+                                    a { class: "nav-link", href: "#firm-secrets", "Manage {label} credentials" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProviderChoice(
+    firm_id: String,
+    csrf_token: String,
+    kind: &'static str,
+    label: &'static str,
+    providers: [(&'static str, &'static str); 2],
+    selected: String,
+    can_edit: bool,
+) -> Element {
+    rsx! {
+        form { class: "nav-form", method: "post", action: "{FIRM_SHOW_PATH}/{firm_id}/integrations",
+            input { r#type: "hidden", name: "_csrf", value: "{csrf_token}" }
+            input { r#type: "hidden", name: "integration", value: "{kind}" }
+            ChoiceGroup {
+                legend: rsx! { "{label}" },
+                name: "provider",
+                columns: 2,
+                selected: vec![selected],
+                options: providers.into_iter().map(|(value, label)| {
+                    ChoiceGroupOption::new(value, label).disabled(!can_edit)
+                }).collect::<Vec<_>>(),
+            }
+            if can_edit {
+                button { class: "nav-btn nav-btn--secondary", r#type: "submit", "Save {label}" }
+            }
         }
     }
 }
@@ -935,7 +1079,7 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
 #[cfg(test)]
 mod tests {
     use super::{
-        firm_show_body, FirmFields, FirmShowView, MemberRow, SecretMetadataRow,
+        firm_show_body, FirmFields, FirmFinances, FirmShowView, MemberRow, SecretMetadataRow,
         SummaryApprovalEventRow, SummaryApprovalRow,
     };
     use crate::firm_invoice_graphs::{
@@ -951,6 +1095,7 @@ mod tests {
             logo: None,
             id: "firm-1".to_string(),
             fields,
+            ..Default::default()
         }))
     }
 
@@ -1026,8 +1171,31 @@ mod tests {
     }
 
     #[test]
-    fn offers_remove_admin_for_a_non_dri_admin_only() {
+    fn firm_link_uses_its_website_and_provider_cards_keep_the_saved_choices() {
         let html = render(Some(FirmFields {
+            website_url: Some("https://practice.example.test".into()),
+            workspace_provider: "microsoft_365".into(),
+            esign_provider: "dropbox_sign".into(),
+            can_edit: true,
+            ..Default::default()
+        }));
+        assert!(html.contains(r#"href="https://practice.example.test""#));
+        for choice in ["microsoft_365", "dropbox_sign"] {
+            assert!(
+                html.split_once(&format!(r#"id="provider-{choice}""#))
+                    .is_some_and(|(_, rest)| rest
+                        .split_once('>')
+                        .is_some_and(|(input, _)| input.contains("checked"))),
+                "{html}"
+            );
+        }
+        assert!(html.contains("Notion"));
+        assert!(html.contains("Slack"));
+    }
+
+    #[test]
+    fn offers_remove_admin_for_a_non_dri_admin_only() {
+        let mut fields = FirmFields {
             members: vec![MemberRow {
                 person_id: "p-3".to_string(),
                 name: "Dana Admin".to_string(),
@@ -1036,13 +1204,17 @@ mod tests {
                 is_dri: false,
             }],
             can_edit: true,
+            can_remove_admin: true,
             ..Default::default()
-        }));
+        };
+        let html = render(Some(fields.clone()));
         assert!(
             html.contains("/app/admin/firms/firm-1/members/remove-admin"),
             "{html}"
         );
         assert!(html.contains("Remove admin"), "{html}");
+        fields.can_remove_admin = false;
+        assert!(!render(Some(fields)).contains("/members/remove-admin"));
     }
 
     /// A caller without `ManageMembership` sees the Firm's facts but no Edit
@@ -1081,67 +1253,39 @@ mod tests {
         assert!(html.contains("No house brands attached."), "{html}");
     }
 
-    /// ENG-591: the invoice graphs render below the members table, driven by
-    /// whatever `FirmFields::invoices` the loader resolved.
     #[test]
-    fn renders_the_invoice_graphs_below_the_members_table() {
-        let html = render(Some(FirmFields {
-            name: "Graphed Practice".to_string(),
-            status: "active".to_string(),
-            entity_name: "Graphed Entity".to_string(),
-            brand_keys: Vec::new(),
-            admin_dri: None,
-            admin_dri_problem: None,
-            members: Vec::new(),
-            can_edit: false,
-            invoices: FirmInvoiceGraphsView {
-                currencies: vec![CurrencyInvoiceGraphsView {
-                    currency: "USD".to_string(),
-                    by_brand: vec![InvoiceBarView {
-                        label: "Neon Law".to_string(),
-                        invoiced_cents: 10_000,
-                        paid_cents: 5_000,
+    fn financial_rollups_render_on_the_dashboard() {
+        let overview = render(Some(FirmFields::default()));
+        assert!(overview.contains(r#"href="/app/admin/firms/firm-1/finances""#));
+        assert!(!overview.contains(r#"id="firm-invoice-graphs""#));
+        let html = dioxus_ssr::render_element(firm_show_body(&FirmShowView {
+            id: "firm-1".into(),
+            finances: Some(FirmFinances {
+                name: "Graphed Practice".into(),
+                invoices: FirmInvoiceGraphsView {
+                    currencies: vec![CurrencyInvoiceGraphsView {
+                        currency: "USD".into(),
+                        by_brand: vec![InvoiceBarView {
+                            label: "Synthetic Brand".into(),
+                            invoiced_cents: 10_000,
+                            paid_cents: 5_000,
+                        }],
+                        by_lawyer_dri: vec![],
                     }],
-                    by_lawyer_dri: vec![],
-                }],
-            },
+                },
+                ..Default::default()
+            }),
             ..Default::default()
         }));
-        assert!(html.contains(r#"id="firm-invoice-graphs""#), "{html}");
-        assert!(html.contains("Neon Law invoiced: $100"), "{html}");
-        // ENG-1250: projected cash sits right after the invoice graphs.
-        let graphs = html.find(r#"id="firm-invoice-graphs""#).unwrap();
-        assert!(
-            html.find(r#"id="firm-projected-cash""#).unwrap() > graphs,
-            "{html}"
-        );
-        // ENG-1251: calibration follows projected cash.
-        assert!(
-            html.find(r#"id="firm-outcome-calibration""#).unwrap()
-                > html.find(r#"id="firm-projected-cash""#).unwrap(),
-            "{html}"
-        );
-    }
-
-    /// A Firm with no invoices in the window renders the graphs section's
-    /// own empty state rather than an omitted section.
-    #[test]
-    fn renders_the_invoice_graphs_empty_state_with_no_invoices() {
-        let html = render(Some(FirmFields {
-            name: "Quiet Practice".to_string(),
-            status: "active".to_string(),
-            entity_name: "Quiet Entity".to_string(),
-            brand_keys: Vec::new(),
-            admin_dri: None,
-            admin_dri_problem: None,
-            members: Vec::new(),
-            can_edit: false,
-            ..Default::default()
-        }));
-        assert!(
-            html.contains("No invoices in the trailing 30 days."),
-            "{html}"
-        );
+        for heading in [
+            "Finances",
+            "firm-invoice-graphs",
+            "firm-projected-cash",
+            "firm-outcome-calibration",
+            "Synthetic Brand invoiced: $100",
+        ] {
+            assert!(html.contains(heading), "{html}");
+        }
     }
 
     #[test]

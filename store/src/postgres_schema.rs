@@ -1451,6 +1451,7 @@ mod tests {
             ("20261127010000_add_firm_drive_settings.sql", include_str!("../postgres/migrations/20261127010000_add_firm_drive_settings.sql")),
             ("20261127193400_deadline_scheduling.sql", include_str!("../postgres/migrations/20261127193400_deadline_scheduling.sql")),
             ("20261127200000_index_inbox_message_order.sql", include_str!("../postgres/migrations/20261127200000_index_inbox_message_order.sql")),
+            ("20261127200500_firm_workspace_provider.sql", include_str!("../postgres/migrations/20261127200500_firm_workspace_provider.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

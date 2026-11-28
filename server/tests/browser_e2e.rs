@@ -1204,7 +1204,7 @@ async fn daily_billing_groups_interleaved_project_entries_after_saving() {
     );
     for (project, subtotal) in [(&first, "$180.00"), (&second, "$0.00")] {
         let selector = format!(
-            "tbody:has(a[href='/app/projects/{}/billing']) .daily-billing__subtotal",
+            "tbody:has(a[href='/app/projects/{}/finances']) .daily-billing__subtotal",
             project.code
         );
         let rows = c.find_all(Locator::Css(&selector)).await.unwrap();
@@ -1340,13 +1340,13 @@ async fn submit_daily_time(
 /// suites; this test pins the tab's presence and its empty-state contract
 /// in a real browser.
 #[tokio::test]
-async fn the_billing_tab_opens_and_its_empty_sections_explain_themselves() {
+async fn the_finances_tab_opens_and_preserves_existing_billing_links() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
     login_as_lawyer(&c).await;
     let url = format!(
-        "{}/app/projects/{}/billing",
+        "{}/app/projects/{}/finances",
         base_url(),
         store::seed::SAMPLE_LITIGATION_CODE
     );
@@ -1360,15 +1360,18 @@ async fn the_billing_tab_opens_and_its_empty_sections_explain_themselves() {
         Duration::from_secs(30),
     )
     .await;
-    let source = c.source().await.expect("the billing page source");
+    let source = c.source().await.expect("the Finances page source");
     assert!(
         c.find_all(Locator::Css(".error-page"))
             .await
             .unwrap()
             .is_empty(),
-        "the billing tab landed on an error page: {source}"
+        "the Finances tab landed on an error page: {source}"
     );
-    assert!(source.contains("<h2>Billing</h2>"), "{source}");
+    assert!(
+        source.contains("<h2>Finances</h2>"),
+        "missing the Finances heading"
+    );
     for text in [
         "No hourly rate is on file",
         "Nothing to invoice yet",
@@ -1376,9 +1379,21 @@ async fn the_billing_tab_opens_and_its_empty_sections_explain_themselves() {
     ] {
         assert!(
             source.contains(text),
-            "the billing tab should explain its absence: {text:?} — {source}"
+            "the Finances tab should explain its absence: {text:?} — {source}"
         );
     }
+    let legacy_url = format!(
+        "{}/app/projects/{}/billing",
+        base_url(),
+        store::seed::SAMPLE_LITIGATION_CODE
+    );
+    wait_for_text_reloading(
+        &c,
+        &legacy_url,
+        "No time logged on this matter yet",
+        Duration::from_secs(30),
+    )
+    .await;
     c.close().await.unwrap();
 }
 

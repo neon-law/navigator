@@ -1,6 +1,7 @@
 use super::tenancy;
 use crate::brands::{BrandEdit, BrandError, NewBrand};
 use crate::firms::{FirmError, FirmMembership, NewFirm, NewPersonFirmRole};
+use crate::persons::Role;
 use crate::postgres::fixtures::{connect, fresh_schema};
 use uuid::Uuid;
 
@@ -839,6 +840,51 @@ async fn firm_membership_wrappers_authorize_and_guard_tenancy() {
                     .await
                     .unwrap();
             assert!(transferred.is_dri);
+
+            tenancy::update_membership(
+                Role::Owner,
+                None,
+                seed.plain_admin,
+                firm.id,
+                FirmMembership::Admin,
+            )
+            .await
+            .unwrap();
+            tenancy::add_membership_on(
+                &pg,
+                &NewPersonFirmRole {
+                    person_id: seed.second_admin,
+                    firm_id: firm.id,
+                    membership: FirmMembership::Admin,
+                    is_dri: false,
+                },
+            )
+            .await
+            .unwrap();
+            for (role, person_id) in [(Role::Owner, None), (Role::Admin, Some(seed.plain_admin))] {
+                assert!(matches!(
+                    tenancy::demote_admin(role, person_id, seed.second_admin, firm.id).await,
+                    Err(FirmError::NotAuthorized)
+                ));
+                assert!(matches!(
+                    tenancy::remove_membership(role, person_id, seed.second_admin, firm.id).await,
+                    Err(FirmError::NotAuthorized)
+                ));
+            }
+            assert!(matches!(
+                tenancy::demote_admin(Role::Admin, Some(seed.dri), seed.dri, firm.id).await,
+                Err(FirmError::WouldLeaveFirmWithoutAdminDri(_))
+            ));
+            let former_admin =
+                tenancy::demote_admin(Role::Admin, Some(seed.dri), seed.plain_admin, firm.id)
+                    .await
+                    .unwrap();
+            assert_eq!(former_admin.membership, FirmMembership::Lawyer);
+            assert!(!former_admin.is_dri);
+            assert!(matches!(
+                tenancy::demote_admin(Role::Admin, Some(seed.dri), seed.plain_admin, firm.id).await,
+                Err(FirmError::NotAuthorized)
+            ));
 
             // Firm edits run through the wrapper with authorization; deletes refuse
             // a non-manager and then remove a firm with no projects.

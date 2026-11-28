@@ -1,12 +1,13 @@
 ---
 title: "Projected Contingency Cash"
 description: >-
-  The Firm show page's rollup of expected contingency cash by quarter, brand and lead lawyer, naming no matter.
+  The Firm Finances dashboard's rollup of expected contingency cash by quarter, brand and lead lawyer, naming no matter.
 ---
 
-**Projected Contingency Cash** is a section on the Firm show page, beside the trailing-30-day invoice graphs, for Owner
-and Admin. It sums the expected cash (fee plus costs recovered) of every open contingent matter the Firm owns, from the
-same [Outcome Projection](outcome-projection.md) the [Contingency Pipeline](contingency-pipeline.md) reads, and shows:
+**Projected Contingency Cash** is a section on the Firm Finances dashboard, beside the trailing-30-day invoice graphs,
+for Owner and Admin. It sums the expected cash (fee plus costs recovered) of every open contingent matter the Firm owns,
+from the same [Outcome Projection](outcome-projection.md) the [Contingency Pipeline](contingency-pipeline.md) reads, and
+shows:
 
 - the expected cash in total, with the range the outcomes span;
 - expected cash by quarter of expected resolution, beside the USD invoiced and paid on invoices issued that quarter,
