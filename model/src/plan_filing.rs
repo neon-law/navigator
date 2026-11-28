@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn configuration_refuses_unknown_fields_and_duplicate_rule_keys() {
-        let yaml = r#"
+        let yaml = r"
 name: Sample Plan
 filing_rules:
   - benefit_code: EXAMPLE
@@ -123,7 +123,7 @@ filing_rules:
     filing_window_days: 30
     filing_destination: https://filing.example/
     filer: responsible lawyer
-"#;
+";
         let mut config: PlanBillingConfiguration = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.validate(), Ok(()));
         let unknown = format!("{yaml}member_id: not-a-plan-field\n");
