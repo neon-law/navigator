@@ -18,5 +18,5 @@ Document UUID and the date the charge occurred.
 navigator project cost create --project <code> --receipt <document-uuid> --occurred-on YYYY-MM-DD --confirm
 ```
 
-The cost appears under **Billing > Expenses**. If the Project already has a cost for that transaction, the command
+The cost appears under **Finances > Expenses**. If the Project already has a cost for that transaction, the command
 reports the existing cost ID and skips creation.

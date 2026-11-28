@@ -15,6 +15,21 @@ pub enum ExpenseCategory {
     Other,
 }
 
+impl ExpenseCategory {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CourtFilingFee => "Court filing fee",
+            Self::EFilingServiceFee => "E-filing service fee",
+            Self::DepositionAndCourtReporter => "Deposition and court reporter",
+            Self::Transcript => "Transcript",
+            Self::CertifiedMailAndPostage => "Certified mail and postage",
+            Self::ProcessService => "Process service",
+            Self::Other => "Other expense",
+        }
+    }
+}
+
 /// The amount, payee, category, and source the receipt supports.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

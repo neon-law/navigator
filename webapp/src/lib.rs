@@ -77,6 +77,7 @@ pub mod error_pages;
 pub mod expunge_document;
 pub mod expunge_requests;
 pub mod firm_edit;
+mod firm_expenses;
 pub mod firm_footer;
 pub mod firm_invoice_graphs;
 pub mod firm_move;

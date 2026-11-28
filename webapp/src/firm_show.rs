@@ -109,6 +109,8 @@ pub struct FirmShowView {
 pub struct FirmFinances {
     pub name: String,
     pub invoices: crate::firm_invoice_graphs::FirmInvoiceGraphsView,
+    #[serde(default)]
+    expenses: crate::firm_expenses::FirmExpenses,
     pub projected_cash: crate::projected_cash::FirmProjectedCashView,
     pub calibration: crate::outcome_calibration::OutcomeCalibrationView,
 }
@@ -322,10 +324,18 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             firm.id,
         )
         .await;
+        let expenses = crate::firm_expenses::load(
+            &application_store,
+            actor_person_id,
+            store_role(role),
+            firm.id,
+        )
+        .await;
         return Ok(FirmShowView {
             finances: Some(FirmFinances {
                 name: firm.name,
                 invoices,
+                expenses,
                 projected_cash,
                 calibration,
             }),
@@ -975,6 +985,7 @@ fn firm_finances_body(view: &FirmShowView, finances: &FirmFinances) -> Element {
                 h1 { "Finances" }
             }
             crate::firm_invoice_graphs::FirmInvoiceGraphs { view: finances.invoices.clone() }
+            crate::firm_expenses::UnbilledExpenses { view: finances.expenses.clone() }
             crate::projected_cash::FirmProjectedCash { view: finances.projected_cash.clone() }
             crate::outcome_calibration::FirmOutcomeCalibration { view: finances.calibration.clone() }
         }
@@ -1280,6 +1291,7 @@ mod tests {
         for heading in [
             "Finances",
             "firm-invoice-graphs",
+            "firm-unbilled-expenses",
             "firm-projected-cash",
             "firm-outcome-calibration",
             "Synthetic Brand invoiced: $100",

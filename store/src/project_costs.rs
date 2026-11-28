@@ -3,6 +3,7 @@
 //! A cost records a third-party charge and its receipt. It never changes a
 //! Xero invoice; a later invoice is linked by its existing Xero identifier.
 use chrono::{NaiveDate, Utc};
+use model::documents::ExpenseCategory;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, Transaction};
 use uuid::Uuid;
@@ -266,7 +267,7 @@ pub async fn create_from_receipt(
     receipt_document_id: Uuid,
     occurred_on: NaiveDate,
 ) -> Result<(ProjectCost, bool), ProjectCostError> {
-    use model::documents::{ExpenseCategory, ReceiptMetadata};
+    use model::documents::ReceiptMetadata;
 
     let asset = live_document(application_store, project_id, receipt_document_id).await?;
     if asset.kind.as_deref() != Some("receipt") {
@@ -281,20 +282,11 @@ pub async fn create_from_receipt(
         .ok_or(ProjectCostError::Invalid(
             "receipt transaction_id must be a canonical mercury::<transaction-id>",
         ))?;
-    let description = match receipt.category {
-        ExpenseCategory::CourtFilingFee => "Court filing fee",
-        ExpenseCategory::EFilingServiceFee => "E-filing service fee",
-        ExpenseCategory::DepositionAndCourtReporter => "Deposition and court reporter",
-        ExpenseCategory::Transcript => "Transcript",
-        ExpenseCategory::CertifiedMailAndPostage => "Certified mail and postage",
-        ExpenseCategory::ProcessService => "Process service",
-        ExpenseCategory::Other => "Other expense",
-    };
     let input = NewProjectCost {
         receipt_document_id,
         occurred_on,
         payee: receipt.payee,
-        description: description.into(),
+        description: receipt.category.label().into(),
         amount_cents: receipt.amount_cents,
         currency: receipt.currency,
         amount_status: "confirmed".into(),
@@ -569,6 +561,69 @@ pub async fn list_for_project(
         .bind(project_id).fetch_all(&pg.0).await?.iter().map(from_row).collect::<Result<_,_>>().map_err(Into::into)
 }
 
+/// A charge with the category and the still-available receipt from its own Project.
+pub struct ExpenseReviewRow {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub occurred_on: NaiveDate,
+    pub payee: String,
+    pub description: String,
+    pub amount_cents: i64,
+    pub currency: String,
+    pub amount_status: String,
+    pub billing_status: String,
+    pub category: ExpenseCategory,
+    pub receipt_id: Option<Uuid>,
+}
+
+/// Read a caller-authorized Project set. The unbilled view includes confirmed,
+/// unbilled charges only. A retained receipt still supplies its category after
+/// deletion, but its link is omitted. Legacy receipts without a category use Other.
+pub async fn for_expense_review(
+    pg: &PostgresDb,
+    project_ids: &[Uuid],
+    confirmed_unbilled_only: bool,
+) -> Result<Vec<ExpenseReviewRow>, ProjectCostError> {
+    let rows = sqlx::query(
+        "SELECT c.id, c.project_id, c.occurred_on, c.payee, c.description, c.amount_cents,
+                c.currency, c.amount_status, c.billing_status,
+                CASE WHEN a.kind = 'receipt' THEN a.metadata #> '{receipt,category}' END AS category,
+                CASE WHEN a.kind IS NOT NULL AND a.deleted_at IS NULL AND a.purged_at IS NULL
+                     THEN a.id END AS receipt_id
+         FROM project_costs c
+         LEFT JOIN asset a ON a.id = c.receipt_document_id AND a.project_id = c.project_id
+         WHERE c.project_id = ANY($1)
+           AND (NOT $2 OR (c.amount_status = 'confirmed' AND c.billing_status = 'unbilled'))
+         ORDER BY c.project_id, c.occurred_on DESC, c.id",
+    )
+    .bind(project_ids)
+    .bind(confirmed_unbilled_only)
+    .fetch_all(&pg.0)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let category = row
+                .try_get::<Option<serde_json::Value>, _>("category")?
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or(ExpenseCategory::Other);
+            Ok(ExpenseReviewRow {
+                id: row.try_get("id")?,
+                project_id: row.try_get("project_id")?,
+                occurred_on: row.try_get("occurred_on")?,
+                payee: row.try_get("payee")?,
+                description: row.try_get("description")?,
+                amount_cents: row.try_get("amount_cents")?,
+                currency: row.try_get("currency")?,
+                amount_status: row.try_get("amount_status")?,
+                billing_status: row.try_get("billing_status")?,
+                category,
+                receipt_id: row.try_get("receipt_id")?,
+            })
+        })
+        .collect::<Result<_, sqlx::Error>>()
+        .map_err(Into::into)
+}
+
 pub async fn find_by_id(pg: &PostgresDb, id: Uuid) -> Result<ProjectCost, ProjectCostError> {
     fetch(pg, id).await
 }
@@ -801,5 +856,138 @@ mod tests {
             draft_mercury_cost(&blank, receipt),
             Err(ProjectCostError::Invalid("payee"))
         ));
+    }
+    async fn seed_expense_review(
+        pg: &crate::postgres::PostgresDb,
+        matter: &crate::firm_side::tests::Matter,
+        other: Uuid,
+    ) -> Vec<Uuid> {
+        let fixtures = [
+            (
+                matter.project_id,
+                "Live receipt",
+                "confirmed",
+                "unbilled",
+                false,
+            ),
+            (
+                matter.project_id,
+                "Deleted receipt",
+                "confirmed",
+                "unbilled",
+                true,
+            ),
+            (
+                matter.project_id,
+                "Estimated charge",
+                "estimated",
+                "unbilled",
+                false,
+            ),
+            (
+                matter.project_id,
+                "Resolved charge",
+                "confirmed",
+                "resolved",
+                false,
+            ),
+            (
+                matter.project_id,
+                "Legacy receipt",
+                "confirmed",
+                "unbilled",
+                false,
+            ),
+            (other, "Outside scope", "confirmed", "unbilled", false),
+        ];
+        let mut tx = pg.pool().begin().await.unwrap();
+        super::set_audit_context(&mut tx, matter.lawyer, "created", None)
+            .await
+            .unwrap();
+        let mut receipt_ids = Vec::new();
+        for (project, description, amount, billing, deleted) in fixtures {
+            let category = (description != "Legacy receipt")
+                .then(|| serde_json::json!({"receipt":{"category":"court_filing_fee"}}));
+            let receipt = sqlx::query_scalar::<_, Uuid>(
+                "INSERT INTO asset (storage_key,content_type,byte_size,sha256_hex,project_id,kind,metadata,deleted_at)
+                 VALUES ($1,'application/pdf',100,repeat('a',64),$2,'receipt',$3,
+                         CASE WHEN $4 THEN now() END) RETURNING id",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(project)
+            .bind(category)
+            .bind(deleted)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO project_costs (id,project_id,occurred_on,payee,description,amount_cents,currency,
+                  amount_status,billing_status,receipt_document_id,source_reference,idempotency_payload,
+                  idempotency_key,inserted_at,updated_at)
+                 VALUES (gen_random_uuid(),$1,current_date,'Synthetic vendor',$2,1200,'USD',$3,$4,$5,$6,
+                         '{}'::jsonb,$2,now(),now())",
+            )
+            .bind(project)
+            .bind(description)
+            .bind(amount)
+            .bind(billing)
+            .bind(receipt)
+            .bind(mercury_source_reference(Uuid::new_v4()))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+            receipt_ids.push(receipt);
+        }
+        tx.commit().await.unwrap();
+        receipt_ids
+    }
+
+    #[tokio::test]
+    async fn expense_review_keeps_unbilled_costs_and_flags_missing_receipt_evidence() {
+        use crate::postgres::fixtures::{connect, fresh_schema};
+        use model::documents::ExpenseCategory;
+
+        let Some((options, database)) = fresh_schema().await else {
+            return;
+        };
+        let pg = connect(&options, &database).await;
+        let matter = crate::firm_side::tests::matter(&pg).await;
+        let other = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO project (code, name, status, entity_id, firm_id)
+             SELECT 'synthetic-other-expenses', 'Synthetic Other', 'open', entity_id, firm_id
+             FROM project WHERE id=$1 RETURNING id",
+        )
+        .bind(matter.project_id)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+        let receipt_ids = seed_expense_review(&pg, &matter, other).await;
+
+        let rows = super::for_expense_review(&pg, &[matter.project_id], true)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        let live = rows
+            .iter()
+            .find(|row| row.description == "Live receipt")
+            .unwrap();
+        assert_eq!(live.receipt_id, Some(receipt_ids[0]));
+        let deleted = rows
+            .iter()
+            .find(|row| row.description == "Deleted receipt")
+            .unwrap();
+        assert_eq!(deleted.receipt_id, None);
+        assert_eq!(live.category, ExpenseCategory::CourtFilingFee);
+        assert_eq!(deleted.category, ExpenseCategory::CourtFilingFee);
+        assert!(rows.iter().any(
+            |row| row.description == "Legacy receipt" && row.category == ExpenseCategory::Other
+        ));
+        assert_eq!(
+            super::for_expense_review(&pg, &[matter.project_id], false)
+                .await
+                .unwrap()
+                .len(),
+            5
+        );
     }
 }
