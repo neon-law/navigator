@@ -256,6 +256,7 @@ impl<'a> LiveSession<'a> {
             total: None,
             next_offset: None,
             integrations: Vec::new(),
+            onboarding: None,
         };
         let mut offset = 0;
         loop {
@@ -440,6 +441,17 @@ pub async fn check_with(
                 message,
             });
         }
+    }
+    // LAW-586: an official onboarding's signed PDF and certificate, once each.
+    for message in integrity
+        .onboarding
+        .iter()
+        .flat_map(|evidence| evidence.missing.iter())
+    {
+        errors.push(CheckFailure {
+            location: "onboarding".into(),
+            message: message.clone(),
+        });
     }
     for finding in &integrity.integrations {
         errors.push(CheckFailure {
@@ -2712,6 +2724,38 @@ mod tests {
 
         assert!(!outcome.rejects(false), "{outcome:?}");
         assert!(outcome.fixes.is_empty(), "{:?}", outcome.fixes);
+    }
+
+    /// LAW-586: the gate fails while an official onboarding's signed record
+    /// is missing, naming what to file.
+    #[tokio::test]
+    async fn an_official_onboarding_without_its_signed_record_fails_the_check() {
+        let (server, project_id, _) = server().await;
+        let dir = tempfile::tempdir().unwrap();
+        gitignore(dir.path());
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({
+                "assets": [],
+                "onboarding": {
+                    "official": true, "signed_pdf": null, "certificate": null,
+                    "missing": ["The onboarding is signed but no signed engagement letter PDF is filed"],
+                },
+            }),
+        )
+        .await;
+
+        let outcome = check(dir.path(), &client(&server, project_id), true, false)
+            .await
+            .unwrap();
+
+        assert!(outcome.rejects(false), "{outcome:?}");
+        assert_eq!(outcome.errors.len(), 1);
+        assert_eq!(outcome.errors[0].location, "onboarding");
+        assert!(outcome.errors[0]
+            .message
+            .contains("signed engagement letter PDF"));
     }
 
     /// LAW-81: a bare legacy slug and its extension-carrying twin both

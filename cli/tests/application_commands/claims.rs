@@ -28,7 +28,7 @@ async fn plan_matter() -> (LiveSite, Uuid) {
     let person = |name: &str, role| {
         NewPerson::with_role(
             name,
-            &format!("{}@example.com", Uuid::now_v7().simple()),
+            format!("{}@example.com", Uuid::now_v7().simple()),
             role,
         )
     };

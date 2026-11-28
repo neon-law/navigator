@@ -204,7 +204,8 @@ pub async fn dispatch_generate_pdf(
     // File the rendered bytes as a content-addressed document `assets`
     // row — the same lane the inbound `document_intake` step writes
     // through.
-    let filename = storage_key.rsplit('/').next().unwrap_or("document.pdf");
+    let filename = filed_name(&kind, storage_key, chrono::Utc::now().date_naive());
+    let filename = filename.as_str();
     // The bytes live at two keys: the Project-scoped content-addressed key
     // the asset points at, and `storage_key` (the notation key the attest /
     // signature steps and the portal read back). Record that second location
@@ -242,6 +243,25 @@ pub async fn dispatch_generate_pdf(
     Ok(Some(serde_json::to_string(&pdf_ref)?))
 }
 
+/// The name a rendered document is filed under. An engagement or closing
+/// letter is dated by its render (`YYYY.MM.DD_engagement-letter.pdf`), so
+/// each review copy is a dated PDF on the matter (LAW-586); other kinds keep
+/// the storage key's own name.
+fn filed_name(kind: &str, storage_key: &str, rendered_on: chrono::NaiveDate) -> String {
+    let letter = match kind {
+        "onboarding" => "engagement-letter",
+        "offboarding" => "closing-letter",
+        _ => {
+            return storage_key
+                .rsplit('/')
+                .next()
+                .unwrap_or("document.pdf")
+                .to_owned()
+        }
+    };
+    format!("{}_{letter}.pdf", rendered_on.format("%Y.%m.%d"))
+}
+
 /// Resolve a notation to the project it belongs to and its pinned
 /// template's declared `kind`. `ingest_bytes` is project-scoped, but step
 /// dispatch only carries the notation id, so this fetches the notation
@@ -264,7 +284,27 @@ async fn notation_project_and_template_kind(
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_generate_pdf, DocumentPayload};
+    use super::{dispatch_generate_pdf, filed_name, DocumentPayload};
+
+    #[test]
+    fn letters_file_as_dated_pdfs_and_other_kinds_keep_their_name() {
+        let on = chrono::NaiveDate::from_ymd_opt(2026, 11, 28).unwrap();
+        let key = "notations/00000000-0000-0000-0000-000000000001/document.pdf";
+        assert_eq!(
+            filed_name("onboarding", key, on),
+            "2026.11.28_engagement-letter.pdf"
+        );
+        assert_eq!(
+            filed_name("offboarding", key, on),
+            "2026.11.28_closing-letter.pdf"
+        );
+        assert_eq!(filed_name("will", key, on), "document.pdf");
+        assert!(rules::c004::is_conventional_filename(&filed_name(
+            "onboarding",
+            key,
+            on
+        )));
+    }
     use std::collections::BTreeMap;
     use std::sync::Arc;
 

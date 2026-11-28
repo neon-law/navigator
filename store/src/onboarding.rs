@@ -69,6 +69,82 @@ pub async fn verified_providers(
     Ok(methods)
 }
 
+/// Whether an official onboarding has its signed record filed (LAW-586):
+/// the signed PDF, and for a DocuSign signature its Certificate of
+/// Completion, each filed once.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OnboardingEvidence {
+    /// Executed through verified provider evidence.
+    pub official: bool,
+    /// The filed signed engagement letter, by name.
+    pub signed_pdf: Option<String>,
+    /// The filed Certificate of Completion, by name.
+    pub certificate: Option<String>,
+    /// What an official onboarding still lacks, or copies filed twice.
+    pub missing: Vec<String>,
+}
+
+/// Read one Project's onboarding evidence.
+///
+/// # Errors
+/// A database failure.
+pub async fn evidence(pg: &PostgresDb, project: Uuid) -> Result<OnboardingEvidence, sqlx::Error> {
+    let methods = verified_providers(pg, &[project])
+        .await?
+        .remove(&project)
+        .unwrap_or_default();
+    // Current revisions of live onboarding PDFs.
+    let rows: Vec<(String, String, bool)> = sqlx::query_as(
+        "SELECT coalesce(a.slug,a.filename,''),a.sha256_hex,a.signing IS NOT NULL FROM asset a
+         WHERE a.project_id=$1 AND a.kind='onboarding' AND a.deleted_at IS NULL
+           AND a.content_type='application/pdf'
+           AND NOT EXISTS (SELECT 1 FROM asset newer WHERE newer.project_id=a.project_id
+                           AND newer.slug=a.slug AND newer.id>a.id)
+         ORDER BY a.inserted_at, a.id",
+    )
+    .bind(project)
+    .fetch_all(pg.pool())
+    .await?;
+    let signed = rows
+        .iter()
+        .find(|(name, _, signing)| *signing || name.ends_with("_signed.pdf"))
+        .map(|(name, ..)| name.clone());
+    let certificate = rows
+        .iter()
+        .find(|(name, ..)| name.ends_with("_certificate.pdf"))
+        .map(|(name, ..)| name.clone());
+    let official = !methods.is_empty();
+    let mut missing = Vec::new();
+    if official && signed.is_none() {
+        missing.push(
+            "The onboarding is signed but no signed engagement letter PDF is filed; file it as              YYYY.MM.DD_engagement-letter_signed.pdf."
+                .to_owned(),
+        );
+    }
+    if methods.contains(&SigningMethod::Docusign) && certificate.is_none() {
+        missing.push(
+            "The onboarding was signed through DocuSign but its Certificate of Completion is not              filed; file it as YYYY.MM.DD_engagement-letter_certificate.pdf."
+                .to_owned(),
+        );
+    }
+    let mut by_digest = std::collections::BTreeMap::<&str, Vec<&str>>::new();
+    for (name, sha, _) in &rows {
+        by_digest.entry(sha).or_default().push(name);
+    }
+    for names in by_digest.values().filter(|names| names.len() > 1) {
+        missing.push(format!(
+            "The same onboarding PDF is filed more than once: {}. Keep one and delete the rest.",
+            names.join(", ")
+        ));
+    }
+    Ok(OnboardingEvidence {
+        official,
+        signed_pdf: signed,
+        certificate,
+        missing,
+    })
+}
+
 /// A lawyer's verification of an exported, completed signing request for a
 /// previously filed Onboarding document.
 #[derive(Clone, Copy)]

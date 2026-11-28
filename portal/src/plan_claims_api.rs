@@ -130,6 +130,7 @@ fn dollars(cents: Option<i64>) -> String {
     )
 }
 
+#[allow(clippy::too_many_lines)] // One row per printed field of the three pages.
 fn packet_params(packet: &store::claim_packets::ClaimPacket) -> pdf::ClaimPacketParams {
     use pdf::{PacketInvoice, PacketPage};
     use store::legal_plans::ClaimProof;

@@ -33,7 +33,7 @@ impl LiveSite {
                     &application_store,
                     &store::persons::NewPerson::with_role(
                         "Synthetic Lawyer",
-                        &format!("lawyer-{}@example.com", Uuid::now_v7().simple()),
+                        format!("lawyer-{}@example.com", Uuid::now_v7().simple()),
                         store::persons::Role::Lawyer,
                     ),
                 )

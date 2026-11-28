@@ -10,6 +10,8 @@ mod documents;
 mod firm;
 #[path = "application_commands/live.rs"]
 mod live;
+#[path = "application_commands/onboarding.rs"]
+mod onboarding;
 #[path = "application_commands/relationship.rs"]
 mod relationship;
 #[path = "application_commands/setup.rs"]

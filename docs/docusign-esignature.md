@@ -205,13 +205,25 @@ navigator project envelope void "$envelope_id_or_link" --reason "Engagement decl
 Run it only after the lawyer approves voiding that envelope. Refresh a recorded envelope afterwards with `navigator
 project envelope status <code> --host <host>` so the matter shows it voided.
 
+## Onboarding letter PDFs
+
+Approving an onboarding letter renders it and files the review copy as `YYYY.MM.DD_engagement-letter.pdf`. The render
+runs before the notation leaves Lawyer Review: a letter that cannot render fails the approval with the reason and stays
+at review. A notation already parked at its render step without a PDF renders again on the next approval, or reports why
+it cannot.
+
+A completed envelope files `YYYY.MM.DD_engagement-letter_signed.pdf` and `YYYY.MM.DD_engagement-letter_certificate.pdf`,
+dated by signing, whether the webhook, a re-delivery, or an adoption files it. The same envelope's bytes are filed once.
+`navigator project status` and `navigator project gate --check` flag a signed onboarding whose signed PDF or, for
+DocuSign, Certificate of Completion is not filed, and the same PDF filed twice.
+
 ## Upload an executed onboarding letter
 
 To file a letter already executed in the Firm's DocuSign account, supply its envelope UUID.
 
 ```bash
 navigator site document upload --host "$host" --project "$project" \
-  --file onboarding_signed.pdf --kind onboarding \
+  --file 2026.11.17_engagement-letter_signed.pdf --kind onboarding \
   --signing-method docusign --signed-on 2026-11-17 --envelope-id "$envelope_id"
 ```
 
