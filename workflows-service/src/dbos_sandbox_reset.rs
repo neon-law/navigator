@@ -12,9 +12,9 @@ use store::{application_store::ApplicationStore, postgres::PostgresDb};
 pub type SandboxResetWorkflow =
     WorkflowRef<SandboxResetStart, SandboxResetReport, SandboxResetError>;
 
-// Xero accepts the same idempotency key for six minutes. Keep a margin for
+// Stripe retains an idempotency key for at least 24 hours. Keep a margin for
 // the bounded provider call and fail closed if a restart outlives the key.
-const REPLAY_WINDOW: chrono::Duration = chrono::Duration::minutes(5);
+const REPLAY_WINDOW: chrono::Duration = chrono::Duration::hours(23);
 const INVOICE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -146,9 +146,9 @@ mod tests {
         let anchor = Utc::now();
         assert!(within_replay_window(
             anchor,
-            anchor + Duration::seconds(299)
+            anchor + Duration::hours(23) - Duration::seconds(1)
         ));
-        assert!(!within_replay_window(anchor, anchor + Duration::minutes(5)));
+        assert!(!within_replay_window(anchor, anchor + Duration::hours(23)));
         assert!(!within_replay_window(anchor, anchor - Duration::seconds(1)));
     }
 

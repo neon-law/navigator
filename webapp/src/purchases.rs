@@ -14,12 +14,12 @@ use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 /// What this Client may do with one Offering.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub enum OfferingAction {
-    /// Buy it: the form raises a Xero invoice.
+    /// Buy it: the form sends a Stripe invoice or opens Stripe Checkout.
     #[default]
     Buy,
     /// A consultation waived for a Google sign-in. Booking is optional.
     Complimentary,
-    /// An invoice is open; pay it at `pay_url` when Xero supplied one.
+    /// An invoice is open; pay it at `pay_url`, the hosted Stripe page.
     Invoiced { pay_url: Option<String> },
     /// Paid and in force.
     Active,
@@ -347,15 +347,18 @@ mod tests {
     }
 
     #[test]
-    fn an_open_invoice_links_to_xero_and_a_paid_consultation_books() {
+    fn an_open_invoice_links_to_its_stripe_page_and_a_paid_consultation_books() {
         let html = render(content(
             OfferingAction::Invoiced {
-                pay_url: Some("https://in.xero.com/abc".into()),
+                pay_url: Some("https://invoice.stripe.com/i/abc".into()),
             },
             None,
         ));
         assert!(html.contains("Invoice sent"), "{html}");
-        assert!(html.contains(r#"href="https://in.xero.com/abc""#), "{html}");
+        assert!(
+            html.contains(r#"href="https://invoice.stripe.com/i/abc""#),
+            "{html}"
+        );
         assert!(!html.contains("<form"), "{html}");
 
         let html = render(content(OfferingAction::Active, None));

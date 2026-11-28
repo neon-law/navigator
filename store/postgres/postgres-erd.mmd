@@ -2039,6 +2039,8 @@ erDiagram
         uuid id
         datetime inserted_at
         string invoice_url
+        string legacy_xero_invoice_id
+        string legacy_xero_repeating_invoice_id
         string offering
         string offering_name
         uuid person_id
@@ -2051,12 +2053,10 @@ erDiagram
         string stripe_checkout_session_id
         string stripe_customer_id
         uuid stripe_firm_id
+        string stripe_invoice_id
         datetime stripe_period_end
         string stripe_subscription_id
         datetime updated_at
-        string xero_contact_id
-        string xero_invoice_id
-        string xero_repeating_invoice_id
     }
     question {
         string answer_type

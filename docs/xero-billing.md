@@ -92,24 +92,32 @@ two is the **withdrawal**: when the firm draws earned fees out of trust, its all
 settles, and each matter's share posts against that matter's trust ledger. See
 [`trust-accounting.md`](trust-accounting.md).
 
-## The one exception: a Client's self-serve Purchase
+## A Client's self-serve Purchase is collected through Stripe
 
 A signed-in Client may buy an [Offering](glossary/offering.md) at its published price from `/purchases`: a consultation,
-or a Delete Your Data plan billed monthly or yearly. That [Purchase](glossary/purchase.md) belongs to no matter, so it
-is not mirrored into `xero_invoice`; it lives in the PostgreSQL `purchase` table.
+or a Delete Your Data plan billed monthly or yearly. That [Purchase](glossary/purchase.md) belongs to no matter and
+never reaches Xero; it lives in the PostgreSQL `purchase` table and collects into the Firm's Stripe Operating account
+(`STRIPE_DEFAULT` and the Firm's Operating key). Whether Purchases stay outside trust-first collection is open in
+LAW-362.
 
-1. `portal::purchases::buy` records the Purchase, finds or creates the Xero contact by email, and raises an `ACCREC`,
-   `AUTHORISED` invoice due in 14 days with the Purchase id as the `Idempotency-Key`. It reads the invoice's
-   `OnlineInvoice` URL and sends the Client there to pay.
-2. Xero emails the invoice and collects payment.
-3. Once `GET /Invoices/{id}` reports `PAID`, `portal::purchases::activate_if_paid` turns the Purchase active. A monthly
-   or yearly Purchase then gets a Xero `RepeatingInvoice` (keyed on the Purchase id, `ApprovedForSending`) starting one
-   period later, so Xero raises and emails every renewal itself.
+1. `portal::purchases::buy` reserves the Purchase on the Firm's Stripe account, then creates, finalizes, and sends a
+   Stripe invoice due in 14 days. Every write carries the Purchase id as its `Idempotency-Key`; an interrupted attempt
+   older than Stripe's 24-hour key window needs reconciliation instead of a second invoice. The Client pays on the
+   hosted invoice page.
+2. `portal::purchases::activate_if_paid` turns the Purchase active once Stripe reports the invoice `paid` in full.
+3. A monthly or yearly plan uses Stripe Checkout and a Stripe subscription; see [privacy and recurring
+   purchases](privacy-and-purchases.md).
 
-The DBOS `PurchaseActivation` schedule runs step 3 every five minutes; the purchase page also runs it for the viewer's
-open invoices. The page refuses to sell without `XERO_TENANT_ID`, because the in-process stub must never stand in for a
-real invoice. Creating repeating invoices needs the connection's invoice-write scope; check that the custom connection's
-granted scopes cover `RepeatingInvoices` before enabling the schedule in production.
+The DBOS `PurchaseActivation` schedule runs step 2 every five minutes; the purchase page also runs it for the viewer's
+open invoices. The page refuses to sell a consultation unless the deployment enables the Operating Stripe route.
+
+The monthly Legal Sandbox reset bills each subscriber's closed-month overage the same way: one sent Stripe invoice on
+the account and Customer of their Stripe subscription. A subscriber whose plan predates Stripe has no Stripe account
+to bill and is reported as skipped.
+
+A Purchase Xero invoiced before Stripe keeps its Xero invoice and repeating-invoice ids as read-only history. An unpaid
+or unanswered Xero Purchase is expired; a plan that renews through a Xero repeating invoice is cancelled by the Firm in
+Xero, not online.
 
 ## Where the price comes from: the matter, agreed per client
 

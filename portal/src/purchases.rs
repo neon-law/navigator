@@ -8,15 +8,15 @@
 //!   Person — the address they confirmed as a lead. [`complimentary`] is that
 //!   rule. A session opened by an email link ([`crate::lead_confirm`]) or any
 //!   other door does not earn it.
-//! - **Buy.** Consultations are invoiced in Xero; recurring plans use hosted
-//!   Stripe Checkout with explicit renewal consent and online cancellation.
+//! - **Buy.** Every paid Purchase collects into the Firm's Stripe Operating
+//!   account. A consultation is a sent Stripe invoice whose hosted page is the
+//!   pay link; a recurring plan uses hosted Stripe Checkout with explicit
+//!   renewal consent and online cancellation.
 //! - **Active.** Provider-verified payment turns the Purchase on. Stripe access
 //!   also requires an unexpired paid period. The durable refresh queue and the
 //!   purchase page refresh provider status.
 //! - **Cancel.** Every authenticated Person can stop their own renewal after
 //!   provider confirmation. A role change cannot block cancellation.
-
-use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::StatusCode;
@@ -24,6 +24,7 @@ use axum::middleware::{from_fn, from_fn_with_state, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Form, Router};
+use billing::stripe::{InvoiceCustomer, OneOffInvoice};
 use chrono::{DateTime, Months, NaiveDate, TimeDelta, Utc};
 use dioxus_server::{render_handler, FullstackState, ServeConfig};
 use serde::Deserialize;
@@ -47,7 +48,6 @@ pub const BOOKING_PATH: &str = "/consultation";
 pub const DUE_DAYS: u32 = 14;
 const CURRENCY: &str = "USD";
 const MAX_BODY_BYTES: usize = 4 * 1024;
-const PAID: &str = "PAID";
 
 /// Whether this session earns the complimentary consultation: it came through
 /// the primary provider (Google) with the Person's own address.
@@ -91,15 +91,6 @@ fn new_purchase(person: &Person, offering: &OfferingCopy) -> NewPurchase {
     }
 }
 
-fn line(purchase: &Purchase) -> billing::InvoiceLine {
-    billing::InvoiceLine {
-        description: purchase.offering_name.clone(),
-        quantity: 1,
-        unit_amount_cents: purchase.amount_cents,
-        account_code: purchase.account_code.clone(),
-    }
-}
-
 fn reference(purchase: &Purchase) -> String {
     format!(
         "{} {}",
@@ -117,60 +108,61 @@ pub enum BuyError {
     Billing(#[from] billing::BillingError),
 }
 
-/// Buy `offering` for `person`: record the Purchase, then raise its Xero
-/// invoice. An open Purchase of the same Offering is returned as it stands,
-/// and an `invoicing` one left by an interrupted attempt is invoiced with the
-/// same idempotency key.
+/// Buy a one-time `offering` for `person`: reserve the Purchase on the Firm's
+/// Stripe Operating account, then send its Stripe invoice. An open Purchase
+/// of the same Offering is returned as it stands, and an `invoicing` one left
+/// by an interrupted attempt is sent under the same idempotency key.
 ///
 /// # Errors
-/// [`BuyError`] when the store or Xero refuses.
-///
-/// An interrupted open Purchase does not yet persist a first-attempt time.
-/// A crash after provider creation but before recording its id can outlive
-/// provider-key retention; durable recovery for that legacy path is separate.
+/// [`BuyError`] when the store or Stripe refuses, or an interrupted attempt
+/// has outlived Stripe's idempotency window and needs reconciliation.
 pub async fn buy(
+    application_store: &store::application_store::ApplicationStore,
     pg: &PostgresDb,
-    billing: &dyn billing::BillingProvider,
     person: &Person,
     offering: &OfferingCopy,
     now: DateTime<Utc>,
 ) -> Result<Purchase, BuyError> {
-    let purchase = purchases::open(pg, &new_purchase(person, offering), now).await?;
+    let firm = crate::subscription_purchases::current_firm(application_store).await?;
+    let key = crate::subscription_purchases::credential(application_store, firm).await?;
+    let stripe = crate::subscription_purchases::client(&key)?;
+    let account = stripe.account_id().await?;
+    let purchase =
+        purchases::open_stripe_invoice(pg, &new_purchase(person, offering), now, firm, &account)
+            .await?;
     if purchase.state == PurchaseState::Invoiced {
         return Ok(purchase);
     }
-    let contact = billing
-        .ensure_contact(&billing::ContactRequest {
-            name: person.name.clone(),
-            email: person.email.clone(),
+    // Stripe retains idempotency keys for at least 24 hours. An uncertain
+    // first attempt older than that window needs reconciliation, never a
+    // second invoice.
+    if now >= purchase.inserted_at + TimeDelta::hours(23) {
+        return Err(billing::BillingError::Provider(
+            "an interrupted purchase invoice requires reconciliation".into(),
+        )
+        .into());
+    }
+    let sent = stripe
+        .send_one_off_invoice(&OneOffInvoice {
+            key: purchase.id,
+            customer: InvoiceCustomer::New {
+                name: &person.name,
+                email: &person.email,
+            },
+            description: &reference(&purchase),
+            amount_cents: purchase.amount_cents,
+            days_until_due: DUE_DAYS,
+            metadata: ("navigator_purchase_id", purchase.id.to_string()),
         })
         .await?;
-    let invoice = billing
-        .create_invoice(
-            purchase.id,
-            &billing::InvoiceRequest {
-                contact_id: Some(contact.clone()),
-                contact_name: person.name.clone(),
-                contact_email: person.email.clone(),
-                reference: reference(&purchase),
-                line_items: vec![line(&purchase)],
-                issued_date: None,
-                due_date: Some(now.date_naive() + TimeDelta::days(i64::from(DUE_DAYS))),
-            },
-        )
-        .await?;
-    // The online invoice page lets the Client view the issued invoice and pay.
-    let url = match billing.online_invoice_url(&invoice.0).await {
-        Ok(url) => url,
-        Err(error) => {
-            tracing::warn!(error = %error, purchase_id = %purchase.id, "online invoice url unavailable");
-            None
-        }
-    };
-    Ok(
-        purchases::record_invoice(pg, purchase.id, &contact.0, &invoice.0, url.as_deref(), now)
-            .await?,
+    Ok(purchases::record_stripe_invoice(
+        pg,
+        purchase.id,
+        &sent.id,
+        sent.hosted_invoice_url.as_deref(),
+        now,
     )
+    .await?)
 }
 
 /// The first renewal date of a subscription activated on `today`.
@@ -184,67 +176,47 @@ pub fn first_renewal(cadence: Cadence, today: NaiveDate) -> Option<NaiveDate> {
     today.checked_add_months(Months::new(months))
 }
 
-/// Turn an invoiced Purchase on when Xero reports its invoice paid, handing a
-/// subscription's renewals to a Xero repeating invoice. Returns whether it is
-/// now active. Safe to repeat: the repeating invoice is keyed on the Purchase
-/// id, and activating an active Purchase changes nothing.
+/// Turn an invoiced one-time Purchase on when Stripe reports its invoice paid
+/// in full. Returns whether it is now active. Safe to repeat: activating an
+/// active Purchase changes nothing.
 ///
 /// # Errors
-/// A store or Xero failure, as text naming no client content.
+/// A store or Stripe failure, as text naming no client content.
 pub async fn activate_if_paid(
+    application_store: &store::application_store::ApplicationStore,
     pg: &PostgresDb,
-    billing: &dyn billing::BillingProvider,
     purchase: &Purchase,
     now: DateTime<Utc>,
 ) -> Result<bool, String> {
-    if purchase.stripe.is_some() {
-        return Ok(false);
-    }
     if purchase.state == PurchaseState::Active {
         return Ok(true);
     }
-    let (PurchaseState::Invoiced, Some(invoice_id)) = (purchase.state, &purchase.xero_invoice_id)
+    let (PurchaseState::Invoiced, Some(binding)) = (purchase.state, &purchase.stripe_invoice)
     else {
         return Ok(false);
     };
-    let status = billing
-        .get_invoice(invoice_id)
+    let Some(invoice_id) = binding.invoice_id.as_deref() else {
+        return Ok(false);
+    };
+    let refused = |_| "purchase payment was not confirmed".to_owned();
+    let key = crate::subscription_purchases::credential(application_store, binding.firm_id)
         .await
-        .map_err(|error| error.to_string())?;
-    if !status.status.eq_ignore_ascii_case(PAID) {
+        .map_err(refused)?;
+    let stripe = crate::subscription_purchases::client(&key).map_err(refused)?;
+    if stripe.account_id().await.map_err(refused)? != binding.account_id {
+        return Err("purchase invoice account requires reconciliation".into());
+    }
+    let invoice = stripe
+        .invoice_state(invoice_id, purchase.amount_cents)
+        .await
+        .map_err(refused)?;
+    if !invoice.paid(purchase.amount_cents) {
         purchases::touch(pg, purchase.id, now)
             .await
             .map_err(|error| error.to_string())?;
         return Ok(false);
     }
-    let repeating = match (
-        first_renewal(purchase.cadence, now.date_naive()),
-        &purchase.xero_contact_id,
-    ) {
-        (Some(start_date), Some(contact_id)) => Some(
-            billing
-                .create_repeating_invoice(
-                    purchase.id,
-                    &billing::RepeatingInvoiceRequest {
-                        contact_id: contact_id.clone(),
-                        reference: purchase.offering_name.clone(),
-                        line_items: vec![line(purchase)],
-                        every: if purchase.cadence == Cadence::Year {
-                            billing::RepeatEvery::Year
-                        } else {
-                            billing::RepeatEvery::Month
-                        },
-                        start_date,
-                        due_days: DUE_DAYS,
-                    },
-                )
-                .await
-                .map_err(|error| error.to_string())?,
-        ),
-        (Some(_), None) => return Err("a subscription Purchase has no Xero contact".into()),
-        (None, _) => None,
-    };
-    purchases::activate(pg, purchase.id, repeating.as_deref(), now)
+    purchases::activate_stripe_invoice(pg, purchase.id, now)
         .await
         .map_err(|error| error.to_string())?;
     tracing::info!(
@@ -260,7 +232,6 @@ pub async fn activate_if_paid(
 /// The DBOS `PurchaseActivation` schedule's view of provider payments and renewals.
 pub struct StoreActivationSource {
     pg: PostgresDb,
-    billing: Arc<dyn billing::BillingProvider>,
     application_store: store::application_store::ApplicationStore,
 }
 
@@ -268,12 +239,10 @@ impl StoreActivationSource {
     #[must_use]
     pub fn new(
         pg: PostgresDb,
-        billing: Arc<dyn billing::BillingProvider>,
         application_store: store::application_store::ApplicationStore,
     ) -> Self {
         Self {
             pg,
-            billing,
             application_store,
         }
     }
@@ -308,7 +277,7 @@ impl workflows::dbos_engine::purchase_activation::ActivationSource for StoreActi
                 .map(|fresh| fresh.is_active(Utc::now()))
                 .map_err(|_| "subscription payment was not confirmed".to_owned());
         }
-        activate_if_paid(&self.pg, self.billing.as_ref(), &purchase, Utc::now()).await
+        activate_if_paid(&self.application_store, &self.pg, &purchase, Utc::now()).await
     }
 }
 
@@ -316,10 +285,9 @@ impl workflows::dbos_engine::purchase_activation::ActivationSource for StoreActi
 struct PageState {
     app: AppState,
     copy: Option<PurchaseCopy>,
-    /// Whether invoices go to a real Xero organisation. Without one the
-    /// billing provider is the in-process stub, which must never stand in
-    /// for a real invoice, so the page refuses rather than sell.
-    xero: bool,
+    /// Whether the deployment collects through a Firm's Stripe Operating
+    /// account. Without it the page refuses to sell a one-time Offering.
+    stripe: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -333,15 +301,17 @@ struct BuyForm {
 /// Build the purchase page and its buy command. `copy` is the mounted
 /// brand's catalog `purchase` block; the page refuses when it has none.
 pub fn routes(state: &AppState, copy: Option<PurchaseCopy>) -> Router {
-    let xero = std::env::var("XERO_TENANT_ID").is_ok_and(|tenant| !tenant.trim().is_empty());
-    routes_with(state, copy, xero)
+    let stripe = store::firm_secrets::stripe_billing_enabled(
+        store::firm_secrets::IntegrationSecretKind::StripeOperatingAppKey,
+    );
+    routes_with(state, copy, stripe)
 }
 
-fn routes_with(state: &AppState, copy: Option<PurchaseCopy>, xero: bool) -> Router {
+fn routes_with(state: &AppState, copy: Option<PurchaseCopy>, stripe: bool) -> Router {
     let page_state = PageState {
         app: state.clone(),
         copy: copy.filter(|copy| !copy.offerings.is_empty()),
-        xero,
+        stripe,
     };
     let render = Router::<FullstackState>::new()
         .route(
@@ -460,11 +430,10 @@ async fn page_content(
     // schedule's next slot.
     for purchase in own
         .iter_mut()
-        .filter(|p| p.state == PurchaseState::Invoiced)
+        .filter(|p| p.state == PurchaseState::Invoiced && p.stripe_invoice.is_some())
     {
-        let billing = state.app.billing_provider.as_ref();
         if matches!(
-            activate_if_paid(&pg, billing, purchase, Utc::now()).await,
+            activate_if_paid(&state.app.application_store, &pg, purchase, Utc::now()).await,
             Ok(true)
         ) {
             if let Ok(fresh) = purchases::get(&pg, purchase.id).await {
@@ -665,19 +634,11 @@ async fn post_buy(
                 .into_response(),
         };
     }
-    if !state.xero {
+    if !state.stripe {
         audit(&person, &offering.id, "rejected_unavailable");
         return Redirect::to(PURCHASES_PATH).into_response();
     }
-    match buy(
-        &pg,
-        state.app.billing_provider.as_ref(),
-        &person,
-        offering,
-        now,
-    )
-    .await
-    {
+    match buy(&state.app.application_store, &pg, &person, offering, now).await {
         Ok(purchase) => {
             audit(&person, &offering.id, "invoiced");
             Redirect::to(purchase.invoice_url.as_deref().unwrap_or(PURCHASES_PATH)).into_response()
@@ -710,24 +671,14 @@ async fn post_cancel(
     if purchase.renewal_cancelled_at.is_some() {
         return Redirect::to(PURCHASES_PATH).into_response();
     }
+    // A plan bought before Stripe renews outside Navigator, so its
+    // cancellation is the Firm's to confirm by hand.
     let result = if purchase.stripe.is_some() {
         crate::subscription_purchases::cancel(&state.app.application_store, &pg, &purchase).await
-    } else if let Some(repeating) = purchase.xero_repeating_invoice_id.as_deref() {
-        match state
-            .app
-            .billing_provider
-            .cancel_repeating_invoice(repeating)
-            .await
-        {
-            Ok(end) => purchases::record_xero_cancelled(&pg, id, end, Utc::now())
-                .await
-                .map_err(|_| {
-                    billing::BillingError::Provider("cancellation needs reconciliation".into())
-                }),
-            Err(error) => Err(error),
-        }
     } else {
-        return StatusCode::BAD_REQUEST.into_response();
+        Err(billing::BillingError::Provider(
+            "a plan bought before Stripe is cancelled by the Firm".into(),
+        ))
     };
     match result {
         Ok(()) => Redirect::to(PURCHASES_PATH).into_response(),
@@ -907,13 +858,11 @@ mod tests {
             currency: CURRENCY.into(),
             account_code: offering.account_code.clone(),
             state,
-            xero_contact_id: None,
-            xero_invoice_id: None,
-            invoice_url: Some("https://in.xero.test/synthetic".into()),
-            xero_repeating_invoice_id: None,
+            invoice_url: Some("https://invoice.stripe.com/i/synthetic".into()),
             inserted_at: now,
             updated_at: now,
             stripe: None,
+            stripe_invoice: None,
             renewal_cancelled_at: None,
             access_ends_at: None,
             activated_at: None,

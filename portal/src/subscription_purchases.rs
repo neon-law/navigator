@@ -23,7 +23,7 @@ pub(crate) fn enabled() -> bool {
         && store::firm_secrets::stripe_billing_enabled(IntegrationSecretKind::StripeOperatingAppKey)
 }
 
-async fn credential(
+pub(crate) async fn credential(
     application_store: &ApplicationStore,
     firm: Uuid,
 ) -> Result<ResolvedCredential, BillingError> {
@@ -39,7 +39,7 @@ async fn credential(
     .map_err(|_| refused())
 }
 
-fn client(key: &ResolvedCredential) -> Result<StripeInvoiceClient<'_>, BillingError> {
+pub(crate) fn client(key: &ResolvedCredential) -> Result<StripeInvoiceClient<'_>, BillingError> {
     let mode = store::firm_secrets::stripe_mode().map_err(|_| refused())?;
     StripeInvoiceClient::new(
         key.expose_for_provider_call(),
@@ -47,7 +47,9 @@ fn client(key: &ResolvedCredential) -> Result<StripeInvoiceClient<'_>, BillingEr
     )
 }
 
-async fn current_firm(application_store: &ApplicationStore) -> Result<Uuid, BillingError> {
+pub(crate) async fn current_firm(
+    application_store: &ApplicationStore,
+) -> Result<Uuid, BillingError> {
     store::firms::firm_id_for_brand_key(application_store, views::brand::brand_key().as_str())
         .await
         .map_err(|_| refused())?
@@ -103,7 +105,7 @@ pub(crate) async fn checkout(
         StripeAdmission {
             firm_id: firm,
             account_id: &account,
-            terms,
+            terms: Some(terms),
         },
     )
     .await
@@ -326,10 +328,8 @@ mod tests {
             currency: "USD".into(),
             account_code: "200".into(),
             state: PurchaseState::Active,
-            xero_contact_id: None,
-            xero_invoice_id: None,
             invoice_url: None,
-            xero_repeating_invoice_id: None,
+            stripe_invoice: None,
             inserted_at: now,
             updated_at: now,
             activated_at: Some(now),

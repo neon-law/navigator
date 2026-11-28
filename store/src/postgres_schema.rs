@@ -1486,6 +1486,7 @@ mod tests {
             ("20261128050200_invoice_destination_approval.sql", include_str!("../postgres/migrations/20261128050200_invoice_destination_approval.sql")),
             ("20261128050300_stripe_customer.sql", include_str!("../postgres/migrations/20261128050300_stripe_customer.sql")),
             ("20261128050400_matter_invoice_ledger.sql", include_str!("../postgres/migrations/20261128050400_matter_invoice_ledger.sql")),
+            ("20261128050500_purchase_stripe_only.sql", include_str!("../postgres/migrations/20261128050500_purchase_stripe_only.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

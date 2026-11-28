@@ -445,8 +445,10 @@ start:
   microcopy: Opens a short questionnaire. A lawyer reviews before anything is filed.
   refusal: We cannot start this matter online right now. Please contact our office and we will help you directly.
 
-# What a signed-in Client may buy online. Xero invoices each Purchase and
-# emails it; the Purchase turns on once Xero reports the invoice paid. Prices,
+# What a signed-in Client may buy online. Each Purchase collects through the
+# Firm's Stripe Operating account: a consultation is a Stripe invoice the
+# Client pays on its hosted page, and a plan is Stripe Checkout. The Purchase
+# turns on once Stripe confirms payment. Prices,
 # names, and account codes are attorney-set. A consultation is free for a
 # Client who signs in with Google using the address they confirmed.
 purchase:
@@ -456,7 +458,7 @@ purchase:
   paid_through_label: Paid access ends
   title: Consultations and plans
   intro: >-
-    Buy a consultation or a Delete Your Data plan here. Consultations are invoiced in Xero.
+    Buy a consultation or a Delete Your Data plan here. Consultations are invoiced through our secure payment page.
     Recurring plans begin after payment through our secure checkout.
   complimentary: >-
     You signed in with Google using the address you confirmed, so your
