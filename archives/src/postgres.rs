@@ -109,6 +109,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "legal_plan",
     "legal_plan_claim",
     "legal_plan_claim_event",
+    "legal_plan_filing_rule",
     "plan_fee_schedule",
     "firm_assumption",
     "outcome_estimate",

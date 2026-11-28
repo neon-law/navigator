@@ -492,6 +492,13 @@
     "target_only": true,
     "through": "claim_id -> legal_plan_claim.project_id"
   },
+  "legal_plan_filing_rule": {
+    "migration_slice": "legal-plan-collections",
+    "parity_scenario": "an identical import preserves each effective version and claims retain their selected rule",
+    "scope": "firm",
+    "target_only": true,
+    "through": "legal_plan_id -> legal_plan.firm_id"
+  },
   "letter": {
     "migration_slice": "communications-storage",
     "parity_scenario": "same-Mailroom round trip; incoming and outgoing; optional Project id preserved",
