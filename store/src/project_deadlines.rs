@@ -607,6 +607,100 @@ async fn persist(
     crate::postgres::project_deadlines::persist(&pg, id, project_id, stored).await
 }
 
+/// Docket a configured claim's civil filing date once and complete it when filing is recorded.
+pub(crate) async fn record_claim_filing(
+    connection: &mut sqlx::PgConnection,
+    project: Uuid,
+    claim: Uuid,
+    due_on: Option<DueOn>,
+    filed: bool,
+) -> Result<(), DeadlineError> {
+    use crate::postgres::{matter::MatterAuthorityError as PgError, project_deadlines::persist_on};
+
+    if due_on.is_none() && !filed {
+        return Ok(());
+    }
+    // Match the lock order used by ordinary Deadline writes before reading its row.
+    sqlx::query("SELECT pg_advisory_xact_lock(1312902739, hashtext($1::text))")
+        .bind(project)
+        .execute(&mut *connection)
+        .await
+        .map_err(PgError::from)?;
+    let replay_key = format!("legal-plan-claim:{claim}");
+    let existing = sqlx::query_scalar::<_, sqlx::types::Json<Deadline>>(
+        "SELECT to_jsonb(d) FROM project_deadlines d
+         WHERE project_id=$1 AND replay_key=$2 FOR UPDATE",
+    )
+    .bind(project)
+    .bind(&replay_key)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(PgError::from)?;
+    if let Some(existing) = existing {
+        let deadline = existing.0;
+        if filed && deadline.status == STATUS_OPEN {
+            let normalized = deadline_schedule(&deadline)?;
+            persist_on(
+                connection,
+                deadline.id,
+                project,
+                &StoredDeadline {
+                    normalized: &normalized,
+                    source_document_id: deadline.source_document_id,
+                    owner_person_id: deadline.owner_person_id,
+                    status: STATUS_COMPLETE,
+                    expected_status: Some(STATUS_OPEN),
+                    expected_updated_at: Some(&deadline.updated_at),
+                    inserted_at: &deadline.inserted_at,
+                },
+                false,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+    let Some(due_on) = due_on else {
+        return Ok(());
+    };
+    let due_at = due_on
+        .instant()
+        .map_err(|error| DeadlineError::Invalid(error.into()))?
+        .to_rfc3339();
+    let normalized = normalize(&DeadlineInput {
+        title: Some("Legal Plan Claim filing"),
+        description: None,
+        due_at: &due_at,
+        due_on: Some(&due_on),
+        hearing: None,
+        effort_minutes: None,
+        authority_kind: "contract",
+        authority: "Verified Legal Plan filing rule",
+        source: "legal_plan_claim",
+        calendar_role: "firm",
+        category: Some("internal"),
+        internal_lead_days: None,
+        client_lead_days: None,
+        replay_key: Some(&replay_key),
+    })?;
+    persist_on(
+        connection,
+        Uuid::now_v7(),
+        project,
+        &StoredDeadline {
+            normalized: &normalized,
+            source_document_id: None,
+            owner_person_id: None,
+            status: if filed { STATUS_COMPLETE } else { STATUS_OPEN },
+            expected_status: None,
+            expected_updated_at: None,
+            inserted_at: &chrono::Utc::now().to_rfc3339(),
+        },
+        false,
+    )
+    .await?;
+    Ok(())
+}
+
 /// An existing Deadline whose calendar zone survives a retry or reschedule.
 #[derive(Clone, Copy, Debug)]
 pub enum DeadlineIdentity<'a> {
@@ -1074,6 +1168,25 @@ pub async fn update(
     .await
 }
 
+fn deadline_schedule(existing: &Deadline) -> Result<Normalized, DeadlineError> {
+    normalize(&DeadlineInput {
+        title: existing.title.as_deref(),
+        description: existing.description.as_deref(),
+        due_at: &existing.due_at,
+        due_on: existing.due_on.as_ref(),
+        hearing: existing.hearing.as_ref(),
+        effort_minutes: Some(existing.effort_minutes),
+        authority_kind: &existing.authority_kind,
+        authority: &existing.authority,
+        source: &existing.source,
+        calendar_role: &existing.calendar_role,
+        category: existing.category.as_deref(),
+        internal_lead_days: existing.internal_lead_days,
+        client_lead_days: existing.client_lead_days,
+        replay_key: existing.replay_key.as_deref(),
+    })
+}
+
 async fn transition(
     application_store: &ApplicationStore,
     project_id: Uuid,
@@ -1116,22 +1229,7 @@ async fn transition(
     if existing.status == next {
         return Ok(existing);
     }
-    let normalized = normalize(&DeadlineInput {
-        title: existing.title.as_deref(),
-        description: existing.description.as_deref(),
-        due_at: &existing.due_at,
-        due_on: existing.due_on.as_ref(),
-        hearing: existing.hearing.as_ref(),
-        effort_minutes: Some(existing.effort_minutes),
-        authority_kind: &existing.authority_kind,
-        authority: &existing.authority,
-        source: &existing.source,
-        calendar_role: &existing.calendar_role,
-        category: existing.category.as_deref(),
-        internal_lead_days: existing.internal_lead_days,
-        client_lead_days: existing.client_lead_days,
-        replay_key: existing.replay_key.as_deref(),
-    })?;
+    let normalized = deadline_schedule(&existing)?;
     persist(
         application_store,
         existing.id,

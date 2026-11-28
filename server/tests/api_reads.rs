@@ -457,6 +457,114 @@ async fn seed_sibling_brand(fx: &Fixture) -> (store::projects::Project, store::p
     (project, sibling)
 }
 
+#[tokio::test]
+async fn legal_plan_configuration_requires_firm_management() {
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let (_, sibling) = seed_sibling_brand(&fx).await;
+        let firm = sibling.firm_id.unwrap();
+        let path = format!("/app/api/firms/{firm}/legal-plans/configuration");
+        let apply = |auth: &str, uri: &str, body: &'static str| {
+            fx.app.clone().oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(uri)
+                    .header("authorization", auth)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+        };
+        let plan = r#"{"name":"Sample Panel"}"#;
+        assert_eq!(
+            apply(&fx.unassigned_admin, &path, plan)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            apply(&fx.lawyer, &path, plan).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+        let dry_run = format!("{path}?dry_run=true");
+        assert_eq!(
+            apply(&fx.unassigned_owner, &dry_run, plan)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        let pg = PostgresDb::application().await.unwrap();
+        assert!(store::legal_plans::list(&pg, firm)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let schema_error = apply(
+            &fx.unassigned_owner,
+            &path,
+            r#"{"name":"Sample Panel","synthetic_private_value":"example"}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(schema_error.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!response_text(schema_error)
+            .await
+            .contains("synthetic_private_value"));
+        assert_eq!(
+            apply(&fx.unassigned_owner, &path, plan)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(store::legal_plans::list(&pg, firm).await.unwrap().len(), 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn project_member_rate_is_bound_to_the_verified_benefit() {
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let (_, project) = seed_sibling_brand(&fx).await;
+        seed_confirmed_plan_project(&fx, &project).await;
+        let path = format!("/app/api/projects/{}/legal-plan", project.id);
+        let set = |body: &'static str| {
+            fx.app.clone().oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(&path)
+                    .header("authorization", &fx.unassigned_owner)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+        };
+        let benefit = set(
+            r#"{"benefit_code":"EXAMPLE","benefit_terms":{"cap_shape":"consult_only","member_rate_cents_per_hour":0}}"#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(benefit.status(), StatusCode::OK);
+        for response in [
+            benefit,
+            set(r#"{"plan_state":"wa"}"#).await.unwrap(),
+            get(&fx, &path, Some(&fx.unassigned_owner)).await,
+        ] {
+            assert_eq!(response.status(), StatusCode::OK);
+            let json: serde_json::Value = serde_json::from_str(&response_text(response).await).unwrap();
+            assert_eq!(json["benefit_terms"]["member_rate_cents_per_hour"], 0);
+        }
+        let revised = set(r#"{"benefit_code":"OTHER"}"#).await.unwrap();
+        assert_eq!(revised.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_str(&response_text(revised).await).unwrap();
+        assert!(json["benefit_terms"].is_null());
+    })
+    .await;
+}
+
 async fn response_text(response: axum::response::Response) -> String {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(bytes.to_vec()).unwrap()

@@ -85,6 +85,7 @@ async fn history(
             project.id,
             firm,
             actor,
+            chrono_tz::UTC,
             plan_claims::Change {
                 claim_id: claim,
                 event_id: Uuid::new_v4(),

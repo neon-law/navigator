@@ -141,6 +141,7 @@ async fn check_plan_claim(
         project.id,
         firm,
         fixture.lawyer,
+        chrono_tz::UTC,
         Change {
             claim_id,
             event_id: Uuid::new_v4(),
@@ -212,6 +213,7 @@ async fn check_reconciled_claim(
             project.id,
             firm,
             fixture.lawyer,
+            chrono_tz::UTC,
             Change {
                 claim_id,
                 event_id: Uuid::new_v4(),
@@ -503,6 +505,7 @@ async fn two_matching_plan_claims(
             project.id,
             firm,
             lawyer,
+            chrono_tz::UTC,
             Change {
                 claim_id,
                 event_id: Uuid::new_v4(),
@@ -612,4 +615,168 @@ async fn approval_prices_only_the_selected_plan_claim_and_replaces_attested_time
         .unwrap()
         .time_entry_ids
         .is_empty());
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Exercise configuration, claims and their shared docket in one Project.
+async fn configured_plan_keeps_benefit_filing_and_deadlines_independent() {
+    use crate::plan_claims::{self, Authorization, Change, Event, Service, Work};
+    use model::plan_filing::PlanBillingConfiguration;
+
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let (fixture, project) = billing_matter(&pg).await;
+    let firm = project.firm_id.unwrap();
+    let on = Utc::now().date_naive();
+    let original_effective_on = on.pred_opt().unwrap();
+    let config: PlanBillingConfiguration = serde_json::from_value(serde_json::json!({
+        "name": "Synthetic configured plan",
+        "filing_rules": [
+            { "benefit_code": "FIXED", "effective_on": original_effective_on, "trigger": "service_completed",
+              "filing_window_days": 10, "filing_destination": "https://claims.example/",
+              "filer": "Handling lawyer" },
+            { "benefit_code": "CAPPED", "effective_on": on, "trigger": "hours_exhausted",
+              "filing_window_days": 20, "filing_destination": "https://claims.example/",
+              "filer": "Handling lawyer" }
+        ]
+    }))
+    .unwrap();
+    crate::legal_plans::configure(&pg, firm, &config, false)
+        .await
+        .unwrap();
+    let plan = crate::legal_plans::find_by_name(&pg, firm, &config.name)
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query(
+        "UPDATE project SET legal_plan_id=$1, plan_case_number='synthetic-case' WHERE id=$2",
+    )
+    .bind(plan.id)
+    .bind(project.id)
+    .execute(pg.pool())
+    .await
+    .unwrap();
+    let record = |claim_id, event_id, event| {
+        plan_claims::record(
+            &pg,
+            project.id,
+            firm,
+            fixture.lawyer,
+            chrono_tz::America::Los_Angeles,
+            Change {
+                claim_id,
+                event_id,
+                occurred_on: on,
+                event,
+            },
+        )
+    };
+    let fixed_claim = Uuid::new_v4();
+    let capped_claim = Uuid::new_v4();
+    let fixed = Authorization::FixedFee {
+        reference: "synthetic-benefit".into(),
+        cents: 100,
+    };
+    let capped = Authorization::CappedHours {
+        reference: "synthetic-authorization".into(),
+        rate_cents_per_hour: 200,
+        covered_minutes: 120,
+        pending_minutes: 0,
+    };
+    for (id, benefit, authorization) in [
+        (fixed_claim, "FIXED", fixed),
+        (capped_claim, "CAPPED", capped),
+    ] {
+        let event_id = Uuid::new_v4();
+        let event = Event::WorkRecorded {
+            work: Work {
+                benefit: benefit.into(),
+                service: Service::Manual,
+                performed_on: on,
+                attorney_minutes: Some(60),
+                time_entry_ids: vec![],
+                authorization: Some(authorization),
+            },
+        };
+        record(id, event_id, event.clone()).await.unwrap();
+        record(id, event_id, event).await.unwrap();
+    }
+    let mut revision = config.clone();
+    revision.filing_rules.truncate(1);
+    revision.filing_rules[0].effective_on = on;
+    revision.filing_rules[0].filing_window_days = Some(90);
+    crate::legal_plans::configure(&pg, firm, &revision, false)
+        .await
+        .unwrap();
+
+    let report = serde_json::to_value(
+        plan_claims::worklist(&pg, firm, Some(&[project.id]))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let totals = &report["plans"][&config.name];
+    assert_eq!(totals["eligible_unsubmitted_count"], 1);
+    assert_eq!(totals["accruing_count"], 1);
+    let ready = totals["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["filing_status"] == "ready")
+        .unwrap();
+    assert_eq!(
+        ready["filing_due_on"],
+        on.checked_add_days(chrono::Days::new(10))
+            .unwrap()
+            .to_string()
+    );
+    assert_eq!(
+        report["filing_review"][&config.name]["eligible_unsubmitted_count"],
+        1
+    );
+    let private =
+        serde_json::to_value(plan_claims::worklist(&pg, firm, None).await.unwrap()).unwrap();
+    assert_eq!(
+        private["plans"][&config.name]["items"],
+        serde_json::json!([])
+    );
+    assert!(record(capped_claim, Uuid::new_v4(), Event::Prepared)
+        .await
+        .is_err());
+    record(fixed_claim, Uuid::new_v4(), Event::Prepared)
+        .await
+        .unwrap();
+    let deadlines =
+        async || {
+            sqlx::query_as::<_, (String, serde_json::Value, Option<i64>)>(
+        "SELECT status, due_on, client_lead_days FROM project_deadlines WHERE project_id=$1",
+    ).bind(project.id).fetch_all(pg.pool()).await.unwrap()
+        };
+    let saved = deadlines().await;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].0, "open");
+    assert_eq!(
+        saved[0].1["date"],
+        on.checked_add_days(chrono::Days::new(10))
+            .unwrap()
+            .to_string()
+    );
+    assert_eq!(saved[0].1["timezone"], "America/Los_Angeles");
+    assert_eq!(saved[0].2, None);
+    record(
+        fixed_claim,
+        Uuid::new_v4(),
+        Event::Submission {
+            provider_reference: "synthetic-filing".into(),
+            claimed_cents: Some(100),
+        },
+    )
+    .await
+    .unwrap();
+    let filed = deadlines().await;
+    assert_eq!(filed.len(), 1);
+    assert_eq!(filed[0].0, "complete");
+    assert_eq!(filed[0].1, saved[0].1);
 }

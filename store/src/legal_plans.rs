@@ -24,8 +24,9 @@
 //! `docs/glossary/plan-fee-schedule.md`.
 use chrono::{DateTime, NaiveDate, Utc};
 pub use model::plan_benefit::PlanBenefitTerms;
+use model::plan_filing::{FilingRule, PlanBillingConfiguration};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{types::Json, PgConnection, Row};
 use uuid::Uuid;
 
 use crate::postgres::PostgresDb;
@@ -40,6 +41,8 @@ pub enum LegalPlanError {
     NotFound,
     #[error("the Firm already has a Legal Plan of that name")]
     Exists,
+    #[error("the filing rule already exists on that effective date with different terms")]
+    FilingRuleConflict,
     #[error("database operation failed")]
     Database(#[from] sqlx::Error),
 }
@@ -150,7 +153,25 @@ pub async fn create(
     input: &NewLegalPlan,
 ) -> Result<LegalPlan, LegalPlanError> {
     input.validate()?;
-    let id: Uuid = sqlx::query_scalar(
+    let mut tx = pg.pool().begin().await?;
+    lock_plan_configuration(&mut tx, firm_id).await?;
+    if configured_plan_id(&mut tx, firm_id, &input.name)
+        .await?
+        .is_some()
+    {
+        return Err(LegalPlanError::Exists);
+    }
+    let id = insert_plan(&mut tx, firm_id, input).await?;
+    tx.commit().await?;
+    find(pg, firm_id, id).await?.ok_or(LegalPlanError::NotFound)
+}
+
+async fn insert_plan(
+    connection: &mut PgConnection,
+    firm_id: Uuid,
+    input: &NewLegalPlan,
+) -> Result<Uuid, LegalPlanError> {
+    sqlx::query_scalar(
         "INSERT INTO legal_plan \
          (firm_id,name,contact,portal,acceptance_sla_hours,turnaround_sla_days,reporting_requirements) \
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
@@ -162,7 +183,7 @@ pub async fn create(
     .bind(input.acceptance_sla_hours)
     .bind(input.turnaround_sla_days)
     .bind(input.reporting_requirements.as_deref().map(str::trim))
-    .fetch_one(&pg.0)
+    .fetch_one(connection)
     .await
     .map_err(|error| {
         if error
@@ -173,8 +194,151 @@ pub async fn create(
         } else {
             error.into()
         }
-    })?;
-    find(pg, firm_id, id).await?.ok_or(LegalPlanError::NotFound)
+    })
+}
+
+// Plan names are read case-insensitively. Lock both configuration and plan creation
+// because the unique constraint on the original spelling does not serialize those names.
+async fn lock_plan_configuration(
+    connection: &mut PgConnection,
+    firm_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('legal-plan-configuration/' || $1::uuid::text, 0))")
+        .bind(firm_id)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
+async fn configured_plan_id(
+    connection: &mut PgConnection,
+    firm_id: Uuid,
+    name: &str,
+) -> Result<Option<Uuid>, LegalPlanError> {
+    let ids = sqlx::query_scalar(
+        "SELECT id FROM legal_plan WHERE firm_id=$1 AND lower(name)=lower($2) LIMIT 2",
+    )
+    .bind(firm_id)
+    .bind(name.trim())
+    .fetch_all(connection)
+    .await?;
+    match ids.as_slice() {
+        [] => Ok(None),
+        [id] => Ok(Some(*id)),
+        _ => Err(LegalPlanError::Exists),
+    }
+}
+
+/// Apply explicit Firm plan metadata and dated filing rules as one unit.
+///
+/// # Errors
+/// Refuses invalid configuration, changed terms for a previously recorded rule,
+/// ambiguous plan names, or a database failure.
+pub async fn configure(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+    input: &PlanBillingConfiguration,
+    dry_run: bool,
+) -> Result<(), LegalPlanError> {
+    input.validate().map_err(LegalPlanError::Invalid)?;
+    let metadata = NewLegalPlan {
+        name: input.name.clone(),
+        contact: input.contact.clone(),
+        portal: input.portal.clone(),
+        acceptance_sla_hours: input.acceptance_sla_hours,
+        turnaround_sla_days: input.turnaround_sla_days,
+        reporting_requirements: input.reporting_requirements.clone(),
+    };
+    let mut tx = pg.pool().begin().await?;
+    lock_plan_configuration(&mut tx, firm_id).await?;
+    let plan = match configured_plan_id(&mut tx, firm_id, &metadata.name).await? {
+        Some(id) => {
+            update_plan_metadata(&mut tx, id, &metadata).await?;
+            id
+        }
+        None => insert_plan(&mut tx, firm_id, &metadata).await?,
+    };
+    for rule in &input.filing_rules {
+        record_filing_rule(&mut tx, plan, rule).await?;
+    }
+    if dry_run {
+        tx.rollback().await?;
+    } else {
+        tx.commit().await?;
+    }
+    Ok(())
+}
+
+async fn update_plan_metadata(
+    connection: &mut PgConnection,
+    plan: Uuid,
+    metadata: &NewLegalPlan,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE legal_plan SET contact=COALESCE($2,contact), portal=COALESCE($3,portal), \
+         acceptance_sla_hours=COALESCE($4,acceptance_sla_hours), \
+         turnaround_sla_days=COALESCE($5,turnaround_sla_days), \
+         reporting_requirements=COALESCE($6,reporting_requirements) WHERE id=$1",
+    )
+    .bind(plan)
+    .bind(metadata.contact.as_deref().map(str::trim))
+    .bind(metadata.portal.as_deref().map(str::trim))
+    .bind(metadata.acceptance_sla_hours)
+    .bind(metadata.turnaround_sla_days)
+    .bind(metadata.reporting_requirements.as_deref().map(str::trim))
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn record_filing_rule(
+    connection: &mut PgConnection,
+    plan: Uuid,
+    rule: &FilingRule,
+) -> Result<(), LegalPlanError> {
+    let inserted = sqlx::query(
+        "INSERT INTO legal_plan_filing_rule \
+         (legal_plan_id,benefit_code,effective_on,trigger,filing_window_days,filing_destination,filer) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING",
+    )
+    .bind(plan)
+    .bind(&rule.benefit_code)
+    .bind(rule.effective_on)
+    .bind(rule.trigger.as_str())
+    .bind(rule.filing_window_days.map(i64::from))
+    .bind(&rule.filing_destination)
+    .bind(&rule.filer)
+    .execute(&mut *connection)
+    .await?;
+    if inserted.rows_affected() == 0
+        && filing_rule(connection, plan, &rule.benefit_code, rule.effective_on)
+            .await?
+            .as_ref()
+            != Some(rule)
+    {
+        return Err(LegalPlanError::FilingRuleConflict);
+    }
+    Ok(())
+}
+
+/// Resolve the rule effective on the service date for a plan already scoped by its caller.
+pub(crate) async fn filing_rule(
+    connection: &mut PgConnection,
+    plan: Uuid,
+    benefit: &str,
+    performed_on: NaiveDate,
+) -> Result<Option<FilingRule>, sqlx::Error> {
+    Ok(sqlx::query_scalar::<_, Json<FilingRule>>(
+        "SELECT to_jsonb(r) - 'legal_plan_id' FROM legal_plan_filing_rule r \
+         WHERE legal_plan_id=$1 AND benefit_code=$2 AND effective_on <= $3 \
+         ORDER BY effective_on DESC LIMIT 1",
+    )
+    .bind(plan)
+    .bind(benefit)
+    .bind(performed_on)
+    .fetch_optional(connection)
+    .await?
+    .map(|value| value.0))
 }
 
 /// The Firm's plans, name order.
@@ -264,7 +428,8 @@ pub async fn project_benefit_terms(
 ) -> Result<Option<PlanBenefitTerms>, LegalPlanError> {
     let row = sqlx::query(
         "SELECT plan_cap_shape,plan_cap_cents,plan_cap_minutes,plan_contested_cap_cents, \
-         plan_rate_cents_per_hour,plan_paralegal_rate_cents_per_hour FROM project \
+         plan_rate_cents_per_hour,plan_paralegal_rate_cents_per_hour, \
+         plan_member_rate_cents_per_hour FROM project \
          WHERE firm_id=$1 AND id=$2 AND plan_cap_shape IS NOT NULL",
     )
     .bind(firm_id)
@@ -281,6 +446,7 @@ pub async fn project_benefit_terms(
             contested_cap_cents: row.try_get("plan_contested_cap_cents")?,
             plan_rate_cents_per_hour: row.try_get("plan_rate_cents_per_hour")?,
             paralegal_rate_cents_per_hour: row.try_get("plan_paralegal_rate_cents_per_hour")?,
+            member_rate_cents_per_hour: row.try_get("plan_member_rate_cents_per_hour")?,
         })
     })
     .transpose()
@@ -724,6 +890,98 @@ mod tests {
             let same_name_elsewhere = create(&pg, second, &plan()).await.unwrap();
             assert_eq!(same_name_elsewhere.name, created.name);
             assert_ne!(same_name_elsewhere.id, created.id);
+        }
+
+        #[tokio::test]
+        async fn plan_configuration_is_dated_scoped_and_atomic() {
+            use super::super::{configure, filing_rule, FilingRule, PlanBillingConfiguration};
+            use model::plan_filing::FilingTrigger;
+
+            let Some((options, database)) = fresh_schema().await else {
+                return;
+            };
+            let pg = connect(&options, &database).await;
+            let first = firm(&pg).await;
+            let second = firm(&pg).await;
+            let initial_rule = FilingRule {
+                benefit_code: "EXAMPLE".into(),
+                effective_on: day(1, 5),
+                trigger: FilingTrigger::ServiceCompleted,
+                filing_window_days: Some(30),
+                filing_destination: "https://filing.example/".into(),
+                filer: "responsible lawyer".into(),
+            };
+            let mut config = PlanBillingConfiguration {
+                name: "Sample Plan".into(),
+                contact: Some("support@example.com".into()),
+                portal: None,
+                acceptance_sla_hours: Some(24),
+                turnaround_sla_days: None,
+                reporting_requirements: None,
+                filing_rules: vec![initial_rule.clone()],
+            };
+
+            configure(&pg, first, &config, true).await.unwrap();
+            assert!(list(&pg, first).await.unwrap().is_empty());
+
+            let (one, two) = tokio::join!(
+                configure(&pg, first, &config, false),
+                configure(&pg, first, &config, false),
+            );
+            one.unwrap();
+            two.unwrap();
+            let plans = list(&pg, first).await.unwrap();
+            assert_eq!(plans.len(), 1);
+            let plan = plans[0].id;
+            assert!(list(&pg, second).await.unwrap().is_empty());
+
+            config.name = "sample plan".into();
+            config.contact = None;
+            let later_rule = FilingRule {
+                effective_on: day(2, 1),
+                trigger: FilingTrigger::MatterClosed,
+                ..initial_rule.clone()
+            };
+            config.filing_rules = vec![later_rule.clone()];
+            configure(&pg, first, &config, false).await.unwrap();
+            let metadata = find(&pg, first, plan).await.unwrap().unwrap();
+            assert_eq!(metadata.name, "Sample Plan");
+            assert_eq!(metadata.contact.as_deref(), Some("support@example.com"));
+
+            let mut connection = pg.pool().acquire().await.unwrap();
+            for (benefit, date, expected) in [
+                ("EXAMPLE", day(1, 4), None),
+                ("EXAMPLE", day(1, 5), Some(&initial_rule)),
+                ("EXAMPLE", day(1, 31), Some(&initial_rule)),
+                ("EXAMPLE", day(2, 1), Some(&later_rule)),
+                ("OTHER", day(2, 1), None),
+            ] {
+                let found = filing_rule(&mut connection, plan, benefit, date)
+                    .await
+                    .unwrap();
+                assert_eq!(found.as_ref(), expected);
+            }
+
+            config.contact = Some("changed@example.com".into());
+            config.filing_rules = vec![
+                FilingRule {
+                    benefit_code: "OTHER".into(),
+                    ..initial_rule.clone()
+                },
+                FilingRule {
+                    filing_window_days: Some(50),
+                    ..initial_rule.clone()
+                },
+            ];
+            assert!(matches!(
+                configure(&pg, first, &config, false).await,
+                Err(LegalPlanError::FilingRuleConflict)
+            ));
+            assert_eq!(find(&pg, first, plan).await.unwrap().unwrap(), metadata);
+            assert!(filing_rule(&mut connection, plan, "OTHER", day(2, 1))
+                .await
+                .unwrap()
+                .is_none());
         }
 
         #[tokio::test]

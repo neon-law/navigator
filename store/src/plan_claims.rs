@@ -1,13 +1,15 @@
 //! Private Legal Plan Claims and their lawyer-confirmed evidence.
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Days, NaiveDate, Utc};
 use model::billing_report::{FilingReview, FilingReviewTotal};
+use model::plan_filing::{FilingRule, FilingTrigger};
 use serde::{Deserialize, Serialize};
 use sqlx::{types::Json, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
+    legal_plans::filing_rule,
     plan_assignment::{provider_for_plan_name, PlanProvider},
     postgres::PostgresDb,
 };
@@ -22,6 +24,8 @@ pub enum ClaimError {
     Duplicate,
     #[error("claim storage failed")]
     Database(#[from] sqlx::Error),
+    #[error("claim filing Deadline could not be recorded")]
+    Deadline(#[from] crate::project_deadlines::DeadlineError),
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -31,6 +35,7 @@ pub enum Service {
     AragRepresentation,
     LegalEaseLegalGuard,
     LegalEasePaymentAuthorization,
+    Manual,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -68,16 +73,23 @@ fn label(value: &str) -> bool {
 }
 
 impl Work {
-    fn validate(&self, plan: &str, today: NaiveDate) -> Result<(), ClaimError> {
-        let provider = match self.service {
-            Service::AragAdviceOnly | Service::AragRepresentation => PlanProvider::Arag,
+    fn validate(&self, plan: &str, today: NaiveDate, configured: bool) -> Result<(), ClaimError> {
+        let provider = provider_for_plan_name(plan);
+        let valid_service = match self.service {
+            Service::AragAdviceOnly | Service::AragRepresentation => {
+                provider == Some(PlanProvider::Arag)
+            }
             Service::LegalEaseLegalGuard | Service::LegalEasePaymentAuthorization => {
-                PlanProvider::LegalEase
+                provider == Some(PlanProvider::LegalEase)
+            }
+            Service::Manual => {
+                configured
+                    && !matches!(provider, Some(PlanProvider::Arag | PlanProvider::LegalEase))
             }
         };
-        if provider_for_plan_name(plan) != Some(provider) {
+        if !valid_service {
             return Err(ClaimError::Invalid(
-                "service path does not match the Project's Legal Plan",
+                "service path does not match the Project's Legal Plan or benefit configuration",
             ));
         }
         if !label(&self.benefit)
@@ -90,6 +102,58 @@ impl Work {
         }
         self.estimate()?;
         Ok(())
+    }
+
+    fn filing(
+        &self,
+        rule: Option<&FilingRule>,
+        closed_on: Option<NaiveDate>,
+        as_of: NaiveDate,
+    ) -> Result<Filing, ClaimError> {
+        let Some(rule) = rule else {
+            let status = if self.service == Service::Manual || self.estimate()?.is_none() {
+                FilingStatus::VerifyTerms
+            } else {
+                FilingStatus::Ready
+            };
+            return Ok(Filing {
+                status,
+                due_on: None,
+            });
+        };
+        let hours_exhausted = matches!(
+            self.authorization,
+            Some(Authorization::CappedHours { covered_minutes, .. })
+                if self.attorney_minutes.is_some_and(|actual| actual >= covered_minutes)
+        );
+        let completed_on = Some(self.performed_on);
+        let hours_on = completed_on.filter(|_| hours_exhausted);
+        let closed_on = closed_on.map(|date| date.max(self.performed_on));
+        let trigger_on = match rule.trigger {
+            FilingTrigger::ServiceCompleted => completed_on,
+            FilingTrigger::HoursExhausted => hours_on,
+            FilingTrigger::MatterClosed => closed_on,
+            FilingTrigger::HoursExhaustedOrMatterClosed => hours_on.or(closed_on),
+        }
+        .filter(|date| *date <= as_of);
+        let due_on = match (trigger_on, rule.filing_window_days) {
+            (Some(start), Some(days)) => {
+                Some(start.checked_add_days(Days::new(u64::from(days))).ok_or(
+                    ClaimError::Invalid("claim filing date is outside the supported range"),
+                )?)
+            }
+            _ => None,
+        };
+        let status = if due_on.is_some_and(|date| date < as_of) {
+            FilingStatus::Expired
+        } else if self.estimate()?.is_none() {
+            FilingStatus::VerifyTerms
+        } else if trigger_on.is_none() {
+            FilingStatus::Accruing
+        } else {
+            FilingStatus::Ready
+        };
+        Ok(Filing { status, due_on })
     }
 
     fn estimate(&self) -> Result<Option<i64>, ClaimError> {
@@ -124,6 +188,20 @@ impl Work {
             )),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FilingStatus {
+    VerifyTerms,
+    Accruing,
+    Ready,
+    Expired,
+}
+
+struct Filing {
+    status: FilingStatus,
+    due_on: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -208,6 +286,10 @@ struct ClaimState {
     claimed_cents: Option<i32>,
     approved_cents: Option<i32>,
     net_cents: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filing_rule: Option<FilingRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filing_due_on: Option<NaiveDate>,
 }
 
 impl ClaimState {
@@ -220,7 +302,32 @@ impl ClaimState {
             claimed_cents: None,
             approved_cents: None,
             net_cents: 0,
+            filing_rule: None,
+            filing_due_on: None,
         }
+    }
+
+    fn filing(
+        &self,
+        current_rule: Option<&FilingRule>,
+        closed_on: Option<NaiveDate>,
+        as_of: NaiveDate,
+    ) -> Result<Filing, ClaimError> {
+        if let Some(due_on) = self.filing_due_on {
+            let status = if due_on < as_of {
+                FilingStatus::Expired
+            } else if self.work.estimate()?.is_none() {
+                FilingStatus::VerifyTerms
+            } else {
+                FilingStatus::Ready
+            };
+            return Ok(Filing {
+                status,
+                due_on: Some(due_on),
+            });
+        }
+        self.work
+            .filing(self.filing_rule.as_ref().or(current_rule), closed_on, as_of)
     }
 
     fn outstanding(&self) -> Option<i64> {
@@ -344,7 +451,16 @@ pub struct Claim {
 
 type ClaimRow = (Uuid, Uuid, Uuid, String, Json<ClaimState>);
 type EvidenceRow = (Uuid, Uuid, NaiveDate, DateTime<Utc>, Uuid, Json<Event>);
-type WorklistRow = (Uuid, String, String, Json<ClaimState>, bool, i64);
+type WorklistRow = (
+    Uuid,
+    String,
+    String,
+    Json<ClaimState>,
+    bool,
+    i64,
+    Option<NaiveDate>,
+    Option<Json<FilingRule>>,
+);
 
 impl From<ClaimRow> for Claim {
     fn from((id, project_id, legal_plan_id, plan_case_number, state): ClaimRow) -> Self {
@@ -446,28 +562,49 @@ pub async fn for_matter_billing(
     project: &crate::projects::Project,
     firm: Uuid,
 ) -> Result<Vec<MatterClaim>, ClaimError> {
-    claim_rows(connection, project.id, firm)
-        .await?
-        .into_iter()
-        .map(|((id, _, plan_id, plan_case_number, state), plan_name)| {
-            let current_case = project.legal_plan_id == Some(plan_id)
-                && project.plan_case_number.as_deref() == Some(plan_case_number.as_str());
-            Ok(MatterClaim {
-                billing: state.billing(id, &project.code)?,
-                plan_name,
-                plan_case_number,
-                attorney_minutes: state.work.attorney_minutes,
-                covered_minutes: match state.work.authorization.as_ref() {
-                    Some(Authorization::CappedHours {
-                        covered_minutes, ..
-                    }) => Some(*covered_minutes),
-                    _ => None,
-                },
-                annotation_rate: current_case.then(|| state.annotation_rate()).flatten(),
-                time_entry_ids: state.0.work.time_entry_ids,
-            })
-        })
-        .collect()
+    let mut claims = Vec::new();
+    let today = Utc::now().date_naive();
+    for ((id, _, plan_id, plan_case_number, state), plan_name) in
+        claim_rows(connection, project.id, firm).await?
+    {
+        let current_case = project.legal_plan_id == Some(plan_id)
+            && project.plan_case_number.as_deref() == Some(plan_case_number.as_str());
+        let mut billing = state.billing(id, &project.code)?;
+        if matches!(state.stage, Stage::Completed | Stage::Prepared) {
+            let work = &state.work;
+            let rule = filing_rule(connection, plan_id, &work.benefit, work.performed_on).await?;
+            if rule.is_some() || state.filing_rule.is_some() {
+                let closed_on = project
+                    .plan_closed_on
+                    .as_deref()
+                    .filter(|_| current_case)
+                    .and_then(|date| date.parse().ok());
+                let filing = state.filing(rule.as_ref(), closed_on, today)?;
+                billing.next_action = match filing.status {
+                    FilingStatus::Accruing => {
+                        Some("Wait for the configured filing milestone".to_owned())
+                    }
+                    FilingStatus::Expired => Some("Review the expired filing window".to_owned()),
+                    _ => billing.next_action,
+                };
+            }
+        }
+        claims.push(MatterClaim {
+            billing,
+            plan_name,
+            plan_case_number,
+            attorney_minutes: state.work.attorney_minutes,
+            covered_minutes: match state.work.authorization.as_ref() {
+                Some(Authorization::CappedHours {
+                    covered_minutes, ..
+                }) => Some(*covered_minutes),
+                _ => None,
+            },
+            annotation_rate: current_case.then(|| state.annotation_rate()).flatten(),
+            time_entry_ids: state.0.work.time_entry_ids,
+        });
+    }
+    Ok(claims)
 }
 
 pub(crate) async fn billing_rows(
@@ -625,6 +762,7 @@ pub async fn record(
     project: Uuid,
     firm: Uuid,
     actor: Uuid,
+    timezone: chrono_tz::Tz,
     change: Change,
 ) -> Result<Claim, ClaimError> {
     let today = Utc::now().date_naive();
@@ -634,8 +772,8 @@ pub async fn record(
     let mut reference = change.event.reference()?;
     let mut tx = pg.pool().begin().await?;
     // Serialize creation and changes against this Project and its plan link.
-    let link: (Option<Uuid>, Option<String>) = sqlx::query_as(
-        "SELECT legal_plan_id, plan_case_number FROM project WHERE id = $1 AND firm_id = $2 FOR UPDATE",
+    let link: (Option<Uuid>, Option<String>, Option<NaiveDate>) = sqlx::query_as(
+        "SELECT legal_plan_id, plan_case_number, plan_closed_on FROM project WHERE id = $1 AND firm_id = $2 FOR UPDATE",
     ).bind(project).bind(firm).fetch_optional(&mut *tx).await?.ok_or(ClaimError::NotFound)?;
     let existing: Option<ClaimRow> = sqlx::query_as(
         "SELECT c.id, c.project_id, c.legal_plan_id, c.plan_case_number, c.state
@@ -647,6 +785,7 @@ pub async fn record(
     .bind(firm)
     .fetch_optional(&mut *tx)
     .await?;
+    let creating = existing.is_none();
     let mut claim = if let Some(row) = existing {
         let mut claim = Claim::from(row);
         read_evidence(&mut tx, &mut claim).await?;
@@ -662,7 +801,32 @@ pub async fn record(
         }
         let applied_event = if let Event::WorkRecorded { work } = &change.event {
             let plan = plan_name(&mut tx, firm, claim.legal_plan_id).await?;
-            let work = verified_work(&mut tx, project, claim.id, work, &plan, today).await?;
+            let changed_identity = work.benefit != claim.state.work.benefit
+                || work.performed_on != claim.state.work.performed_on;
+            if changed_identity && claim.state.filing_due_on.is_some() {
+                return Err(ClaimError::Invalid(
+                    "the docketed claim's benefit and service date are fixed",
+                ));
+            }
+            if changed_identity || claim.state.filing_rule.is_none() {
+                claim.state.filing_rule = filing_rule(
+                    &mut tx,
+                    claim.legal_plan_id,
+                    &work.benefit,
+                    work.performed_on,
+                )
+                .await?;
+            }
+            let work = verified_work(
+                &mut tx,
+                project,
+                claim.id,
+                work,
+                &plan,
+                today,
+                claim.state.filing_rule.is_some(),
+            )
+            .await?;
             Event::WorkRecorded { work }
         } else {
             change.event.clone()
@@ -688,40 +852,103 @@ pub async fn record(
             // The reference is already exclusively reserved to this claim.
             reference = None;
         }
+        if matches!(applied_event, Event::Prepared) {
+            adopt_filing_rule(&mut tx, &mut claim).await?;
+            let closed_on = plan_case_closed(&link, &claim);
+            let filing = claim.state.filing(None, closed_on, change.occurred_on)?;
+            match filing.status {
+                FilingStatus::Ready => {}
+                FilingStatus::VerifyTerms => {
+                    return Err(ClaimError::Invalid(
+                        "verify the claim's fee and filing terms before preparing",
+                    ))
+                }
+                FilingStatus::Accruing => {
+                    return Err(ClaimError::Invalid(
+                        "the configured claim filing milestone has not occurred",
+                    ))
+                }
+                FilingStatus::Expired => {
+                    return Err(ClaimError::Invalid(
+                        "the configured claim filing window has elapsed",
+                    ))
+                }
+            }
+        }
         claim.state.apply(change.occurred_on, &applied_event)?;
-        sqlx::query("UPDATE legal_plan_claim SET state = $1 WHERE id = $2")
-            .bind(&claim.state)
-            .bind(claim.id)
-            .execute(&mut *tx)
-            .await?;
         claim
     } else {
         let Event::WorkRecorded { work } = &change.event else {
             return Err(ClaimError::NotFound);
         };
-        let (Some(plan_id), Some(case_number)) = link else {
+        let (Some(plan_id), Some(ref case_number), _) = link else {
             return Err(ClaimError::NotFound);
         };
         let plan = plan_name(&mut tx, firm, plan_id).await?;
-        let work = verified_work(&mut tx, project, change.claim_id, work, &plan, today).await?;
+        let rule = filing_rule(&mut tx, plan_id, &work.benefit, work.performed_on).await?;
+        let work = verified_work(
+            &mut tx,
+            project,
+            change.claim_id,
+            work,
+            &plan,
+            today,
+            rule.is_some(),
+        )
+        .await?;
         if change.occurred_on < work.performed_on {
             return Err(ClaimError::Invalid("work record predates service"));
         }
-        let state = Json(ClaimState::new(work));
+        let mut state = ClaimState::new(work);
+        state.filing_rule = rule;
+        Claim::from((
+            change.claim_id,
+            project,
+            plan_id,
+            case_number.clone(),
+            Json(state),
+        ))
+    };
+    let filed = matches!(&change.event, Event::Submission { .. });
+    if filed || matches!(claim.state.stage, Stage::Completed | Stage::Prepared) {
+        adopt_filing_rule(&mut tx, &mut claim).await?;
+        if claim.state.filing_rule.is_some() {
+            let filing =
+                claim
+                    .state
+                    .filing(None, plan_case_closed(&link, &claim), change.occurred_on)?;
+            claim.state.filing_due_on = filing.due_on;
+            let due_on = filing.due_on.map(|date| crate::project_deadlines::DueOn {
+                date,
+                timezone,
+                cutoff: None,
+            });
+            crate::project_deadlines::record_claim_filing(
+                &mut tx, project, claim.id, due_on, filed,
+            )
+            .await?;
+        }
+    }
+    if creating {
         sqlx::query(
             "INSERT INTO legal_plan_claim (id, project_id, legal_plan_id, plan_case_number, state)
              VALUES ($1, $2, $3, $4, $5)",
         )
-        .bind(change.claim_id)
+        .bind(claim.id)
         .bind(project)
-        .bind(plan_id)
-        .bind(&case_number)
-        .bind(&state)
+        .bind(claim.legal_plan_id)
+        .bind(&claim.plan_case_number)
+        .bind(&claim.state)
         .execute(&mut *tx)
         .await
         .map_err(write_error)?;
-        Claim::from((change.claim_id, project, plan_id, case_number, state))
-    };
+    } else {
+        sqlx::query("UPDATE legal_plan_claim SET state = $1 WHERE id = $2")
+            .bind(&claim.state)
+            .bind(claim.id)
+            .execute(&mut *tx)
+            .await?;
+    }
     let (kind, reference) = reference.unzip();
     sqlx::query(
         "INSERT INTO legal_plan_claim_event
@@ -744,6 +971,33 @@ pub async fn record(
     Ok(claim)
 }
 
+fn plan_case_closed(
+    link: &(Option<Uuid>, Option<String>, Option<NaiveDate>),
+    claim: &Claim,
+) -> Option<NaiveDate> {
+    link.2.filter(|_| {
+        link.0 == Some(claim.legal_plan_id)
+            && link.1.as_deref() == Some(claim.plan_case_number.as_str())
+    })
+}
+
+async fn adopt_filing_rule(
+    connection: &mut sqlx::PgConnection,
+    claim: &mut Claim,
+) -> Result<(), ClaimError> {
+    if claim.state.filing_rule.is_none() {
+        let work = &claim.state.work;
+        claim.state.filing_rule = filing_rule(
+            connection,
+            claim.legal_plan_id,
+            &work.benefit,
+            work.performed_on,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn verified_work(
     tx: &mut Transaction<'_, Postgres>,
     project: Uuid,
@@ -751,6 +1005,7 @@ async fn verified_work(
     work: &Work,
     plan: &str,
     today: NaiveDate,
+    configured: bool,
 ) -> Result<Work, ClaimError> {
     let mut work = work.clone();
     if !work.time_entry_ids.is_empty() {
@@ -781,7 +1036,7 @@ async fn verified_work(
         }
         work.attorney_minutes = Some(minutes.into_iter().sum());
     }
-    work.validate(plan, today)?;
+    work.validate(plan, today, configured)?;
     Ok(work)
 }
 
@@ -817,6 +1072,8 @@ struct ReviewRow {
     state: Json<ClaimState>,
     recorded_this_week: bool,
     net_collected_this_week_cents: i64,
+    closed_on: Option<NaiveDate>,
+    filing_rule: Option<FilingRule>,
 }
 
 #[derive(Debug, Serialize)]
@@ -832,6 +1089,14 @@ struct FollowUp {
     claimed_cents: Option<i32>,
     approved_outstanding_cents: Option<i64>,
     pending_minutes: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filing_status: Option<FilingStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filing_due_on: Option<NaiveDate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filing_destination: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filer: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -847,6 +1112,8 @@ struct PlanTotals {
     #[serde(flatten)]
     filing_review: FilingReviewTotal,
     needs_verification_count: usize,
+    accruing_count: usize,
+    expired_count: usize,
     submitted_unpaid_count: usize,
     denied_count: usize,
     approved_outstanding_cents: i64,
@@ -880,9 +1147,19 @@ pub async fn worklist(
              WHEN 'payment' THEN (e.event->>'cents')::integer
              WHEN 'reversal' THEN -(e.event->>'cents')::integer END)
          FROM legal_plan_claim_event e WHERE e.claim_id = c.id
-         AND e.occurred_on > CURRENT_DATE - 7), 0) AS net_collected_this_week_cents
+         AND e.occurred_on > CURRENT_DATE - 7), 0) AS net_collected_this_week_cents,
+         CASE WHEN c.legal_plan_id = p.legal_plan_id AND c.plan_case_number = p.plan_case_number
+              THEN p.plan_closed_on END,
+         to_jsonb(rule) - 'legal_plan_id'
          FROM legal_plan_claim c JOIN project p ON p.id = c.project_id
          JOIN legal_plan l ON l.id = c.legal_plan_id
+         LEFT JOIN LATERAL (
+             SELECT r.* FROM legal_plan_filing_rule r
+             WHERE r.legal_plan_id=c.legal_plan_id
+               AND r.benefit_code=c.state->'work'->>'benefit'
+               AND r.effective_on <= (c.state->'work'->>'performed_on')::date
+             ORDER BY r.effective_on DESC LIMIT 1
+         ) rule ON TRUE
          WHERE p.firm_id = $1 AND l.firm_id = $1 AND ($2::uuid[] IS NULL OR p.id = ANY($2))
          ORDER BY (c.state->>'submitted_on') NULLS FIRST, c.state->'work'->>'performed_on', c.id",
     )
@@ -890,8 +1167,10 @@ pub async fn worklist(
     .bind(visible_projects)
     .fetch_all(&mut *tx)
     .await?;
-    let closed: Vec<(String, String)> = sqlx::query_as(
-        "SELECT l.name, p.code FROM project p JOIN legal_plan l ON l.id = p.legal_plan_id
+    let closed: Vec<(String, String, bool)> = sqlx::query_as(
+        "SELECT l.name, p.code,
+                EXISTS (SELECT 1 FROM legal_plan_filing_rule r WHERE r.legal_plan_id = l.id)
+         FROM project p JOIN legal_plan l ON l.id = p.legal_plan_id
          WHERE p.firm_id = $1 AND l.firm_id = $1 AND ($2::uuid[] IS NULL OR p.id = ANY($2))
          AND (p.status = 'closed' OR p.plan_closed_on IS NOT NULL)
          AND NOT EXISTS (SELECT 1 FROM legal_plan_claim c WHERE c.project_id = p.id
@@ -906,7 +1185,16 @@ pub async fn worklist(
     let rows = rows
         .into_iter()
         .map(
-            |(id, code, plan, state, recorded_this_week, net_collected_this_week_cents)| {
+            |(
+                id,
+                code,
+                plan,
+                state,
+                recorded_this_week,
+                net_collected_this_week_cents,
+                closed_on,
+                rule,
+            )| {
                 ReviewRow {
                     id,
                     code,
@@ -914,16 +1202,20 @@ pub async fn worklist(
                     state,
                     recorded_this_week,
                     net_collected_this_week_cents,
+                    closed_on,
+                    filing_rule: rule.map(|rule| rule.0),
                 }
             },
         )
         .collect();
     let mut report = summarize(Utc::now().date_naive(), rows, visible_projects.is_some())?;
-    for (plan, code) in closed {
-        if !matches!(
-            provider_for_plan_name(&plan),
-            Some(PlanProvider::Arag | PlanProvider::LegalEase)
-        ) {
+    for (plan, code, configured) in closed {
+        if !configured
+            && !matches!(
+                provider_for_plan_name(&plan),
+                Some(PlanProvider::Arag | PlanProvider::LegalEase)
+            )
+        {
             continue;
         }
         let totals = report.plans.entry(plan).or_default();
@@ -935,6 +1227,38 @@ pub async fn worklist(
     Ok(report)
 }
 
+fn tally_filing(
+    totals: &mut PlanTotals,
+    review: &mut FilingReview,
+    plan: &str,
+    service: Service,
+    filing: Option<&Filing>,
+    estimate: Option<i64>,
+) -> Result<(), ClaimError> {
+    match (filing.map(|item| item.status), estimate) {
+        (Some(FilingStatus::Ready), Some(cents)) => {
+            let carrier = match service {
+                Service::AragAdviceOnly | Service::AragRepresentation => &mut review.arag,
+                Service::LegalEaseLegalGuard | Service::LegalEasePaymentAuthorization => {
+                    &mut review.legal_ease
+                }
+                Service::Manual => review.other_plans.entry(plan.to_owned()).or_default(),
+            };
+            for subtotal in [&mut totals.filing_review, carrier] {
+                subtotal.eligible_unsubmitted_count += 1;
+                subtotal.eligible_unsubmitted_cents = subtotal
+                    .eligible_unsubmitted_cents
+                    .checked_add(cents)
+                    .ok_or(ClaimError::Invalid("filing review total is too large"))?;
+            }
+        }
+        (Some(FilingStatus::Accruing), _) => totals.accruing_count += 1,
+        (Some(FilingStatus::Expired), _) => totals.expired_count += 1,
+        _ => totals.needs_verification_count += 1,
+    }
+    Ok(())
+}
+
 fn summarize(
     today: NaiveDate,
     rows: Vec<ReviewRow>,
@@ -943,8 +1267,9 @@ fn summarize(
     let mut plans = BTreeMap::<String, PlanTotals>::new();
     let mut filing_review = FilingReview::default();
     for row in rows {
-        let totals = plans.entry(row.plan).or_default();
+        let totals = plans.entry(row.plan.clone()).or_default();
         let state = row.state.0;
+        let selected_rule = state.filing_rule.as_ref().or(row.filing_rule.as_ref());
         totals.work_count += 1;
         totals.touched_this_week += usize::from(row.recorded_this_week);
         totals.net_collected_cents += state.net_cents;
@@ -964,28 +1289,18 @@ fn summarize(
             _ => 0,
         };
         totals.pending_attorney_minutes += i64::from(pending_minutes);
+        let filing = matches!(state.stage, Stage::Completed | Stage::Prepared)
+            .then(|| state.filing(row.filing_rule.as_ref(), row.closed_on, today))
+            .transpose()?;
         match state.stage {
-            Stage::Completed | Stage::Prepared => {
-                if let Some(cents) = estimate {
-                    let carrier = match state.work.service {
-                        Service::AragAdviceOnly | Service::AragRepresentation => {
-                            &mut filing_review.arag
-                        }
-                        Service::LegalEaseLegalGuard | Service::LegalEasePaymentAuthorization => {
-                            &mut filing_review.legal_ease
-                        }
-                    };
-                    for subtotal in [&mut totals.filing_review, carrier] {
-                        subtotal.eligible_unsubmitted_count += 1;
-                        subtotal.eligible_unsubmitted_cents = subtotal
-                            .eligible_unsubmitted_cents
-                            .checked_add(cents)
-                            .ok_or(ClaimError::Invalid("filing review total is too large"))?;
-                    }
-                } else {
-                    totals.needs_verification_count += 1;
-                }
-            }
+            Stage::Completed | Stage::Prepared => tally_filing(
+                totals,
+                &mut filing_review,
+                &row.plan,
+                state.work.service,
+                filing.as_ref(),
+                estimate,
+            )?,
             Stage::Denied => totals.denied_count += 1,
             Stage::Submitted
                 if state.net_cents == 0
@@ -1011,6 +1326,10 @@ fn summarize(
                 claimed_cents: state.claimed_cents,
                 approved_outstanding_cents: outstanding,
                 pending_minutes: (pending_minutes > 0).then_some(pending_minutes),
+                filing_status: filing.as_ref().map(|item| item.status),
+                filing_due_on: filing.and_then(|item| item.due_on),
+                filing_destination: selected_rule.map(|rule| rule.filing_destination.clone()),
+                filer: selected_rule.map(|rule| rule.filer.clone()),
             });
         }
     }
