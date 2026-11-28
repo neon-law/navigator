@@ -2482,6 +2482,30 @@ project_claims_path if {
     input.path[4] == "legal-plan-claims"
 }
 
+project_claim_packet_path if {
+    count(input.path) == 7
+    array.slice(input.path, 0, 3) == ["app", "api", "projects"]
+    input.path[4] == "legal-plan-claims"
+    input.path[6] == "packet"
+}
+
+route_allow if {
+    project_claim_packet_path
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+# A plan's claim-filing rules: Firm data, behind the handler's
+# plan-management capability.
+route_allow if {
+    count(input.path) == 7
+    array.slice(input.path, 0, 3) == ["app", "api", "firms"]
+    input.path[4] == "legal-plans"
+    input.path[6] == "claim-filing"
+    input.method == "PUT"
+    is_lawyer(input.session)
+}
+
 firm_collections_path if {
     count(input.path) == 5
     array.slice(input.path, 0, 3) == ["app", "api", "firms"]

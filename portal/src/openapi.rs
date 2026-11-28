@@ -1566,7 +1566,9 @@ fn canonical_document(base: &str) -> Value {
                 "event_id": { "type": "string", "format": "uuid" },
                 "occurred_on": { "type": "string", "format": "date" },
                 "event": { "type": "object", "required": ["type"], "properties": {
-                  "type": { "type": "string", "enum": ["work_recorded", "authorization_confirmed", "prepared", "submission", "approval", "denial", "correction", "payment", "reversal"] }
+                  "type": { "type": "string", "enum": ["work_recorded", "authorization_confirmed", "prepared", "submission", "provider_reference", "approval", "denial", "correction", "payment", "reversal"] },
+                  "provider_reference": { "type": "string" },
+                  "sent_message_id": { "type": "string", "description": "A submission filed by email: the sent message's id, in place of a provider reference" }
                 } }
               }
             } } } },
@@ -1580,6 +1582,20 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/legal-plan-claims/{claim_id}/packet": {
+          "post": {
+            "summary": "File a Legal Plan claim packet",
+            "description": "Renders the plan's claim form, an itemized invoice with the covered amount and member share, and the proof the plan's filing rules ask for as one PDF. Files it on the Project as an internal invoice document and links it to the claim. Filing the same packet again changes nothing.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "claim_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "200": { "description": "The claim, the filed document, the filing destination, any missing proof, and the PDF as base64", "content": { "application/json": { "schema": { "type": "object", "properties": { "asset_id": { "type": "string", "format": "uuid" }, "filename": { "type": "string" }, "sha256": { "type": "string" }, "file_with": { "type": ["string", "null"] }, "subject": { "type": ["string", "null"] }, "missing_proof": { "type": "array", "items": { "type": "string", "enum": ["engagement_letter", "filed_document"] } }, "pdf_base64": { "type": "string" } } } } } },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "The session lacks lawyer-tier access, or acts under impersonation" },
+              "404": { "description": "Claim or Project outside the caller's scope" },
+              "422": { "description": "The claim is decided, or a proof document or the render failed" }
+            }
+          }
+        },
         "/app/api/firms/{id}/legal-plan-collections": {
           "get": {
             "summary": "Review plan claims and confirmed net collections",
@@ -1588,6 +1604,15 @@ fn canonical_document(base: &str) -> Value {
               { "name": "totals_only", "in": "query", "description": "Firm aggregate without Project details, with Firm plan-metrics access", "schema": { "type": "boolean", "default": false } }
             ],
             "responses": { "200": { "description": "Plan worklist or Firm aggregates" }, "404": { "description": "Firm outside the caller's scope" } }
+          }
+        },
+        "/app/api/firms/{id}/legal-plans/{plan_id}/claim-filing": {
+          "put": {
+            "summary": "Record where and how a plan takes its claims",
+            "description": "Firm data the claim packet reads: the claims address or portal, the email subject (`{case_number}` is replaced), a separate invoice address, the plan's claim form title, and the proof to include. Requires plan-management capability on the Firm; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "plan_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["file_with"], "properties": { "file_with": { "type": "string" }, "subject": { "type": "string" }, "invoice_to": { "type": "string" }, "form_title": { "type": "string" }, "proof": { "type": "array", "items": { "type": "string", "enum": ["engagement_letter", "filed_document"] } } } } } } },
+            "responses": { "200": { "description": "The plan with its filing rules" }, "401": { "description": "Authenticated session required" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "Plan or Firm outside the caller's capability" }, "422": { "description": "Invalid filing rules" } }
           }
         },
         "/app/api/projects/{id}/legal-plan": {

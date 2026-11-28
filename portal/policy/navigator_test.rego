@@ -3645,6 +3645,18 @@ test_time_entry_proposals_require_lawyer_tier if {
     not authz.allow with input as {"path": array.concat(base, ["proposal", "invoice"]), "method": "POST", "session": lawyer_session}
 }
 
+test_claim_packet_and_filing_rules_require_lawyer_tier if {
+    packet := ["app", "api", "projects", "sample", "legal-plan-claims", "claim", "packet"]
+    filing := ["app", "api", "firms", "sample", "legal-plans", "plan", "claim-filing"]
+    every request in [{"path": packet, "method": "POST"}, {"path": filing, "method": "PUT"}] {
+        authz.allow with input as {"path": request.path, "method": request.method, "session": lawyer_session}
+        not authz.allow with input as {"path": request.path, "method": request.method, "session": client_session}
+        not authz.allow with input as {"path": request.path, "method": request.method, "session": clerk_session}
+    }
+    not authz.allow with input as {"path": packet, "method": "DELETE", "session": lawyer_session}
+    not authz.allow with input as {"path": filing, "method": "DELETE", "session": lawyer_session}
+}
+
 test_legal_plan_collections_require_lawyer_tier if {
     path := ["app", "api", "firms", "sample", "legal-plan-collections"]
     authz.allow with input as {"path": path, "method": "GET", "session": lawyer_session}

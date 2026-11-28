@@ -2,6 +2,8 @@ use clap::error::ErrorKind;
 
 #[path = "application_commands/billing.rs"]
 mod billing;
+#[path = "application_commands/claims.rs"]
+mod claims;
 #[path = "application_commands/documents.rs"]
 mod documents;
 #[path = "application_commands/firm.rs"]

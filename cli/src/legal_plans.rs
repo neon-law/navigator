@@ -47,6 +47,27 @@ pub enum LegalPlansCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Record where and how a plan takes its claims, for the claim packet.
+    ClaimFiling {
+        /// The plan's name, as `list` shows it.
+        #[arg(long)]
+        plan: String,
+        /// The claims email address or portal URL.
+        #[arg(long)]
+        file_with: String,
+        /// The claim email's subject; `{case_number}` is replaced.
+        #[arg(long)]
+        subject: Option<String>,
+        /// A separate address the itemized invoice goes to.
+        #[arg(long)]
+        invoice_to: Option<String>,
+        /// The plan's name for its claim form.
+        #[arg(long)]
+        form_title: Option<String>,
+        /// Proof to include, in order. Repeat for each.
+        #[arg(long, value_enum)]
+        proof: Vec<ClaimProof>,
+    },
     /// Add a plan to the Firm's vocabulary.
     Create {
         /// The plan's name, unique in the Firm, for example `ARAG`.
@@ -68,6 +89,13 @@ pub enum LegalPlansCmd {
         #[arg(long)]
         reporting_requirements: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimProof {
+    EngagementLetter,
+    FiledDocument,
 }
 
 /// The plan fields `navigator project legal-plan set` may change. An absent
@@ -293,6 +321,40 @@ async fn firm_command(base: &str, token: &str, firm: &str, action: LegalPlansCmd
             }
             Ok(json!({ "configuration": if dry_run { "validated" } else { "saved" } }))
         }
+        LegalPlansCmd::ClaimFiling {
+            plan,
+            file_with,
+            subject,
+            invoice_to,
+            form_title,
+            proof,
+        } => {
+            let plans = call(client.get(&route).bearer_auth(token), "list").await?;
+            let id = plans
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|row| {
+                    row["name"]
+                        .as_str()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(plan.trim()))
+                })
+                .and_then(|row| row["id"].as_str())
+                .ok_or_else(|| anyhow!("the Firm has no plan named {plan}"))?
+                .to_owned();
+            let body = json!({
+                "file_with": file_with, "subject": subject, "invoice_to": invoice_to,
+                "form_title": form_title, "proof": proof,
+            });
+            call(
+                client
+                    .put(format!("{route}/{id}/claim-filing"))
+                    .bearer_auth(token)
+                    .json(&body),
+                "claim filing",
+            )
+            .await
+        }
         LegalPlansCmd::Create {
             name,
             portal,
@@ -399,11 +461,30 @@ pub enum ClaimCmd {
     },
     /// Prepare covered work for the lawyer's manual filing.
     Prepare(ExistingClaim),
-    /// Confirm an already-filed claim.
+    /// Write the claim form, itemized invoice, and proof as one PDF, and file
+    /// it on the Project linked to the claim.
+    Packet {
+        /// Claim UUID printed by 'claim work' or 'claim status'.
+        #[arg(long)]
+        claim: Uuid,
+        /// Where to write the PDF.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Confirm an already-filed claim, by the provider's reference or, for a
+    /// claim filed by email, the sent message's id.
     #[command(visible_alias = "file")]
     Submit(ClaimSubmission),
+    /// Record the provider's reference for a claim filed without one.
+    Reference {
+        #[command(flatten)]
+        claim: ExistingClaim,
+        /// Claim reference from the provider.
+        #[arg(long)]
+        provider_reference: String,
+    },
     /// Confirm a corrected filing for the same claim.
-    Correct(ClaimSubmission),
+    Correct(ClaimCorrection),
     /// Record the provider's approval.
     Approve(ClaimAmountEvidence),
     /// Record the provider's denial.
@@ -442,6 +523,23 @@ pub struct ClaimSubmission {
     #[command(flatten)]
     claim: ExistingClaim,
     /// Claim reference from the provider's filing confirmation.
+    #[arg(long, required_unless_present = "sent_message")]
+    provider_reference: Option<String>,
+    /// For a claim filed by email: the sent message's id (Gmail's message
+    /// id). The claim shows as filed; add the provider's reference later
+    /// with `reference`.
+    #[arg(long)]
+    sent_message: Option<String>,
+    /// Filed amount in cents, if confirmed.
+    #[arg(long)]
+    claimed_cents: Option<i32>,
+}
+
+#[derive(Args)]
+pub struct ClaimCorrection {
+    #[command(flatten)]
+    claim: ExistingClaim,
+    /// Claim reference from the provider's corrected filing.
     #[arg(long)]
     provider_reference: String,
     /// Filed amount in cents, if confirmed.
@@ -554,9 +652,22 @@ impl ExistingClaim {
 }
 
 impl ClaimSubmission {
-    fn event(self, kind: &str) -> Value {
+    fn event(self) -> Value {
+        let mut event = json!({"type": "submission", "claimed_cents": self.claimed_cents});
+        if let Some(reference) = self.provider_reference {
+            event["provider_reference"] = reference.into();
+        }
+        if let Some(message) = self.sent_message {
+            event["sent_message_id"] = message.into();
+        }
+        self.claim.event(&event)
+    }
+}
+
+impl ClaimCorrection {
+    fn event(self) -> Value {
         self.claim.event(&json!({
-            "type": kind, "provider_reference": self.provider_reference, "claimed_cents": self.claimed_cents,
+            "type": "correction", "provider_reference": self.provider_reference, "claimed_cents": self.claimed_cents,
         }))
     }
 }
@@ -571,7 +682,7 @@ impl ClaimAmountEvidence {
 impl ClaimCmd {
     fn into_body(self, project: Uuid) -> Result<Option<Value>> {
         let body = match self {
-            Self::Status => return Ok(None),
+            Self::Status | Self::Packet { .. } => return Ok(None),
             Self::Work(work) => {
                 let claim = claim_key(&json!([
                     "navigator-plan-claim",
@@ -604,8 +715,14 @@ impl ClaimCmd {
                 )
             }
             Self::Prepare(claim) => claim.event(&json!({"type": "prepared"})),
-            Self::Submit(submission) => submission.event("submission"),
-            Self::Correct(submission) => submission.event("correction"),
+            Self::Submit(submission) => submission.event(),
+            Self::Reference {
+                claim,
+                provider_reference,
+            } => claim.event(
+                &json!({"type": "provider_reference", "provider_reference": provider_reference}),
+            ),
+            Self::Correct(correction) => correction.event(),
             Self::Approve(evidence) => evidence.event("approval"),
             Self::Deny { claim, reference } => {
                 claim.event(&json!({"type": "denial", "reference": reference}))
@@ -643,6 +760,9 @@ pub(crate) async fn claim_command(
 ) -> Result<Value> {
     let route = format!("{project_route}/legal-plan-claims");
     let client = remote::authenticated_client_builder(project_route)?.build()?;
+    if let ClaimCmd::Packet { claim, out } = &action {
+        return packet(&client, &route, token, *claim, out).await;
+    }
     match action.into_body(project)? {
         None => call(client.get(route).bearer_auth(token), "claim status").await,
         Some(body) => {
@@ -653,6 +773,45 @@ pub(crate) async fn claim_command(
             .await
         }
     }
+}
+
+/// File the claim packet and write its PDF to `out`.
+async fn packet(
+    client: &reqwest::Client,
+    route: &str,
+    token: &str,
+    claim: Uuid,
+    out: &Path,
+) -> Result<Value> {
+    use base64::Engine as _;
+    let mut filed = call(
+        client
+            .post(format!("{route}/{claim}/packet"))
+            .bearer_auth(token)
+            .timeout(Duration::from_secs(120)),
+        "claim packet",
+    )
+    .await?;
+    let pdf = filed
+        .as_object_mut()
+        .and_then(|filed| filed.remove("pdf_base64"))
+        .and_then(|pdf| pdf.as_str().map(str::to_owned))
+        .context("the site returned no packet PDF")?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(pdf)
+        .context("decode the packet PDF")?;
+    std::fs::write(out, &bytes).with_context(|| format!("write {}", out.display()))?;
+    filed["out"] = out.display().to_string().into();
+    if filed["missing_proof"]
+        .as_array()
+        .is_some_and(|missing| !missing.is_empty())
+    {
+        eprintln!(
+            "navigator: the plan asks for proof not filed on the Project: {}",
+            filed["missing_proof"]
+        );
+    }
+    Ok(filed)
 }
 
 #[cfg(test)]

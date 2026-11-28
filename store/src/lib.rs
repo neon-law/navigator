@@ -111,6 +111,7 @@ pub(crate) mod matter_record_links;
 pub use model::correspondence;
 pub use model::mail_attachments;
 pub use model::nef;
+pub mod claim_packets;
 pub mod court_date_forgejo;
 pub mod deadline_proposals;
 pub mod notarizations;

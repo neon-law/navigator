@@ -1377,6 +1377,7 @@ mod tests {
                 turnaround_sla_days: Some(10),
                 reporting_requirements: None,
                 inserted_at: Utc::now(),
+                claim_filing: None,
             },
             LegalPlan {
                 id: Uuid::now_v7(),
@@ -1388,6 +1389,7 @@ mod tests {
                 turnaround_sla_days: Some(10),
                 reporting_requirements: None,
                 inserted_at: Utc::now(),
+                claim_filing: None,
             },
         ];
         assert_eq!(

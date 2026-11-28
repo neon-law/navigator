@@ -62,6 +62,7 @@ use thiserror::Error;
 
 pub mod acroform;
 pub mod certificate;
+pub mod claim_packet;
 pub mod format;
 pub mod markdown;
 pub mod merge;
@@ -77,6 +78,7 @@ pub use acroform::{
 pub use certificate::{
     escape_typst_markup, escape_typst_string, render_certificate, CertificateParams,
 };
+pub use claim_packet::{render_claim_packet, ClaimPacketParams, PacketInvoice, PacketPage};
 pub use format::{
     render_document, render_document_with_options, Closing, LetterBlocks, Letterhead,
     LetterheadMark, OutputFormat, PREVIEW_LABEL, PRIVILEGED_LABEL,

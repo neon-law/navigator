@@ -23,7 +23,7 @@ async fn priced(site: &LiveSite) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn backfilled_time_is_added_edited_approved_and_billed_once() {
     store::test_support::with_postgres(async {
-        let site = LiveSite::start(None, None).await;
+        let site = LiveSite::start(None, None, false).await;
         priced(&site).await;
         let last_week = (Utc::now().date_naive() - Duration::days(7)).to_string();
         let request = Uuid::now_v7().to_string();
@@ -161,7 +161,7 @@ fn sources(value: &Value) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn backfill_previews_writes_and_never_repeats_a_source() {
     store::test_support::with_postgres(async {
-        let site = LiveSite::start(None, None).await;
+        let site = LiveSite::start(None, None, false).await;
         seed_record(&site).await;
 
         let preview = site.json(&["time", "backfill", "--dry-run"]);

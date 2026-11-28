@@ -109,6 +109,101 @@ pub struct LegalPlan {
     /// What the plan asks the Firm to report and how often.
     pub reporting_requirements: Option<String>,
     pub inserted_at: DateTime<Utc>,
+    /// Where and how the plan takes its claims, when the Firm has said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim_filing: Option<ClaimFiling>,
+}
+
+/// Proof a plan asks to accompany a claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimProof {
+    /// The signed engagement letter.
+    EngagementLetter,
+    /// The latest document filed with the court.
+    FiledDocument,
+}
+
+/// Where and how a Legal Plan takes its claims: Firm data the claim packet
+/// reads, never a hard-coded plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimFiling {
+    /// The claims email address or portal URL.
+    pub file_with: String,
+    /// The claim email's subject. `{case_number}` is replaced by the Plan
+    /// Case Number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// A separate address the itemized invoice goes to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invoice_to: Option<String>,
+    /// The plan's name for its claim form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form_title: Option<String>,
+    /// The proof the plan asks for, in packet order.
+    #[serde(default)]
+    pub proof: Vec<ClaimProof>,
+}
+
+impl ClaimFiling {
+    fn validate(&self) -> Result<(), LegalPlanError> {
+        let text = |value: &str, limit: usize| {
+            !value.trim().is_empty() && value.len() <= limit && !value.chars().any(char::is_control)
+        };
+        if !text(&self.file_with, 320) {
+            return Err(LegalPlanError::Invalid("file_with"));
+        }
+        for (field, value) in [
+            ("subject", &self.subject),
+            ("invoice_to", &self.invoice_to),
+            ("form_title", &self.form_title),
+        ] {
+            if value.as_deref().is_some_and(|value| !text(value, 320)) {
+                return Err(LegalPlanError::Invalid(field));
+            }
+        }
+        let mut proof = self.proof.clone();
+        proof.dedup();
+        if proof.len() != self.proof.len() {
+            return Err(LegalPlanError::Invalid("proof"));
+        }
+        Ok(())
+    }
+
+    /// The claim email's subject for one Plan Case Number.
+    #[must_use]
+    pub fn subject_for(&self, case_number: &str) -> Option<String> {
+        self.subject
+            .as_ref()
+            .map(|subject| subject.replace("{case_number}", case_number))
+    }
+}
+
+/// Record where and how a plan takes its claims.
+///
+/// # Errors
+/// [`LegalPlanError::Invalid`] for an empty destination or a repeated proof;
+/// [`LegalPlanError::NotFound`] for a plan of another Firm.
+pub async fn set_claim_filing(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+    plan_id: Uuid,
+    filing: &ClaimFiling,
+) -> Result<LegalPlan, LegalPlanError> {
+    filing.validate()?;
+    let updated = sqlx::query("UPDATE legal_plan SET claim_filing=$3 WHERE firm_id=$1 AND id=$2")
+        .bind(firm_id)
+        .bind(plan_id)
+        .bind(sqlx::types::Json(filing))
+        .execute(&pg.0)
+        .await?;
+    if updated.rows_affected() == 0 {
+        return Err(LegalPlanError::NotFound);
+    }
+    find(pg, firm_id, plan_id)
+        .await?
+        .ok_or(LegalPlanError::NotFound)
 }
 
 /// The inputs to [`create`].
@@ -349,7 +444,7 @@ pub(crate) async fn filing_rule(
 pub async fn list(pg: &PostgresDb, firm_id: Uuid) -> Result<Vec<LegalPlan>, LegalPlanError> {
     sqlx::query(
         "SELECT id,firm_id,name,contact,portal,acceptance_sla_hours,turnaround_sla_days, \
-         reporting_requirements,inserted_at FROM legal_plan WHERE firm_id=$1 ORDER BY name, id",
+         reporting_requirements,inserted_at,claim_filing FROM legal_plan WHERE firm_id=$1 ORDER BY name, id",
     )
     .bind(firm_id)
     .fetch_all(&pg.0)
@@ -372,7 +467,7 @@ pub async fn find(
 ) -> Result<Option<LegalPlan>, LegalPlanError> {
     sqlx::query(
         "SELECT id,firm_id,name,contact,portal,acceptance_sla_hours,turnaround_sla_days, \
-         reporting_requirements,inserted_at FROM legal_plan WHERE firm_id=$1 AND id=$2",
+         reporting_requirements,inserted_at,claim_filing FROM legal_plan WHERE firm_id=$1 AND id=$2",
     )
     .bind(firm_id)
     .bind(plan_id)
@@ -395,7 +490,7 @@ pub async fn find_by_name(
 ) -> Result<Option<LegalPlan>, LegalPlanError> {
     let exact = sqlx::query(
         "SELECT id,firm_id,name,contact,portal,acceptance_sla_hours,turnaround_sla_days, \
-         reporting_requirements,inserted_at FROM legal_plan \
+         reporting_requirements,inserted_at,claim_filing FROM legal_plan \
          WHERE firm_id=$1 AND lower(name)=lower($2)",
     )
     .bind(firm_id)
@@ -481,6 +576,9 @@ fn plan_from_row(row: &sqlx::postgres::PgRow) -> Result<LegalPlan, LegalPlanErro
         turnaround_sla_days: row.try_get("turnaround_sla_days")?,
         reporting_requirements: row.try_get("reporting_requirements")?,
         inserted_at: row.try_get("inserted_at")?,
+        claim_filing: row
+            .try_get::<Option<sqlx::types::Json<ClaimFiling>>, _>("claim_filing")?
+            .map(|filing| filing.0),
     })
 }
 

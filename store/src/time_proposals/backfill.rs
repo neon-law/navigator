@@ -47,7 +47,7 @@ pub const DEFAULT_MINUTES: &[DefaultMinutes] = &[
     DefaultMinutes {
         kind: "document",
         minutes: 30,
-        rule: "a document filed on the Project, other than a mail attachment or a DocuSign copy",
+        rule: "a document filed on the Project, other than a mail attachment, a DocuSign copy, an invoice, or a receipt",
     },
     DefaultMinutes {
         kind: "deadline",
@@ -207,12 +207,14 @@ async fn candidates(
         });
     }
 
-    // Mail attachments are read with their message, and DocuSign copies are
-    // the signing record of work already counted.
+    // Mail attachments are read with their message, DocuSign copies are the
+    // signing record of work already counted, and invoices and receipts are
+    // billing, not work on the matter.
     for row in sqlx::query(
         "SELECT a.id,timezone('UTC',a.inserted_at)::date AS day,coalesce(a.slug,a.filename,a.kind) AS name
          FROM asset a WHERE a.project_id=$1 AND a.deleted_at IS NULL
          AND a.source IS DISTINCT FROM 'docusign' AND a.source_message_id IS NULL
+         AND coalesce(a.kind,'') NOT IN ('invoice','receipt')
          AND NOT EXISTS (SELECT 1 FROM communication c WHERE c.asset_id=a.id)
          AND NOT EXISTS (SELECT 1 FROM inbox_message_asset m WHERE m.asset_id=a.id)
          AND ($2::date IS NULL OR timezone('UTC',a.inserted_at)::date >= $2) AND NOT EXISTS (SELECT 1 FROM time_entry_proposal p WHERE p.project_id=$1

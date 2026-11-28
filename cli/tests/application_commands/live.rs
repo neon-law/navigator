@@ -11,6 +11,7 @@ pub struct LiveSite {
     pub project: store::projects::Project,
     pub lawyer: Uuid,
     pub pg: store::postgres::PostgresDb,
+    pub storage: std::sync::Arc<dyn cloud::StorageService>,
     pub root: TempDir,
     credentials: std::path::PathBuf,
     server: tokio::task::JoinHandle<()>,
@@ -18,8 +19,8 @@ pub struct LiveSite {
 
 impl LiveSite {
     /// Serve the API for a fresh Project on `firm`, with `lawyer` signed in
-    /// and participating firm-side.
-    pub async fn start(firm: Option<Uuid>, lawyer: Option<Uuid>) -> Self {
+    /// and participating firm-side, as the lawyer DRI when `responsible`.
+    pub async fn start(firm: Option<Uuid>, lawyer: Option<Uuid>, responsible: bool) -> Self {
         let pg = store::postgres::PostgresDb::application().await.unwrap();
         let application_store = store::application_store::ApplicationStore::uninitialized();
         let project =
@@ -46,13 +47,18 @@ impl LiveSite {
             &store::participation::AddParticipantCommand {
                 project_id: project.id,
                 person_id: lawyer,
-                dri: store::participation::DriRequest::Unchanged,
+                dri: if responsible {
+                    store::participation::DriRequest::Designate(store::projects::DriSide::Lawyer)
+                } else {
+                    store::participation::DriRequest::Unchanged
+                },
                 actor: store::participation::DriActor::System,
             },
         )
         .await
         .unwrap();
         let state = portal::test_support::app_state(application_store.clone()).await;
+        let storage = state.storage.clone();
         let request_pg = pg.clone();
         let app = portal::api::routes()
             .with_state(portal::api::ApiState {
@@ -102,6 +108,7 @@ impl LiveSite {
             project,
             lawyer,
             pg,
+            storage,
             root,
             credentials,
             server,
@@ -120,9 +127,14 @@ impl LiveSite {
         command
     }
 
-    /// Run a verb that must succeed and parse its JSON output.
+    /// Run a verb that must succeed and parse its JSON output. `time` verbs
+    /// and the billing report print JSON with `--json`; claim verbs always do.
     pub fn json(&self, args: &[&str]) -> Value {
-        let output = self.navigator(args).arg("--json").assert().success();
+        let mut command = self.navigator(args);
+        if args.first() == Some(&"time") || args == ["billing"] {
+            command.arg("--json");
+        }
+        let output = command.assert().success();
         serde_json::from_slice(&output.get_output().stdout).unwrap()
     }
 }

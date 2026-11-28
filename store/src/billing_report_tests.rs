@@ -195,7 +195,8 @@ async fn check_reconciled_claim(
         Event::WorkRecorded { work },
         Event::Prepared,
         Event::Submission {
-            provider_reference: "submission-receipt".into(),
+            provider_reference: Some("submission-receipt".into()),
+            sent_message_id: None,
             claimed_cents: Some(11_000),
         },
         Event::Approval {
@@ -769,7 +770,8 @@ async fn configured_plan_keeps_benefit_filing_and_deadlines_independent() {
         fixed_claim,
         Uuid::new_v4(),
         Event::Submission {
-            provider_reference: "synthetic-filing".into(),
+            provider_reference: Some("synthetic-filing".into()),
+            sent_message_id: None,
             claimed_cents: Some(100),
         },
     )
